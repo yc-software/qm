@@ -35,4 +35,5 @@ test("the public threat model covers the documented material limitations", () =>
   assert.doesNotMatch(security, /signature is not verified/);
   assert.match(security, /eight\s+hours and renews on use/);
   assert.match(security, /not exhaustive/);
+  assert.match(security, /\[master spec\]\(\.\/docs\/master\.md\)/);
 });

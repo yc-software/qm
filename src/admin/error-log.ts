@@ -28,3 +28,13 @@ export function createErrorLog(): ErrorLog {
     count: async (opts = {}) => (await sink.list({ ...opts, limit: MAX })).length,
   };
 }
+
+const recordedErrors = new WeakSet<object>();
+
+export function markErrorRecorded(err: unknown): void {
+  if (typeof err === "object" && err !== null) recordedErrors.add(err);
+}
+
+export function errorAlreadyRecorded(err: unknown): boolean {
+  return typeof err === "object" && err !== null && recordedErrors.has(err);
+}

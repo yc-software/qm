@@ -74,8 +74,8 @@ test("narrow navigation overlays content and closes when its breakpoint is cross
 
 test("every sidebar destination dismisses the narrow overlay", () => {
   const openSession = sessions.match(/export async function openSession[^]*?\n\}/)?.[0] ?? "";
-  const startProjectChat = sessions.match(/function startProjectChat[^]*?\n\}/)?.[0] ?? "";
+  const startNewChat = sessions.match(/export function startNewChat\([^]*?\n\}/)?.[0] ?? "";
   assert.match(openSession, /closeSidebarOnNarrowView\(\)/);
-  assert.match(startProjectChat, /closeSidebarOnNarrowView\(\)/);
+  assert.match(startNewChat, /closeSidebarOnNarrowView\(\)/);
   assert.match(shell, /export function switchView[^]*?closeSidebarOnNarrowView\(\)/);
 });

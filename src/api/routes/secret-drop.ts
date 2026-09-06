@@ -11,7 +11,7 @@ import { isSharedScope, parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
 import { escapeHtml, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, resolveCapabilityDestination } from "./shared.ts";
+import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
@@ -137,6 +137,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     purpose?: unknown;
     grantMode?: unknown;
     fields?: unknown;
+    onBehalfOf?: unknown;
   };
   if (typeof b.service !== "string" || !b.service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
     return sendJson(res, 400, {
@@ -154,11 +155,17 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       message: `fields must be 1–${MAX_DROP_FIELDS} items of { key: ENV_VAR_NAME, label?, secret? } with unique keys`,
     });
   }
+  let ownerId = capability.actorId;
+  if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, capability.actorId)) {
+    const speaker = await verifiedConversationSpeaker(ctx, b.onBehalfOf.trim());
+    if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
+    ownerId = speaker.principalId;
+  }
   const scope = parseScopeId(capability.scopeId);
   const wantsGrant = scope.kind === "channel" || scope.kind === "group";
   const dest = resolveCapabilityDestination(capability, undefined);
   const { dropId } = await deps.secretDrops.mint({
-    ownerId: capability.actorId,
+    ownerId,
     orgId: configOrgId(),
     service: b.service.trim(),
     ...(typeof b.envKey === "string" && b.envKey.trim() ? { envKey: b.envKey.trim() } : {}),
@@ -176,12 +183,12 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   audit(deps, {
     principalId: capability.actorId,
     action: "keychain.drop.mint",
-    resource: `${b.service.trim()}:${dropId}`,
+    resource: `${b.service.trim()}:${dropId}${samePerson(ownerId, capability.actorId) ? "" : ` (onBehalfOf ${ownerId})`}`,
     scopeLabel: capability.scopeId,
   });
   const linkToken = await mintCapabilityToken(
     {
-      actorId: capability.actorId,
+      actorId: ownerId,
       scopeId: capability.scopeId,
       ...(capability.botActor ? { botActor: true } : {}),
       ...(capability.liveActor ? { liveActor: true } : {}),

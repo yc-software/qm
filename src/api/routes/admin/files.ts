@@ -79,10 +79,11 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
 }
 
 export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps } = ctx;
+  const { res, app, deps, url } = ctx;
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return;
   const { actor, scope } = authz;
+  const nameQuery = (url.searchParams.get("q") ?? "").trim();
   audit(deps, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
   if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
   const orgWide = parseScopeId(scope).kind === "org";
@@ -100,7 +101,11 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
   }> = [];
   let cursor: string | undefined;
   do {
-    const page = await deps.files.listOwnedByScopes(scopes, { limit: FILES_PAGE_SIZE, ...(cursor ? { cursor } : {}) });
+    const page = await deps.files.listOwnedByScopes(scopes, {
+      limit: FILES_PAGE_SIZE,
+      ...(nameQuery ? { nameQuery } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
     for (const a of page.files) {
       files.push({
         id: a.id,

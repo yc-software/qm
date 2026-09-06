@@ -97,9 +97,13 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
   });
 
   it("webhooks share the same owner rule", async () => {
-    const webhook = { id: "w1", owner: "Regan@YC.com", ownerScopeId: scopeId("personal", "Regan@YC.com") } as Webhook;
-    assert.equal(await canAdministerWebhook(appOver(), webhook, "regan@yc.com"), true);
-    assert.equal(await canAdministerWebhook(appOver(), webhook, "casey@yc.com"), false);
+    const webhook = {
+      id: "w1",
+      owner: "Alex@EXAMPLE.com",
+      ownerScopeId: scopeId("personal", "Alex@EXAMPLE.com"),
+    } as Webhook;
+    assert.equal(await canAdministerWebhook(appOver(), webhook, "alex@example.com"), true);
+    assert.equal(await canAdministerWebhook(appOver(), webhook, "casey@example.com"), false);
   });
 
   it("the list-path matcher agrees with the per-item check, including the roster bridge", async () => {

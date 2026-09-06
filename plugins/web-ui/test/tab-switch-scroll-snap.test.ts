@@ -7,7 +7,7 @@ const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
 test("shown panes start at the end after refreshing their density", () => {
   const handler = split.match(/onDidVisibilityChange\(\(e\) => \{[\s\S]*?\}\);/)?.[0] ?? "";
-  assert.match(handler, /this\.conversation\.scrollToBottom\(\)/);
+  assert.match(handler, /this\.conversation\?\.scrollToBottom\(\)/);
   assert.match(handler, /this\.syncDensity\(\)/, "shown panes still refresh their responsive presentation");
 });
 

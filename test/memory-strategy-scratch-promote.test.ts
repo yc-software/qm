@@ -191,6 +191,26 @@ test("maintain promotes: one-shot judges the window, rewrites MEMORY.md, leaves 
   assert.equal(await workspace.read(SCOPE, logPath(TODAY)), logBefore, "log untouched");
 });
 
+test("maintain refuses a runaway promotion: an oversized one-shot output leaves the notebook untouched and skips log pruning", async () => {
+  const runaway = "I'll scan for new signed replies… ".repeat(2_000);
+  const { workspace, strategy, memory } = fresh({ oneShot: () => Promise.resolve(runaway) });
+  await memory.replace(SCOPE, "# Memory\n\n- keep me");
+  await memory.capture(SCOPE, ["recent"], TODAY);
+  const ancient = TODAY - 30 * DAY;
+  await workspace.write(SCOPE, logPath(ancient), "- (2026-05-11) ancient\n");
+
+  await withNow(TODAY, () => strategy.maintain!(SCOPE));
+
+  const notebook = (await workspace.read(SCOPE, MEMORY_FILE)) ?? "";
+  assert.match(notebook, /keep me/, "the existing notebook survives");
+  assert.doesNotMatch(notebook, /scan for new signed replies/, "the runaway output is never persisted");
+  assert.match(
+    (await workspace.read(SCOPE, logPath(ancient))) ?? "",
+    /ancient/,
+    "unpromoted logs are not pruned when promotion was discarded",
+  );
+});
+
 test("maintain is a no-op rewrite when the judge says NONE, and prunes logs past retention", async () => {
   const { workspace, strategy, memory } = fresh({ oneShot: () => Promise.resolve("NONE") });
   await memory.replace(SCOPE, "# Memory\n\n- keep me");
@@ -276,7 +296,6 @@ test("strategy wiring: scratch-promote parses, wraps the store, and ships prompt
 test("a save landing during promotion is not reverted by the promote write", async () => {
   const { base, strategy, memory } = fresh({
     oneShot: async () => {
-      // a user edit lands while the model call is in flight
       await base.replace(SCOPE, "# Memory\n\n- (2026-06-10) the newer edit");
       return "# Memory\n\n- (2026-06-10) promoted fact";
     },

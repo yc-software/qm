@@ -10,7 +10,7 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP MATERIALIZED VIEW IF EXISTS surface_active_threads CASCADE");
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
     "DROP TABLE IF EXISTS channel_messages, channel_state, channel_files, channel_policy, channel_policy_history CASCADE",
   );
@@ -68,7 +68,7 @@ test("pg surface-cache: markHandled sets + survives a later ingest (edit) of the
   }
 });
 
-test("pg surface-cache: tsvector search + active-threads materialized view + membership", { skip }, async () => {
+test("pg surface-cache: tsvector search + active threads + membership", { skip }, async () => {
   const cache = createPostgresSurfaceCache(URL!);
   try {
     await cache.ingest([
@@ -89,7 +89,7 @@ test("pg surface-cache: tsvector search + active-threads materialized view + mem
     assert.ok(hits.length >= 2, "tsvector matches the two live 'launch' messages");
     assert.ok(!hits.some((h) => h.deleted), "the deleted row is excluded from search");
     const threads = await cache.activeThreads({ container: "CS1" });
-    assert.equal(threads.length, 1, "the materialized view projects the one sub-conversation");
+    assert.equal(threads.length, 1, "activeThreads projects the one sub-conversation");
     assert.equal(threads[0]!.sub, "T1");
     assert.deepEqual((await cache.members("CS1")).sort(), ["U1", "U2"]);
     assert.equal(await cache.isMember("CS1", "U1"), true);
@@ -103,6 +103,37 @@ test("pg surface-cache: tsvector search + active-threads materialized view + mem
     await cache.close();
   }
 });
+
+test(
+  "pg surface-cache: activeThreads excludes deleted + sub-null rows, orders by activity, honors limit",
+  { skip },
+  async () => {
+    const cache = createPostgresSurfaceCache(URL!);
+    try {
+      await cache.ingest([
+        { container: "CT1", ts: "1.0", sub: "T-a", text: "a1", createdAt: 9000000000001 },
+        { container: "CT1", ts: "2.0", sub: "T-a", text: "a2", createdAt: 9000000000002 },
+        { container: "CT1", ts: "2.5", sub: "T-a", text: "gone", deleted: true, createdAt: 9000000000005 },
+        { container: "CT1", ts: "3.0", sub: "T-b", text: "b1", createdAt: 9000000000003 },
+        { container: "CT1", ts: "4.0", text: "top-level, no sub", createdAt: 9000000000004 },
+        { container: "CT1", ts: "5.0", sub: "T-c", text: "only deleted", deleted: true, createdAt: 9000000000006 },
+        { container: "CT2", ts: "6.0", sub: "T-d", text: "d1", createdAt: 9000000000007 },
+      ]);
+      const threads = await cache.activeThreads({ container: "CT1" });
+      assert.equal(threads.length, 2, "sub-null, deleted-only, and other-container rows are excluded");
+      assert.equal(threads[0]!.sub, "T-b", "newest live activity first");
+      const a = threads.find((t) => t.sub === "T-a")!;
+      assert.equal(a.messageCount, 2, "the deleted reply does not count");
+      assert.equal(a.lastTs, "2.0", "the deleted reply does not advance lastTs");
+      assert.equal(a.lastActivityAt, 9000000000002, "the deleted reply does not advance lastActivityAt");
+      const limited = await cache.activeThreads({ limit: 1 });
+      assert.equal(limited.length, 1);
+      assert.equal(limited[0]!.sub, "T-d", "the cross-container query returns the newest thread");
+    } finally {
+      await cache.close();
+    }
+  },
+);
 
 test("pg surface-cache: oldest_ts is the numeric floor (ts::numeric compare, not lexical)", { skip }, async () => {
   const cache = createPostgresSurfaceCache(URL!);
@@ -185,6 +216,66 @@ test("pg surface-cache: mentions JSONB round-trips and survives a mention-less e
     await cache.ingest([{ container: "Cm", ts: "9.0", text: "hi @jordan edited", editedAt: 5, createdAt: 1 }]);
     msgs = await cache.readMessages("Cm");
     assert.deepEqual(msgs[0]!.mentions, { U1: "jordan", U2: "avery" }, "a mention-less edit keeps the prior mentions");
+  } finally {
+    await cache.close();
+  }
+});
+
+test("pg surface-cache: revisedSince returns edits and deletions after the watermark", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  const container = `Crev-${Date.now()}`;
+  try {
+    await cache.ingest([
+      { container, ts: "1.0", text: "a", createdAt: 1 },
+      { container, ts: "2.0", text: "b", createdAt: 2 },
+      { container, ts: "3.0", text: "c", createdAt: 3 },
+    ]);
+    const before = Date.now();
+    await cache.ingest([{ container, ts: "1.0", text: "a2", editedAt: before + 10 }]);
+    await cache.ingest([{ container, ts: "2.0", deleted: true }]);
+    const revised = (await cache.revisedSince(container, before - 1)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+    assert.deepEqual(
+      revised.map((m) => [m.ts, m.text, m.deleted ?? false]),
+      [
+        ["1.0", "a2", false],
+        ["2.0", "b", true],
+      ],
+    );
+    assert.ok((revised.find((m) => m.ts === "2.0")!.deletedAt ?? 0) >= before);
+    assert.ok(
+      (await cache.revisedSince(container, before + 10)).some((m) => m.ts === "1.0"),
+      "the watermark itself is included",
+    );
+    assert.ok(!(await cache.revisedSince(container, before + 11)).some((m) => m.ts === "1.0"));
+  } finally {
+    await cache.close();
+  }
+});
+
+test("pg surface-cache: revisedSince skips self edits and scopes to a thread", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  const container = `Cthr-${Date.now()}`;
+  try {
+    await cache.ingest([
+      { container, ts: "1.0", text: "root", createdAt: 1 },
+      { container, ts: "1.5", sub: "1.0", text: "reply", createdAt: 2 },
+      { container, ts: "2.0", text: "other root", createdAt: 3 },
+      { container, ts: "2.5", sub: "2.0", text: "bot reply", self: true, createdAt: 4 },
+    ]);
+    await cache.ingest([
+      { container, ts: "1.0", text: "root edited", editedAt: 10 },
+      { container, ts: "1.5", sub: "1.0", text: "reply edited", editedAt: 11 },
+      { container, ts: "2.0", text: "other root edited", editedAt: 12 },
+      { container, ts: "2.5", sub: "2.0", text: "bot reply edited", self: true, editedAt: 13 },
+    ]);
+    assert.deepEqual(
+      (await cache.revisedSince(container, 0)).map((m) => m.ts),
+      ["2.0", "1.5", "1.0"],
+    );
+    assert.deepEqual(
+      (await cache.revisedSince(container, 0, { thread: "1.0" })).map((m) => m.ts),
+      ["1.5", "1.0"],
+    );
   } finally {
     await cache.close();
   }

@@ -81,7 +81,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     const { appState, signOut, syncDocumentTitle } = await vite.ssrLoadModule("/src/shell.ts");
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-    const { openBackgroundInCanvas, splitInterceptsOpen } = await vite.ssrLoadModule("/src/split.ts");
+    const { activateCanvas, splitInterceptsOpen } = await vite.ssrLoadModule("/src/split.ts");
     const oldSession = { id: "old", threadRef: "web:old", scopeId: "personal:tester", title: "Old title" };
     const newSession = { id: "new", threadRef: "web:new", scopeId: "personal:tester", title: "New title" };
     sessionsState.list = [oldSession, newSession];
@@ -98,8 +98,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     syncDocumentTitle();
     assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
 
-    assert.equal(openBackgroundInCanvas(oldSession), true);
-    assert.equal(splitInterceptsOpen(newSession), true);
+    activateCanvas({ sessionId: "old", threadRef: "web:old" }, { sessionId: "new", threadRef: "web:new" }, "right");
     assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
     assert.equal(splitInterceptsOpen(oldSession), true);
     assert.equal(document.title, `Old title · ${PRODUCT_TITLE}`);

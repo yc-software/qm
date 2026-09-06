@@ -31,3 +31,11 @@ test("every drop zone the canvas renders has a positioning rule in shell.css", (
   const missing = edges.filter((e) => !new RegExp(`\\.zone-${e}\\s*\\{`).test(shellCss));
   assert.deepEqual(missing, [], "drop zones rendered with no .zone-<edge> rule (they collapse to 0×0)");
 });
+
+test("no surface paints a shadow", () => {
+  const painted = [...(shellCss + tsSource).matchAll(/(?:box|text)-shadow\s*:\s*([^;}]+)/g)]
+    .map((m) => m[1].trim())
+    .filter((v) => v !== "none");
+  assert.deepEqual(painted, [], "shadows are not part of this app's surface treatment");
+  assert.doesNotMatch(shellCss + tsSource, /drop-shadow\(/);
+});

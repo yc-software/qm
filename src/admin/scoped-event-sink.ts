@@ -1,5 +1,5 @@
 import type { ScopeId } from "../types.ts";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage } from "../util/errors.ts";
 
 export interface ScopedEvent {
@@ -90,11 +90,19 @@ const CONVERT: Record<ColumnKind, (v: unknown) => unknown> = {
   boolean: Boolean,
 };
 
+interface PostgresEventSinkSchema<F extends string = string> {
+  initialColumns?: readonly EventColumn<F>[];
+  expectedChecksum?: string;
+  followUps?: readonly PgMigrationDefinition[];
+}
+
 export interface PostgresEventSinkConfig<E> {
   connectionString: string;
   table: string;
+
   columns: readonly EventColumn<keyof E & string>[];
   extraSchemaStatements?: string[];
+  schema?: PostgresEventSinkSchema<keyof E & string>;
   defaultLimit: number;
   equalityFilters: Record<string, string>;
   persistErrorMessage: string;
@@ -115,18 +123,38 @@ function standardIndexes(table: string): string[] {
   ];
 }
 
+export function scopedEventMigrationId(table: string, ordinal: number): string {
+  return `admin/scoped-events/${table}/${String(ordinal).padStart(4, "0")}`;
+}
+
 export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): PostgresEventSink<E> {
+  const initialColumns = cfg.schema?.initialColumns ?? cfg.columns;
+  const followUps = cfg.schema?.followUps ?? [];
   const createTable = [
     `CREATE TABLE IF NOT EXISTS ${cfg.table}(`,
     [
       "  id BIGSERIAL PRIMARY KEY",
-      ...cfg.columns.map(([db, , sqlType, , required]) => `  ${db} ${sqlType}${required ? " NOT NULL" : ""}`),
+      ...initialColumns.map(([db, , sqlType, , required]) => `  ${db} ${sqlType}${required ? " NOT NULL" : ""}`),
     ].join(",\n"),
     ")",
   ].join("\n");
+  const initialDbColumns = new Set(initialColumns.map(([db]) => db));
+  const followUpSql = followUps.flatMap((migration) => migration.statements).join("\n");
+  for (const [db] of cfg.columns) {
+    if (initialDbColumns.has(db)) continue;
+    if (!new RegExp(`\\b${db}\\b`).test(followUpSql)) {
+      throw new Error(
+        `scoped-event-sink: column ${cfg.table}.${db} is not part of the released 0001 schema and no follow-up migration adds it`,
+      );
+    }
+  }
   const { q } = createPgPool(cfg.connectionString, [
-    createTable,
-    ...(cfg.extraSchemaStatements ?? standardIndexes(cfg.table)),
+    {
+      id: scopedEventMigrationId(cfg.table, 1),
+      statements: [createTable, ...(cfg.extraSchemaStatements ?? standardIndexes(cfg.table))],
+      ...(cfg.schema?.expectedChecksum !== undefined ? { expectedChecksum: cfg.schema.expectedChecksum } : {}),
+    },
+    ...followUps,
   ]);
 
   const dbCols = cfg.columns.map(([db]) => db).join(", ");

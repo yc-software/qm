@@ -51,7 +51,7 @@ test("an imageFrom stack reuses the reference images and overrides only its own 
   assert.match(coreToml, /app = "beta-core"/);
   assert.match(coreToml, /ORG_ID = "beta"/);
   assert.match(coreToml, /PUBLIC_WEB_URL = "https:\/\/beta-portal\.fly\.dev"/);
-  assert.match(coreToml, /FLY_SANDBOX_APP_NAME = "beta-sandboxes"/);
+  assert.match(coreToml, /STACK_MARKER = "beta-sandboxes"/);
 });
 
 const exampleFlyConfig = (): QmConfig => ({
@@ -65,13 +65,26 @@ const exampleFlyConfig = (): QmConfig => ({
   flyOrg: "example-org",
   sandbox: {
     app: "example-sandboxes",
-    image: "registry.fly.io/example-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
   },
   services: ["core", "admin", "web-ui", "portal"],
   plugins: [],
   skills: [],
   env: {},
   imageOverrides: {},
+});
+
+test("a configured bot identity lands in the derived fly toml for core and auth only", () => {
+  const config = { ...exampleFlyConfig(), botName: "straylight", orgName: "Straylight Industries" };
+  config.services = ["core", "admin", "web-ui", "portal", "auth"];
+  const core = derivedTomlFor(config, "core", repoRoot);
+  assert.match(core, /^\s*ORG_BRAND_SELF_LABEL = "straylight"$/m);
+  assert.match(core, /^\s*ORG_BRAND_ORG_NAME = "Straylight Industries"$/m);
+  const auth = derivedTomlFor(config, "auth", repoRoot);
+  assert.match(auth, /^\s*AUTH_BRAND_NAME = "straylight"$/m);
+  const webUi = derivedTomlFor(config, "web-ui", repoRoot);
+  assert.doesNotMatch(webUi, /ORG_BRAND_SELF_LABEL/);
+  const bare = derivedTomlFor(exampleFlyConfig(), "core", repoRoot);
+  assert.doesNotMatch(bare, /ORG_BRAND_SELF_LABEL/);
 });
 
 test("a configured bot identity lands in the derived fly toml for core and auth only", () => {
@@ -99,10 +112,6 @@ test("derived Fly configs contain only the deployment's region, org, sandbox, an
   assert.match(admin, /^\s*ADMIN_BASE_PATH = "\/admin"$/m);
   assert.match(core, /^\s*FLY_ORG = "example-org"$/m);
   assert.match(core, /^\s*PI_MODEL = "example-model"$/m);
-  assert.match(
-    core,
-    /^\s*FLY_DEPLOY_BASE_IMAGE = "registry\.fly\.io\/example-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"$/m,
-  );
   assert.match(core, /^\s*QM_DEPLOYMENT_ID = "qm-v2:example-org:example:example-stack"$/m);
   assert.doesNotMatch(core, /PI_DETECT_MODEL/);
   assert.doesNotMatch(portal, /OIDC_ALLOWED_EMAIL_DOMAIN/);

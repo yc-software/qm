@@ -1,6 +1,7 @@
 import type {
   CandidateDestination,
   CommandApprovalGrant,
+  Destination,
   EgressPolicy,
   Principal,
   Resolution,
@@ -182,6 +183,8 @@ export function renderTitleTranscript(entries: SessionEntry[]): string {
   return lines.join("\n\n");
 }
 
+const DELIVERY_NOTE_ITEM_MAX_CHARS = 200;
+
 export async function recentPrincipalDeliveryNote(
   deliveries: DeliveryStore | undefined,
   threadRef: string,
@@ -192,7 +195,11 @@ export async function recentPrincipalDeliveryNote(
   const lines = recent.map((d) => {
     const from = d.destination.onBehalfOf ? ` from ${d.destination.onBehalfOf}` : "";
     const trigger = d.provenance?.trigger ? ` [${d.provenance.trigger}]` : "";
-    const text = d.text.trim().replace(/\s+/g, " ");
+    const flattened = d.text.trim().replace(/\s+/g, " ");
+    const text =
+      flattened.length > DELIVERY_NOTE_ITEM_MAX_CHARS
+        ? `${flattened.slice(0, DELIVERY_NOTE_ITEM_MAX_CHARS)}…`
+        : flattened;
     return `- ${new Date(d.deliveredAt ?? d.createdAt).toISOString()}${trigger}${from}: ${text}`;
   });
   return [
@@ -275,6 +282,50 @@ export function approvalGrantId(
 
 function candidateKey(target: string, audienceScopeId: ScopeId): string {
   return hashId([target, audienceScopeId]);
+}
+
+const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
+
+export function completedSurfaceEnqueues(
+  entries: readonly SessionEntry[],
+  sinceSeq: number,
+  surfaceTool: string,
+): number {
+  const calls: Array<{ enqueues: boolean; callId: string | undefined; done: boolean }> = [];
+  for (const e of entries) {
+    if (e.seq <= sinceSeq) continue;
+    if (e.type === "tool_call") {
+      const p = e.payload as { tool?: unknown; action?: unknown; callId?: unknown } | null;
+      calls.push({
+        enqueues: p?.tool === surfaceTool && SURFACE_ENQUEUE_ACTIONS.has(String(p?.action)),
+        callId: typeof p?.callId === "string" ? p.callId : undefined,
+        done: false,
+      });
+    } else if (e.type === "tool_result") {
+      const cid = (e.payload as { callId?: unknown } | null)?.callId;
+      const call =
+        typeof cid === "string" ? calls.find((c) => c.callId === cid && !c.done) : calls.findLast((c) => !c.done);
+      if (call) call.done = true;
+    }
+  }
+  return calls.filter((c) => c.enqueues && c.done).length;
+}
+
+export interface TurnPostKeys {
+  seed(completed: number): void;
+  take(): number;
+  key(destination: Destination, seq: number): string;
+}
+
+export function turnPostKeys(turnKey: string): TurnPostKeys {
+  let next = 0;
+  return {
+    seed(completed) {
+      next = completed;
+    },
+    take: () => next++,
+    key: (destination, seq) => `post:${turnKey}:${destination.type}:${destination.target}:${seq}`,
+  };
 }
 
 export function replaceThreadSegment(target: string, threadTs: string): string {

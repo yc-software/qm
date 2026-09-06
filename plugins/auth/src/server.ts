@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readBody, PayloadTooLargeError, serveEmojiFavicon } from "../../chassis/src/http.ts";
+import { readBody, PayloadTooLargeError, sendBuffered, serveEmojiFavicon } from "../../chassis/src/http.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import type { AuthConfig } from "./config.ts";
 import { validEmail } from "./config.ts";
@@ -47,21 +47,17 @@ function noStore(extra: Record<string, string> = {}): Record<string, string> {
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, noStore({ "content-type": "application/json" }));
-  res.end(JSON.stringify(body));
+  sendBuffered(res, status, noStore({ "content-type": "application/json" }), JSON.stringify(body));
 }
 
 function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_CSP): void {
-  res.writeHead(
-    status,
-    noStore({
-      "content-type": "text/html; charset=utf-8",
-      "content-security-policy": csp,
-      "x-frame-options": "DENY",
-      "x-robots-tag": "noindex, nofollow",
-    }),
-  );
-  res.end(html);
+  const headers = noStore({
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": csp,
+    "x-frame-options": "DENY",
+    "x-robots-tag": "noindex, nofollow",
+  });
+  sendBuffered(res, status, headers, html);
 }
 
 function basicCredentials(header: string | undefined): { id: string; secret: string } | null {

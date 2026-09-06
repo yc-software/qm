@@ -1,14 +1,13 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, MoreHorizontal, Pencil, RotateCcw, X } from "lucide";
+import { Archive, Check, Copy, ExternalLink, Pencil, RotateCcw, X } from "lucide";
 import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { copyText, fieldSelect, icon, relTime } from "./ui";
+import { copyText, icon, relTime } from "./ui";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
-import { mainConversation } from "./conversations";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import {
   withDeploymentDetailNotice,
@@ -32,10 +31,10 @@ import {
   deploymentTitle,
   filterDeployments,
   friendlyPrincipal,
-  type DeploymentSort,
   type DeploymentTab,
   type DeploymentView,
 } from "./deploy-view";
+import { tip } from "./tooltip";
 
 const DEPLOY_TABS: Array<{ value: DeploymentTab; label: string }> = [
   { value: "yours", label: "Yours" },
@@ -49,15 +48,13 @@ let deployLoading = false;
 let deployScope: string | null = null;
 let deployQuery = "";
 let deployTab: DeploymentTab = "yours";
-let deploySort: DeploymentSort = "newest";
 let deployPageHost: HTMLElement | null = null;
-let deployMenuId: string | null = null;
 let activeDeploy: DeploymentView | null = null;
 let editingDeploy: { id: string; field: "displayName" | "name" } | null = null;
 let deployDraft = "";
 let deploySaving = false;
 let archiveCandidate: DeploymentView | null = null;
-let archiveFocusTarget: { id: string; detail: boolean } | null = null;
+let restoreArchiveFocus = false;
 let deployToast: { deployment: DeploymentView; text: string; undo?: boolean } | null = null;
 let deployRefreshSeq = 0;
 
@@ -91,21 +88,9 @@ function permissionBadge(d: DeploymentView): TemplateResult {
   const title = manage
     ? "You own this app or have permission to manage it."
     : "This app is shared with a context you can access. You can open and clone it, but not change it.";
-  return html`<span class="deploy-permission ${manage ? "manage" : "view"}" title=${title}
+  return html`<span class="deploy-permission ${manage ? "manage" : "view"}" ${tip(title)}
     >${manage ? "Can manage" : "Can view"}</span
   >`;
-}
-
-function versionLabel(d: DeploymentView): string {
-  if (d.currentVersion === undefined) return "Version unknown";
-  if (d.appliedVersion !== undefined && d.appliedVersion !== d.currentVersion)
-    return `v${d.appliedVersion} live · v${d.currentVersion} pending`;
-  return `v${d.currentVersion}`;
-}
-
-function deployedLabel(d: DeploymentView): string {
-  const at = deploymentLatestAt(d);
-  return at ? `Deployed ${relTime(at)}` : "Deployment time unavailable";
 }
 
 function ownerLabel(d: DeploymentView): string {
@@ -135,7 +120,6 @@ function deployTabs(): TemplateResult {
             class="cron-filter-chip ${deployTab === tab.value ? "active" : ""}"
             @click=${() => {
               deployTab = tab.value;
-              deployMenuId = null;
               drawDeploysPage();
             }}
           >
@@ -149,112 +133,36 @@ function deployTabs(): TemplateResult {
 
 function deploymentRow(d: DeploymentView): TemplateResult {
   const running = d.status === "running";
-  const contextScope = deploymentContextScope(d);
+  const title = html`
+    <span class="deploy-row-title">
+      <span class="list-row-title" dir="auto">${deploymentTitle(d)}</span>
+    </span>
+  `;
   return html`
     <div class="list-row deploy-row ${d.status === "archived" ? "deploy-row-archived" : ""}">
-      <button class="deploy-row-main" type="button" @click=${() => void openDeploy(d)}>
-        <span class="deploy-row-title">
-          <span class="list-row-title">${deploymentTitle(d)}</span>
-          <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
-        </span>
-        <span class="deploy-row-url">/d/${deploymentSlug(d)}/</span>
-        <span class="list-row-meta deploy-row-meta">
-          ${contextScope ? scopeChip(contextScope) : nothing}
-          <span>${ownerLabel(d)}</span>
-          ${canManage(d) ? permissionBadge(d) : nothing}
-          <span>${versionLabel(d)}</span>
-          <span>${deployedLabel(d)}</span>
-        </span>
-      </button>
-      <div class="deploy-row-actions" aria-label="App actions">
-        ${
-          running && d.webUrl
-            ? html`<a class="btn deploy-open" href=${withBase(d.webUrl)} target="_blank" rel="noreferrer"
-                >Open ${icon(ExternalLink, 14)}</a
-              >`
-            : nothing
-        }
-        ${
-          d.webUrl
-            ? html`<button
-                class="icon-btn subtle"
-                type="button"
-                title="Copy app URL"
-                aria-label="Copy app URL"
-                @click=${(event: Event) => void copyText(new URL(withBase(d.webUrl!), window.location.href).href, event.currentTarget as HTMLButtonElement)}
-              >
-                ${icon(Copy, 14)}
-              </button>`
-            : nothing
-        }
-        ${canManage(d) ? deployMenu(d) : nothing}
-      </div>
-    </div>
-  `;
-}
-
-function deployMenu(d: DeploymentView): TemplateResult {
-  const open = deployMenuId === d.id;
-  return html`
-    <div class="session-menu deploy-menu">
-      <button
-        class="session-menu-btn deploy-menu-trigger"
-        data-deployment-id=${d.id}
-        type="button"
-        aria-label=${`More actions for ${deploymentTitle(d)}`}
-        aria-haspopup="menu"
-        aria-expanded=${open ? "true" : "false"}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          deployMenuId = open ? null : d.id;
-          drawDeploysPage();
-        }}
-      >
-        ${icon(MoreHorizontal, 16)}
-      </button>
       ${
-        open
-          ? html`<div class="session-menu-popover" role="menu" @click=${(event: Event) => event.stopPropagation()}>
-              ${
-                d.status === "archived"
-                  ? html`<button
-                      class="session-menu-option"
-                      type="button"
-                      role="menuitem"
-                      @click=${() => void restoreDeploy(d)}
-                    >
-                      ${icon(RotateCcw, 15)}<span>Restore</span>
-                    </button>`
-                  : html`
-                      <button
-                        class="session-menu-option"
-                        type="button"
-                        role="menuitem"
-                        @click=${() => void editFromList(d, "displayName")}
-                      >
-                        ${icon(Pencil, 15)}<span>Edit display name</span>
-                      </button>
-                      <button
-                        class="session-menu-option"
-                        type="button"
-                        role="menuitem"
-                        @click=${() => void editFromList(d, "name")}
-                      >
-                        ${icon(Pencil, 15)}<span>Change URL slug</span>
-                      </button>
-                      <button
-                        class="session-menu-option danger"
-                        type="button"
-                        role="menuitem"
-                        @click=${() => requestArchive(d)}
-                      >
-                        ${icon(Archive, 15)}<span>Archive</span>
-                      </button>
-                    `
-              }
-            </div>`
-          : nothing
+        running && d.webUrl
+          ? html`<a
+              class="deploy-row-main"
+              href=${withBase(d.webUrl)}
+              target="_blank"
+              rel="noreferrer"
+              aria-label=${`Open ${deploymentTitle(d)}`}
+              >${title}</a
+            >`
+          : html`<span class="deploy-row-main">${title}</span>`
       }
+      <div class="deploy-row-actions" aria-label="App status and actions">
+        <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+        <button
+          class="btn deploy-manage"
+          type="button"
+          aria-label=${`Manage ${deploymentTitle(d)}`}
+          @click=${() => void openDeploy(d)}
+        >
+          Manage
+        </button>
+      </div>
     </div>
   `;
 }
@@ -273,7 +181,7 @@ function drawDeploysPage(): void {
     scope: deployScope,
     query: deployQuery,
     viewer,
-    sort: deploySort,
+    sort: "newest",
   });
   const allForTab = deployList.filter(
     (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, deployScope),
@@ -301,31 +209,6 @@ function drawDeploysPage(): void {
       ${scopedViewTopbar("apps", drawDeploysPage)}
       ${listPageTpl({
         title: "Apps",
-        scope: deployScope,
-        onScope: scoped
-          ? undefined
-          : (scope) => {
-              deployScope = scope;
-              drawDeploysPage();
-            },
-        onRefresh: () => void renderDeploys(),
-        action: { label: "Deploy with Agent", onClick: deployWithAgent },
-        controls: html`<label class="deploy-sort"
-          ><span>Sort</span>${fieldSelect({
-            compact: true,
-            ariaLabel: "Sort apps",
-            value: deploySort,
-            onChange: (value) => {
-              deploySort = value as DeploymentSort;
-              drawDeploysPage();
-            },
-            options: [
-              html`<option value="newest">Newest</option>`,
-              html`<option value="name">Name</option>`,
-              html`<option value="status">Status</option>`,
-            ],
-          })}</label
-        >`,
         search: {
           value: deployQuery,
           placeholder: "Search apps",
@@ -344,7 +227,6 @@ function drawDeploysPage(): void {
 }
 
 async function openDeploy(d: DeploymentView): Promise<void> {
-  deployMenuId = null;
   editingDeploy = null;
   deployDraft = "";
   deployNotices = withoutDeploymentDetailNotice(deployNotices);
@@ -378,7 +260,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
         <div class="resource-heading deploy-detail-heading">
           <div>
             <div class="deploy-heading-title">
-              <h2>${deploymentTitle(d)}</h2>
+              <h2 dir="auto">${deploymentTitle(d)}</h2>
               <span class="deploy-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
             </div>
             <div class="deploy-detail-url">/d/${deploymentSlug(d)}/</div>
@@ -396,11 +278,11 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <h3>Overview</h3>
           <div class="deploy-facts">
             <div><span>Status</span><strong>${statusLabel(d)}</strong></div>
-            <div><span>Live version</span><strong>${d.appliedVersion ?? d.currentVersion ?? "—"}</strong></div>
-            <div><span>Latest version</span><strong>${d.currentVersion ?? "—"}</strong></div>
+            <div><span>Live version</span><strong>${d.appliedVersion ?? d.currentVersion ?? "None"}</strong></div>
+            <div><span>Latest version</span><strong>${d.currentVersion ?? "None"}</strong></div>
             <div>
               <span>Last deployed</span
-              ><strong>${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString() : "—"}</strong>
+              ><strong>${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString() : "Never"}</strong>
             </div>
             <div>
               <span>Last opened</span
@@ -437,7 +319,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                     ><button
                       class="icon-btn subtle"
                       type="button"
-                      title="Copy Git remote"
+                      ${tip("Copy Git remote")}
                       aria-label="Copy Git remote"
                       @click=${(event: Event) => void copyText(d.gitUrl!, event.currentTarget as HTMLButtonElement)}
                     >
@@ -461,7 +343,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                     <strong>Display name</strong
                     ><span>The human-friendly name shown here. This does not change the app URL.</span>
                   </div>
-                  ${editingName ? deployEditForm(d, "displayName") : html`<div class="deploy-setting-value"><span>${d.displayName || "Using URL slug"}</span><button class="btn" type="button" @click=${() => startEditDeploy(d, "displayName")}>Edit</button></div>`}
+                  ${editingName ? deployEditForm(d, "displayName") : html`<div class="deploy-setting-value"><span dir="auto">${d.displayName || "Using URL slug"}</span><button class="btn" type="button" @click=${() => startEditDeploy(d, "displayName")}>Edit</button></div>`}
                 </div>
                 <div class="deploy-setting-row">
                   <div><strong>URL slug</strong><span>Changes the app URL. Existing links do not redirect.</span></div>
@@ -501,7 +383,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                         </div>
                         <div>
                           <span>${new Date(version.createdAt).toLocaleString()}</span
-                          >${version.commit ? html`<code title=${version.commit}>${version.commit.slice(0, 10)}</code>` : nothing}
+                          >${version.commit ? html`<code ${tip(version.commit)}>${version.commit.slice(0, 10)}</code>` : nothing}
                         </div>
                       </div>
                     `,
@@ -550,13 +432,13 @@ function deployEditForm(d: DeploymentView, field: "displayName" | "name"): Templ
           />${slug ? html`<span>/</span>` : nothing}</span
         >
       </label>
-      <button class="icon-btn" type="submit" title="Save" aria-label="Save" ?disabled=${deploySaving}>
+      <button class="icon-btn" type="submit" aria-label="Save" ${tip("Save")} ?disabled=${deploySaving}>
         ${icon(Check, 14)}
       </button>
       <button
         class="icon-btn"
         type="button"
-        title="Cancel"
+        ${tip("Cancel")}
         aria-label="Cancel"
         ?disabled=${deploySaving}
         @click=${cancelEditDeploy}
@@ -565,11 +447,6 @@ function deployEditForm(d: DeploymentView, field: "displayName" | "name"): Templ
       </button>
     </form>
   `;
-}
-
-async function editFromList(d: DeploymentView, field: "displayName" | "name"): Promise<void> {
-  await openDeploy(d);
-  if (activeDeploy?.id === d.id) startEditDeploy(activeDeploy, field);
 }
 
 function startEditDeploy(d: DeploymentView, field: "displayName" | "name"): void {
@@ -636,8 +513,7 @@ async function commitEditDeploy(d: DeploymentView): Promise<void> {
 }
 
 function requestArchive(d: DeploymentView): void {
-  archiveFocusTarget = { id: d.id, detail: activeDeploy?.id === d.id };
-  deployMenuId = null;
+  restoreArchiveFocus = true;
   archiveCandidate = d;
   drawCurrentDeployView();
   setDeployBackgroundInert(true);
@@ -648,25 +524,15 @@ function requestArchive(d: DeploymentView): void {
 }
 
 function closeArchiveDialog(): void {
-  const focusTarget = archiveFocusTarget;
+  const restoreFocus = restoreArchiveFocus;
   setDeployBackgroundInert(false);
   archiveCandidate = null;
-  archiveFocusTarget = null;
+  restoreArchiveFocus = false;
   drawCurrentDeployView();
   requestAnimationFrame(() => {
-    if (!focusTarget || appState.currentView !== "deploys" || archiveCandidate) return;
-    restoreDialogFocus(null, () =>
-      focusTarget.detail
-        ? document.querySelector<HTMLElement>(".deploy-archive-trigger")
-        : deploymentMenuTrigger(focusTarget.id),
-    );
+    if (!restoreFocus || appState.currentView !== "deploys" || archiveCandidate) return;
+    restoreDialogFocus(null, () => document.querySelector<HTMLElement>(".deploy-archive-trigger"));
   });
-}
-
-function deploymentMenuTrigger(id: string): HTMLElement | undefined {
-  return [...document.querySelectorAll<HTMLElement>(".deploy-menu-trigger")].find(
-    (element) => element.dataset.deploymentId === id,
-  );
 }
 
 function setDeployBackgroundInert(inert: boolean): void {
@@ -707,7 +573,9 @@ function archiveDialog(d: DeploymentView): TemplateResult {
         @keydown=${(event: KeyboardEvent) => trapDialogFocus(event, closeArchiveDialog)}
       >
         <div class="project-dialog-head">
-          <div><h2 id="deploy-archive-title">Archive ${deploymentTitle(d)}?</h2></div>
+          <div>
+            <h2 id="deploy-archive-title">Archive <bdi>${deploymentTitle(d)}</bdi>?</h2>
+          </div>
         </div>
         <p>
           This takes the app offline immediately, so its current URL will stop working. Its source and version history
@@ -773,7 +641,6 @@ async function restoreDeploy(d: DeploymentView): Promise<void> {
   if (deploySaving) return;
   const restoringActive = activeDeploy?.id === d.id;
   deploySaving = true;
-  deployMenuId = null;
   if (restoringActive) deployNotices = withDeploymentDetailNotice(deployNotices, d.id, "Restoring deployment…");
   else if (!activeDeploy) deployNotices = withDeploymentListNotice(deployNotices, "Restoring deployment…");
   if (restoringActive || !activeDeploy) drawCurrentDeployView();
@@ -822,7 +689,7 @@ function undoToast(toast: { deployment: DeploymentView; text: string; undo?: boo
     >${archived ? html`<button type="button" ?disabled=${deploySaving} @click=${() => void restoreDeploy(toast.deployment)}>Undo</button>` : nothing}<button
       class="icon-btn"
       type="button"
-      title="Dismiss"
+      ${tip("Dismiss")}
       aria-label="Dismiss notification"
       @click=${() => {
         deployToast = null;
@@ -849,14 +716,6 @@ async function openLiveEdit(d: DeploymentView, button: HTMLButtonElement): Promi
   }
 }
 
-function deployWithAgent(): void {
-  const conv = mainConversation();
-  conv.newChat();
-  conv.composer.state.draft = "Deploy an app for me. ";
-  conv.drawActiveChat(conv.state.agent);
-  conv.composer.focusComposerEnd();
-}
-
 async function refreshDeployments(): Promise<"updated" | "failed" | "superseded"> {
   const seq = ++deployRefreshSeq;
   try {
@@ -874,20 +733,10 @@ async function refreshDeployments(): Promise<"updated" | "failed" | "superseded"
   }
 }
 
-export function closeDeployMenu(target?: Element | null, restoreFocus = false): boolean {
-  if (!deployMenuId || target?.closest(".deploy-menu")) return false;
-  const id = deployMenuId;
-  const restoreListFocus = !activeDeploy;
-  deployMenuId = null;
-  drawCurrentDeployView();
-  if (restoreFocus && restoreListFocus) requestAnimationFrame(() => deploymentMenuTrigger(id)?.focus());
-  return true;
-}
-
 export async function renderDeploys(): Promise<void> {
   if (appState.currentView !== "deploys") return;
   archiveCandidate = null;
-  archiveFocusTarget = null;
+  restoreArchiveFocus = false;
   setDeployBackgroundInert(false);
   if (scopedSession.active) {
     deployScope = scopedSession.active.scopeId;
@@ -895,6 +744,8 @@ export async function renderDeploys(): Promise<void> {
   } else if (contextsState.selected) {
     deployScope = contextsState.selected;
     contextsState.selected = null;
+  } else {
+    deployScope = null;
   }
   const seq = appState.viewRenderSeq;
   await ensureContexts();

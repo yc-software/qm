@@ -2,8 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import { cronIdOf, sessionOrigin } from "../src/sessions/session-store.ts";
+import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "../src/sessions/session-store.ts";
+import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
+import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin("agent:main:cron:abc"), "cron");
@@ -58,6 +61,22 @@ test("attributedTurns applies each window's [validFrom,validTo) and excludes ove
   assert.equal(u2[0]!.lastAt, mid.createdAt);
 });
 
+test("scopeHasSessions + listByScope answer scope questions directly", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("channel", "scoped");
+  const other = scopeId("channel", "other");
+  assert.equal(await store.scopeHasSessions(scope), false);
+  const a = await store.getOrCreateByThread("scopedA", "channel", scope);
+  const b = await store.getOrCreateByThread("scopedB", "channel", scope);
+  await store.getOrCreateByThread("scopedC", "channel", other);
+  assert.equal(await store.scopeHasSessions(scope), true);
+  assert.deepEqual(
+    new Set((await store.listByScope(scope)).map((s) => s.id)),
+    new Set([a.id, b.id]),
+    "only the asked-for scope comes back",
+  );
+});
+
 test("a blocked acquire names, dates, and times out the holder it lost to", async () => {
   const nowRef = { v: 10_000_000_000 };
   const t0 = nowRef.v;
@@ -83,6 +102,63 @@ test("a blocked acquire names, dates, and times out the holder it lost to", asyn
   const past = await store.acquireLease(s.id, "turn");
   assert.ok(past.lease, "an expired holder no longer blocks");
   assert.equal(past.heldUntil, undefined, "a won acquire reports no holder");
+});
+
+test("peekLease reads the holder without contending for it, and clears on release", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-peek", "dm", scope);
+  assert.equal(await store.peekLease(s.id), null);
+  const { lease } = await store.acquireLease(s.id, "compaction");
+  assert.ok(lease);
+  const seen = await store.peekLease(s.id);
+  assert.equal(seen?.holder, "compaction");
+  assert.ok((seen?.heldUntil ?? 0) > Date.now());
+  await store.releaseLease(lease!);
+  assert.equal(await store.peekLease(s.id), null);
+});
+
+test("acquireLeaseWithin outlasts a short hold and returns the winning lease", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-wait", "dm", scope);
+  const { lease: held } = await store.acquireLease(s.id, "compaction");
+  assert.ok(held);
+  setTimeout(() => void store.releaseLease(held!), 300);
+
+  const attempt = await acquireLeaseWithin(store, s.id, "turn", 5_000);
+  assert.ok(attempt.lease, "the waiter wins once the short hold lapses");
+});
+
+test("acquireLeaseWithin gives up after its budget and reports the holder it lost to", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-wait-loses", "dm", scope);
+  const { lease: held } = await store.acquireLease(s.id, "compaction");
+  assert.ok(held);
+
+  const attempt = await acquireLeaseWithin(store, s.id, "turn", 100);
+  assert.equal(attempt.lease, null, "the budget bounds the wait");
+  assert.equal(attempt.heldBy, "compaction", "the loser still learns what outranked it");
+  assert.ok((attempt.waitedMs ?? 0) >= 75, "the budget was actually spent waiting");
+  await store.releaseLease(held!);
+});
+
+test("acquireLeaseWithin bails immediately on holders the caller will not wait for", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-wait-turn", "dm", scope);
+  const { lease: held } = await store.acquireLease(s.id, "turn");
+  assert.ok(held);
+
+  const started = Date.now();
+  const attempt = await acquireLeaseWithin(store, s.id, "turn", 5_000, {
+    waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn",
+  });
+  assert.equal(attempt.lease, null);
+  assert.equal(attempt.heldBy, "turn", "the refusal names the holder it declined to wait for");
+  assert.ok(Date.now() - started < 1_000, "no wait is spent on a holder that will not release in time");
+  await store.releaseLease(held!);
 });
 
 const backends: Array<[string, () => SessionStore]> = [["memory", () => createMemorySessionStore()]];
@@ -214,10 +290,6 @@ for (const [name, make] of backends) {
       "retention/usage counts only the real user turn",
     );
 
-    const light = await store.scopeSessionSummaries(scope, false, undefined, false);
-    const lightRow = light.find((r) => r.id === s.id)!;
-    assert.equal(lightRow.turns, 1, "light rows still carry counts");
-    assert.deepEqual([lightRow.firstMessage, lightRow.lastMessage], ["", ""], "light rows omit previews");
     const previews = await store.lastUserMessages([s.id]);
     assert.equal(
       previews.get(s.id),
@@ -358,6 +430,72 @@ for (const [name, make] of backends) {
     const page = await store.scopeSessionSummaries(scope, false, { limit: 1, offset: 1, cronId: "c1" });
     assert.equal(page.length, 1, "cronId filter applies before pagination");
     assert.deepEqual(await store.scopeCronGroups(scopeId("channel", "other"), false), [], "scope filter applies");
+  });
+
+  test(`${name}: scopeSessionRollups aggregates per scope what the scope index used to count row by row`, async () => {
+    const nowRef = { v: 30_000_000_000 };
+    const t0 = nowRef.v;
+    const store = createMemorySessionStore({ now: () => nowRef.v });
+    const a = scopeId("channel", "A");
+    const b = scopeId("channel", "B");
+    const c = scopeId("personal", "U9");
+    const say = async (id: string, text: string) => {
+      const { lease } = await store.acquireLease(id);
+      await store.append(lease!, { type: "user", payload: { text }, scopeLabel: a });
+      await store.releaseLease(lease!);
+    };
+    const conv1 = await store.getOrCreateByThread("ch:A:t1", "channel", a);
+    await store.getOrCreateByThread("agent:main:webhook:w1", "channel", a);
+    nowRef.v = t0 + 50_000;
+    await store.getOrCreateByThread("agent:main:monitor:m1", "channel", b);
+    nowRef.v = t0 + 100_000;
+    await say(conv1.id, "one");
+    const conv3 = await store.getOrCreateByThread("ch:A:t3", "channel", a);
+    await say(conv3.id, "three");
+    nowRef.v = t0 + 200_000;
+    await store.getOrCreateByThread("ch:A:t2", "channel", a);
+    await store.getOrCreateByThread("dm:D9", "dm", c);
+    nowRef.v = t0 + 300_000;
+    const fire = await store.getOrCreateByThread("cron:c1:fire:abc", "channel", a);
+    await say(fire.id, "fired");
+
+    const rollups = byScopeId(await store.scopeSessionRollups(a, true));
+    assert.deepEqual(rollups, [
+      {
+        scopeId: a,
+        sessions: 3,
+        backgroundSessions: 2,
+        lastActivity: t0 + 300_000,
+        lastConversationActivity: t0 + 200_000,
+        previewSessionId: [conv1.id, conv3.id].sort().at(-1)!,
+      },
+      {
+        scopeId: b,
+        sessions: 0,
+        backgroundSessions: 1,
+        lastActivity: t0 + 50_000,
+        lastConversationActivity: 0,
+        previewSessionId: null,
+      },
+      {
+        scopeId: c,
+        sessions: 1,
+        backgroundSessions: 0,
+        lastActivity: t0 + 200_000,
+        lastConversationActivity: t0 + 200_000,
+        previewSessionId: null,
+      },
+    ]);
+    assert.deepEqual(
+      rollups,
+      rollupsFromSummaries(await store.scopeSessionSummaries(a, true)),
+      "the aggregate matches a row-by-row pass over the summaries",
+    );
+    assert.deepEqual(
+      await store.scopeSessionRollups(b, false),
+      rollups.filter((r) => r.scopeId === b),
+      "scope filter applies",
+    );
   });
 
   test(`${name}: forceReleaseLease drops a held lease so a fresh acquire succeeds (reaper path)`, async () => {
@@ -575,6 +713,30 @@ for (const [name, make] of backends) {
     await store.addParticipant(s2.id, "U2");
     assert.equal((await store.listByParticipant("U1")).length, 2);
     assert.equal((await store.listByParticipant("U2")).length, 1);
+  });
+
+  test(`${name}: getForParticipant returns exactly the row listByParticipant returns`, async () => {
+    const store = make();
+    await assertParticipantSessionParity(store, `parity-${name}-a`);
+    await assertParticipantSessionParity(store, `parity-${name}-b`);
+  });
+
+  test(`${name}: countSessions and distinctParticipants aggregate without loading rows`, async () => {
+    const store = make();
+    const scope = scopeId("channel", "CAGG");
+    assert.equal(await store.countSessions(), 0);
+    assert.deepEqual(await store.distinctParticipants(), []);
+    const a = await store.getOrCreateByThread("agg-a", "channel", scope);
+    const b = await store.getOrCreateByThread("agg-b", "channel", scope);
+    await store.addParticipant(a.id, "U1");
+    await store.addParticipant(b.id, "U1");
+    await store.addParticipant(b.id, "U2");
+    await store.removeParticipant(b.id, "U2");
+    assert.equal(await store.countSessions(), 2);
+    assert.deepEqual((await store.distinctParticipants()).sort(), ["U1", "U2"], "one id per person, removed included");
+    await store.deleteSession(b.id);
+    assert.equal(await store.countSessions(), 1);
+    assert.deepEqual(await store.distinctParticipants(), ["U1"]);
   });
 
   test(`${name}: deleteSession hard-removes the session and its rows`, async () => {
@@ -834,6 +996,20 @@ for (const [name, make] of backends) {
   });
 }
 
+test("getEntry returns exactly the requested seq and nothing else", async () => {
+  const store = createMemorySessionStore();
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("dm:point-fetch", "dm", scope);
+  const { lease } = await store.acquireLease(s.id);
+  assert.ok(lease);
+  const first = await store.append(lease!, { type: "user", payload: { text: "one" }, scopeLabel: scope });
+  const second = await store.append(lease!, { type: "assistant", payload: { text: "two" }, scopeLabel: scope });
+  assert.deepEqual(await store.getEntry(s.id, first.seq), first);
+  assert.deepEqual(await store.getEntry(s.id, second.seq), second);
+  assert.equal(await store.getEntry(s.id, second.seq + 1), undefined);
+  assert.equal(await store.getEntry("missing", 0), undefined);
+});
+
 test("cronIdOf and sessionOrigin agree on which threadRefs are crons", () => {
   const refs = [
     "agent:main:cron:abc",
@@ -852,6 +1028,38 @@ test("cronIdOf and sessionOrigin agree on which threadRefs are crons", () => {
   assert.equal(cronIdOf("agent:main:cron:abc"), "abc");
   assert.equal(cronIdOf("cron:abc:slot"), "abc");
   assert.equal(cronIdOf("dm:D1"), null);
+});
+
+test("the store's origin and the admin wake-ref parser agree on which threadRefs are background", () => {
+  const refs = [
+    "agent:main:cron:abc",
+    "agent:main:webhook:wh1",
+    "agent:main:monitor:m1",
+    "agent:main:cron:abc:extra",
+    "agent:main:email:e1",
+    "agent:cron:abc",
+    "cron:c1:fire:abc",
+    "cron:c1:2026-01-01T00:00",
+    "cron:c1:manual:uuid",
+    "webhook:wh1:delivery",
+    "monitor:m1:lost",
+    "monitor:m1:quiet:123",
+    "cron:",
+    "cronx:1",
+    "Cron:1",
+    " cron:1",
+    "ch:cron:1",
+    "dm:D1",
+    "ch:C1:t1",
+    "",
+  ];
+  for (const ref of refs) {
+    assert.equal(
+      sessionCategory(sessionOrigin(ref)),
+      parseSessionWakeRef(ref) ? "background" : "conversation",
+      `classifiers agree on ${JSON.stringify(ref)}`,
+    );
+  }
 });
 
 test("deleteSessionIfEmpty refuses while a lease is held and after entries land", async () => {
@@ -883,4 +1091,27 @@ test("deleteSessionIfEmpty refuses while a lease is held and after entries land"
     /valid session lease/,
     "the stale holder cannot append after the discard",
   );
+});
+
+test("renewLease keeps a live turn's lock fresh and refuses stale or superseded tokens", async () => {
+  const nowRef = { v: 10_000_000_000 };
+  const t0 = nowRef.v;
+  const store = createMemorySessionStore({ now: () => nowRef.v, leaseTtlMs: 60_000 });
+  const scope = scopeId("personal", "U1");
+  const s = await store.getOrCreateByThread("t-renew", "dm", scope);
+  const { lease } = await store.acquireLease(s.id, "turn");
+  assert.ok(lease);
+
+  nowRef.v = t0 + 50_000;
+  assert.equal(await store.renewLease(lease!), true, "the holder can renew without writing an entry");
+  const blocked = await store.acquireLease(s.id, "turn");
+  assert.equal(blocked.lease, null);
+  assert.equal(blocked.heldUntil, nowRef.v + 60_000, "the renewal moved the expiry");
+  assert.equal(await store.renewLease({ sessionId: s.id, token: "stale" }), false, "a foreign token cannot renew");
+
+  nowRef.v = nowRef.v + 70_000;
+  assert.equal(await store.renewLease(lease!), false, "an expired lease cannot be revived by its old holder");
+  const taken = await store.acquireLease(s.id, "turn");
+  assert.ok(taken.lease, "an expired lease can still be taken over");
+  assert.equal(await store.renewLease(lease!), false, "the superseded holder cannot renew the new lock");
 });

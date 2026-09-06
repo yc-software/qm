@@ -151,7 +151,6 @@ function drawWebhooksPage(): void {
         webhooksScope = s;
         drawWebhooksPage();
       },
-      onRefresh: () => void renderWebhooksPage(),
       action: { label: "New webhook", onClick: showNewWebhook },
       search: {
         value: webhooksSearch,
@@ -319,7 +318,7 @@ function webhookForm() {
       ${listBackLink("Webhooks", drawWebhooksPage)}
       <h2>New webhook</h2>
       <label
-        >Action <span class="hint">— what the agent should do for each event</span>
+        >Action <span class="hint">(what the agent should do for each event)</span>
         <textarea
           name="action"
           rows="4"
@@ -357,14 +356,14 @@ function webhookForm() {
         <span class="hint webhook-scheme-guidance">${WEBHOOK_SCHEMES[0]!.guidance}</span>
       </label>
       <label
-        >Signing secret <span class="hint">— leave blank to auto-generate</span>
+        >Signing secret <span class="hint">(leave blank to auto-generate)</span>
         <div class="copyrow">
           <input type="text" name="secret" placeholder="auto-generated if blank" />
           <button type="button" class="btn" @click=${fillGeneratedSecret}>Generate</button>
         </div>
       </label>
       <label
-        >Filters <span class="hint">— optional; one per line as <code>path: value1, value2</code></span>
+        >Filters <span class="hint">(optional; one per line as <code>path: value1, value2</code>)</span>
         <textarea name="filters" rows="2" placeholder="action: opened, reopened"></textarea>
       </label>
       <p class="hint">
@@ -472,7 +471,7 @@ function showWebhookCreated(w: WebhookView, url: string): void {
       <div class="resource-detail">
         ${listBackLink("Webhooks", drawWebhooksPage)}
         <h2>Webhook created ✓</h2>
-        <div class="warn">Copy the secret now — it won't be shown again.</div>
+        <div class="warn">Copy the secret now. It won't be shown again.</div>
         <div class="field">
           <label>Inbound URL</label>
           ${copyRow(url)}

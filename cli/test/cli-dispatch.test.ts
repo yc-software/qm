@@ -1,15 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { main } from "../src/cli.ts";
 import { renderTaskDefinition } from "../src/backends/aws.ts";
 import { computedSecrets } from "../src/secrets.ts";
-
-const PINNED_SANDBOX_IMAGE = `registry.fly.io/acme-sandboxes@sha256:${"b".repeat(64)}`;
 
 async function run(argv: string[], cwd?: string): Promise<{ out: string; exitCode: number | null }> {
   const lines: string[] = [];
@@ -54,6 +52,7 @@ test("help lists every deploy + develop command and the deploy-wide options", as
       "status",
       "logs",
       "down",
+      "layer sync",
       "sandbox build",
       "infra build-image",
       "infra delete-task-definitions",
@@ -66,6 +65,28 @@ test("help lists every deploy + develop command and the deploy-wide options", as
     for (const opt of ["--config", "--env-file", "--sandbox-dir", "--build-from", "--dry-run", "--purge", "--tail"]) {
       assert.match(out, new RegExp(opt.replace(/-/g, "\\-")), `help should mention ${opt}`);
     }
+  }
+});
+
+test("layer sync exposes deployment-layer reconciliation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-layer-"));
+  writeFileSync(
+    join(dir, CONFIG_FILENAME),
+    JSON.stringify({
+      contract: 1,
+      orgId: "acme",
+      publicUrl: "http://localhost:8080",
+      target: "docker",
+      services: ["core"],
+      sandbox: { app: "acme-sandboxes" },
+    }),
+  );
+  try {
+    const result = await run(["layer", "sync", "--sandbox-dir", join(dir, "missing")], dir);
+    assert.equal(result.exitCode, null, result.out);
+    assert.match(result.out, /deployment layer: skipped/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -115,7 +136,7 @@ test("check --json reserves exit 2 for an unsupported live invocation", async ()
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -138,7 +159,7 @@ test("check flag typos are invocation errors and never print a success first", a
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -167,7 +188,7 @@ test("non-JSON check --live fails when the target has no live drift implementati
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -201,7 +222,7 @@ else console.log("{}");
     services: ["core"],
     env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
     imageOverrides: { core: `ghcr.io/acme/core@sha256:${"a".repeat(64)}` },
-    sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    sandbox: { backend: "sprites", app: "acme-sandboxes" },
     aws: {
       accountId: "123456789012",
       region: "us-west-2",
@@ -243,7 +264,7 @@ test("successful check --json --live reports the live-drift clause", async () =>
     services: ["core"],
     env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
     imageOverrides: { core: `ghcr.io/acme/core@${digest}` },
-    sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    sandbox: { backend: "sprites", app: "acme-sandboxes" },
     aws: {
       accountId: "123456789012",
       region: "us-west-2",
@@ -280,10 +301,13 @@ const args = argv.join(" ");
 if (args.includes("sts get-caller-identity")) console.log("123456789012");
 else if (args.includes("lambda-microvms get-microvm-image")) console.log(JSON.stringify({ imageArn: "arn:aws:lambda:us-west-2:123456789012:microvm-image:acme-microvm-app" }));
 else if (args.includes("lambda-microvms list-microvm-image-versions")) console.log(JSON.stringify({ items: [{ imageVersion: "1", state: "SUCCESSFUL", status: "ACTIVE" }] }));
+else if (args.includes("describe-secret")) console.log(JSON.stringify({ ARN: "arn", VersionIdsToStages: { current: ["AWSCURRENT"] } }));
 else if (args.includes("get-secret-value") && args.includes("--query SecretString")) console.log("signing-secret".repeat(3));
 else if (args.includes("get-secret-value")) console.log(JSON.stringify({ ARN: "arn", SecretString: "secret-value".repeat(3) }));
 else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s", status: "ACTIVE", desiredCount: 1, runningCount: 1, taskDefinition: "task", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet"], securityGroups: ["sg"], assignPublicIp: "DISABLED" } }, deployments: [{ status: "PRIMARY", rolloutState: "COMPLETED", taskDefinition: "task" }], loadBalancers: [{ targetGroupArn: "tg" }] }] }));
 else if (args.includes("describe-task-definition")) console.log(${JSON.stringify(JSON.stringify({ taskDefinition: task }))});
+else if (args.includes("list-tasks")) console.log(JSON.stringify({ taskArns: ["live-core"] }));
+else if (args.includes("describe-tasks") && args.includes("live-core")) console.log(JSON.stringify({ tasks: [{ taskDefinitionArn: "task", lastStatus: "RUNNING", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (args.includes("run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "canary" }] }));
 else if (args.includes("describe-tasks")) console.log(JSON.stringify({ tasks: [{ containers: [{ name: "core", exitCode: 0 }] }] }));
 else if (args.includes("dynamodb get-item") && args.includes("deployment/current")) console.log(JSON.stringify({ Item: { manifestId: { S: "manifest" } } }));
@@ -352,7 +376,7 @@ test("--tail must be a non-negative integer", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -374,7 +398,7 @@ test("--env-file that does not exist is an error", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     }),
   );
   const xdg = mkdtempSync(join(tmpdir(), "qm-xdg-"));
@@ -413,81 +437,10 @@ test("docker --only is rejected explicitly instead of silently restarting the fu
   }
 });
 
-test("sandbox publish directs MicroVM AWS deployments (no sandbox.app) to the image-build path", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
-  const configPath = join(dir, CONFIG_FILENAME);
-  const raw = JSON.stringify({
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "aws",
-    services: ["core"],
-    env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app" } },
-    aws: {
-      accountId: "123456789012",
-      region: "us-west-2",
-      cluster: "c",
-      deployRoleArn: "arn:aws:iam::123456789012:role/d",
-      secretsPrefix: "p/",
-      imageLabel: "release",
-      networking: { cloudMapNamespace: "n" },
-      services: { core: { ecrRepository: "repo", ecsService: "s", cpu: 256, memory: 512 } },
-    },
-  });
-  writeFileSync(configPath, raw);
-  mkdirSync(join(dir, "sandbox"));
-  writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM scratch\n");
-  try {
-    const result = await run(["sandbox", "publish", "--dry-run"], dir);
-    assert.equal(result.exitCode, 1, result.out);
-    assert.match(result.out, /Lambda MicroVM sandboxes/);
-    assert.match(result.out, /infra build-image/);
-    assert.equal(readFileSync(configPath, "utf8"), raw);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("sandbox publish on an AWS deployment with sandbox.app dry-runs the operator layer image", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
-  const configPath = join(dir, CONFIG_FILENAME);
-  const raw = JSON.stringify({
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "aws",
-    services: ["core"],
-    env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app" } },
-    sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
-    aws: {
-      accountId: "123456789012",
-      region: "us-west-2",
-      cluster: "c",
-      deployRoleArn: "arn:aws:iam::123456789012:role/d",
-      secretsPrefix: "p/",
-      imageLabel: "release",
-      networking: { cloudMapNamespace: "n" },
-      services: { core: { ecrRepository: "repo", ecsService: "s", cpu: 256, memory: 512 } },
-    },
-  });
-  writeFileSync(configPath, raw);
-  mkdirSync(join(dir, "sandbox"));
-  writeFileSync(join(dir, "sandbox", "Dockerfile"), "FROM scratch\n");
-  try {
-    const result = await run(["sandbox", "publish", "--dry-run"], dir);
-    assert.equal(result.exitCode, null, result.out);
-    assert.match(result.out, /sandbox publish → registry\.fly\.io\/acme-sandboxes:latest/);
-    assert.match(result.out, /DRY RUN — nothing built, pushed, or recorded/);
-    assert.equal(readFileSync(configPath, "utf8"), raw);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("destructive commands reject unknown flags before resolving a deployment", async () => {
   for (const argv of [
     ["up", "--dryrun"],
-    ["sandbox", "publish", "--dryrun"],
+    ["sandbox", "build", "--dryrun"],
     ["down", "--confg", "/tmp/other"],
     ["rollback", "--too", "v1"],
     ["secrets", "push", "--form", "operator.env"],
@@ -539,7 +492,7 @@ test("destructive commands reject extra positionals and boolean flags never cons
   for (const argv of [
     ["up", "unexpected"],
     ["up", "--dry-run", "unexpected"],
-    ["sandbox", "publish", "unexpected"],
+    ["sandbox", "build", "unexpected"],
     ["down", "--purge", "unexpected"],
     ["rollback", "unexpected"],
     ["secrets", "push", "unexpected"],
@@ -550,7 +503,7 @@ test("destructive commands reject extra positionals and boolean flags never cons
     assert.match(result.out, /unexpected argument/);
     assert.doesNotMatch(result.out, /no qm\.config/);
   }
-  const valuedBoolean = await run(["sandbox", "publish", "--dry-run=false"]);
+  const valuedBoolean = await run(["sandbox", "build", "--dry-run=false"]);
   assert.equal(valuedBoolean.exitCode, 2, valuedBoolean.out);
   assert.match(valuedBoolean.out, /--dry-run does not take a value/);
 });
@@ -577,7 +530,7 @@ test("conformance honors the deploy-wide --config and --sandbox-dir flags", asyn
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     }),
   );
   mkdirSync(join(sandboxDir, "skills", "greet"), { recursive: true });
@@ -620,7 +573,7 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -632,11 +585,7 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
     assert.equal(nested.out, "acme-sandboxes");
 
     const object = await run(["config", "get", "sandbox"], dir);
-    assert.deepEqual(
-      JSON.parse(object.out),
-      { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
-      "objects print as JSON",
-    );
+    assert.deepEqual(JSON.parse(object.out), { app: "acme-sandboxes" }, "objects print as JSON");
 
     const overridden = await run(["config", "get", "target", "--target", "fly"], dir);
     assert.equal(overridden.out, "fly", "--target overrides the config's durable value, same as every deploy command");
@@ -663,7 +612,7 @@ test("--target revalidates the effective provider config", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { backend: "sprites", app: "acme-sandboxes" },
     }),
   );
   try {
@@ -682,7 +631,7 @@ test("check --json routes failures on structured clause data, not message sniffi
     publicUrl: "http://localhost:8080",
     target: "docker",
     services: ["core"],
-    sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    sandbox: { app: "acme-sandboxes" },
   };
   const sandboxDir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
   writeFileSync(join(sandboxDir, CONFIG_FILENAME), JSON.stringify(base));
@@ -694,7 +643,7 @@ test("check --json routes failures on structured clause data, not message sniffi
     JSON.stringify({
       ...base,
       target: "aws",
-      sandbox: { backend: "sprites", app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { backend: "sprites", app: "acme-sandboxes" },
       aws: {
         accountId: "123456789012",
         region: "us-west-2",
@@ -738,7 +687,7 @@ test("check --json groups a multi-clause failure under each error's own clause, 
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
       env: { core: { MY_API_KEY: "x" } },
     }),
   );

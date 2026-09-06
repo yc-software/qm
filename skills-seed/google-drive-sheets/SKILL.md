@@ -118,7 +118,7 @@ Always report the file id/link and the modified range.
 
 ## Persist a file to Drive (upload)
 
-You can save a file you produced (a report, an export, an outbox artifact) into the
+You can save a file you produced (a report, an export, a generated artifact) into the
 user's Drive. This is a write — summarize what you're uploading and where, and get
 approval first.
 
@@ -128,7 +128,7 @@ After approval, multipart-upload the bytes. Send the metadata part then the file
 curl -sS -X POST 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink' \
   -H "Authorization: Bearer $VAULT_TOKEN_WWW_GOOGLEAPIS_COM" \
   -F "metadata={\"name\":\"report.pdf\"};type=application/json;charset=UTF-8" \
-  -F "file=@outbox/report.pdf;type=application/pdf"
+  -F "file=@report.pdf;type=application/pdf"
 ```
 
 To place it in a specific folder, add `"parents":["FOLDER_ID"]` to the metadata. The

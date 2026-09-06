@@ -58,8 +58,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
     assert.equal(config.env.core?.HARNESS, "pi");
-    assert.equal(config.modelProvider, "anthropic", "init names a base model provider by default");
-    assert.deepEqual(config.sandbox, { app: "acme-sandboxes" });
+    assert.equal(config.sandbox, undefined);
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config), ".env.example is exactly renderEnvExample output");
@@ -218,11 +217,11 @@ test("init keeps stable qm Slack branding for long org ids", () => {
   }
 });
 
-test("init derives sandbox.app from --org", () => {
+test("init scaffolds no sandbox block — sandboxes boot stock platform images", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-init-"));
   try {
     quiet(() => runInit({ dir, org: "globex" }));
-    assert.deepEqual(loadConfigInDir(dir).config.sandbox, { app: "globex-sandboxes" });
+    assert.equal(loadConfigInDir(dir).config.sandbox, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

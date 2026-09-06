@@ -5,7 +5,7 @@ import { findRoute, type RouteAuth } from "../src/api/routes/route.ts";
 import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 import { OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 
-const PUBLIC_ROUTES = new Set<string>();
+const PUBLIC_ROUTES = new Set<string>([]);
 const AUD_ROUTES = new Map<string, string>([
   ["POST /v1/connectors/oauth/consent/mint", OAUTH_CONSENT_AUD],
   ["POST /v1/credentials/broker", CREDENTIAL_BROKER_AUD],
@@ -24,7 +24,7 @@ function synthesize(path: string): string {
     .map((seg) => (seg.startsWith(":") ? "sample" : seg))
     .join("/");
 }
-const PATHS = new Set<string>();
+const PATHS = new Set<string>([]);
 for (const route of apiRoutes) if ("path" in route) PATHS.add(synthesize(route.path));
 for (const p of [
   "/v1/crons/sample",

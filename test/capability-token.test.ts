@@ -120,3 +120,15 @@ test("blob-transfer verification enforces its audience-specific grant", async ()
     null,
   );
 });
+
+test("a deployment claim round-trips and must be a non-empty string", async () => {
+  const c = claims({ deployment: "dpl-1" });
+  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET), {
+    orgId: "default-org",
+    ...c,
+  });
+  for (const deployment of [7, "", null] as unknown[]) {
+    const token = await mintCapabilityToken(claims({ deployment } as Partial<CapabilityClaims>), SECRET);
+    assert.equal(await verifyCapabilityToken(token, SECRET), null, `deployment=${JSON.stringify(deployment)}`);
+  }
+});

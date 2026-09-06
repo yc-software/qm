@@ -1,48 +1,26 @@
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { parseScopeId } from "../types.ts";
+import { contextSummaryPayload, entrySecurityTainted } from "../sessions/session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
 
-const CONTEXT_SUMMARY_KIND = "context_summary";
-
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
 const COMPACT_ENTRY_TAIL_CHARS = 2_000;
+const CHAINED_SUMMARY_PREFIX_HEADROOM = 1_000;
+const FALLBACK_SUMMARY_BODY_CHARS = 8_000;
+const FALLBACK_SUMMARY_TAIL_CHARS = 6_000;
 
-function capCompactLine(s: string): string {
-  if (s.length <= MAX_COMPACT_ENTRY_CHARS) return s;
+function headTailSlice(s: string, maxChars: number, tailChars: number): string {
+  if (s.length <= maxChars) return s;
   const notice = `…[truncated — ${s.length} chars]…`;
-  return (
-    headSlice(s, MAX_COMPACT_ENTRY_CHARS - COMPACT_ENTRY_TAIL_CHARS - notice.length) +
-    notice +
-    tailSlice(s, COMPACT_ENTRY_TAIL_CHARS)
-  );
+  return headSlice(s, maxChars - tailChars - notice.length) + notice + tailSlice(s, tailChars);
 }
 
 export const INTERRUPTED_TOOL_RESULT =
   "[interrupted — the platform restarted while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
 
-export interface ContextSummaryPayload {
-  kind: typeof CONTEXT_SUMMARY_KIND;
-  throughSeq: number;
-  text: string;
-}
-
-export function contextSummaryPayload(entry: SessionEntry): ContextSummaryPayload | null {
-  const payload = entry.payload as Partial<ContextSummaryPayload> | null;
-  if (
-    entry.type === "system" &&
-    payload?.kind === CONTEXT_SUMMARY_KIND &&
-    typeof payload.throughSeq === "number" &&
-    typeof payload.text === "string"
-  ) {
-    return { kind: CONTEXT_SUMMARY_KIND, throughSeq: payload.throughSeq, text: payload.text };
-  }
-  return null;
-}
-
-export function createContextSummaryPayload(throughSeq: number, text: string): ContextSummaryPayload {
-  return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
-}
+export const CONTEXT_SUMMARY_HEADER =
+  "[Earlier conversation summary — an index of turns compacted out of your context. The full transcript is still stored: reopen any type#seq it cites with the history tool (seq parameter; a very long entry returns as head and tail), or search it (query).]";
 
 export function compactedScopeLabel(
   entries: SessionEntry[],
@@ -65,28 +43,35 @@ export function compactedScopeLabel(
   return labels.includes(sessionScopeId) ? sessionScopeId : orgScopeId;
 }
 
-export function forModelContext(
-  entries: SessionEntry[],
-  opts: { includeSecurityTainted?: boolean } = {},
-): SessionEntry[] {
-  const replayable = entries.filter(
+function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
+  return entries.filter(
     (e) =>
       e.type !== "thinking" &&
       e.type !== "text" &&
       e.type !== "soul" &&
       (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure",
   );
+}
+
+export function forModelContext(
+  entries: SessionEntry[],
+  opts: { includeSecurityTainted?: boolean } = {},
+): SessionEntry[] {
+  const replayable = modelReplayable(entries);
   const latest = replayable.findLast((e) => contextSummaryPayload(e));
-  const visible = replayable.filter((e) => {
-    const securityTainted = (e.payload as { securityTainted?: unknown } | null)?.securityTainted === true;
-    return opts.includeSecurityTainted || !securityTainted;
-  });
+  const visible = replayable.filter((e) => opts.includeSecurityTainted || !entrySecurityTainted(e));
   if (!latest) return visible;
   const throughSeq = contextSummaryPayload(latest)!.throughSeq;
   return [
     ...(visible.includes(latest) ? [latest] : []),
     ...visible.filter((e) => !contextSummaryPayload(e) && e.seq > throughSeq),
   ];
+}
+
+export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
+  const replayable = modelReplayable(entries);
+  const latest = replayable.findLast((e) => contextSummaryPayload(e));
+  return replayable.filter((e) => !entrySecurityTainted(e) && (!contextSummaryPayload(e) || e === latest));
 }
 
 const entryTokenCache = new Map<string, number>();
@@ -112,17 +97,20 @@ export function estimateHistoryTokens(history: SessionEntry[]): number {
   return total;
 }
 
-export function recentEntryCountWithinBudget(history: SessionEntry[], maxCount: number, maxTokens: number): number {
+export function recentEntryCountWithinBudget(history: SessionEntry[], maxTokens: number): number {
   let count = 0;
   let tokens = 0;
   for (let i = history.length - 1; i >= 0; i--) {
-    if (count >= maxCount) break;
     const next = tokens + estimateEntryTokens(history[i]!);
     if (count >= 1 && next > maxTokens) break;
     tokens = next;
     count += 1;
   }
   return count;
+}
+
+function entryStamp(createdAt: number): string {
+  return Number.isFinite(createdAt) && createdAt > 0 ? ` ${new Date(createdAt).toISOString().slice(0, 16)}Z` : "";
 }
 
 export function compactTranscript(history: SessionEntry[]): string {
@@ -133,11 +121,12 @@ export function compactTranscript(history: SessionEntry[]): string {
     if (typeof cid === "string" && cid) resultByCallId.set(cid, true);
   }
   const lines: string[] = [];
-  const push = (line: string) => lines.push(capCompactLine(line));
+  const push = (line: string) => lines.push(headTailSlice(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));
   for (const entry of history) {
+    const stamp = entryStamp(entry.createdAt);
     const summary = contextSummaryPayload(entry);
     if (summary) {
-      push(`Prior summary through seq ${summary.throughSeq}: ${summary.text}`);
+      push(`Prior summary through seq ${summary.throughSeq}${stamp ? ` (written${stamp})` : ""}: ${summary.text}`);
       continue;
     }
     const op = entry.payload as {
@@ -150,16 +139,17 @@ export function compactTranscript(history: SessionEntry[]): string {
     const ov = entry.type === "user" && op?.overheard === true;
     const text = String(op?.text ?? "").trim();
     const ovFiles = ov && Array.isArray(op?.files) ? (op!.files as unknown[]).map(String).filter(Boolean) : [];
+    const author = entry.type === "user" && typeof op?.name === "string" && op.name ? op.name : null;
     const label = ov
-      ? `overheard#${entry.seq} (${typeof op?.name === "string" && op.name ? op.name : "someone"})`
-      : `${entry.type}#${entry.seq}`;
+      ? `overheard#${entry.seq}${stamp} (${author ?? "someone"})`
+      : `${entry.type}#${entry.seq}${stamp}${author ? ` (${author})` : ""}`;
     if (text) push(`${label}: ${text}${ovFiles.length ? ` (files: ${ovFiles.join(", ")})` : ""}`);
     else if (ov && ovFiles.length) push(`${label}: (shared file) (files: ${ovFiles.join(", ")})`);
     else if (!ov) push(`${label}:${op?.isError === true ? " [isError]" : ""} ${JSON.stringify(entry.payload ?? {})}`);
     if (entry.type === "tool_call") {
       const cid = (entry.payload as { callId?: unknown } | null)?.callId;
       if (typeof cid === "string" && cid && !resultByCallId.has(cid)) {
-        lines.push(`tool_result#${entry.seq}: ${INTERRUPTED_TOOL_RESULT}`);
+        lines.push(`tool_result for tool_call#${entry.seq} (none recorded): ${INTERRUPTED_TOOL_RESULT}`);
       }
     }
   }
@@ -169,13 +159,8 @@ export function compactTranscript(history: SessionEntry[]): string {
 export const COMPACT_SOFT_FRACTION = 0.7;
 export const COMPACT_HARD_FRACTION = 0.9;
 
-export function overBudgetFraction(
-  history: SessionEntry[],
-  maxEntries: number,
-  maxTokens: number,
-  fraction: number,
-): boolean {
-  return history.length > maxEntries * fraction || estimateHistoryTokens(history) > maxTokens * fraction;
+export function overBudgetFraction(history: SessionEntry[], maxTokens: number, fraction: number): boolean {
+  return estimateHistoryTokens(history) > maxTokens * fraction;
 }
 
 export interface CompactionPlan {
@@ -186,11 +171,9 @@ export interface CompactionPlan {
 
 export function planCompaction(
   history: SessionEntry[],
-  maxEntries: number,
   maxTokens: number,
   keepRecentTokenFraction: number,
-  keepRecentEntries: number = maxEntries - 1,
-  reuseBudget: { entries: number; tokens: number } = { entries: maxEntries, tokens: maxTokens },
+  reuseBudgetTokens: number = maxTokens,
 ): CompactionPlan | null {
   const latestSummary = [...history].reverse().find((entry) => contextSummaryPayload(entry));
   const latestPayload = latestSummary ? contextSummaryPayload(latestSummary) : null;
@@ -198,18 +181,12 @@ export function planCompaction(
     if (contextSummaryPayload(entry)) return false;
     return latestPayload ? entry.seq > latestPayload.throughSeq : true;
   });
-  const summarySlots = 1;
-  const keepRecent = Math.max(1, keepRecentEntries);
   const keepRecentTokens = Math.floor(maxTokens * keepRecentTokenFraction);
-  if (
-    latestSummary &&
-    afterSummary.length + summarySlots <= reuseBudget.entries &&
-    estimateHistoryTokens([latestSummary, ...afterSummary]) <= reuseBudget.tokens
-  ) {
+  if (latestSummary && estimateHistoryTokens([latestSummary, ...afterSummary]) <= reuseBudgetTokens) {
     return { toSummarize: [], kept: [latestSummary, ...afterSummary], reuse: latestSummary };
   }
 
-  const keptCount = recentEntryCountWithinBudget(afterSummary, keepRecent, keepRecentTokens);
+  const keptCount = recentEntryCountWithinBudget(afterSummary, keepRecentTokens);
   let overflowCount = Math.max(0, afterSummary.length - keptCount);
   while (overflowCount > 0) {
     const last = afterSummary[overflowCount - 1]!;
@@ -237,6 +214,14 @@ export function compactionThroughSeq(entries: SessionEntry[]): number {
 
 export function deterministicCompactSummary(history: SessionEntry[]): string {
   const throughSeq = compactionThroughSeq(history);
-  const body = headSlice(compactTranscript(history), 8_000);
+  const body = headTailSlice(compactTranscript(history), FALLBACK_SUMMARY_BODY_CHARS, FALLBACK_SUMMARY_TAIL_CHARS);
   return `Compacted ${history.length} prior entr${history.length === 1 ? "y" : "ies"} through seq ${throughSeq}.\n${body}`;
+}
+
+export const MAX_COMPACT_SUMMARY_CHARS = MAX_COMPACT_ENTRY_CHARS - CHAINED_SUMMARY_PREFIX_HEADROOM;
+
+export function boundCompactSummary(candidate: string | undefined, history: SessionEntry[]): string {
+  const text = candidate?.trim();
+  if (!text || text.length > MAX_COMPACT_SUMMARY_CHARS) return deterministicCompactSummary(history);
+  return text;
 }

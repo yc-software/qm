@@ -102,3 +102,7 @@ export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnO
       return {};
   }
 }
+
+export function isPersonAuthored(kind: TurnOrigin["kind"]): boolean {
+  return kind === "human" || kind === "direct";
+}

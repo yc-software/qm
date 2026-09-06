@@ -146,3 +146,14 @@ test("a manual deactivation survives roster churn — only reactivate() clears i
   await svc.reactivate("U-fired");
   assert.equal(svc.classify("U-fired").type, "internal");
 });
+
+test("an overridden principal classifies internal even when flagged guest or deactivated", async () => {
+  const overrides = new Set(["u-contractor"]);
+  const svc = createIdentityService(createMemoryMap<DeactivationRecord>(), {
+    isOverridden: (externalId) => overrides.has(externalId.trim().toLowerCase()),
+  });
+  assert.equal(svc.classify("U-CONTRACTOR", true).type, "internal");
+  await svc.deactivate("U-CONTRACTOR");
+  assert.equal(svc.classify("U-CONTRACTOR").type, "internal");
+  assert.equal(svc.classify("U-OTHER", true).type, "guest");
+});

@@ -98,34 +98,40 @@ function latestRefreshFailure(
 }
 
 async function connectorProviderStatus(deps: ServerDeps, principalId: string): Promise<Record<string, unknown>> {
-  const providers: Record<string, unknown> = {};
-  for (const [name, provider] of Object.entries(PROVIDERS)) {
-    const hosts = (await Promise.all(
-      provider.hosts.map(async (host) => {
-        const probed = await Promise.all(
-          CONNECTOR_STATUS_ACCOUNT_TYPES.map(
-            async (at) =>
-              (await deps.connectorTokens?.connectorTokenStatus(host, principalId, at)) ?? { connected: false },
-          ),
-        );
-        const best = bestOAuthTokenStatus(probed);
-        return { host, ...best };
-      }),
-    )) as HostStatus[];
-    const configured = await providerConfigured(deps, name);
-    const reconnectHosts = hosts.filter((h) => h.needsReconnect);
-    const latestFailure = latestRefreshFailure(hosts);
-    providers[name] = {
-      hosts,
-      connected: hosts.some((h) => h.connected && !h.needsReconnect),
-      ...(reconnectHosts.length ? { needsReconnect: true } : {}),
-      ...latestFailure,
-      configured,
-      available: configured,
-      consentMode: provider.consentMode,
-    };
-  }
-  return providers;
+  const entries = await Promise.all(
+    Object.entries(PROVIDERS).map(async ([name, provider]) => {
+      const [hosts, configured] = await Promise.all([
+        Promise.all(
+          provider.hosts.map(async (host) => {
+            const probed = await Promise.all(
+              CONNECTOR_STATUS_ACCOUNT_TYPES.map(
+                async (at) =>
+                  (await deps.connectorTokens?.connectorTokenStatus(host, principalId, at)) ?? { connected: false },
+              ),
+            );
+            const best = bestOAuthTokenStatus(probed);
+            return { host, ...best };
+          }),
+        ) as Promise<HostStatus[]>,
+        providerConfigured(deps, name),
+      ]);
+      const reconnectHosts = hosts.filter((h) => h.needsReconnect);
+      const latestFailure = latestRefreshFailure(hosts);
+      return [
+        name,
+        {
+          hosts,
+          connected: hosts.some((h) => h.connected && !h.needsReconnect),
+          ...(reconnectHosts.length ? { needsReconnect: true } : {}),
+          ...latestFailure,
+          configured,
+          available: configured,
+          consentMode: provider.consentMode,
+        },
+      ] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
 }
 
 async function oauthCallback(ctx: BaseCtx): Promise<void> {

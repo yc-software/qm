@@ -164,6 +164,21 @@ test("listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", async 
   assert.equal(p2.nextCursor, undefined, "last page has no cursor");
 });
 
+test("listOwnedByScopes: nameQuery matches names case-insensitively across the whole set", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  await store.put(put({ id: "a", name: "Quarterly Report.pdf", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
+  await store.put(put({ id: "b", name: "notes.txt", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
+  await store.put(put({ id: "c", name: "report-draft.txt", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
+
+  const hit = await store.listOwnedByScopes([owner], { nameQuery: "REPORT" });
+  assert.deepEqual(
+    hit.files.map((f) => f.id),
+    ["c", "a"],
+    "matches by name regardless of case, newest first",
+  );
+  assert.equal((await store.listOwnedByScopes([owner], { nameQuery: "missing" })).files.length, 0);
+});
+
 test("resolveByOwnerPaths returns the SHARED set by (owner, path); disabled excluded", async () => {
   const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a") }));

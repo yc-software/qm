@@ -54,7 +54,7 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
 
     async capture(scopeId, facts, at, author, context) {
       const op = opts.write;
-      if (!op) throw new Error("brain write is not configured");
+      if (!op) throw new Error("memory provider write is not configured");
       const args: Record<string, unknown> = { [op.contentArg ?? "content"]: facts.join("\n") };
       if (context?.input && op.inputArg) args[op.inputArg] = context.input;
       if (context?.reply && op.replyArg) args[op.replyArg] = context.reply;

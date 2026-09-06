@@ -113,8 +113,7 @@ class SmtpSession {
   }
 
   async upgrade(host: string): Promise<void> {
-    if (this.buffer.length > 0)
-      throw new Error("SMTP server sent data before the TLS handshake — refusing to continue");
+    if (this.buffer.length > 0) throw new Error("SMTP server sent data before the TLS handshake, refusing to continue");
     const plain = this.socket;
     this.detach(plain);
     const secure = tlsConnect({ socket: plain, servername: host }) as unknown as Socket;
@@ -180,7 +179,7 @@ export async function smtpDeliver(options: SmtpOptions, delivery: SmtpDelivery |
     let ehlo = await session.command(`EHLO ${clientName(options.host)}`, [250]);
     if (options.tls === "starttls") {
       if (!/\bSTARTTLS\b/i.test(ehlo.text))
-        throw new Error("SMTP server does not offer STARTTLS — refusing to send credentials in cleartext");
+        throw new Error("SMTP server does not offer STARTTLS, refusing to send credentials in cleartext");
       await session.command("STARTTLS", [220]);
       await session.upgrade(options.host);
       ehlo = await session.command(`EHLO ${clientName(options.host)}`, [250]);

@@ -13,6 +13,7 @@ import {
   residentAuthProbeIsStale,
   type ResidentAuthConnector,
 } from "../../credentials/resident-auth.ts";
+import { expandServiceAliases } from "../../credentials/resident-paths.ts";
 import { shq } from "../../util/shell.ts";
 import { createSkillMaterializer, safeSkillDirName } from "../../skills/materialize.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -35,16 +36,16 @@ export interface TurnSandboxContext {
   transferId: string;
   turnSessionDir: string;
   turnFilesDir: string;
-  turnOutboxDir: string;
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
   isolateOwnerKeychain: boolean;
   ownerAuthAvailable: boolean;
   ownerAuthEnv: Record<string, string>;
   ownerEnvCredentialIds: string[];
-  brokeredTools: readonly import("../../deployment/load-layer.ts").BrokeredLayerTool[];
+  credentialTools: readonly import("../../deployment/load-layer.ts").LayerCredentialTool[];
+  credentialServices: string[];
+  credentialCutoverServices: string[];
   quarantinedServices: string[];
-  brokerCutoverServices: string[];
   cutoverModeOf: (service: string) => DeviceFlowCutoverMode;
   visibleSkills: SkillResolution[];
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
@@ -66,16 +67,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     transferId,
     turnSessionDir,
     turnFilesDir,
-    turnOutboxDir,
     connectorEnv,
     egressTokenForTurn,
     isolateOwnerKeychain,
     ownerAuthAvailable,
     ownerAuthEnv,
     ownerEnvCredentialIds,
-    brokeredTools,
+    credentialTools,
+    credentialServices,
+    credentialCutoverServices,
     quarantinedServices,
-    brokerCutoverServices,
     cutoverModeOf,
     visibleSkills,
     visibleSkillsForTurn,
@@ -97,7 +98,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const keys = brokerEnvKeys.filter((key) => !(key in env));
     return keys.length ? `unset ${keys.join(" ")}; ` : "";
   };
-  const scopedCommand = brokerCutoverServices.length
+  const scopedCommand = credentialCutoverServices.length
     ? (command: string): string => `${unsetBrokerEnv(connectorEnv)}${command}`
     : undefined;
   if (ownerAuthAvailable) {
@@ -114,7 +115,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       const exports = Object.entries(ownerAuthEnv)
         .map(([key, value]) => `${key}=${shq(value)}`)
         .join(" ");
-      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN AGENT_OUTBOX; ${unsetBrokerEnv(ownerAuthEnv)}${exports ? `export ${exports}; ` : ""}${command}`;
+      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN; ${unsetBrokerEnv(ownerAuthEnv)}${exports ? `export ${exports}; ` : ""}${command}`;
     };
   }
   const box: {
@@ -157,7 +158,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ownerId: actor.id,
       services,
       allOrigins: true,
-      canonicalRoots: brokeredTools.filter((tool) => services.includes(tool.service)).flatMap((tool) => tool.roots),
+      canonicalRoots: credentialTools.filter((tool) => services.includes(tool.service)).flatMap((tool) => tool.roots),
     });
   };
   let sandboxStatusSeq = 2_000_000;
@@ -195,7 +196,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.pending = handle;
     emit("provision", provisionStart, Date.now());
     box.provisionMs = Date.now() - provisionStart;
-    handle.env = { ...handle.env, AGENT_OUTBOX: `${handle.rootDir}/${turnOutboxDir}` };
     if (deps.keychain) {
       const deviceFlowStart = Date.now();
       const restoreOwnerId =
@@ -203,14 +203,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           ? actor.id
           : deviceFlowCredOwner(memoryScopeId, actor.id);
       const resetGenerations = new Map<string, string>();
-      for (const tool of brokeredTools) {
-        if (cutoverModeOf(tool.service) !== "legacy") continue;
-        const generation = await deps.deviceFlowCutover?.residentResetGeneration(memoryScopeId, tool.service);
-        if (generation) resetGenerations.set(tool.service, generation);
+      for (const service of credentialServices) {
+        if (cutoverModeOf(service) !== "legacy") continue;
+        const generation = await deps.deviceFlowCutover?.residentResetGeneration(memoryScopeId, service);
+        if (generation) resetGenerations.set(service, generation);
       }
       const owned = resetGenerations.size ? await deps.keychain.listByOwner(restoreOwnerId) : [];
       const resetServices = [...resetGenerations.keys()].filter((service) =>
-        owned.some((record) => record.service === service),
+        owned.some((record) => expandServiceAliases([service]).includes(record.service)),
       );
       const removeServices = [...new Set([...quarantinedServices, ...resetServices])];
       if (removeServices.length) {
@@ -220,7 +220,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           keychain: deps.keychain,
           ownerId: restoreOwnerId,
           services: removeServices,
-          canonicalRoots: brokeredTools
+          canonicalRoots: credentialTools
             .filter((tool) => removeServices.includes(tool.service))
             .flatMap((tool) => tool.roots),
         });
@@ -232,6 +232,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           keychain: deps.keychain,
           ownerId: restoreOwnerId,
           ...(quarantinedServices.length ? { excludeServices: quarantinedServices } : {}),
+          onAnomaly: (service, detail) =>
+            deps.errors?.record({
+              category: "keychain",
+              code: "device_flow_restore_failed",
+              message: `${service}: ${detail}`,
+              scopeLabel: scopeId,
+              sessionId: session.id,
+            }),
         });
         for (const service of restoredServices) {
           deps.credentialUsage?.record({
@@ -364,7 +372,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       },
     );
     scratchBox.provisionMs = Date.now() - provisionStart;
-    handle.env = { ...handle.env, AGENT_OUTBOX: `${handle.rootDir}/${turnOutboxDir}` };
     scratchBox.handle = handle;
     return handle;
   };
@@ -394,7 +401,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
               handle,
               keychain: deps.keychain,
               ownerId: actor.id,
-              ...(brokerCutoverServices.length ? { excludeServices: brokerCutoverServices } : {}),
+              ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
+              onAnomaly: (service, detail) =>
+                deps.errors?.record({
+                  category: "keychain",
+                  code: "device_flow_restore_failed",
+                  message: `${service} (owner-auth box): ${detail}`,
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                }),
             });
             for (const service of restoredServices) {
               deps.auditLog.record({
@@ -563,7 +578,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         keepWarm = false;
       }
     }
-    await deps.sandbox.teardown(handle, keepWarm ? { keepWarm: true } : undefined);
+    await deps.sandbox.teardown(handle, {
+      ...(keepWarm ? { keepWarm: true } : {}),
+      ...(box.used ? {} : { homeUnchanged: true }),
+    });
     if (ownerCleanupError) throw ownerCleanupError;
   };
 
@@ -580,5 +598,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionForReach,
     reclaimBox,
     provisionPending: () => provisionInFlight !== null,
+    invalidateProvision: () => {
+      provisionInFlight = null;
+    },
   };
 }

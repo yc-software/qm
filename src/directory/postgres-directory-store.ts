@@ -13,7 +13,7 @@ import {
   type DirectoryStore,
 } from "./directory-store.ts";
 
-const SCHEMA = [
+const INITIAL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS directory_members(
     org_id          TEXT NOT NULL,
     principal_id    TEXT NOT NULL,
@@ -42,8 +42,6 @@ const SCHEMA = [
     name       TEXT NOT NULL,
     name_lc    TEXT NOT NULL,
     is_private BOOLEAN NOT NULL DEFAULT FALSE,
-    is_external BOOLEAN NOT NULL DEFAULT FALSE,
-    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (org_id, channel_id)
   )`,
   `CREATE INDEX IF NOT EXISTS directory_channels_name
@@ -62,15 +60,6 @@ const SCHEMA = [
     principal_id TEXT NOT NULL,
     PRIMARY KEY (org_id, group_id, principal_id)
   )`,
-  `CREATE TABLE IF NOT EXISTS directory_groups(
-    org_id       TEXT NOT NULL,
-    group_id     TEXT NOT NULL,
-    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
-    PRIMARY KEY (org_id, group_id)
-  )`,
-  `INSERT INTO directory_groups (org_id, group_id, roster_known)
-    SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members
-    ON CONFLICT (org_id, group_id) DO NOTHING`,
   `CREATE INDEX IF NOT EXISTS directory_group_members_principal
     ON directory_group_members (org_id, principal_id, group_id)`,
   `CREATE TABLE IF NOT EXISTS directory_sync(
@@ -96,9 +85,14 @@ const SCHEMA = [
       ALTER TABLE directory_sync ADD COLUMN channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE;
     END IF;
   END $$`,
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT`,
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT`,
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT`,
+  `CREATE TABLE IF NOT EXISTS directory_meta(
+    org_id        TEXT PRIMARY KEY,
+    workspace_url TEXT,
+    updated_at    BIGINT NOT NULL
+  )`,
+];
+
+const EXTERNAL_ROSTER_SCHEMA = [
   `ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS is_external BOOLEAN NOT NULL DEFAULT FALSE`,
   `DO $$
   BEGIN
@@ -111,11 +105,21 @@ const SCHEMA = [
       FROM directory_sync s WHERE c.org_id = s.org_id AND s.channel_members_synced = TRUE;
     END IF;
   END $$`,
-  `CREATE TABLE IF NOT EXISTS directory_meta(
-    org_id        TEXT PRIMARY KEY,
-    workspace_url TEXT,
-    updated_at    BIGINT NOT NULL
+  `CREATE TABLE IF NOT EXISTS directory_groups(
+    org_id       TEXT NOT NULL,
+    group_id     TEXT NOT NULL,
+    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (org_id, group_id)
   )`,
+  `INSERT INTO directory_groups (org_id, group_id, roster_known)
+    SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members
+    ON CONFLICT (org_id, group_id) DO NOTHING`,
+];
+
+const SYNC_STAMP_SCHEMA = [
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT`,
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT`,
+  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT`,
 ];
 
 function memberRow(r: Record<string, unknown>): DirectoryMember {
@@ -169,8 +173,16 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
 }
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
-  const { q, pool } = createPgPool(connectionString, SCHEMA);
   const orgId = configOrgId();
+  const { q, pool } = createPgPool(connectionString, [
+    {
+      id: "directory/store/0001",
+      expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
+      statements: INITIAL_SCHEMA,
+    },
+    { id: "directory/store/0002", statements: SYNC_STAMP_SCHEMA },
+    { id: "directory/store/0003", statements: EXTERNAL_ROSTER_SCHEMA },
+  ]);
 
   async function pick<T>(
     query: string,

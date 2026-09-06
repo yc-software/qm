@@ -6,7 +6,6 @@ import { RECALL_MAX_CHARS, bullets, capTail, dateStr, isBullet, normalize } from
 
 export const MEMORY_FILE = "memory/MEMORY.md";
 const MEMORY_HEADER = "# Memory";
-const MAX_FACTS = 300;
 
 function revisionToken(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -104,17 +103,9 @@ export function foldCapture(
   }
   if (!added.length) return { body: existing, added: 0 };
 
-  let body = existing.trim()
+  const body = existing.trim()
     ? `${existing.replace(/\s+$/, "")}\n${added.join("\n")}`
     : `${MEMORY_HEADER}\n\n${added.join("\n")}`;
-
-  const lines = body.split("\n");
-  const bulletIdx = lines.flatMap((l, i) => (isBullet(l) ? [i] : []));
-  const overflow = bulletIdx.length - MAX_FACTS;
-  if (overflow > 0) {
-    const drop = new Set(bulletIdx.slice(0, overflow));
-    body = lines.filter((_, i) => !drop.has(i)).join("\n");
-  }
   return { body, added: added.length };
 }
 
@@ -191,7 +182,7 @@ export function isSystemActor(actorId: string | undefined): boolean {
   return !!actorId?.startsWith("system:");
 }
 
-export function ccTargetFor(origin: ScopeId, actorId: string | undefined): ScopeId | null {
+function ccTargetFor(origin: ScopeId, actorId: string | undefined): ScopeId | null {
   if (!actorId || isSystemActor(actorId)) return null;
   const { kind } = parseScopeId(origin);
   if (kind !== "channel" && kind !== "group") return null;

@@ -24,7 +24,7 @@ test("set → list projects WITHOUT the secret; getSecret decrypts it", async ()
     name: "X firehose",
     secret: "super-secret-bearer",
     host: "api.x.com",
-    injection: { header: "Authorization", scheme: "Bearer " },
+    injection: { header: "Authorization", scheme: "Bearer ", actor: true },
     allowedMethods: ["get"],
     allowedPathPrefixes: ["/2/tweets/search/"],
     updatedBy: "admin-alice",
@@ -44,6 +44,8 @@ test("set → list projects WITHOUT the secret; getSecret decrypts it", async ()
   const dec = await cfg.getServiceCredentialSecret(ORG, "x-firehose");
   assert.equal(dec?.secret, "super-secret-bearer");
   assert.equal(dec?.host, "api.x.com");
+  assert.equal(dec?.injection?.actor, true);
+  assert.equal(pub.injection?.actor, true);
   assert.deepEqual(dec?.allowedPathPrefixes, ["/2/tweets/search/"]);
 });
 
@@ -267,4 +269,14 @@ test("env delivery validates its envKey; broker refuses one", async () => {
     () => cfg.setServiceCredential(ORG, { slug: "x", name: "X", envKey: "X_KEY", secret: "s", host: "api.x.com" }),
     /must not carry an envKey/,
   );
+});
+
+test("a service credential is available to published apps by default; the switch persists and reads back through both views", async () => {
+  const cfg = store();
+  await cfg.setServiceCredential(ORG, { slug: "yc-data", name: "YC data", secret: "s", host: "api.example" });
+  assert.equal((await cfg.listServiceCredentials(ORG))[0]!.deployments, true);
+  assert.equal((await cfg.getServiceCredentialSecret(ORG, "yc-data"))!.deployments, true);
+  await cfg.setServiceCredential(ORG, { slug: "yc-data", name: "YC data", host: "api.example", deployments: false });
+  assert.equal((await cfg.listServiceCredentials(ORG))[0]!.deployments, false);
+  assert.equal((await cfg.getServiceCredentialSecret(ORG, "yc-data"))!.deployments, false);
 });

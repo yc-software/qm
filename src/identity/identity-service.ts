@@ -35,9 +35,20 @@ export interface IdentityService extends IdentityProvider {
   refresh(force?: boolean): Promise<void>;
 }
 
+export function actorAssertionActive(
+  identity: Pick<IdentityService, "classify" | "isInternal">,
+  actor: ActorAssertion | undefined,
+): boolean {
+  return !!actor?.externalId && identity.isInternal(identity.classify(actor.externalId, actor.isExternalGuest));
+}
+
 export function createIdentityService(
   backing?: DurableMap<DeactivationRecord>,
-  opts: { directorySyncProtected?: readonly string[]; externalMembers?: DurableMap<ExternalMember> } = {},
+  opts: {
+    isOverridden?: (externalId: string) => boolean;
+    directorySyncProtected?: readonly string[];
+    externalMembers?: DurableMap<ExternalMember>;
+  } = {},
 ): IdentityService {
   const store = backing ?? createMemoryMap<DeactivationRecord>();
   const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
@@ -68,6 +79,7 @@ export function createIdentityService(
   }
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
+    if (opts.isOverridden?.(externalId)) return { id: externalId, type: "internal" };
     const key = personKey(externalId);
     const record = deactivated.get(key);
     const external = externals.get(key);

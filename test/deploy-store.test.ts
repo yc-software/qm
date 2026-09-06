@@ -4,7 +4,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDeployStore, deployCurrentGitRef, publicUrlOf, type Deployment } from "../src/deploy/deploy-store.ts";
+import {
+  createDeployStore,
+  deployCurrentGitRef,
+  deployTouchDebounceMs,
+  publicUrlOf,
+  type Deployment,
+} from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
@@ -176,6 +182,49 @@ test("touch records last-access for scale-to-zero (C3)", async () => {
   assert.equal((await s.get(d.id))!.lastAccessAt, undefined);
   await s.touch(d.id, 12345);
   assert.equal((await s.get(d.id))!.lastAccessAt, 12345);
+  assert.equal((await s.list()).find((x) => x.id === d.id)!.lastAccessAt, 12345);
+  await s.touch("nope", 1);
+});
+
+test("the touch debounce is clamped well under the reap TTL so steady traffic never looks idle", () => {
+  assert.equal(deployTouchDebounceMs(undefined), 60_000);
+  assert.equal(deployTouchDebounceMs(0), 60_000);
+  assert.equal(deployTouchDebounceMs(6 * 60 * 60_000), 60_000);
+  assert.equal(deployTouchDebounceMs(60_000), 15_000);
+  assert.equal(deployTouchDebounceMs(1_000), 250);
+});
+
+test("touch is debounced per id within the window", async () => {
+  const s = createDeployStore({ touchDebounceMs: 10_000 });
+  const d = await s.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node s.js",
+    snapshotDir: "/snap",
+  });
+  await s.touch(d.id, 1_000);
+  await s.touch(d.id, 5_000);
+  assert.equal((await s.get(d.id))!.lastAccessAt, 1_000, "a touch inside the window is skipped");
+  await s.touch(d.id, 11_001);
+  assert.equal((await s.get(d.id))!.lastAccessAt, 11_001, "a touch past the window writes");
+});
+
+test("touch does not rewrite the deployment blob and falls back to the blob's legacy value", async () => {
+  const deployments = createMemoryMap<Deployment>();
+  const s1 = createDeployStore({ deployments });
+  const d = await s1.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node s.js",
+    snapshotDir: "/snap",
+  });
+  await deployments.merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
+
+  const s2 = createDeployStore({ deployments, touchDebounceMs: 0 });
+  assert.equal((await s2.get(d.id))!.lastAccessAt, 777, "a never-touched row reads the blob's value");
+  await s2.touch(d.id, 9_999);
+  assert.equal((await s2.get(d.id))!.lastAccessAt, 9_999);
+  assert.equal((await deployments.get(d.id))!.lastAccessAt, 777, "the blob is not rewritten by touch");
 });
 
 test("deploy versions carry git commits for app files and rollback moves the current ref", async () => {

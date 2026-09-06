@@ -72,7 +72,7 @@ const HISTORY_DEFAULT_LIMIT = 50;
 
 export function createPostgresChannelPolicyStore(connectionString: string): ChannelPolicyStore {
   const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, [
+  const { q, close } = createPgPool(connectionString, "surface-cache/channel-policy/0001", [
     `CREATE TABLE IF NOT EXISTS channel_policy(
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         orders TEXT NOT NULL DEFAULT '', bots JSONB NOT NULL DEFAULT '{}'::jsonb,

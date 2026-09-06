@@ -81,3 +81,21 @@ test("policies can be updated and cleared for immediate rollback", async () => {
     "clearing an org cutover to default legacy requests a reset for every child computer",
   );
 });
+
+test("stored policies and reset requests discover removed services across restart", async () => {
+  const backing = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverPolicy>();
+  const resets = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverReset>();
+  const org = scopeId("org", "default-org");
+  const scope = scopeId("personal", "U1");
+  const first = createDeviceFlowCutoverStore(backing, { resets });
+  await first.set(org, "shared-tool", "prefer_ephemeral", "admin");
+  await first.set(scope, "retired-tool", "ephemeral_only", "admin");
+  await first.set(scopeId("personal", "U2"), "unrelated", "ephemeral_only", "admin");
+  const restarted = createDeviceFlowCutoverStore(backing, { resets });
+  assert.deepEqual(await restarted.listServices(scope), ["retired-tool", "shared-tool"]);
+  await restarted.clear(scope, "retired-tool");
+  const afterClear = createDeviceFlowCutoverStore(backing, { resets });
+  assert.deepEqual(await afterClear.listServices(scope), ["retired-tool", "shared-tool"]);
+  assert.equal(await afterClear.resolve(scope, "retired-tool"), "legacy");
+  assert.ok(await afterClear.residentResetGeneration(scope, "retired-tool"));
+});

@@ -38,6 +38,7 @@ export interface ConvCtx extends ConvHost {
 }
 
 interface ChatState {
+  pins: import("./core-bridge").SessionPin[];
   agent: Agent | null;
   host: HTMLElement | null;
   threadRef: string | null;
@@ -63,6 +64,7 @@ export interface ChatSurface {
   state: ChatState;
   hasLiveRun(): boolean;
   signalLiveRun(kind: "abort" | "steer", text?: string): Promise<import("./core-bridge").SignalOutcome>;
+  stopLiveRun(): Promise<void>;
   currentTurnOptions(): TurnOptions;
   newChat(context?: { scopeId: string; name: string | null }): string;
   teardown(): void;
@@ -87,6 +89,7 @@ export interface ChatSurface {
   scrollToBottom(): void;
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;
   setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier?: boolean): void;
+  setPins(pins: import("./core-bridge").SessionPin[]): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
   hasUnresolvedApproval(): boolean;
@@ -114,6 +117,7 @@ interface ComposerState {
 }
 
 export interface ComposerSurface {
+  restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;
   composerForm(agent: Agent): TemplateResult;
   queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;

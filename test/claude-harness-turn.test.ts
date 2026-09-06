@@ -144,6 +144,29 @@ test("a steered turn persists every reply, not only the last result's", async ()
   assert.deepEqual(userTexts, ["what is the capital of france?", "now do the other three"]);
 });
 
+test("a user stop that surfaces as a non-success SDK result is a clean stop, and the stop stays pending", async () => {
+  const signals = createMemoryRunSignalStore();
+  const runId = "run-stop-error";
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    await signals.send(runId, { kind: "abort" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
+  };
+
+  const harness = createClaudeHarness({ signals });
+  const { turn } = harnessTurn({ runId });
+  const result = await harness.turns.runTurn(turn);
+
+  assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
+  assert.equal(result.reply, "");
+  assert.deepEqual(
+    (await signals.takePending(runId)).map((s) => s.kind),
+    ["abort"],
+    "the stop stays pending for the terminal drain",
+  );
+});
+
 test("model calls are counted per API response and charged their real input tokens", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();

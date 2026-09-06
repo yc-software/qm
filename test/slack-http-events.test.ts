@@ -16,6 +16,14 @@ test("HTTP events mode trims the configured enum like the deployment secret gate
   assert.equal(config?.eventsMode, "http");
 });
 
+test("SLACK_ACK_CAP_MS overrides the deferred-ack cap; junk values are ignored", () => {
+  const base = { SLACK_BOT_TOKEN: "xoxb-test", SLACK_SIGNING_SECRET: SECRET, SLACK_EVENTS_MODE: "http" };
+  assert.equal(slackPluginConfigFromEnv({ ...base, SLACK_ACK_CAP_MS: "5000" })?.ackCapMs, 5000);
+  assert.equal(slackPluginConfigFromEnv({ ...base })?.ackCapMs, undefined);
+  assert.equal(slackPluginConfigFromEnv({ ...base, SLACK_ACK_CAP_MS: "nope" })?.ackCapMs, undefined);
+  assert.equal(slackPluginConfigFromEnv({ ...base, SLACK_ACK_CAP_MS: "-1" })?.ackCapMs, undefined);
+});
+
 function sign(body: string, ts = Math.floor(Date.now() / 1000)): { signature: string; timestamp: string } {
   return {
     timestamp: String(ts),

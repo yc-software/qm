@@ -1,25 +1,41 @@
 locals {
-  tags                       = { Deployment = var.org_id, ManagedBy = "terraform" }
-  azs                        = length(data.aws_availability_zones.available.names) >= 2 ? slice(data.aws_availability_zones.available.names, 0, 2) : []
-  subnet_ids                 = values(aws_subnet.public)[*].id
-  vpc_id                     = aws_vpc.this.id
-  has_portal                 = contains(keys(var.services), "portal")
-  public_service_names       = local.has_portal ? ["portal"] : ["core"]
-  ingress_services           = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
-  direct_path_services       = local.has_portal ? {} : { core = ["/v1/*"] }
-  alb_name                   = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
-  service_security_groups    = [aws_security_group.services.id]
-  default_task_role_arn      = aws_iam_role.task.arn
-  core_task_role_arn         = aws_iam_role.core_task.arn
+  qm_scaffold_version     = 3
+  tags                    = { Deployment = var.org_id, ManagedBy = "terraform" }
+  azs                     = length(data.aws_availability_zones.available.names) >= 2 ? slice(data.aws_availability_zones.available.names, 0, 2) : []
+  subnet_ids              = values(aws_subnet.public)[*].id
+  vpc_id                  = aws_vpc.this.id
+  has_portal              = contains(keys(var.services), "portal")
+  public_service_names    = local.has_portal ? concat(["portal"], length(var.core_public_hosts) > 0 ? ["core"] : []) : ["core"]
+  ingress_services        = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
+  direct_path_services    = local.has_portal ? {} : { core = ["/v1/*"] }
+  alb_name                = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
+  service_security_groups = [aws_security_group.services.id]
+  default_task_role_arn   = aws_iam_role.task.arn
+  core_task_role_arn      = aws_iam_role.core_task.arn
+  assume_role_services    = { for name, service in var.services : name => service if try(length(service.assume_role_arns), 0) > 0 }
+  managed_assume_role_services = {
+    for name, service in var.services : name => service if service.manage_task_role
+  }
+  managed_assume_role_policy_services = {
+    for name, service in local.assume_role_services : name => service if service.manage_task_role
+  }
+  configured_assume_role_services = {
+    for name, service in local.assume_role_services : name => service if !service.manage_task_role
+  }
+  effective_task_role_arns = {
+    for name, service in var.services : name => coalesce(
+      service.task_role_arn,
+      try(service.manage_task_role ? aws_iam_role.assume_role_task[name].arn : null, null),
+      name == "core" ? local.core_task_role_arn : local.default_task_role_arn,
+    )
+  }
   default_execution_role_arn = aws_iam_role.task_execution.arn
-  task_role_arns = distinct(compact(concat(
-    [local.default_task_role_arn, local.core_task_role_arn],
-    [for service in values(var.services) : service.task_role_arn],
-  )))
+  task_role_arns             = distinct(values(local.effective_task_role_arns))
   execution_role_arns = distinct(compact(concat(
     [local.default_execution_role_arn],
     [for service in values(var.services) : service.execution_role_arn],
   )))
+  github_subject_prefix = var.github_subject_prefix != "" ? var.github_subject_prefix : "repo:${var.github_repository}"
 }
 
 data "aws_caller_identity" "current" {}
@@ -75,11 +91,23 @@ resource "aws_route_table_association" "public" {
 resource "aws_security_group" "alb" {
   name   = "${var.cluster_name}-alb"
   vpc_id = local.vpc_id
-  ingress {
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
+  dynamic "ingress" {
+    for_each = var.certificate_arn == "" ? [1] : []
+    content {
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
+    }
+  }
+  dynamic "ingress" {
+    for_each = var.certificate_arn == "" ? [] : [1]
+    content {
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
   }
   egress {
     from_port   = 0
@@ -138,21 +166,6 @@ resource "aws_service_discovery_private_dns_namespace" "this" {
   tags = local.tags
 }
 
-resource "aws_service_discovery_service" "service" {
-  for_each = var.services
-  name     = each.key
-  dns_config {
-    namespace_id = aws_service_discovery_private_dns_namespace.this.id
-    dns_records {
-      ttl  = 10
-      type = "A"
-    }
-    routing_policy = "MULTIVALUE"
-  }
-  health_check_custom_config { failure_threshold = 1 }
-  tags = local.tags
-}
-
 resource "aws_iam_role" "task_execution" {
   name               = "${var.cluster_name}-task-execution"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" }, Action = "sts:AssumeRole" }] })
@@ -165,8 +178,15 @@ resource "aws_iam_role_policy_attachment" "task_execution" {
 }
 
 resource "aws_iam_role_policy" "task_secrets" {
-  role   = aws_iam_role.task_execution.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [for secret in aws_secretsmanager_secret.contract : secret.arn] }] })
+  role = aws_iam_role.task_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = [for name in var.secret_names : "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${var.secrets_prefix}${name}-*"]
+    }]
+  })
 }
 
 resource "aws_iam_role" "task" {
@@ -179,6 +199,51 @@ resource "aws_iam_role" "core_task" {
   name               = "${var.cluster_name}-core-task"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" }, Action = "sts:AssumeRole" }] })
   tags               = local.tags
+}
+
+resource "aws_iam_role" "ecs_load_balancer" {
+  name = "${var.cluster_name}-ecs-load-balancer"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowAccessToECSForInfrastructureManagement"
+      Effect    = "Allow"
+      Principal = { Service = "ecs.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_load_balancer" {
+  role       = aws_iam_role.ecs_load_balancer.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonECSInfrastructureRolePolicyForLoadBalancers"
+}
+
+resource "aws_iam_role" "assume_role_task" {
+  for_each           = local.managed_assume_role_services
+  name               = "${var.cluster_name}-${each.key}-task"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy" "managed_service_assume_role" {
+  for_each = local.managed_assume_role_policy_services
+  role     = aws_iam_role.assume_role_task[each.key].id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = ["sts:AssumeRole"], Resource = each.value.assume_role_arns }]
+  })
+}
+
+resource "aws_iam_role_policy" "configured_service_assume_role" {
+  for_each = local.configured_assume_role_services
+  role     = basename(local.effective_task_role_arns[each.key])
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = ["sts:AssumeRole"], Resource = each.value.assume_role_arns }]
+  })
+  lifecycle { create_before_destroy = true }
 }
 
 resource "aws_cloudwatch_log_group" "microvm" {
@@ -253,11 +318,12 @@ resource "aws_iam_role" "github_deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          # The branch subject stays even when an environment is configured: workflows that deploy
-          # from main without declaring one assume this same role.
+          # With a GitHub environment configured, only environment-scoped runs may assume the
+          # role (every deploy workflow declares one); the bare branch subject is the fallback
+          # for deployments that configure no environment.
           "token.actions.githubusercontent.com:sub" = compact([
-            var.github_environment != "" ? "repo:${var.github_repository}:environment:${var.github_environment}" : "",
-            "repo:${var.github_repository}:ref:${var.github_ref}",
+            var.github_environment != "" ? "${local.github_subject_prefix}:environment:${var.github_environment}" : "",
+            var.github_environment == "" ? "${local.github_subject_prefix}:ref:${var.github_ref}" : "",
           ])
         }
       }
@@ -281,7 +347,6 @@ resource "aws_iam_role_policy" "github_deploy" {
           "ec2:DescribeSecurityGroups",
           "elasticloadbalancing:Describe*",
           "rds:DescribeDBInstances",
-          "rds:DescribeDBSnapshots",
           "servicediscovery:ListNamespaces",
           "servicediscovery:ListServices",
           "logs:DescribeLogGroups"
@@ -289,27 +354,10 @@ resource "aws_iam_role_policy" "github_deploy" {
         Resource = "*"
       },
       {
-        Sid    = "CreatePredeployDatabaseSnapshots"
-        Effect = "Allow"
-        Action = "rds:CreateDBSnapshot"
-        Resource = [
-          aws_db_instance.this.arn,
-          "arn:aws:rds:${var.region}:${data.aws_caller_identity.current.account_id}:snapshot:${aws_db_instance.this.identifier}-predeploy-*"
-        ]
-      },
-      {
-        Sid    = "ManagePredeployDatabaseSnapshots"
-        Effect = "Allow"
-        Action = [
-          "rds:AddTagsToResource",
-          "rds:DeleteDBSnapshot"
-        ]
-        Resource = "arn:aws:rds:${var.region}:${data.aws_caller_identity.current.account_id}:snapshot:${aws_db_instance.this.identifier}-predeploy-*"
-      },
-      {
         Sid    = "ManageStackTaskDefinitions"
         Effect = "Allow"
         Action = [
+          "ecs:DeregisterTaskDefinition",
           "ecs:ListTagsForResource",
           "ecs:RegisterTaskDefinition",
           "ecs:TagResource"
@@ -334,6 +382,15 @@ resource "aws_iam_role_policy" "github_deploy" {
         Resource = [for repository in aws_ecr_repository.service : repository.arn]
       },
       {
+        Sid      = "ListClusterTasks"
+        Effect   = "Allow"
+        Action   = ["ecs:ListTasks"]
+        Resource = "*"
+        Condition = {
+          ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn }
+        }
+      },
+      {
         Sid      = "DescribeCluster"
         Effect   = "Allow"
         Action   = ["ecs:DescribeClusters"]
@@ -344,6 +401,33 @@ resource "aws_iam_role_policy" "github_deploy" {
         Effect   = "Allow"
         Action   = ["ecs:DescribeServices", "ecs:ListTagsForResource", "ecs:UpdateService"]
         Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.cluster_name}/*"]
+      },
+      {
+        Sid    = "InspectBlueGreenRollouts"
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeServiceRevisions",
+          "ecs:ListServiceDeployments"
+        ]
+        Resource = [
+          "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.cluster_name}/*",
+          "arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service-revision/${var.cluster_name}/*/*"
+        ]
+      },
+      {
+        Sid      = "RunCoreMigrationTask"
+        Effect   = "Allow"
+        Action   = ["ecs:RunTask"]
+        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["core"].ecs_service}:*"]
+        Condition = {
+          ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn }
+        }
+      },
+      {
+        Sid      = "InspectMigrationTasks"
+        Effect   = "Allow"
+        Action   = ["ecs:DescribeTasks"]
+        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task/${var.cluster_name}/*"]
       },
       {
         Sid      = "RunDeploymentCanaries"
@@ -368,10 +452,20 @@ resource "aws_iam_role_policy" "github_deploy" {
         Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
       },
       {
-        Sid      = "InspectDeployRoles"
-        Effect   = "Allow"
-        Action   = ["iam:GetRole"]
-        Resource = [aws_iam_role.github_deploy.arn, aws_iam_role.task_execution.arn, aws_iam_role.task.arn, aws_iam_role.core_task.arn, aws_iam_role.microvm_build.arn, var.deploy_microvm_execution_role_arn]
+        Sid       = "PassLoadBalancerRoleToEcs"
+        Effect    = "Allow"
+        Action    = ["iam:PassRole"]
+        Resource  = aws_iam_role.ecs_load_balancer.arn
+        Condition = { StringEquals = { "iam:PassedToService" = "ecs.amazonaws.com" } }
+      },
+      {
+        Sid    = "InspectDeployRoles"
+        Effect = "Allow"
+        Action = ["iam:GetRole"]
+        Resource = concat(
+          [aws_iam_role.github_deploy.arn, aws_iam_role.task_execution.arn, aws_iam_role.task.arn, aws_iam_role.core_task.arn, aws_iam_role.microvm_build.arn, var.deploy_microvm_execution_role_arn],
+          [for role in aws_iam_role.assume_role_task : role.arn],
+        )
       },
       {
         Sid    = "ManageStackMicrovmImage"
@@ -415,10 +509,15 @@ resource "aws_iam_role_policy" "github_deploy" {
         Resource = [data.aws_iam_openid_connect_provider.github.arn]
       },
       {
+        Sid      = "InspectContractSecretMetadata"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:DescribeSecret"]
+        Resource = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${var.secrets_prefix}*"
+      },
+      {
         Sid    = "ManageContractSecrets"
         Effect = "Allow"
         Action = [
-          "secretsmanager:DescribeSecret",
           "secretsmanager:GetSecretValue",
           "secretsmanager:PutSecretValue"
         ]
@@ -699,28 +798,32 @@ resource "aws_lb_target_group" "service" {
   tags = local.tags
 }
 
+resource "aws_lb_target_group" "alternate" {
+  for_each    = local.ingress_services
+  name        = "${substr(var.cluster_name, 0, 16)}-${substr(replace(each.key, "-", ""), 0, 4)}-g-${substr(sha1("${var.cluster_name}:${each.key}:alternate"), 0, 6)}"
+  port        = each.value.internal_port
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = local.vpc_id
+  health_check {
+    path    = "/healthz"
+    matcher = "200-399"
+  }
+  tags = local.tags
+}
+
 resource "aws_lb_listener" "public" {
   load_balancer_arn = aws_lb.this.arn
   port              = var.certificate_arn == "" ? 80 : 443
   protocol          = var.certificate_arn == "" ? "HTTP" : "HTTPS"
   certificate_arn   = var.certificate_arn == "" ? null : var.certificate_arn
   ssl_policy        = var.certificate_arn == "" ? null : "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  dynamic "default_action" {
-    for_each = local.has_portal ? ["portal"] : []
-    content {
-      type             = "forward"
-      target_group_arn = aws_lb_target_group.service[default_action.value].arn
-    }
-  }
-  dynamic "default_action" {
-    for_each = local.has_portal ? [] : ["not-found"]
-    content {
-      type = "fixed-response"
-      fixed_response {
-        content_type = "text/plain"
-        message_body = "not found"
-        status_code  = "404"
-      }
+  default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "not found"
+      status_code  = "404"
     }
   }
 }
@@ -737,7 +840,7 @@ resource "aws_cloudfront_distribution" "portal" {
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "http-only"
+      origin_protocol_policy = var.certificate_arn == "" ? "http-only" : "https-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
   }
@@ -770,16 +873,37 @@ resource "aws_cloudfront_distribution" "portal" {
   tags = local.tags
 }
 
-resource "aws_lb_listener_rule" "paths" {
-  for_each     = local.direct_path_services
+resource "aws_lb_listener_rule" "production" {
+  for_each     = local.ingress_services
   listener_arn = aws_lb_listener.public.arn
   priority     = 10 + index(sort(keys(var.services)), each.key)
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.service[each.key].arn
+  lifecycle {
+    ignore_changes = [action]
   }
-  condition {
-    path_pattern { values = each.value }
+  action {
+    type = "forward"
+    forward {
+      target_group {
+        arn    = aws_lb_target_group.service[each.key].arn
+        weight = 1
+      }
+      target_group {
+        arn    = aws_lb_target_group.alternate[each.key].arn
+        weight = 0
+      }
+    }
+  }
+  dynamic "condition" {
+    for_each = each.key == "portal" || !local.has_portal ? [1] : []
+    content {
+      path_pattern { values = each.key == "portal" ? ["/*"] : local.direct_path_services[each.key] }
+    }
+  }
+  dynamic "condition" {
+    for_each = each.key == "core" && local.has_portal ? [1] : []
+    content {
+      host_header { values = sort(tolist(var.core_public_hosts)) }
+    }
   }
 }
 
@@ -790,6 +914,46 @@ resource "aws_cloudwatch_log_group" "service" {
   tags              = local.tags
 }
 
+resource "aws_cloudwatch_metric_alarm" "primary_target_5xx" {
+  for_each            = local.ingress_services
+  alarm_name          = "${var.cluster_name}-${each.key}-primary-target-5xx"
+  alarm_description   = "Rollback an ECS deployment when the primary target group serves 5xx responses."
+  namespace           = "AWS/ApplicationELB"
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  dimensions = {
+    LoadBalancer = aws_lb.this.arn_suffix
+    TargetGroup  = aws_lb_target_group.service[each.key].arn_suffix
+  }
+  tags = local.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "alternate_target_5xx" {
+  for_each            = local.ingress_services
+  alarm_name          = "${var.cluster_name}-${each.key}-alternate-target-5xx"
+  alarm_description   = "Rollback an ECS deployment when the alternate target group serves 5xx responses."
+  namespace           = "AWS/ApplicationELB"
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  dimensions = {
+    LoadBalancer = aws_lb.this.arn_suffix
+    TargetGroup  = aws_lb_target_group.alternate[each.key].arn_suffix
+  }
+  tags = local.tags
+}
+
 resource "aws_ecs_task_definition" "bootstrap" {
   for_each                 = var.services
   family                   = each.value.ecs_service
@@ -798,18 +962,18 @@ resource "aws_ecs_task_definition" "bootstrap" {
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   execution_role_arn       = coalesce(each.value.execution_role_arn, local.default_execution_role_arn)
-  task_role_arn            = coalesce(each.value.task_role_arn, each.key == "core" ? local.core_task_role_arn : local.default_task_role_arn)
+  task_role_arn            = local.effective_task_role_arns[each.key]
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = each.value.architecture == "amd64" ? "X86_64" : "ARM64"
   }
-  container_definitions = jsonencode([{ name = each.key, image = "public.ecr.aws/docker/library/alpine:3.20", essential = true, command = ["sh", "-c", "while true; do nc -l -p ${each.value.internal_port} -e echo ok; done"], portMappings = [{ containerPort = each.value.internal_port }], logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.service[each.key].name, awslogs-region = var.region, awslogs-stream-prefix = each.key } } }])
+  container_definitions = jsonencode([{ name = each.key, image = "public.ecr.aws/docker/library/alpine:3.20", essential = true, command = ["sh", "-c", "while true; do nc -l -p ${each.value.internal_port} -e echo ok; done"], portMappings = [{ name = each.key, containerPort = each.value.internal_port, appProtocol = "http" }], logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.service[each.key].name, awslogs-region = var.region, awslogs-stream-prefix = each.key } } }])
   tags                  = local.tags
 }
 
 resource "aws_ecs_service" "service" {
   for_each        = var.services
-  depends_on      = [aws_lb_listener.public, aws_lb_listener_rule.paths]
+  depends_on      = [aws_lb_listener.public, aws_lb_listener_rule.production, aws_iam_role_policy_attachment.ecs_load_balancer]
   name            = each.value.ecs_service
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.bootstrap[each.key].arn
@@ -820,18 +984,51 @@ resource "aws_ecs_service" "service" {
     security_groups  = local.service_security_groups
     assign_public_ip = true
   }
-  service_registries { registry_arn = aws_service_discovery_service.service[each.key].arn }
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_private_dns_namespace.this.arn
+    service {
+      port_name      = each.key
+      discovery_name = each.key
+      client_alias {
+        dns_name = "${each.key}.${var.cloud_map_namespace}"
+        port     = each.value.internal_port
+      }
+    }
+  }
+  deployment_controller { type = "ECS" }
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+  deployment_configuration {
+    strategy             = "BLUE_GREEN"
+    bake_time_in_minutes = var.ecs_blue_green_bake_minutes
+  }
+  dynamic "alarms" {
+    for_each = contains(keys(local.ingress_services), each.key) ? [each.key] : []
+    content {
+      alarm_names = [
+        aws_cloudwatch_metric_alarm.primary_target_5xx[alarms.value].alarm_name,
+        aws_cloudwatch_metric_alarm.alternate_target_5xx[alarms.value].alarm_name,
+      ]
+      enable   = true
+      rollback = true
+    }
+  }
+  sigint_rollback = true
   dynamic "load_balancer" {
     for_each = contains(keys(local.ingress_services), each.key) ? [each.key] : []
     content {
       target_group_arn = aws_lb_target_group.service[load_balancer.value].arn
       container_name   = each.key
       container_port   = each.value.internal_port
+      advanced_configuration {
+        alternate_target_group_arn = aws_lb_target_group.alternate[load_balancer.value].arn
+        production_listener_rule   = aws_lb_listener_rule.production[load_balancer.value].arn
+        role_arn                   = aws_iam_role.ecs_load_balancer.arn
+      }
     }
-  }
-  deployment_circuit_breaker {
-    enable   = true
-    rollback = true
   }
   lifecycle {
     ignore_changes = [task_definition, desired_count]

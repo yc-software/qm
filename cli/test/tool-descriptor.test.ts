@@ -1,11 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  compileApproval,
-  interpolateSplitEnv,
-  parseSkillFrontmatter,
-  parseToolDescriptor,
-} from "../src/sandbox-layer.ts";
+import { compileApproval, parseSkillFrontmatter, parseToolDescriptor } from "../src/sandbox-layer.ts";
 import * as canonical from "../../src/deployment/deployment-layer.ts";
 import { parseSeedSkillFrontmatter } from "../../src/skills/frontmatter.ts";
 
@@ -50,20 +45,18 @@ test("install.binary is restricted to the inert charset (it lands in generated D
   }
 });
 
-test("auth requires check + reauth; credentialPaths + splitEnv optional and shape-checked", () => {
+test("auth requires check + reauth; credentialPaths optional and shape-checked", () => {
   const d = P({
     id: "my-tool",
     auth: {
       check: "my-tool status",
       reauth: "my-tool auth login",
       credentialPaths: [credentialDirectory(".my-tool")],
-      splitEnv: { MY_TOOL_ACTING_USER: "{actingSlackUserId}" },
     },
   });
   assert.equal(d.auth!.check, "my-tool status");
   assert.equal(d.auth!.reauth, "my-tool auth login");
   assert.deepEqual(d.auth!.credentialPaths, [credentialDirectory(".my-tool")]);
-  assert.deepEqual(d.auth!.splitEnv, { MY_TOOL_ACTING_USER: "{actingSlackUserId}" });
   assert.throws(() => P({ id: "x", auth: { reauth: "y" } }), /"auth.check" is required/);
   assert.throws(() => P({ id: "x", auth: { check: "y" } }), /"auth.reauth" is required/);
   assert.throws(
@@ -78,14 +71,6 @@ test("auth requires check + reauth; credentialPaths + splitEnv optional and shap
     () => P({ id: "x", auth: { check: "a", reauth: "b", credentialPaths: [{ path: ".x", kind: "other" }] } }),
     /kind file or directory/,
   );
-  assert.throws(
-    () => P({ id: "x", auth: { check: "a", reauth: "b", splitEnv: { K: 5 } } }),
-    /splitEnv.K" must be a string/,
-  );
-  assert.throws(
-    () => P({ id: "x", auth: { check: "a", reauth: "b", splitEnv: { K: "{unknown}" } } }),
-    /may only use the \{actingSlackUserId\} placeholder/,
-  );
 });
 
 test("id must match the shell/regex-inert charset (interpolated into probe scripts)", () => {
@@ -94,20 +79,6 @@ test("id must match the shell/regex-inert charset (interpolated into probe scrip
   for (const bad of ["Bad", "a|b", "a b", "a'b", "-lead", "a/b"]) {
     assert.throws(() => P({ id: bad }), /must match \^\[a-z0-9\]/, `expected reject: ${bad}`);
   }
-});
-
-test("splitEnv keys must be uppercase env-var names", () => {
-  assert.doesNotThrow(() =>
-    P({ id: "t", auth: { check: "c", reauth: "r", splitEnv: { MY_TOOL_USER: "{actingSlackUserId}" } } }),
-  );
-  assert.throws(
-    () => P({ id: "t", auth: { check: "c", reauth: "r", splitEnv: { "bad-key": "v" } } }),
-    /must match \^\[A-Z\]/,
-  );
-  assert.throws(
-    () => P({ id: "t", auth: { check: "c", reauth: "r", splitEnv: { lower: "v" } } }),
-    /must match \^\[A-Z\]/,
-  );
 });
 
 test("credentialPaths reject whitespace (device-flow capture word-splits the find roots)", () => {
@@ -275,15 +246,6 @@ test("install.binary is the approval target for command and raw-pattern rules", 
   );
 });
 
-test("interpolateSplitEnv is all-or-nothing on placeholders; literals pass through", () => {
-  assert.deepEqual(interpolateSplitEnv({ A: "{actingSlackUserId}", B: "slack" }, { actingSlackUserId: "U123" }), {
-    A: "U123",
-    B: "slack",
-  });
-  assert.deepEqual(interpolateSplitEnv({ A: "{actingSlackUserId}", B: "slack" }, {}), {});
-  assert.deepEqual(interpolateSplitEnv({ B: "slack" }, {}), { B: "slack" });
-});
-
 test("parseSkillFrontmatter requires name + description + body; requiredCapabilities optional", () => {
   const fm = parseSkillFrontmatter("---\nname: greet\ndescription: Greet a teammate by name.\n---\nbody", "SKILL.md");
   assert.equal(fm.name, "greet");
@@ -360,7 +322,6 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
         check: "c",
         reauth: "r",
         credentialPaths: [credentialFile(".p")],
-        splitEnv: { K: "{actingSlackUserId}" },
       },
     },
     {
@@ -381,12 +342,6 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
       auth: {
         check: "c",
         reauth: "r",
-        broker: {
-          kind: "aws-role",
-          roleArnEnv: "T_ROLE_ARN",
-          region: "us-west-2",
-          sessionActions: ["execute-api:Invoke"],
-        },
       },
     },
     {
@@ -394,12 +349,6 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
       auth: {
         check: "c",
         reauth: "r",
-        broker: {
-          kind: "aws-role",
-          roleArnEnv: "T_ROLE_ARN",
-          regionEnv: "T_REGION",
-          sessionActions: ["execute-api:Invoke", "s3:GetObject"],
-        },
       },
     },
     {
@@ -416,19 +365,11 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
     );
   }
   const invalid = [
+    '{"id":"x","auth":{"check":"a","reauth":"b","broker":{}}}',
     "{}",
     '{"id":""}',
     '{"id":"x","auth":{"check":"a"}}',
     '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"gcp","roleArnEnv":"R","region":"r","sessionActions":["a"]}}}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","region":"r","sessionActions":["a"]}}}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","roleArnEnv":"lower","region":"r","sessionActions":["a"]}}}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","roleArnEnv":"R","sessionActions":["a"]}}}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","roleArnEnv":"R","region":"r","sessionActions":[]}}}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","roleArnEnv":"R","region":"r","sessionActions":[" "]}}}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","roleArnEnv":"R","regionEnv":"bad-env","sessionActions":["a"]}}}',
-    '{"id":"my-tool","auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","roleArnEnv":"R","region":"r","sessionActions":["a"]}}}',
-    '{"id":"x","install":{"binary":"tool-bin"},"auth":{"check":"a","reauth":"b","broker":{"kind":"aws-role","roleArnEnv":"R","region":"r","sessionActions":["a"]}}}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","splitEnv":{"K":"{unknown}"}}}',
     '{"id":"x","approvals":[{}]}',
     '{"id":"x","approvals":[{"command":"a","decision":"allow"}]}',
     '{"id":"gh","approvals":[{"pattern":"nightmare"}]}',
@@ -439,7 +380,6 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":".my-tool","kind":"directory"},{"path":".my-tool/creds","kind":"file"}]}}',
     '{"id":"Bad"}',
     '{"id":"a|b"}',
-    '{"id":"x","auth":{"check":"a","reauth":"b","splitEnv":{"bad-key":"v"}}}',
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":".my tool","kind":"file"}]}}',
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":"workspace","kind":"directory"}]}}',
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":".acme","kind":"directory"},{"path":".acme/sub/key","kind":"file"}]}}',
@@ -476,10 +416,53 @@ test("drift-lock: cli sandbox-layer parser matches the canonical src/deployment 
     assert.equal(cliErr, canErr, `error message drift on: ${raw}`);
   }
   assert.deepEqual(compileApproval("t", { command: "a b" }), canonical.compileApproval("t", { command: "a b" }));
-  assert.deepEqual(
-    interpolateSplitEnv({ A: "{actingSlackUserId}" }, {}),
-    canonical.interpolateSplitEnv({ A: "{actingSlackUserId}" }, {}),
-  );
-  assert.deepEqual(interpolateSplitEnv({ A: "{constructor}" }, {}), {});
-  assert.deepEqual(canonical.interpolateSplitEnv({ A: "{constructor}" }, {}), {});
+});
+
+test("install.files: shape-checked, mode defaulted by destination, and byte-identical to the canonical parser", () => {
+  const raw = {
+    id: "t",
+    install: {
+      binary: "t",
+      files: [
+        { from: "t", to: "/usr/local/bin/t" },
+        { from: "lib.mjs", to: "/usr/local/lib/t/lib.mjs", mode: "0600" },
+      ],
+    },
+  };
+  const parsed = P(raw);
+  assert.deepEqual(parsed.install, {
+    binary: "t",
+    files: [
+      { from: "t", to: "/usr/local/bin/t", mode: "0755" },
+      { from: "lib.mjs", to: "/usr/local/lib/t/lib.mjs", mode: "0600" },
+    ],
+  });
+  assert.deepEqual(parsed, canonical.parseToolDescriptor(JSON.stringify(raw), "t.json"));
+  for (const [files, message] of [
+    [{}, /must be an array/],
+    [["t"], /must be an object/],
+    [[{ from: "tool.json", to: "/usr/local/bin/t" }], /not tool\.json itself/],
+    [[{ from: "sub/t", to: "/usr/local/bin/t" }], /must name a file beside tool\.json/],
+    [[{ from: "t", to: "/usr/bin/t" }], /under \/usr\/local\/bin\/ or \/usr\/local\/lib\//],
+    [[{ from: "t", to: "/usr/local/bin/../etc/t" }], /under \/usr\/local\/bin\/ or \/usr\/local\/lib\//],
+    [[{ from: "t", to: "/usr/local/bin/node" }], /must be \/usr\/local\/bin\/t or a path under \/usr\/local\/lib\/t\//],
+    [
+      [{ from: "t", to: "/usr/local/lib/other/t" }],
+      /must be \/usr\/local\/bin\/t or a path under \/usr\/local\/lib\/t\//,
+    ],
+    [[{ from: "t", to: "/usr/local/bin/t", mode: "755" }], /four-digit octal/],
+    [
+      [
+        { from: "a", to: "/usr/local/bin/t" },
+        { from: "b", to: "/usr/local/bin/t" },
+      ],
+      /declares "\/usr\/local\/bin\/t" twice/,
+    ],
+  ] as const) {
+    assert.throws(() => P({ id: "t", install: { files } }), message);
+    assert.throws(
+      () => canonical.parseToolDescriptor(JSON.stringify({ id: "t", install: { files } }), "t.json"),
+      message,
+    );
+  }
 });

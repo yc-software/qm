@@ -1,11 +1,12 @@
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
+import type { TurnResult } from "../types.ts";
+import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 
 export function isBoundaryRefusal(reason: string | undefined): boolean {
   return (reason ?? "").startsWith("internal-only");
 }
 
 export function refusalDelivery(
-  result: { refusalKind?: "security_quarantine" },
+  result: { refusalKind?: TurnResult["refusalKind"] },
   unprompted: boolean,
 ): "thread" | "requester" | "silent" {
   if (unprompted) return "silent";
@@ -27,20 +28,20 @@ export async function postThenAckRunDelivery(opts: {
 }
 
 export function refusalNote(
-  result: { reason?: string; adminUrl?: string; refusalKind?: "security_quarantine" },
+  result: { status?: string; reason?: string; adminUrl?: string; refusalKind?: TurnResult["refusalKind"] },
   kind: "dm" | "channel",
 ): string {
-  if (result.refusalKind === "security_quarantine") {
-    return SECURITY_QUARANTINE_REFUSAL_TEXT;
-  }
+  const standalone = standaloneFailureText(result);
+  if (standalone) return standalone;
   const reason = result.reason ?? "refused";
   if (isBoundaryRefusal(reason)) {
     return kind === "dm"
       ? `I can't respond just now — ${reason}.`
       : `I can't respond here — ${reason}. Try a DM or a fully-internal channel.`;
   }
+  const clause = userFacingFailureClause(result);
   const detail = result.adminUrl ? ` Full error: ${result.adminUrl}` : "";
   return kind === "dm"
-    ? `I hit an error and couldn't finish — ${reason}.${detail}`
-    : `I hit an error and couldn't finish — ${reason}.${detail} Try again, or DM me.`;
+    ? `I hit an error and couldn't finish — ${clause}.${detail}`
+    : `I hit an error and couldn't finish — ${clause}.${detail} Try again, or DM me.`;
 }

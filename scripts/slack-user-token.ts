@@ -37,7 +37,11 @@ async function main(): Promise<void> {
           redirect_uri: REDIRECT,
         });
         const resp = await fetch("https://slack.com/api/oauth.v2.access", { method: "POST", body });
-        const data = (await resp.json()) as any;
+        const data = (await resp.json()) as {
+          ok?: boolean;
+          authed_user?: { access_token?: string; id: string };
+          team?: { name?: string; id?: string };
+        };
         if (!data.ok || !data.authed_user?.access_token) throw new Error(`oauth.v2.access: ${JSON.stringify(data)}`);
         res
           .writeHead(200, { "content-type": "text/html" })

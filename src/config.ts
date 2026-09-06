@@ -1,5 +1,10 @@
 import { existsSync, readdirSync } from "node:fs";
-import { providerBaseUrlsFromEnv, type ProviderBaseUrls } from "./model/provider-endpoints.ts";
+import {
+  parseProviderBaseUrl,
+  providerBaseUrlsFromEnv,
+  type ModelGatewayTransportConfig,
+  type ProviderBaseUrls,
+} from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import {
   parseMemoryCaptureMode,
@@ -37,8 +42,8 @@ export interface Config {
   databaseCaCertFile?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
-  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "porter" | "agent37";
-  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "porter" | "agent37";
+  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
+  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
   deployProvider: "docker" | "aws" | "fly" | "porter";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
@@ -63,6 +68,7 @@ export interface Config {
   openrouterApiKey?: string;
   modelProvider?: ModelProvider;
   providerBaseUrls: ProviderBaseUrls;
+  modelGateway?: ModelGatewayTransportConfig;
   piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
   sessionTapeMode: "shadow" | "serve";
@@ -76,7 +82,6 @@ export interface Config {
   budgetUsdPerWindow?: number;
   orgBudgetUsdPerWindow?: number;
   budgetWindowMs: number;
-  maxContextEntries?: number;
   maxContextTokens?: number;
   execTimeoutDefaultMs: number;
   execTimeoutMaxMs: number;
@@ -97,6 +102,7 @@ export interface Config {
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
+  slackEventsPort?: number;
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -140,6 +146,7 @@ export interface Config {
   maxClaims: number;
   processReaperIntervalMs: number;
   approvalSummaryTimeoutMs: number;
+  turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
   securityScreenBackend: "model" | "proxy";
   securityScreenProxy?: {
@@ -148,8 +155,6 @@ export interface Config {
     token: string;
     shadow: boolean;
   };
-  insightsIntervalMs: number;
-  reachDeniedNotifyChannel?: string;
   scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
   sharedOwnerAuthIsolation: boolean;
@@ -160,6 +165,8 @@ export interface Config {
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
   agent37Sandbox: Agent37SandboxEnv;
+  e2bSandbox: E2bSandboxEnv;
+  modalSandbox: ModalSandboxEnv;
   porterSandbox: PorterSandboxEnv;
   porterDeploy: PorterDeployEnv;
   awsDeploy: AwsDeployEnv;
@@ -195,7 +202,10 @@ export function harnessCarriedModelAuth(config: Config): ModelProvider | undefin
       config.claudeProcessEnv.ANTHROPIC_AUTH_TOKEN)
   )
     return "anthropic";
-  if (config.harness === "codex" && (config.codexAuthCredential || config.codexProcessEnv.CODEX_ACCESS_TOKEN))
+  if (
+    config.harness === "codex" &&
+    (config.codexAuthCredential || config.codexAuthFile || config.codexProcessEnv.CODEX_ACCESS_TOKEN)
+  )
     return "openai";
   return undefined;
 }
@@ -321,6 +331,123 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
   };
 }
 
+interface E2bSandboxEnv {
+  apiKey?: string;
+  templateId?: string;
+  namePrefix?: string;
+  sandboxTtlSec?: number;
+
+  proxy?: string;
+
+  egressProxyUrl?: string;
+  snapshotS3Bucket?: string;
+  snapshotIntervalSec?: number;
+  defaultTimeoutSec?: number;
+}
+
+function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
+  return {
+    ...(env.E2B_API_KEY ? { apiKey: env.E2B_API_KEY } : {}),
+    ...(env.E2B_TEMPLATE_ID ? { templateId: env.E2B_TEMPLATE_ID } : {}),
+    ...(env.E2B_NAME_PREFIX ? { namePrefix: env.E2B_NAME_PREFIX } : {}),
+    ...(numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) !== undefined
+      ? { sandboxTtlSec: numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) }
+      : {}),
+    ...(env.E2B_PROXY ? { proxy: env.E2B_PROXY } : {}),
+    ...(env.E2B_EGRESS_PROXY_URL ? { egressProxyUrl: env.E2B_EGRESS_PROXY_URL } : {}),
+    ...(env.E2B_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.E2B_SNAPSHOT_S3_BUCKET } : {}),
+    ...(numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) !== undefined
+      ? { snapshotIntervalSec: numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) }
+      : {}),
+    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
+      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
+      : {}),
+  };
+}
+
+interface ModalSandboxEnv {
+  tokenId?: string;
+  tokenSecret?: string;
+  appName?: string;
+  environment?: string;
+  image?: string;
+  namePrefix?: string;
+  cpus?: number;
+  memoryMb?: number;
+  regions?: string[];
+  sandboxTimeoutSec?: number;
+  rotateAfterSec?: number;
+  reapIdleSec?: number;
+  egressProxyUrl?: string;
+  snapshotS3Bucket?: string;
+  snapshotIntervalSec?: number;
+  defaultTimeoutSec?: number;
+}
+
+function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
+  const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
+  return {
+    ...(env.MODAL_TOKEN_ID ? { tokenId: env.MODAL_TOKEN_ID } : {}),
+    ...(env.MODAL_TOKEN_SECRET ? { tokenSecret: env.MODAL_TOKEN_SECRET } : {}),
+    ...(env.MODAL_APP_NAME ? { appName: env.MODAL_APP_NAME } : {}),
+    ...(env.MODAL_ENVIRONMENT ? { environment: env.MODAL_ENVIRONMENT } : {}),
+    ...(env.MODAL_IMAGE ? { image: env.MODAL_IMAGE } : {}),
+    ...(env.MODAL_NAME_PREFIX ? { namePrefix: env.MODAL_NAME_PREFIX } : {}),
+    ...(num("MODAL_CPUS") !== undefined ? { cpus: num("MODAL_CPUS") } : {}),
+    ...(num("MODAL_MEMORY_MB") !== undefined ? { memoryMb: num("MODAL_MEMORY_MB") } : {}),
+    ...(env.MODAL_REGIONS?.trim()
+      ? {
+          regions: env.MODAL_REGIONS.split(",")
+            .map((r) => r.trim())
+            .filter(Boolean),
+        }
+      : {}),
+    ...(num("MODAL_SANDBOX_TIMEOUT_SEC") !== undefined ? { sandboxTimeoutSec: num("MODAL_SANDBOX_TIMEOUT_SEC") } : {}),
+    ...(num("MODAL_ROTATE_AFTER_SEC") !== undefined ? { rotateAfterSec: num("MODAL_ROTATE_AFTER_SEC") } : {}),
+    ...(num("MODAL_REAP_IDLE_SEC") !== undefined ? { reapIdleSec: num("MODAL_REAP_IDLE_SEC") } : {}),
+    ...(env.MODAL_EGRESS_PROXY_URL ? { egressProxyUrl: env.MODAL_EGRESS_PROXY_URL } : {}),
+    ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
+    ...(num("MODAL_SNAPSHOT_INTERVAL_SEC") !== undefined
+      ? { snapshotIntervalSec: num("MODAL_SNAPSHOT_INTERVAL_SEC") }
+      : {}),
+    ...(num("SANDBOX_TIMEOUT_SEC") !== undefined ? { defaultTimeoutSec: num("SANDBOX_TIMEOUT_SEC") } : {}),
+  };
+}
+
+interface SmolmachinesSandboxEnv {
+  token?: string;
+  baseUrl?: string;
+  namePrefix?: string;
+  image?: string;
+  cpus?: number;
+  memoryMb?: number;
+  diskGb?: number;
+  egressProxyUrl?: string;
+  defaultTimeoutSec?: number;
+}
+
+function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv {
+  return {
+    ...(env.SMOLMACHINES_TOKEN ? { token: env.SMOLMACHINES_TOKEN } : {}),
+    ...(env.SMOLMACHINES_BASE_URL ? { baseUrl: env.SMOLMACHINES_BASE_URL } : {}),
+    ...(env.SMOLMACHINES_NAME_PREFIX ? { namePrefix: env.SMOLMACHINES_NAME_PREFIX } : {}),
+    ...(env.SMOLMACHINES_IMAGE ? { image: env.SMOLMACHINES_IMAGE } : {}),
+    ...(numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) !== undefined
+      ? { cpus: numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) }
+      : {}),
+    ...(numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) !== undefined
+      ? { memoryMb: numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) }
+      : {}),
+    ...(numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) !== undefined
+      ? { diskGb: numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) }
+      : {}),
+    ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
+    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
+      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
+      : {}),
+  };
+}
+
 interface PorterSandboxEnv {
   image?: string;
   token?: string;
@@ -393,40 +520,6 @@ function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
     ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
     ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-  };
-}
-
-interface SmolmachinesSandboxEnv {
-  token?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  image?: string;
-  cpus?: number;
-  memoryMb?: number;
-  diskGb?: number;
-  egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
-}
-
-function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv {
-  return {
-    ...(env.SMOLMACHINES_TOKEN ? { token: env.SMOLMACHINES_TOKEN } : {}),
-    ...(env.SMOLMACHINES_BASE_URL ? { baseUrl: env.SMOLMACHINES_BASE_URL } : {}),
-    ...(env.SMOLMACHINES_NAME_PREFIX ? { namePrefix: env.SMOLMACHINES_NAME_PREFIX } : {}),
-    ...(env.SMOLMACHINES_IMAGE ? { image: env.SMOLMACHINES_IMAGE } : {}),
-    ...(numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) !== undefined
-      ? { cpus: numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) }
-      : {}),
-    ...(numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) }
-      : {}),
-    ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
@@ -662,8 +755,8 @@ export const CONFIG_DEFAULTS = {
   cronFireConcurrency: 4,
   monitorHeartbeatSec: 180,
   approvalSummaryTimeoutMs: 6_000,
+  turnLeaseWaitMs: 5_000,
   securityScreenTimeoutMs: 15_000,
-  insightsIntervalMs: 5 * 60_000,
   workers: 16,
   leaseTtlMs: 120_000,
   heartbeatIntervalMs: 10_000,
@@ -727,6 +820,24 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
   );
 }
 
+export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
+  const credentialed: Record<Config["sandboxBackend"], boolean> = {
+    local: Boolean(config.localSandbox?.image),
+    sprites: Boolean(config.spritesSandbox?.token),
+    smolmachines: Boolean(config.smolmachinesSandbox?.token),
+    agent37: Boolean(config.agent37Sandbox?.apiKey),
+    e2b: Boolean(config.e2bSandbox?.apiKey),
+    modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
+    aws: Boolean(config.awsSandbox?.s3Bucket),
+    porter: Boolean(config.porterSandbox?.token),
+  };
+  const enabled = new Set<Config["sandboxBackend"]>([config.sandboxBackend]);
+  for (const [name, on] of Object.entries(credentialed)) {
+    if (on) enabled.add(name as Config["sandboxBackend"]);
+  }
+  return [...enabled];
+}
+
 function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): Config["sandboxBackend"] {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
@@ -735,12 +846,14 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
     backend === "local" ||
     backend === "sprites" ||
     backend === "smolmachines" ||
-    backend === "porter" ||
-    backend === "agent37"
+    backend === "e2b" ||
+    backend === "modal" ||
+    backend === "agent37" ||
+    backend === "porter"
   )
     return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, porter, or agent37, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, or agent37, or unset it.`,
   );
 }
 
@@ -784,6 +897,33 @@ function csvPaths(value: string | undefined): string[] | undefined {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((p) => resolve(p));
+}
+
+function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
+  const names = ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_API_KEY", "MODEL_GATEWAY_API_KEY_HEADER", "MODEL_GATEWAY_MODELS"];
+  if (!names.some((name) => env[name]?.trim())) return undefined;
+  for (const name of names) {
+    if (!env[name]?.trim()) throw new Error(`${name} is required when model gateway routing is configured`);
+  }
+  const apiKeyHeader = env.MODEL_GATEWAY_API_KEY_HEADER!.trim();
+  if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(apiKeyHeader)) {
+    throw new Error("MODEL_GATEWAY_API_KEY_HEADER must be a valid HTTP header name");
+  }
+  const models: Record<string, string> = {};
+  for (const mapping of env.MODEL_GATEWAY_MODELS!.split(",")) {
+    const separator = mapping.indexOf("=");
+    const source = mapping.slice(0, separator).trim();
+    const target = mapping.slice(separator + 1).trim();
+    if (separator < 1 || !source || !target) throw new Error(`invalid MODEL_GATEWAY_MODELS mapping: ${mapping}`);
+    if (models[source]) throw new Error(`duplicate MODEL_GATEWAY_MODELS source: ${source}`);
+    models[source] = target;
+  }
+  return {
+    url: parseProviderBaseUrl("MODEL_GATEWAY_URL", env.MODEL_GATEWAY_URL!),
+    apiKey: env.MODEL_GATEWAY_API_KEY!,
+    apiKeyHeader,
+    models,
+  };
 }
 
 function defaultPluginSkillDirs(): string[] {
@@ -851,6 +991,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       );
     }
   }
+  if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
+    console.warn(
+      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — home snapshots are held in memory only, so a core restart plus an expired pause LOSES scope files; set E2B_SNAPSHOT_S3_BUCKET for durable snapshots.",
+    );
+  }
+  if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_SNAPSHOT_S3_BUCKET) {
+    console.warn(
+      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — home snapshots are held in memory only, and modal has no pause: a core restart, an idle reap, or the 24h lifetime wall LOSES scope files; set MODAL_SNAPSHOT_S3_BUCKET for durable snapshots.",
+    );
+  }
   if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {
     console.warn(
       `[config] HARNESS is ${env.HARNESS?.trim() ? '"mock"' : "unset, which means mock"} in production — this deployment answers every message with canned text and calls no model provider. Set HARNESS=pi to run real agent turns.`,
@@ -862,7 +1012,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
-  const porterSandboxSelected = env.SANDBOX_BACKEND === "porter" || env.SANDBOX_SECONDARY_BACKEND === "porter";
+  const porterSandboxSelected = env.SANDBOX_BACKEND === "porter";
   if (porterSandboxSelected && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {
     console.warn(
       "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
@@ -885,16 +1035,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, porter, agent37, aws, or local.",
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, aws, or local.",
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
-  const secondaryRaw = env.SANDBOX_SECONDARY_BACKEND?.trim();
-  let sandboxSecondaryBackend: Config["sandboxSecondaryBackend"];
-  if (secondaryRaw) {
-    const secondary = sandboxBackendEnvStrict(secondaryRaw, "SANDBOX_SECONDARY_BACKEND");
-    if (secondary === sandboxBackend) throw new Error("SANDBOX_SECONDARY_BACKEND must differ from SANDBOX_BACKEND.");
-    sandboxSecondaryBackend = secondary;
+  if (env.SANDBOX_SECONDARY_BACKEND?.trim()) {
+    console.warn(
+      `[config] SANDBOX_SECONDARY_BACKEND=${JSON.stringify(env.SANDBOX_SECONDARY_BACKEND.trim())} is retired and ignored — every backend whose credential is present is constructed; per-scope routes pick between them. Remove the variable.`,
+    );
+  }
+  const retiredBrainEnv = ["BRAIN", "BRAIN_MCP_URL", "BRAIN_RO_CLIENT_ID", "BRAIN_RW_CLIENT_ID"].filter((name) =>
+    env[name]?.trim(),
+  );
+  if (retiredBrainEnv.length) {
+    console.warn(
+      `[config] ${retiredBrainEnv.join(", ")} ${retiredBrainEnv.length === 1 ? "is" : "are"} retired and ignored — the brain integration was removed; point an external knowledge server at MEMORY_PROVIDER_CONFIG (docs/memory-providers.md). Remove the variables.`,
+    );
   }
   const securityScreenBackend = securityScreenBackendEnvStrict(env.SECURITY_SCREEN_BACKEND);
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
@@ -959,6 +1115,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (codexOAuthConfigured && codexAuthCandidate) codexEnv.CODEX_AUTH_FILE = codexAuthCandidate;
   else delete codexEnv.CODEX_AUTH_FILE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
+  const modelGateway = modelGatewayFromEnv(env);
   const codexProcessEnv = Object.fromEntries(
     [
       "PATH",
@@ -1005,6 +1162,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     numEnvStrict("RUN_MAX_AGE_MS", env.RUN_MAX_AGE_MS) ??
     (turnWallClockMs > 0 ? 2 * turnWallClockMs : CONFIG_DEFAULTS.runMaxAgeMs);
   const slack = slackPluginConfigFromEnv(env);
+  const slackEventsPort =
+    env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
+  if (
+    slackEventsPort !== undefined &&
+    (!Number.isSafeInteger(slackEventsPort) || slackEventsPort <= 0 || slackEventsPort > 65_535)
+  ) {
+    throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
+  }
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   return {
     production: env.NODE_ENV === "production",
@@ -1030,7 +1195,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     sandboxBackend,
-    ...(sandboxSecondaryBackend ? { sandboxSecondaryBackend } : {}),
     deployProvider,
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
@@ -1059,6 +1223,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
     ...(modelProvider ? { modelProvider } : {}),
     providerBaseUrls,
+    ...(modelGateway ? { modelGateway } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS
       ? {
@@ -1090,9 +1255,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { orgBudgetUsdPerWindow: numEnvStrict("ORG_BUDGET_USD_PER_WINDOW", env.ORG_BUDGET_USD_PER_WINDOW) }
       : {}),
     budgetWindowMs: numEnvStrict("BUDGET_WINDOW_MS", env.BUDGET_WINDOW_MS) ?? CONFIG_DEFAULTS.budgetWindowMs,
-    ...(numEnvStrict("MAX_CONTEXT_ENTRIES", env.MAX_CONTEXT_ENTRIES) !== undefined
-      ? { maxContextEntries: numEnvStrict("MAX_CONTEXT_ENTRIES", env.MAX_CONTEXT_ENTRIES) }
-      : {}),
     ...(numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) !== undefined
       ? { maxContextTokens: numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) }
       : {}),
@@ -1128,8 +1290,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
+    ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),
     secretsPrefix: env.SECRETS_PREFIX ?? "",
+    layerEnv: { ...env },
     ...(publicApiUrl ? { apiBaseUrl: publicApiUrl } : {}),
     ...(publicUrl ? { publicUrl } : {}),
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
@@ -1141,7 +1305,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     skillsSeedDir: resolve(env.SKILLS_SEED_DIR ?? "./skills-seed"),
     pluginSkillDirs: csvPaths(env.PLUGIN_SKILLS_DIRS) ?? defaultPluginSkillDirs(),
     ...(env.DEPLOYMENT_LAYER ? { deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER) } : {}),
-    layerEnv: { ...env },
     memoryRecall: parseMemoryRecallMode(env.MEMORY_RECALL),
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
@@ -1186,10 +1349,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     approvalSummaryTimeoutMs:
       numEnvStrict("APPROVAL_SUMMARY_TIMEOUT_MS", env.APPROVAL_SUMMARY_TIMEOUT_MS) ??
       CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
+    turnLeaseWaitMs: numEnvStrict("TURN_LEASE_WAIT_MS", env.TURN_LEASE_WAIT_MS) ?? CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs,
-    insightsIntervalMs:
-      numEnvStrict("INSIGHTS_INTERVAL_MS", env.INSIGHTS_INTERVAL_MS) ?? CONFIG_DEFAULTS.insightsIntervalMs,
-    ...(env.REACH_DENIED_NOTIFY_CHANNEL ? { reachDeniedNotifyChannel: env.REACH_DENIED_NOTIFY_CHANNEL.trim() } : {}),
     scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     sharedOwnerAuthIsolation: boolEnvStrict("SHARED_OWNER_AUTH_ISOLATION", env.SHARED_OWNER_AUTH_ISOLATION) ?? false,
@@ -1202,6 +1363,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agent37Sandbox: agent37SandboxEnv(env),
     porterSandbox: porterSandboxEnv(env),
     porterDeploy: porterDeployEnv(env),
+    e2bSandbox: e2bSandboxEnv(env),
+    modalSandbox: modalSandboxEnv(env),
     awsDeploy: {
       ...awsDeployEnv(env),
       ...(env.DEPLOY_APPS_DOMAIN && deployAppsDomain && !env.AWS_DEPLOY_APPS_DOMAIN

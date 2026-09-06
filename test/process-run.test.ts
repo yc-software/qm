@@ -393,3 +393,32 @@ test("a NonRetryableTurnError parks the run even with attempts remaining", async
   assert.equal(parked?.attempts, 1, "parked on the first attempt, not after exhausting maxAttempts");
   assert.equal(parked?.result?.reason, "policy says no");
 });
+
+test("a crashed turn's raw exception text never reaches the stored reason", async () => {
+  const { runs } = createMemoryRunStore();
+  const orchestrator = fakeOrchestrator(async () => {
+    throw new Error("connect ECONNREFUSED db-internal.local:5432 password=hunter2");
+  });
+
+  await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 });
+  const run = await runs.claim("w1", 5_000);
+  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!), /db-internal/);
+
+  const parked = await runs.get(run!.id);
+  assert.equal(parked?.status, "failed");
+  const reason = parked?.result?.reason ?? "";
+  assert.ok(!reason.includes("db-internal"), `raw error leaked into the surfaced reason: ${reason}`);
+  assert.match(reason, /operator error log/, "surfaces point operators at the log instead");
+});
+
+test("a NonRetryableTurnError keeps its human-readable reason on the stored result", async () => {
+  const { runs } = createMemoryRunStore();
+  const orchestrator = fakeOrchestrator(async () => {
+    throw new NonRetryableTurnError("Codex turn exceeded 300s wall clock");
+  });
+
+  await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 });
+  const run = await runs.claim("w1", 5_000);
+  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!));
+  assert.equal((await runs.get(run!.id))?.result?.reason, "Codex turn exceeded 300s wall clock");
+});

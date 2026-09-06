@@ -14,9 +14,9 @@ import { testConfig } from "./support/test-config.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
-    { sessionId: "s1", principalId: "U1", validFrom: 100, validTo: null },
-    { sessionId: "s2", principalId: "U1", validFrom: 200, validTo: null },
-    { sessionId: "s1", principalId: "U2", validFrom: 100, validTo: null },
+    { sessionId: "s1", principalId: "U1", validFrom: 100, validTo: null, validFromSeq: null, validToSeq: null },
+    { sessionId: "s2", principalId: "U1", validFrom: 200, validTo: null, validFromSeq: null, validToSeq: null },
+    { sessionId: "s1", principalId: "U2", validFrom: 100, validTo: null, validFromSeq: null, validToSeq: null },
   ];
   const turns = [
     { principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 150, lastAt: 160 },
@@ -37,7 +37,9 @@ test("computeUsers dedupes participants, credits in-window turns, and joins admi
 
 test("computeUsers sums a window's turn rollup and takes its latest timestamp", () => {
   const rows = computeUsers({
-    participants: [{ sessionId: "s1", principalId: "U1", validFrom: 100, validTo: 200 }],
+    participants: [
+      { sessionId: "s1", principalId: "U1", validFrom: 100, validTo: 200, validFromSeq: null, validToSeq: null },
+    ],
     turns: [{ principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 100, lastAt: 199 }],
     grants: [],
   });

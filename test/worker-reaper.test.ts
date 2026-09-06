@@ -180,22 +180,26 @@ test("reaping a lease-expired run releases its stranded session lease", async ()
   assert.ok(reacquired, "session lease was released on reap, so the retry can re-acquire");
 });
 
-test("reapExpired retires the run BEFORE releasing its session lease (release only what was retired)", async () => {
+test("reapExpired fences the dead attempt, releases its session lease, and only then requeues", async () => {
   const { runs } = createMemoryRunStore();
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  await runs.claim("dead-worker", 10);
+  const claimed = await runs.claim("dead-worker", 10);
   await sleep(30);
 
   let statusAtRelease: string | undefined;
+  let zombieBeatAtRelease: boolean | undefined;
   let sessionIdsSeen: string[] = [];
   const swept = await runs.reapExpired(async (sessionIds) => {
     sessionIdsSeen = sessionIds;
     statusAtRelease = (await runs.get(r.id))?.status;
+    zombieBeatAtRelease = await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000);
   });
 
   assert.deepEqual(sessionIdsSeen, ["t1"], "the hook receives the retired run's thread ref");
-  assert.equal(statusAtRelease, "pending", "the run is retired (requeued) before its lease is released");
+  assert.equal(statusAtRelease, "running", "the lease is released BEFORE the retry becomes claimable");
+  assert.equal(zombieBeatAtRelease, false, "the dead attempt is fenced first, so a zombie cannot revive the run");
   assert.equal(swept.requeued, 1);
+  assert.equal((await runs.get(r.id))?.status, "pending", "the retry is claimable only after the release hook ran");
 });
 
 test("a heartbeat landing between SELECT and retire leaves the run AND its session lease untouched", async () => {

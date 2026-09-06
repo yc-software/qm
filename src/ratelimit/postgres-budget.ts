@@ -11,7 +11,7 @@ export function createPostgresBudgetTracker(
   const orgLimitUsd = opts.orgLimitUsd ?? Infinity;
   const windowMs = opts.windowMs ?? DEFAULT_BUDGET_WINDOW_MS;
   const orgKey = "@org";
-  const { q } = createPgPool(connectionString, [
+  const { q } = createPgPool(connectionString, "ratelimit/budget/0001", [
     `CREATE TABLE IF NOT EXISTS budget_spend(
         id BIGSERIAL PRIMARY KEY,
         principal_id TEXT NOT NULL,

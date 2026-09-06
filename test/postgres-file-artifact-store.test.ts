@@ -16,6 +16,7 @@ beforeEach(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS file_artifacts CASCADE");
   await p.end();
 });
@@ -101,6 +102,34 @@ test("pg listOwnedByScopes: created-scope and enabled filters compose", { skip }
     all.files.map((f) => f.id),
     ["d", "b", "a"],
   );
+});
+
+test("pg listOwnedByScopes: nameQuery is case-insensitive and treats wildcards as literals", { skip }, async () => {
+  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+  await store.put(put({ id: "a", name: "Quarterly Report.pdf", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
+  await store.put(put({ id: "b", name: "notes.txt", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
+  await store.put(put({ id: "c", name: "report-draft.txt", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
+  await store.put(put({ id: "d", name: "100%_done.txt", path: "p/d", data: Buffer.from("d"), createdAt: 400 }));
+  await store.put(put({ id: "e", name: "dir\\file.txt", path: "p/e", data: Buffer.from("e"), createdAt: 500 }));
+
+  const hit = await store.listOwnedByScopes([owner], { nameQuery: "REPORT" });
+  assert.deepEqual(
+    hit.files.map((f) => f.id),
+    ["c", "a"],
+  );
+  const literal = await store.listOwnedByScopes([owner], { nameQuery: "%_" });
+  assert.deepEqual(
+    literal.files.map((f) => f.id),
+    ["d"],
+    "% and _ match only themselves, not as SQL wildcards",
+  );
+  const backslash = await store.listOwnedByScopes([owner], { nameQuery: "dir\\file" });
+  assert.deepEqual(
+    backslash.files.map((f) => f.id),
+    ["e"],
+    "a literal backslash in the query matches itself",
+  );
+  assert.equal((await store.listOwnedByScopes([owner], { nameQuery: "missing" })).files.length, 0);
 });
 
 test("pg scoped file pages have a matching enabled recency index", { skip }, async () => {

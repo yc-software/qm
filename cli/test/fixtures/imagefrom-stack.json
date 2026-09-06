@@ -8,8 +8,7 @@
   "flyOrg": "personal",
   "imageFrom": "qm",
   "sandbox": {
-    "app": "beta-sandboxes",
-    "image": "registry.fly.io/beta-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+    "app": "beta-sandboxes"
   },
   "services": ["core", "slack", "admin", "web-ui", "portal"],
   "vms": {
@@ -18,7 +17,7 @@
   "env": {
     "core": {
       "PUBLIC_WEB_URL": "https://beta-portal.fly.dev",
-      "FLY_SANDBOX_APP_NAME": "beta-sandboxes",
+      "STACK_MARKER": "beta-sandboxes",
       "SNAPSHOT_STORE": "s3",
       "TRANSFER_STORE": "s3",
       "S3_BUCKET": "beta-data",

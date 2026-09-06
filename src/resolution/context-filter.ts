@@ -8,6 +8,7 @@ export function principalEntitledToScope(
   orgScopeId: ScopeId,
 ): boolean {
   if (label === orgScopeId) return true;
+
   if (label === sessionScopeId) return true;
   const { kind, ref } = parseScopeId(label);
   if (kind === "personal") return p.id === ref;

@@ -22,7 +22,7 @@ export const scenarios: Scenario[] = [
   {
     name: "mention-reply",
     lane: "parallel",
-    tags: ["smoke", "core"],
+    tags: ["smoke", "core", "release"],
     async run(ctx) {
       const ch = await ctx.freshChannel();
       const marker = ctx.marker();
@@ -34,7 +34,7 @@ export const scenarios: Scenario[] = [
   {
     name: "thread-context",
     lane: "parallel",
-    tags: ["core"],
+    tags: ["core", "release"],
     async run(ctx) {
       const ch = await ctx.freshChannel();
       const codeword = ctx.marker("codeword");
@@ -178,7 +178,7 @@ export const scenarios: Scenario[] = [
   {
     name: "file-upload",
     lane: "parallel",
-    tags: ["sandbox"],
+    tags: ["sandbox", "release"],
     timeoutMs: SANDBOX_TIMEOUT,
     async run(ctx) {
       const ch = await ctx.freshChannel();
@@ -287,13 +287,14 @@ export const scenarios: Scenario[] = [
   {
     name: "concurrent-second-message",
     lane: "parallel",
+    tags: ["release"],
     timeoutMs: 5 * 60_000,
     async run(ctx) {
       const ch = await ctx.freshChannel();
       const m1 = ctx.marker("q1");
       const m2 = ctx.marker("q2");
       const root = await ch.mention(
-        `First question (tag ${m1}): briefly describe Rome, Venice, and Florence, with one sentence about each.`,
+        `First question: briefly describe Rome, Venice, and Florence, with one sentence about each, then end with the exact token ${m1}.`,
       );
       await sleep(3000);
       await ch.threadReply(root, `Second question (tag ${m2}): also, what is 17 * 23? Answer both questions.`);
@@ -303,7 +304,7 @@ export const scenarios: Scenario[] = [
       const dupes = texts.filter((t, i) => texts.indexOf(t) !== i);
       assert.strictEqual(dupes.length, 0, `duplicate bot replies detected: ${dupes[0]?.slice(0, 120)}`);
       const combined = texts.join("\n").toLowerCase();
-      for (const expected of ["rome", "venice", "florence", "391"]) {
+      for (const expected of [m1, "391"]) {
         assert.match(combined, new RegExp(`\\b${expected}\\b`), `consecutive replies dropped ${expected}`);
       }
     },
@@ -331,7 +332,7 @@ export const scenarios: Scenario[] = [
   {
     name: "teammate-dm-reach",
     lane: "dm",
-    tags: ["sandbox"],
+    tags: ["sandbox", "release"],
     timeoutMs: SANDBOX_TIMEOUT,
     async run(ctx) {
       const ch = await ctx.freshChannel();
@@ -352,9 +353,33 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    name: "dm-file-attach",
+    lane: "dm",
+    tags: ["sandbox", "release"],
+    timeoutMs: SANDBOX_TIMEOUT,
+    async run(ctx) {
+      const dm = await ctx.dm();
+      const marker = ctx.marker();
+      const ts = await dm.send(
+        `Create a text file named ${marker}.txt containing the single line "hello from ci" and send me the file here.`,
+      );
+      await dm.waitForBotReply(ts, { timeoutMs: SANDBOX_TIMEOUT - 30_000 });
+      const msgs = await ctx.env.qa.history(dm.id, ts);
+      const delivered = msgs.some(
+        (m) =>
+          (m.user === ctx.env.botUserId || !!m.bot_id) &&
+          (m.files ?? []).some((f) => (f.name ?? f.title ?? "").includes(marker)),
+      );
+      assert.ok(
+        delivered,
+        `no ${marker}.txt upload arrived in the DM — a reply-rail file has to ride out via the attach tool`,
+      );
+    },
+  },
+  {
     name: "dm-reply",
     lane: "dm",
-    tags: ["smoke", "core"],
+    tags: ["smoke", "core", "release"],
     async run(ctx) {
       const dm = await ctx.dm();
       const marker = ctx.marker();
@@ -400,7 +425,7 @@ export const scenarios: Scenario[] = [
   {
     name: "dm-continuation",
     lane: "dm",
-    tags: ["core"],
+    tags: ["core", "release"],
     async run(ctx) {
       const dm = await ctx.dm();
       const codeword = ctx.marker("codeword");

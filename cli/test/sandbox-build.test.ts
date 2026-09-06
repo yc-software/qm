@@ -68,7 +68,7 @@ test("generates a Dockerfile that COPYs each tool executable onto PATH + bakes t
 test("--from overrides the base image for the generated Dockerfile", () => {
   const sb = sandboxDir((s) => tool(s, "t", { id: "t" }));
   try {
-    const out = dryRun({ sandboxDir: sb, app: "acme-sandboxes", from: "registry.fly.io/custom-base:v1" });
+    const out = dryRun({ sandboxDir: sb, from: "registry.fly.io/custom-base:v1" });
     assert.match(out, /FROM registry\.fly\.io\/custom-base:v1/);
   } finally {
     rmSync(sb, { recursive: true, force: true });
@@ -81,7 +81,7 @@ test("a custom sandbox/Dockerfile owns the recipe; --from is warned-ignored; pre
     writeFileSync(join(s, "Dockerfile"), "FROM my/base:1\nRUN apt-get install -y apt-tool\n");
   });
   try {
-    const out = dryRun({ sandboxDir: sb, app: "acme-sandboxes", from: "registry.fly.io/ignored:1" });
+    const out = dryRun({ sandboxDir: sb, from: "registry.fly.io/ignored:1" });
     assert.match(out, /FROM my\/base:1/);
     assert.match(out, /--from is ignored/);
     assert.match(out, /command -v "\$b"/);
@@ -124,20 +124,6 @@ test("--tag sets the image tag", () => {
     const out = dryRun({ sandboxDir: sb, tag: "acme-sandbox:v2" });
     assert.match(out, /acme-sandbox:v2/);
   } finally {
-    rmSync(sb, { recursive: true, force: true });
-  }
-});
-
-test("sandbox build is local-only and ignores registry app selection", () => {
-  const sb = sandboxDir((s) => tool(s, "t", { id: "t" }));
-  const prev = process.env.FLY_SANDBOX_APP_NAME;
-  try {
-    process.env.FLY_SANDBOX_APP_NAME = "from-env";
-    assert.match(dryRun({ sandboxDir: sb, app: "from-flag" }), /acme-sandbox:local/);
-    assert.doesNotMatch(dryRun({ sandboxDir: sb, app: "from-flag" }), /from-flag|from-env/);
-  } finally {
-    if (prev === undefined) delete process.env.FLY_SANDBOX_APP_NAME;
-    else process.env.FLY_SANDBOX_APP_NAME = prev;
     rmSync(sb, { recursive: true, force: true });
   }
 });

@@ -23,12 +23,13 @@ import {
   codexReplayCallId,
   codexTaskTitle,
   codexTokenUsageUpdate,
-  codexToolContext,
   codexTurnInputText,
   createCodexHarness,
   prepareCodexHome,
 } from "../src/harness/codex-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import { harnessToolContext } from "../src/harness/harness-shared.ts";
+import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
@@ -407,7 +408,7 @@ rl.on("line", (line) => {
   if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-" + process.pid } } });
   if (msg.method === "turn/start") {
     const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
-    const reply = String(auth.tokens.account_id ?? "none") + ":" + String("refresh_token" in auth.tokens);
+    const reply = String(auth.tokens.account_id ?? "none") + ":" + String(Boolean(auth.tokens.refresh_token));
     send({ id: msg.id, result: { turn: { id: "turn-" + process.pid, status: "inProgress", items: [] } } });
     return setTimeout(() => send({ method: "turn/completed", params: { threadId: "thread-" + process.pid, turn: { id: "turn-" + process.pid, status: "completed", items: [{ type: "agentMessage", text: reply, phase: "final_answer" }] } } }), ${delayMs});
   }
@@ -447,7 +448,7 @@ test("Codex forwards external-content screening into its native tool bridge", ()
   const screenExternalContent: NonNullable<HarnessTurnInput["screenExternalContent"]> = async () => ({
     decision: "auto",
   });
-  const ref = codexToolContext({ screenExternalContent } as HarnessTurnInput);
+  const ref = harnessToolContext({ screenExternalContent } as HarnessTurnInput);
   assert.equal(ref.screenExternalContent, screenExternalContent);
 });
 
@@ -627,7 +628,7 @@ test("Codex materializes ChatGPT OAuth auth as ephemeral child material without 
   );
   assert.equal((childAuth.tokens as Record<string, unknown>).account_id, "account-before");
   // The child never receives the long-lived credential: only the store refreshes.
-  assert.equal((childAuth.tokens as Record<string, unknown>).refresh_token, undefined);
+  assert.equal((childAuth.tokens as Record<string, unknown>).refresh_token, "");
   // Nothing a child writes ever flows back to the source of truth.
   writeFileSync(
     childAuthFile,
@@ -1446,6 +1447,78 @@ for (const mode of ["turnFailed", "startRejected"] as const) {
     );
   });
 }
+
+function stopReportsFailedCodexBinary(dir: string): string {
+  const path = join(dir, "stop-failed-codex");
+  writeFileSync(
+    path,
+    `#!/usr/bin/env node
+const readline = require("node:readline");
+const { writeFileSync } = require("node:fs");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-sf" } } });
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "turn-sf", status: "inProgress", items: [] } } });
+    return writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
+  }
+  if (msg.method === "turn/interrupt") {
+    send({ id: msg.id, result: {} });
+    return send({ method: "turn/completed", params: { threadId: "thread-sf", turn: { id: "turn-sf", status: "failed", error: { message: "turn interrupted" }, items: [] } } });
+  }
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+test("a user stop whose interrupted turn reports status=failed is a clean stop, and the stop stays pending", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-stop-failed-test-"));
+  const signals = createMemoryRunSignalStore();
+  const harness = createCodexHarness({
+    binaryPath: stopReportsFailedCodexBinary(dir),
+    env: process.env,
+    turnWallClockMs: 5_000,
+    signals,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const running = harness.turns.runTurn({
+    session: { id: "stop-failed-session" } as Session,
+    input: "hi",
+    runId: "run-stop-failed",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) =>
+      ({ ...entry, sessionId: "stop-failed-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  const deadline = Date.now() + 4_000;
+  while (!existsSync(join(dir, "started"))) {
+    if (Date.now() > deadline) throw new Error("mock codex never started its turn");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await signals.send("run-stop-failed", { kind: "abort" });
+  const result = await running;
+  assert.equal(result.stopped, true, "an interrupted turn the provider calls failed is still a user stop");
+  assert.equal(result.reply, "");
+  assert.deepEqual(
+    (await signals.takePending("run-stop-failed")).map((s) => s.kind),
+    ["abort"],
+    "the stop stays pending for the terminal drain",
+  );
+});
 
 test("Codex records one llm row per turn carrying real timings and usage, even when the turn fails", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-telemetry-test-"));

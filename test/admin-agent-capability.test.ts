@@ -243,6 +243,56 @@ test("an unattended admin-read grant opens only the five read-only routes and ke
   }
 });
 
+test("each new unattended read grant opens exactly its own routes", async () => {
+  const s = start();
+  try {
+    const scopeQ = `scope=${encodeURIComponent(ORG)}`;
+    const cases: Array<[string, string[]]> = [
+      ["admin.audit.read", [`/v1/admin/audit?${scopeQ}`]],
+      ["admin.metrics.read", [`/v1/admin/metrics?${scopeQ}`]],
+      ["admin.egress.read", [`/v1/admin/egress?${scopeQ}`]],
+      ["admin.files.read", [`/v1/admin/files?${scopeQ}`]],
+    ];
+    const crossDenied = [
+      `/v1/admin/sessions?${scopeQ}`,
+      `/v1/admin/audit?${scopeQ}`,
+      `/v1/admin/metrics?${scopeQ}`,
+      `/v1/admin/egress?${scopeQ}`,
+      `/v1/admin/files?${scopeQ}`,
+    ];
+    for (const [grant, allowed] of cases) {
+      const token = await capFor("admin-alice", { live: false, grants: [grant] });
+      for (const path of allowed) {
+        const response = await fetch(`${s.base}${path}`, { headers: { "x-agent-capability": token } });
+        assert.equal(response.status, 200, `${grant} opens ${path} (got ${response.status})`);
+      }
+      for (const path of crossDenied) {
+        if (allowed.includes(path)) continue;
+        const response = await fetch(`${s.base}${path}`, { headers: { "x-agent-capability": token } });
+        assert.equal(response.status, 403, `${grant} must not open ${path}`);
+      }
+    }
+    const combined = await capFor("admin-alice", {
+      live: false,
+      grants: ["admin.sessions.read", "admin.metrics.read"],
+    });
+    assert.equal(
+      (await fetch(`${s.base}/v1/admin/metrics?${scopeQ}`, { headers: { "x-agent-capability": combined } })).status,
+      200,
+    );
+    assert.equal(
+      (await fetch(`${s.base}/v1/admin/sessions?${scopeQ}`, { headers: { "x-agent-capability": combined } })).status,
+      200,
+    );
+    assert.equal(
+      (await fetch(`${s.base}/v1/admin/audit?${scopeQ}`, { headers: { "x-agent-capability": combined } })).status,
+      403,
+    );
+  } finally {
+    await s.close();
+  }
+});
+
 test("an aud-less token never opens the admin door", async () => {
   const s = start();
   try {

@@ -296,7 +296,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   assert.equal((await turn("owner", "web:owner:first", "secret-before-join")).status, "ok");
   assert.equal((await built.runs.list())[0]?.request.scopeVersion, await built.projects.version(groupRef));
-  const [first] = (await built.sessions.listAll()).filter((session) => session.scopeId === scope);
+  const [first] = (await built.sessions.scanAll()).filter((session) => session.scopeId === scope);
   assert.ok(first);
   assert.equal(first.channelName, "Launch Cohort");
   assert.ok(!(await built.sessions.listByParticipant("outsider")).some((session) => session.id === first.id));
@@ -517,7 +517,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     leaseIndex >= 0 && participantIndex > leaseIndex,
     "Project participant reconciliation happens only after the lease",
   );
-  const projectSessions = (await built.sessions.listAll()).filter((session) => session.scopeId === scope);
+  const projectSessions = (await built.sessions.scanAll()).filter((session) => session.scopeId === scope);
   assert.equal(projectSessions.length, 6);
   for (const session of projectSessions) {
     assert.ok((await built.sessions.listByParticipant("member")).some((candidate) => candidate.id === session.id));
@@ -577,7 +577,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(healed.status === "ok" && healed.changed, false);
   const outsiderSessions = await built.sessions.listByParticipant("outsider");
   assert.ok(projectSessions.every((session) => outsiderSessions.some((candidate) => candidate.id === session.id)));
-  const globalTitles = new Map((await built.sessions.listAll()).map((session) => [session.id, session.title ?? null]));
+  const globalTitles = new Map((await built.sessions.scanAll()).map((session) => [session.id, session.title ?? null]));
   assert.ok(outsiderSessions.every((session) => (session.title ?? null) === globalTitles.get(session.id)));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
 

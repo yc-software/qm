@@ -4,7 +4,11 @@ import { marked } from "marked";
 import katex from "katex";
 import { JSDOM } from "jsdom";
 import createDOMPurify from "dompurify";
-import { MARKDOWN_SANITIZE_CONFIG, rewriteSandboxFileLinks } from "../src/markdown-sanitize.ts";
+import {
+  MARKDOWN_SANITIZE_CONFIG,
+  rewriteSandboxFileLinks,
+  SHARED_MARKDOWN_SANITIZE_CONFIG,
+} from "../src/markdown-sanitize.ts";
 
 const DOMPurify = createDOMPurify(new JSDOM("").window as unknown as Window & typeof globalThis);
 const sanitize = (html: string): string => DOMPurify.sanitize(html, MARKDOWN_SANITIZE_CONFIG) as string;
@@ -34,11 +38,6 @@ test("strips every script-bearing vector marked would otherwise pass through", (
   }
 });
 
-test("turns sandbox workspace links into real file-library downloads", () => {
-  const out = render("[download](sandbox:/home/sprite/workspace/reports/interview-list.csv)");
-  assert.match(out, /href="\/api\/files\/by-name\/content\?name=interview-list\.csv"/);
-});
-
 test("preserves ordinary links (target=_blank), code fences, and inline PNG images", () => {
   const link = render("[docs](https://example.com/a)");
   assert.match(link, /href="https:\/\/example\.com\/a"/);
@@ -52,4 +51,19 @@ test("preserves KaTeX math output (visible render + MathML annotation)", () => {
   assert.match(out, /class="katex/);
   assert.match(out, /<math/);
   assert.match(out, /annotation/);
+});
+
+test("shared Markdown preserves formatting without media or private file links", () => {
+  const source =
+    '**Packing list**\n\n- Water\n- Snacks\n\n```js\nconst safe = true;\n```\n![remote](https://example.test/track)\n[private](sandbox:/home/sprite/workspace/secret.txt)\n<img src="/api/files/secret/content"><svg><a xlink:href="/api/sessions/private">hidden link</a></svg>';
+  const result = DOMPurify.sanitize(marked.parse(source, { async: false }), SHARED_MARKDOWN_SANITIZE_CONFIG) as string;
+  assert.ok(result.includes("<strong>Packing list</strong>"));
+  assert.ok(result.includes("<li>Water</li>"));
+  assert.ok(result.includes("const safe = true;"));
+  assert.equal(/<img|(?:src|href)=|secret\.txt|api\/files/.test(result), false);
+});
+
+test("turns sandbox workspace links into real file-library downloads", () => {
+  const out = render("[download](sandbox:/home/sprite/workspace/reports/interview-list.csv)");
+  assert.match(out, /href="\/api\/files\/by-name\/content\?name=interview-list\.csv"/);
 });

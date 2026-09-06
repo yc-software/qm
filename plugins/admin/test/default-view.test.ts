@@ -31,10 +31,36 @@ function resolvedDisplay(classes: string[]) {
 
 test("admin shell uses the QM identity with org-injectable branding", () => {
   assert.match(html, /<title>QM Admin<\/title>/);
-  assert.match(html, /<meta name="brand-self-label" content="Agent" \/>/);
-  assert.match(html, /<div class="brand"><span id="brand-product">Agent<\/span>&nbsp;Admin /);
+  assert.match(html, /<meta name="brand-self-label" content="QM" \/>/);
+  assert.match(html, /<header class="top">/);
+  assert.match(html, /id="home-link">← Back to home<\/a>/);
+  assert.match(html, /<span class="brand-mark" aria-hidden="true"><\/span>/);
+  assert.match(
+    html,
+    /<span class="brand-name"\s*>\s*<span id="brand-product" data-brand-product>QM<\/span> <span class="brand-suffix">\(admin\)<\/span>/,
+  );
+  assert.match(html, /<aside class="admin-sidebar"[^>]*>\s*<div class="brand">/, "the lockup sits in the sidebar");
+  assert.match(html, /<main class="admin-main" id="main" aria-label="Admin content">/);
   assert.doesNotMatch(html, new RegExp(["Work", "Claw"].join(" "), "i"));
   assert.doesNotMatch(html, new RegExp(["Quarter", "master"].join(""), "i"));
+});
+
+test("admin shell groups control, logs, and artifacts like the reorganization", () => {
+  assert.match(
+    html,
+    /const SECTIONS = \[\s*\{ views: \["governance", "models", "credentials", "connectors", "customize", "users"\] \},\s*\{ label: "Logs", views: \["history", "slack", "judgments", "audit", "egress", "metrics"\] \},\s*\{ label: "Artifacts", views: \["files", "skills", "memory", "deployments", "crons", "retention"\] \},\s*\];/,
+  );
+  assert.match(html, /history: "Sessions"/);
+  assert.match(
+    html,
+    /const VIEWS = \[\.\.\.SECTIONS\.flatMap\(\(s\) => s\.views\), "onboarding", "user", "ackemoji", "keychain"\];/,
+  );
+});
+
+test("deployment management is presented as Apps", () => {
+  assert.match(html, /deployments: "Apps"/);
+  assert.match(html, /Search all apps…/);
+  assert.doesNotMatch(html, /deployments: "Deployments"/);
 });
 
 test("admin shell defaults bare admin URLs to org history", () => {
@@ -84,7 +110,6 @@ test("mobile admin navigation keeps the active section visible and controls touc
   assert.match(html, /--header-total-h: calc\(var\(--header-h\) \+ var\(--header-safe-top\)\)/);
   assert.match(html, /padding: var\(--header-safe-top\)/);
   assert.match(html, /top: var\(--header-total-h\)/);
-  assert.match(html, /\.governance-page-head\s*\{\s*top:\s*calc\(var\(--header-total-h\) \+ 61px\);\s*\}/);
   assert.doesNotMatch(html, /top: (?:calc\()?var\(--header-h\)/);
   assert.doesNotMatch(html, /scroll-margin-top: calc\(var\(--header-h\)/);
   assert.match(html, /const narrowAdminNav = matchMedia\("\(max-width: 900px\)"\);/);
@@ -146,8 +171,18 @@ test("governance posture saves refresh only the saved card", () => {
   assert.match(html, /if \(key === "security-posture" \|\| key === "ambient-policy"\)/);
 });
 
-test("governance presents a scoped effective-state control plane", () => {
-  assert.match(html, /class="governance-page-head"/);
+test("compact ambient reply policy tracks the value after each save", () => {
+  assert.match(html, /if \(key === "org-ambient"\) \{/);
+  assert.match(html, /governanceOrgAmbientSaved = body\.on \? "on" : "off"/);
+  assert.match(html, /\$\("governance-org-ambient-save"\)\.disabled = true/);
+  assert.match(
+    html,
+    /orgAmbientStatus\.classList\.contains\("err"\)[\s\S]*\$\("governance-org-ambient-save"\)\.disabled = false/,
+  );
+});
+
+test("governance retains scoped effective-state data behind the compact reference layout", () => {
+  assert.doesNotMatch(html, /class="governance-page-head"/);
   assert.match(html, /id="governance-overview"/);
   assert.match(html, /aria-label="Governance sections"/);
   for (const id of [
@@ -162,6 +197,35 @@ test("governance presents a scoped effective-state control plane", () => {
   assert.match(html, /function renderGovernanceOverview\(data\)/);
   assert.match(html, /Effective security posture/);
   assert.match(html, /Resolved at organization scope/);
+  assert.match(
+    html,
+    /#view-governance > \.governance-overview,[\s\S]*#view-governance \.governance-sections,[\s\S]*#view-governance \.governance-group,[\s\S]*display: none !important;/,
+  );
+});
+
+test("control-plane pages use the shared web UI canvas without redundant page introductions", () => {
+  assert.doesNotMatch(html, /const GOV_HEADS/);
+  assert.doesNotMatch(html, /Set the organization’s operating boundaries/);
+  assert.doesNotMatch(html, /The runtimes, models, and browsing defaults agents run with/);
+  assert.match(
+    html,
+    /#view-governance \.governance-content \{[\s\S]*border: 0;[\s\S]*background: transparent;[\s\S]*box-shadow: none/,
+  );
+  assert.match(html, /--cta: oklch\(0\.27 0\.062 250\)/);
+  assert.match(html, /data-choice-for="security-posture"/);
+  assert.match(html, /data-checkbox-for="external-slack-participants"/);
+  assert.match(html, /governanceAmbient\.id = "card-governance-org-ambient"/);
+  assert.match(html, /id="sc-editor"/);
+  assert.match(html, /id="sc-add">\+ Add credential/);
+  assert.match(html, /id="conn-editor"/);
+  assert.match(html, /id="slack-token-editor"/);
+  assert.match(html, /id="soul-preview"/);
+  assert.match(html, /body\[data-subview="connectors"\] \.shellbar/);
+  assert.match(html, /connectorTip\.className = "connector-dm-tip hidden"/);
+  assert.doesNotMatch(html, /First match wins/);
+  assert.doesNotMatch(html, /direct mutations blocked/);
+  assert.doesNotMatch(html, /The org setting is a minimum/);
+  assert.doesNotMatch(html, /The runtime inherited by scopes without an override/);
 });
 
 test("governance renders simple settings as compact rows with contextual actions", () => {
@@ -170,11 +234,9 @@ test("governance renders simple settings as compact rows with contextual actions
     "card-external-slack",
     "card-base-model",
     "card-people-directory",
-    "card-browse-model",
-    "card-browse-max-steps",
     "card-turn-wall-clock",
   ]) {
-    assert.match(html, new RegExp(`class="card setting-row(?: hidden)?" id="${id}"`));
+    assert.match(html, new RegExp(`class="card(?: sv-[a-z]+)? setting-row(?: hidden)?" id="${id}"`));
   }
   assert.match(html, /class="setting-toggle"/);
   assert.match(html, /class="setting-switch" aria-hidden="true"/);
@@ -182,24 +244,18 @@ test("governance renders simple settings as compact rows with contextual actions
   assert.match(html, /"turnWallClockSec" in r\.data/);
 });
 
-test("the Auto flagger can be tested against past screenings before it is applied", () => {
-  assert.match(html, /id="auto-flagger-test"/);
-  assert.match(html, /id="auto-flagger-window"[\s\S]*?max="500"/);
-  assert.match(html, /id="auto-flagger-compare"/);
-  assert.match(html, /id="st-auto-flagger-test"/);
-  assert.match(html, /auto-flagger\/test/, "the button posts to the test endpoint, not the save endpoint");
-  assert.match(html, /window: requested/, "the chosen window is what gets replayed");
-  assert.match(html, /rubric: \$\("auto-flagger-rubric"\)\.value/, "the draft in the box is what gets tested");
-  assert.match(html, /Flagged " \+ data\.flagged/, "the result reports a flag count and rate");
-});
-
-test("governance exposes Auto flagger runtime and rubric controls", () => {
-  assert.match(html, /id="card-auto-flagger"/);
-  assert.match(html, /id="auto-flagger-harness"/);
-  assert.match(html, /id="auto-flagger-model"/);
-  assert.match(html, /id="auto-flagger-rubric"/);
-  assert.match(html, /id="auto-flagger-reset"/);
-  assert.match(html, /data-save="auto-flagger"/);
+test("default runtime controls save reasoning level and fast mode", () => {
+  assert.match(html, /id="base-effort"/);
+  assert.match(html, /id="base-fast-mode"/);
+  assert.match(html, /id="base-fast-mode-control"/);
+  assert.match(html, /thinkingLevelsByHarness/);
+  assert.match(html, /fastModeModelIds/);
+  assert.match(html, /fastModeHarnessIds/);
+  assert.match(html, /base-fast-mode-control"\)\.style\.display = fastCapable \? "" : "none"/);
+  assert.match(
+    html,
+    /runtime: \(\) => \(\{[\s\S]*effortLevel: \$\("base-effort"\)\.value,[\s\S]*fastMode: \$\("base-fast-mode"\)\.checked/,
+  );
 });
 
 test("compact governance rows preserve policy detail and collapse before they overflow", () => {
@@ -229,15 +285,24 @@ test("governance reviews high-impact changes in product and preserves drafts", (
   assert.doesNotMatch(html, /confirm\("Enable Dangerous/);
 });
 
-test("governance makes unenforced egress a draft instead of an effective control", () => {
+test("governance disables egress controls when the deployment cannot enforce them", () => {
   assert.match(html, /id="egress-capability"/);
-  assert.match(html, />\s*Save draft\s*<\/button\s*>/);
+  assert.doesNotMatch(html, /View deployment/);
+  assert.match(html, /id="egress-deny-editor"/);
+  assert.match(html, /id="egress-allow-editor"/);
+  assert.match(html, /class="egress-empty-state"/);
+  assert.match(html, /id="egress-add-deny">\+ Denylist/);
+  assert.match(html, /id="egress-add-allow">\+ Allowlist/);
   assert.match(html, /data\.egressEnforcement/);
-  assert.match(html, /enforcement\.active \? "Save policy" : "Save draft"/);
+  assert.match(html, /egressCard\.classList\.toggle\("egress-disabled", !enforcement\.active\)/);
+  assert.match(html, /capability\.classList\.toggle\("hidden", !!enforcement\.active\)/);
+  assert.match(html, /control\.disabled = !enforcement\.active/);
   assert.match(html, /enforcement\.reason === "control_plane_unconfigured"/);
-  assert.match(html, /control plane cannot mint a reachable proxy token/);
+  assert.match(html, /Egress enforcement has not been activated for this deployment/);
   assert.match(html, /Backend supports policy; control plane inactive/);
   assert.match(html, /Backend cannot enforce host policy/);
+  assert.doesNotMatch(html, /fidelity, which cannot enforce outbound host policy/);
+  assert.doesNotMatch(html, /Agents still have open outbound access/);
 });
 
 test("governance keeps effective-state summaries synchronized after focused saves", () => {
@@ -253,21 +318,34 @@ test("stale governance reads cannot overwrite a newer scope", () => {
   assert.match(html, /encodeURIComponent\(requestedScope\) \+ "\/" \+ key/);
 });
 
-test("effective egress summary preserves deny-before-allow semantics", () => {
-  assert.match(
-    html,
-    /plural\(effectiveAllowCount, "allowed host"\)[\s\S]*plural\(effectiveDenyCount, "explicitly denied host"\)[\s\S]*deny rules first[\s\S]*all other hosts denied/,
-  );
-  assert.match(
-    html,
-    /else if \(effectiveDenyCount\) \{\s*effectiveEgressLabel = plural\(effectiveDenyCount, "denied host"\) \+ " · all other hosts allowed";/,
-  );
+test("egress omits the backend enforcement summary and hides empty editors", () => {
+  assert.doesNotMatch(html, /class="egress-state"/);
+  assert.doesNotMatch(html, /id="egress-backend"|id="egress-enforcement"|id="egress-effective"/);
+  assert.doesNotMatch(html, /Policy is enforced|enforces this policy/);
+  assert.match(html, /Denylist: hosts the agent may never reach/);
+  assert.match(html, /Allowlist: when present, only these outbound hosts may be reached/);
+  assert.match(html, /const hasRules = allowedHosts\.length > 0 \|\| deniedHosts\.length > 0/);
+  assert.match(html, /\$\("egress-deny-editor"\)\.classList\.toggle\("hidden", deniedHosts\.length === 0\)/);
+  assert.match(html, /\$\("egress-allow-editor"\)\.classList\.toggle\("hidden", allowedHosts\.length === 0\)/);
 });
 
 test("egress validation follows programmatic reloads and successful saves", () => {
   assert.match(html, /populateEgress\(r\.data\.egress\)/);
   assert.match(html, /function populateEgress\(policy\)[\s\S]*renderEgressValidation\(\)/);
-  assert.match(html, /if \(key === "egress"\)[\s\S]*renderGovernanceOverview[\s\S]*renderEgressValidation\(\)/);
+  assert.match(html, /if \(key === "egress"\)[\s\S]*renderGovernanceOverview[\s\S]*populateEgress\(body\)/);
+});
+
+test("command policy uses compact sentence rows and a modal tester", () => {
+  assert.doesNotMatch(html, /id="mode"|class="policy-mode"/);
+  assert.match(html, /commandPolicyMode = cp\?\.mode \|\| "denylist"/);
+  assert.match(html, /return \{ mode: commandPolicyMode, rules \}/);
+  assert.match(html, /row\.append\(sel, pat, rsn, del\)/);
+  assert.match(html, /\$\("rules"\)\.prepend\(row\)/);
+  assert.match(html, /slice\(3\)/);
+  assert.match(html, /id="policy-test-dialog"/);
+  assert.match(html, /\$\("policy-test-dialog"\)\.showModal\(\)/);
+  assert.doesNotMatch(html, /Patterns matched against each executed command/);
+  assert.doesNotMatch(html, /Priority<\/th>|Order<\/th>|Move rule up|Move rule down/);
 });
 
 test("the removed config-transfer surface stays gone", () => {
@@ -278,10 +356,10 @@ test("the removed API-reference tab stays gone", () => {
   assert.doesNotMatch(html, /renderApiDocs|"api"|api: "API"/);
 });
 
-test("policy simulator caveats only implicit allows", () => {
-  assert.match(
+test("policy simulator omits deployment caveats", () => {
+  assert.doesNotMatch(
     html,
-    /decision === "allow" && response\.data\.ruleSource == null && response\.data\.deploymentRulesEvaluated === false/,
+    /deploymentRulesEvaluated|deployment’s rules may still restrict|Deployment rules may further restrict/i,
   );
 });
 
@@ -345,4 +423,111 @@ test("the hidden utility hides an element whose component rule is declared later
   for (const component of ["admin-app", "scope-menu", "pack-adv", "ovmenu", "dense-row", "setting-row"]) {
     assert.equal(resolvedDisplay([component, "hidden"]), "none");
   }
+});
+
+test("admin parity views expose the requested card groups and real navigation actions", () => {
+  for (const text of [
+    "Security posture",
+    "Command policy",
+    "Ambient reply policy",
+    "Egress policy",
+    "External Slack audience",
+    "Default runtime",
+    "Custom providers",
+    "Enabled models",
+    "Organization SOUL",
+    "Branding",
+    "People directory",
+    "Channel defaults",
+    "Turn budget",
+    "Feature flags",
+    "Shared service credentials",
+    "Personal keychains",
+    "Slack installation",
+    "OAuth apps",
+    "Built-in connectors",
+  ]) {
+    assert.ok(html.includes(text), `missing ${text}`);
+  }
+  for (const action of [
+    "View judgment log ›",
+    "View logs ›",
+    "View history ›",
+    "+ Add provider",
+    "+ Add flag",
+    "View usage ›",
+    "View users ›",
+    "Rotate tokens…",
+    "+ Add OAuth app",
+  ]) {
+    assert.ok(html.includes(action), `missing ${action}`);
+  }
+  assert.match(html, /button\.onclick = \(\) => setView\(button\.dataset\.viewlink\)/);
+  assert.match(html, /id="model-custom-provider-rows"/);
+  assert.match(html, /provider\.models\.length/);
+  assert.match(html, /function renderBuiltInConnectors\(\)/);
+  assert.match(html, /function loadPersonalKeychainSummary\(\)/);
+  assert.doesNotMatch(html, /Enabled harnesses/);
+  assert.doesNotMatch(html, /id="card-browsing"/);
+  assert.doesNotMatch(html, /\$\("feature-flag-enable"\)\.disabled = true/);
+});
+
+test("enabled models uses the runtime default and an explicit add interaction", () => {
+  assert.doesNotMatch(html, /id="webui-models-default"/);
+  assert.match(html, /id="webui-models-add">\s*<option value="">Choose a model…<\/option>/);
+  assert.match(html, /id="webui-models-add-button" disabled>\+ Add model<\/button>/);
+  assert.match(html, /className = "model-chip"/);
+  assert.match(html, /updateSectionDirty\("webui-models"\)/);
+  assert.match(html, /"webui-models": \(\) => \(\{ ids: webuiModelIds \}\)/);
+});
+
+test("custom providers share one in-place editor instead of linking to onboarding", () => {
+  assert.match(html, /id="custom-provider-dialog"/);
+  assert.match(html, /class="project-dialog-head"/);
+  assert.match(html, /class="project-dialog-actions"/);
+  assert.match(html, /id="custom-provider-close" aria-label="Close"/);
+  assert.match(html, /dialog\.custom-provider-dialog[\s\S]*padding: 20px;[\s\S]*border-radius: 10px;/);
+  assert.match(html, /\$\("add-custom-provider"\)\.onclick = \(\) => openCustomProviderEditor\(\)/);
+  assert.match(html, /\$\("onboarding-add-custom-provider"\)\.onclick = \(\) => openCustomProviderEditor\(\)/);
+  assert.match(html, /edit\.onclick = \(\) => openCustomProviderEditor\(provider\)/);
+  assert.match(html, /actions\.append\(edit, customProviderRemoveButton\(provider\)\)/);
+  assert.match(html, /if \(view === "models"\) await loadScope\(\)/);
+  assert.doesNotMatch(html, /\$\("add-custom-provider"\)\.onclick = \(\) => \{[\s\S]*?setView\("onboarding"\)/);
+});
+
+test("all admin data views receive the shared flat cards and custom dropdowns", () => {
+  assert.match(html, /#view-data section\.card,[\s\S]*#view-connectors section\.card[\s\S]*box-shadow: none/);
+  assert.match(html, /\.admin-app select\[data-dd-host\]/);
+  assert.match(html, /initCustomDropdowns\(\$\("app-view"\)\)/);
+  assert.match(html, /btn\.setAttribute\("aria-controls", menu\.id\)/);
+  assert.match(
+    html,
+    /btn\.setAttribute\("aria-label", label \? label \+ ": " \+ lab\.textContent : lab\.textContent\)/,
+  );
+  assert.match(html, /btn\.setAttribute\("aria-activedescendant", it\.id\)/);
+  assert.match(html, /\.observe\(\$\("app-view"\), \{ childList: true, subtree: true \}\)/);
+});
+
+test("grouped parity cards keep each setting bound to its own save action", () => {
+  assert.match(html, /card\.dataset\.saveScope = save\.dataset\.save/);
+  assert.match(html, /const subsection = target\.closest\("\[data-save-scope\]"\)/);
+});
+
+test("admin follows the main UI theme preference", () => {
+  assert.match(html, /localStorage\.getItem\("theme"\)/);
+  assert.match(html, /--warn-surface: oklch\(0\.25 0\.035 85\)/);
+  assert.match(html, /background: var\(--warn-surface\)/);
+  assert.match(html, /window\.matchMedia\("\(prefers-color-scheme: dark\)"\)/);
+  assert.match(html, /document\.documentElement\.classList\.toggle\("dark", dark\)/);
+  assert.match(html, /:root\.dark\s*\{/);
+  assert.match(html, /input:not\(\[type\]\)/);
+});
+
+test("governance follows the neutral web UI interaction palette", () => {
+  assert.doesNotMatch(html, /--accent:\s*#f26522/);
+  assert.match(html, /\.viewlink \{[\s\S]*?color: var\(--muted\)/);
+  assert.match(
+    html,
+    /\.posture-choice:has\(input:checked\) \{\s*border-color: var\(--border\);\s*background: var\(--subtle\)/,
+  );
 });

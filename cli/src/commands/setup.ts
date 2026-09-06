@@ -106,10 +106,6 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
     "is usually a tunnel or LAN address; for fly/aws it matches your apiUrl when",
     "configured (split-hostname stacks), otherwise your publicUrl.",
   ],
-  FLY_SANDBOX_API_TOKEN: [
-    "A Fly deploy token scoped to the agent-computer app <sandbox-app>.",
-    "Create the app first if it does not exist: fly apps create <sandbox-app>",
-  ],
   FLY_DEPLOY_API_TOKEN: [
     "Required only when env.core.DEPLOY_PROVIDER is explicitly set to fly.",
     "A separate Fly organization token for qm's per-deployment apps.",
@@ -131,11 +127,9 @@ const FORMAT_HINTS: Readonly<Record<string, { prefix: string; label: string }>> 
 export function playbookFor(name: string, config: QmConfig): string[] {
   const lines = PLAYBOOKS[name];
   if (!lines) return [];
-  const app = config.sandbox?.app ?? "<sandbox-app>";
   const flyOrg = config.flyOrg ?? "<fly-org>";
   return lines.map((line) =>
     line
-      .replaceAll("<sandbox-app>", app)
       .replaceAll("<fly-org>", flyOrg)
       .replaceAll("<public-url>", config.publicUrl.replace(/\/$/, ""))
       .replaceAll("<manifest>", "slack-app-manifest.yml"),

@@ -32,12 +32,9 @@ npm exec qm -- check
 Setup keeps the sandbox deploy token separate from the organization deploy
 token. Do not substitute a personal token.
 
-## Publish the agent computer and deploy
-
-Publish the package-selected sandbox base and record its immutable digest:
+## Deploy
 
 ```bash
-npm exec qm -- sandbox publish
 npm exec qm -- secrets push
 npm exec qm -- plan
 npm exec qm -- up

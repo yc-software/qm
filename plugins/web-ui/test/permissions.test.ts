@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appState, can } from "../src/shell-state.ts";
+import { appState, can, canView } from "../src/shell-state.ts";
 
 test("can(key) is false before /me loads", () => {
   appState.me = null;
@@ -19,4 +19,13 @@ test("a user without the permission cannot — drives hiding the admin session-l
 
   appState.me = { user: "carol", org: "acme" };
   assert.equal(can("admin"), false);
+});
+
+test("loops view requires the loops permission", () => {
+  appState.me = { user: "alice", org: "acme", permissions: [] };
+  assert.equal(canView("loops"), false);
+  assert.equal(canView("chats"), true);
+
+  appState.me.permissions = ["loops"];
+  assert.equal(canView("loops"), true);
 });

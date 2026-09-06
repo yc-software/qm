@@ -4,6 +4,7 @@ import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
+import type { SlackMessageEvent } from "./payloads.ts";
 import { MAX_NAME_LOOKUPS } from "./conversation-view.ts";
 
 export interface Mirror {
@@ -16,7 +17,7 @@ export interface Mirror {
   ): void;
   resolveTextMentions(client: any, text: string): Promise<{ text: string; mentions: Record<string, string> }>;
   mirrorMessageEvent(
-    m: any,
+    m: Partial<SlackMessageEvent>,
     client: any,
     opts?: { editedAt?: number; handled?: boolean; containerName?: string; kind?: "channel" | "dm" | "group" },
   ): Promise<void>;
@@ -81,7 +82,7 @@ export function createMirror(deps: {
   }
 
   async function mirrorMessageEvent(
-    m: any,
+    m: Partial<SlackMessageEvent>,
     client: any,
     opts: { editedAt?: number; handled?: boolean; containerName?: string; kind?: "channel" | "dm" | "group" } = {},
   ): Promise<void> {

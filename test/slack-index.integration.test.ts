@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
+import type { SlackAgentRequestContext } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
@@ -197,9 +198,9 @@ class FakeApp {
     this.started = false;
   }
 
-  async emitMessage(message: any, eventId = `Ev-${message.channel}-${message.ts}`): Promise<void> {
+  async emitMessage(message: any, eventId = `Ev-${message.channel}-${message.ts}`, context: any = {}): Promise<void> {
     for (const handler of this.messageHandlers) {
-      await handler({ message, body: { event_id: eventId }, client: this.client, context: {} });
+      await handler({ message, body: { event_id: eventId }, client: this.client, context });
     }
   }
 
@@ -217,6 +218,7 @@ mock.module("@slack/web-api", { namedExports: { WebClient: class {} } });
 const { slackPluginConfigFromEnv, startSlackPlugin } = await import("../src/slack/index.ts");
 
 class FakeCore implements SlackCoreClient {
+  async inboxSlackMessage(): Promise<void> {}
   readonly turns: any[] = [];
   readonly ingests: any[][] = [];
   readonly directories: any[] = [];
@@ -238,8 +240,15 @@ class FakeCore implements SlackCoreClient {
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
   }
+  async internalMemberOverrides(): Promise<string[]> {
+    return [];
+  }
   async ackEmojiOverride(): Promise<string[] | null> {
     return null;
+  }
+  readonly publishedEmojiCatalogs: Array<Record<string, string>> = [];
+  async publishEmojiCatalog(emoji: Record<string, string>): Promise<void> {
+    this.publishedEmojiCatalogs.push(emoji);
   }
   async surfaceHeaderFacts(): Promise<{ agentLabel?: string; modelName: string }> {
     return { agentLabel: "Quartermaster", modelName: "Claude Opus 4.8" };
@@ -310,20 +319,54 @@ class FakeCore implements SlackCoreClient {
   async getApproval(): Promise<null> {
     return null;
   }
-  async pushDirectory(body: any): Promise<void> {
-    this.directories.push(body);
+  readonly agentRequests = new Map<string, SlackAgentRequestContext>();
+  async putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void> {
+    this.agentRequests.set(requestId, record);
   }
+  async getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
+    return this.agentRequests.get(requestId) ?? null;
+  }
+  async takeAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
+    const record = this.agentRequests.get(requestId) ?? null;
+    this.agentRequests.delete(requestId);
+    return record;
+  }
+  async agentRequestForApproval(approvalRequestId: string): Promise<SlackAgentRequestContext | null> {
+    for (const record of this.agentRequests.values()) {
+      if (record.approvalRequestIds?.includes(approvalRequestId)) return record;
+    }
+    return null;
+  }
+  async pushDirectory(body: any): Promise<boolean> {
+    this.directories.push(body);
+    return true;
+  }
+  holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
+    return fn(new Promise<void>(() => {}));
+  }
+  holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
+    return fn(new Promise<void>(() => {}));
+  }
+
+  holdEnvelopeReplay<T>(_account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
+    return fn(new Promise<void>(() => {}));
+  }
+
   async claimDeliveries(): Promise<[]> {
     return [];
   }
   async ackDelivery(): Promise<void> {}
+  deliverySubscriptions = 0;
   onDeliveryEnqueued(): () => void {
+    this.deliverySubscriptions++;
     return () => {};
   }
   async pendingContextRequests(): Promise<[]> {
     return [];
   }
+  contextSubscriptions = 0;
   onContextRequest(): () => void {
+    this.contextSubscriptions++;
     return () => {};
   }
   async fulfillContextRequest(): Promise<void> {}
@@ -352,6 +395,9 @@ async function fixture(
     identityEmail?: "0" | "1";
     extraChannels?: number;
     membershipDelayMs?: number;
+    allowFrom?: string[];
+    denyMessage?: string;
+    coreSingleton?: boolean;
   } = {},
 ) {
   const core = new FakeCore();
@@ -361,6 +407,9 @@ async function fixture(
       botToken: "xoxb-test",
       appToken: "xapp-test",
       identityEmail: options.identityEmail ?? "0",
+      ...(options.allowFrom ? { allowFrom: options.allowFrom } : {}),
+      ...(options.denyMessage ? { denyMessage: options.denyMessage } : {}),
+      ...(options.coreSingleton === undefined ? {} : { coreSingleton: options.coreSingleton }),
       ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
     },
     core,
@@ -411,6 +460,85 @@ test("config is all-or-nothing and numeric tuning fails closed", () => {
   assert.deepEqual(config, { botToken: "xoxb", appToken: "xapp", maxPrivateChannels: 10 });
 });
 
+test("a core failure the user is told about counts as handled; a quiet one reports failure and forgets the dedup key", async () => {
+  const f = await fixture();
+  try {
+    const gate: string[] = [];
+    const ackGate = {
+      persisted: () => gate.push("persisted"),
+      failed: (reason?: string) => gate.push(`failed:${typeof reason}`),
+    };
+    f.core.submitError = new Error("db down");
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "ask", ts: "700.1" }, "Ev-700", {
+      ackGate,
+    });
+    assert.deepEqual(gate, [], "the error note the user saw is the outcome; nothing is left for replay");
+    assert.ok(
+      f.client.posts.some((m: any) => String(m.text).includes("⚠️")) ||
+        f.client.ephemerals.some((m: any) => String(m.text).includes("⚠️")),
+    );
+
+    f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+    f.client.messagesByChannel.set("G1", [
+      { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
+      { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
+    ]);
+    const quiet = {
+      channel: "G1",
+      channel_type: "mpim",
+      user: "U2",
+      text: "also this",
+      ts: "300.3",
+      thread_ts: "300.1",
+    };
+    await f.app.emitMessage(quiet, "Ev-300", { ackGate });
+    assert.deepEqual(gate, ["failed:string"], "a quiet failure keeps the staged envelope for replay");
+    const turnsBefore = f.core.turns.length;
+    f.core.submitError = undefined;
+    f.core.queuedRunId = "R9";
+    await f.app.emitMessage(quiet, "Ev-300-replay", { ackGate });
+    assert.equal(f.core.turns.length, turnsBefore + 1, "the replay is not swallowed by the in-process deduper");
+    assert.deepEqual(gate, ["failed:string", "persisted"]);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a redelivery of a message still in flight on this instance is not treated as handled", async () => {
+  const f = await fixture();
+  try {
+    const gate: string[] = [];
+    const ackGate = {
+      persisted: () => gate.push("persisted"),
+      failed: (reason?: string) => gate.push(`failed:${reason}`),
+    };
+    f.core.holdRun("R1");
+    const first = f.app.emitMessage(
+      { channel: "D1", channel_type: "im", user: "U1", text: "slow ask", ts: "800.1" },
+      "Ev-800",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    await f.app.emitMessage(
+      { channel: "D1", channel_type: "im", user: "U1", text: "slow ask", ts: "800.1" },
+      "Ev-800-again",
+      {
+        ackGate,
+      },
+    );
+    assert.deepEqual(
+      gate,
+      ["failed:already in flight on this instance"],
+      "the row stays until the live handler accepts",
+    );
+    assert.equal(f.core.turns.length, 1, "the in-flight turn is not run a second time");
+    f.core.finishRun({ status: "ok", reply: "done" });
+    await first;
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a mid-turn message that STEERS the live run does not post the reply twice", async () => {
   const f = await fixture();
   try {
@@ -443,6 +571,35 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
   }
 });
 
+test("a queued run's ok reply carries the recovery delivery's marker, so a replay reuses it", async () => {
+  const f = await fixture();
+  try {
+    f.core.holdRun("R7");
+    const turn = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "ask", ts: "600.1" });
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.finishRun({ status: "ok", reply: "agent reply" });
+    await turn;
+
+    const reply = f.client.posts.find((p) => p.text === "agent reply");
+    assert.deepEqual(reply?.metadata, {
+      event_type: "qm_delivery",
+      event_payload: { idempotency_key: "run:R7" },
+    });
+
+    f.client.messagesByChannel.set("D1", [{ ts: "posted-1", metadata: reply.metadata }]);
+    const postsBefore = f.client.posts.length;
+    const { postWithVerify } = await import("../src/slack/delivery.ts");
+    const replayed = await postWithVerify(f.client as any, { channel: "D1", text: "agent reply" }, "run:R7", {
+      verifyFirst: true,
+      verifyOldest: "0",
+    });
+    assert.equal(replayed.ts, "posted-1", "the recovery probe finds the live handler's reply");
+    assert.equal(f.client.posts.length, postsBefore, "an already-posted reply is never re-posted");
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a DM becomes one scoped live turn and one Slack reply", async () => {
   const f = await fixture();
   try {
@@ -451,6 +608,7 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.equal(f.core.turns[0].text, "hello agent");
     assert.equal(f.core.turns[0].conversation.kind, "dm");
     assert.equal(f.core.turns[0].conversation.threadRef, "dm:D1");
+    assert.match(f.core.turns[0].redeliveryKey, /^slack:[^:]+:D1:100\.1$/);
     assert.equal(f.core.turns[0].conversation.audience[0].externalId, "U1");
     assert.equal(f.core.turns[0].deliveryTarget, "D1");
     assert.equal(f.core.turns[0].liveActor, true);
@@ -1052,6 +1210,27 @@ test("a core boundary refusal stays requester-only in a channel", async () => {
   }
 });
 
+test("a blocked-thread result without approval details tells only the sender instead of posting a dead approval card", async () => {
+  const f = await fixture();
+  try {
+    f.core.result = {
+      status: "pending_approval",
+      sessionId: "S1",
+      reason: "This conversation is waiting for someone else to resolve a pending approval.",
+    };
+    const event = { channel: "C1", channel_type: "channel", user: "U2", text: "<@UBOT> any update?", ts: "105.1" };
+    f.client.messagesByChannel.set("C1", [event]);
+    await f.app.emitEvent("app_mention", event);
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.client.posts.length, 0, "no public post and no approval buttons for a non-requester");
+    assert.equal(f.client.ephemerals.length, 1);
+    assert.match(f.client.ephemerals[0].text, /waiting for someone else/);
+    assert.equal(f.client.ephemerals[0].blocks, undefined);
+  } finally {
+    await f.stop();
+  }
+});
+
 test("an internal channel mention carries the complete audience and thread context", async () => {
   const f = await fixture();
   try {
@@ -1317,6 +1496,44 @@ test("message edits and deletes update the mirror without creating turns", async
       events.some((e: any) => e.ts === "105.1" && e.deleted === true),
       true,
     );
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_changed",
+      message: { channel_type: "channel", user: "U1", text: "unfurled", ts: "105.7" },
+      previous_message: { user: "U1", text: "unfurled" },
+      ts: "105.8",
+    });
+    const unfurl = f.core.ingests.flat().find((e: any) => e.ts === "105.7");
+    assert.ok(unfurl, "an unchanged message_changed still refreshes the mirror");
+    assert.equal(unfurl.editedAt, undefined, "but it is not stamped as an edit");
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      subtype: "message_changed",
+      message: {
+        channel_type: "channel",
+        subtype: "tombstone",
+        user: "USLACKBOT",
+        text: "This message was deleted.",
+        ts: "105.9",
+      },
+      ts: "106.0",
+    });
+    const tombstone = f.core.ingests.flat().find((e: any) => e.ts === "105.9");
+    assert.equal(tombstone?.deleted, true, "a tombstoned thread root reads as a deletion");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a stalled run keeps its still-working wording instead of the generic failure", async () => {
+  const f = await fixture();
+  try {
+    f.core.submitError = Object.assign(new Error("run stalled"), { code: "run_stalled" });
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "106.0" });
+    assert.equal(f.client.posts.length, 1);
+    assert.match(f.client.posts[0].text, /taking unusually long/);
   } finally {
     await f.stop();
   }
@@ -1329,7 +1546,7 @@ test("raw core failures never leak through Slack", async () => {
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "106.1" });
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.client.posts.length, 1);
-    assert.match(f.client.posts[0].text, /couldn't reach the agent core/);
+    assert.match(f.client.posts[0].text, /Something went wrong on my end/);
     assert.doesNotMatch(f.client.posts[0].text, /super-secret|postgres|run\/abc/);
   } finally {
     await f.stop();
@@ -1344,6 +1561,129 @@ test("stop aborts the active run without enqueuing a second turn", async () => {
     assert.deepEqual(f.core.abortedRuns, ["run-active"]);
     assert.equal(f.core.turns.length, 0);
     assert.equal(f.client.posts.length, 0);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an allowFrom account answers listed members and is silent to everyone else", async () => {
+  const f = await fixture({ identityEmail: "1", allowFrom: ["example.com"] });
+  try {
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "300.1" });
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].conversation.audience[0].externalId, "alice@example.com");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("an allowFrom account drops unlisted members before any core work", async () => {
+  const f = await fixture({ identityEmail: "1", allowFrom: ["staff@example.com"] });
+  try {
+    await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hey there", ts: "301.1" });
+    await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> ping", ts: "301.2" });
+    assert.equal(f.core.turns.length, 0);
+    assert.equal(f.core.ackPicks.length, 0);
+    assert.deepEqual(f.core.ingests, []);
+    assert.deepEqual(f.client.posts, []);
+    assert.deepEqual(f.client.ephemerals, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a non-singleton account still serves turns but runs no core-singleton subsystems", async () => {
+  const f = await fixture({ coreSingleton: false });
+  try {
+    assert.deepEqual(f.core.directories, []);
+    assert.equal(f.core.deliverySubscriptions, 0);
+    assert.equal(f.core.contextSubscriptions, 0);
+    assert.equal(f.core.modelChangeListeners.length, 0);
+    assert.equal(f.core.headerPinChangeListeners.length, 0);
+    assert.equal(f.core.publishedEmojiCatalogs.length, 0);
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "302.1" });
+    assert.equal(f.core.turns.length, 1);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("the default account keeps every core-singleton subsystem", async () => {
+  const f = await fixture();
+  try {
+    assert.equal(f.core.deliverySubscriptions, 1);
+    assert.equal(f.core.contextSubscriptions, 1);
+    assert.equal(f.core.modelChangeListeners.length, 1);
+    assert.equal(f.core.headerPinChangeListeners.length, 1);
+    await waitFor(() => f.core.publishedEmojiCatalogs.length === 1);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a gated account joining a channel stays silent — no welcome, no header", async () => {
+  const f = await fixture({
+    identityEmail: "1",
+    allowFrom: ["staff@example.com"],
+    webUiPublicUrl: "https://claw.example.dev",
+  });
+  try {
+    f.core.headerPinScopes.add("channel:C1");
+    await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "400.1" }, "Ev-gated-join");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(f.client.posts, []);
+    assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("the default account still pushes the core directory", async () => {
+  const f = await fixture();
+  try {
+    await waitFor(() => f.core.directories.length >= 1);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a gated account with a denyMessage answers direct approaches with it, once per user", async () => {
+  const f = await fixture({
+    identityEmail: "1",
+    allowFrom: ["staff@example.com"],
+    denyMessage: "I only work with YC staff — ask your group partner.",
+  });
+  try {
+    await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> help", ts: "500.1" });
+    assert.equal(f.client.ephemerals.length, 1);
+    assert.equal(f.client.ephemerals[0].user, "U2");
+    assert.equal(f.client.ephemerals[0].text, "I only work with YC staff — ask your group partner.");
+    await f.app.emitEvent("app_mention", { channel: "C1", user: "U2", text: "<@UBOT> hello?", ts: "500.2" });
+    assert.equal(f.client.ephemerals.length, 1);
+    await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hi", ts: "500.3" });
+    assert.equal(f.client.posts.length, 1);
+    assert.equal(f.client.posts[0].channel, "D2");
+    assert.equal(f.client.posts[0].text, "I only work with YC staff — ask your group partner.");
+    await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hello??", ts: "500.4" });
+    assert.equal(f.client.posts.length, 1);
+    assert.equal(f.core.turns.length, 0);
+    assert.deepEqual(f.core.ingests, []);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a denyMessage account stays silent on ambient channel chatter from unlisted members", async () => {
+  const f = await fixture({
+    identityEmail: "1",
+    allowFrom: ["staff@example.com"],
+    denyMessage: "Staff only, I fear.",
+  });
+  try {
+    await f.app.emitMessage({ channel: "C1", channel_type: "channel", user: "U2", text: "morning all", ts: "501.1" });
+    assert.deepEqual(f.client.posts, []);
+    assert.deepEqual(f.client.ephemerals, []);
+    assert.deepEqual(f.core.ingests, []);
   } finally {
     await f.stop();
   }

@@ -1,45 +1,23 @@
 import { randomUUID } from "node:crypto";
-import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createKeyedQueue, sleep } from "../util/async.ts";
-import { swallowAs, errMessage } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
+import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import {
-  BLOB_TRANSFER_TTL_MS,
-  createExecBackup,
-  createExecBlobStaging,
+  createBackendBlobStaging,
+  createExecExport,
   createExecFileOps,
-  posixJoin,
+  type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
-import { DROPPED_PROXY_ENV, forceThroughProxyEnv, proxyExportPrefix } from "./sandbox-env.ts";
-import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token.ts";
-import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { CAPABILITY_HEADER } from "../api/contract.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { spriteScopeName } from "./sprites-sandbox.ts";
-import type {
-  AgentComputerProfile,
-  ExecOptions,
-  ExecResult,
-  ProvisionOptions,
-  Sandbox,
-  SandboxHandle,
-  TeardownOptions,
-} from "./sandbox.ts";
+import { createExecSandboxBase } from "./exec-sandbox-base.ts";
+import { createLayerToolInstaller } from "./layer-tool-install.ts";
+import type { LayerInstallFile } from "../deployment/load-layer.ts";
+import type { AgentComputerProfile, ExecResult, Sandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
-const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const INLINE_LIMIT = 256 * 1024;
 const FILE_TRANSFER_TIMEOUT_MS = 300_000;
 const EXEC_SYNC_MAX_SEC = 240;
@@ -65,7 +43,7 @@ interface MachineExecResponse {
   stderrTruncated?: boolean;
 }
 
-export interface SmolmachinesSandboxOptions {
+export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
   namePrefix?: string;
@@ -75,12 +53,9 @@ export interface SmolmachinesSandboxOptions {
   diskGb?: number;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
-  blobTransfer?: BlobTransferStore;
-  signingSecret?: string;
-  capabilitySecret?: string;
-  apiBaseUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
+  layerToolFiles?: () => readonly LayerInstallFile[];
   fetchImpl?: typeof fetch;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -97,13 +72,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
-  const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
-  const provisionQueue = createKeyedQueue<string>();
 
   const idByName = new Map<string, string>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
 
   async function api(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<Response> {
     const res = await fetchImpl(`${baseUrl}${path}`, {
@@ -330,17 +300,26 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  async function ensureMachine(
-    key: string,
-    name: string,
-    onStatus?: (text: string) => void,
-  ): Promise<{ coldStart: boolean }> {
-    return provisionQueue(key, async () => {
+  const base = createExecSandboxBase({
+    workspace,
+    label: "smolmachines",
+    prefix,
+    homeDir: HOME_DIR,
+    defaultTimeoutSec,
+    credentialPaths: opts.credentialPaths ?? [],
+    ...(opts.layerToolFiles ? { installLayerTools: createLayerToolInstaller(opts.layerToolFiles) } : {}),
+    egressProxyUrl: opts.egressProxyUrl,
+    deleteFailureCode: "machine_delete_failed",
+    onError: opts.onError,
+    exec: execRaw,
+    writeAbsBytes,
+    readAbsBytes,
+    async ensureResident(name, onStatus) {
       if (idByName.has(name)) return { coldStart: false };
       const existing = await findMachine(name);
       if (existing) {
         idByName.set(name, existing.id);
-        if (!RUNNING_STATES.has(existing.state)) await startMachine(existing.id);
+        if (!RUNNING_STATES.has(existing.state.toLowerCase())) await startMachine(existing.id);
         return { coldStart: false };
       }
       try {
@@ -351,23 +330,15 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       const { info, created } = await createMachine(name, false);
       idByName.set(name, info.id);
       return { coldStart: created };
-    });
-  }
-
-  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = spriteScopeName(`${prefix}-scratch`, key);
-    return provisionQueue(`scratch:${key}`, async () => {
-      scratchKeyByName.set(name, key);
-      const active = activeScratch.get(name) ?? 0;
-      if (active === 0 && !idByName.has(name)) {
-        await deleteMachine(name).catch(swallowAs("smolmachines-sandbox: stale scratch delete", undefined));
-        const { info } = await createMachine(name, true);
-        idByName.set(name, info.id);
-      }
-      activeScratch.set(name, active + 1);
-      return { name, coldStart: active === 0 };
-    });
-  }
+    },
+    isProvisioned: (name) => idByName.has(name),
+    async recreateScratch(name) {
+      await deleteMachine(name).catch(swallowAs("smolmachines-sandbox: stale scratch delete", undefined));
+      const { info } = await createMachine(name, true);
+      idByName.set(name, info.id);
+    },
+    deleteInstance: deleteMachine,
+  });
 
   const profile: AgentComputerProfile = {
     backend: "smolmachines",
@@ -387,7 +358,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
       ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
       homeDir: HOME_DIR,
-      workdir: workspaceDir,
+      workdir: base.workspaceDir,
     },
   };
 
@@ -405,30 +376,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const blobSigningSecret = opts.capabilitySecret ?? opts.signingSecret;
-  const blobStaging =
-    opts.blobTransfer && blobSigningSecret && opts.apiBaseUrl
-      ? createExecBlobStaging({
-          label: "smolmachines",
-          exec: (id, script, t) => execRaw(id, script, t),
-          proxyPrefix: proxyExportPrefix,
-          apiBaseUrl: opts.apiBaseUrl,
-          capabilityHeader: CAPABILITY_HEADER,
-          mintToken: (grant) =>
-            mintCapabilityToken(
-              {
-                actorId: "smolmachines-sandbox",
-                aud: BLOB_TRANSFER_AUD,
-                scopeId: "personal:smolmachines-sandbox",
-                blob: grant,
-                exp: Date.now() + BLOB_TRANSFER_TTL_MS,
-              },
-              blobSigningSecret,
-            ),
-        })
-      : null;
+  const blobStaging = createBackendBlobStaging("smolmachines", (id, script, t) => execRaw(id, script, t), opts);
 
-  const execBackup = createExecBackup({
+  const execExport = createExecExport({
     label: "smolmachines",
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
@@ -436,7 +386,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
-  const sandbox: Sandbox = {
+  return {
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,
@@ -444,141 +394,14 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...(blobStaging
-      ? {
-          async stageIn(handle: SandboxHandle, destRelPath: string, blobId: string): Promise<void> {
-            await blobStaging.stageInAbs(handle, posixJoin(handle.rootDir, destRelPath), blobId);
-          },
-          async stageOut(handle: SandboxHandle, srcRelPath: string): Promise<string> {
-            return blobStaging.stageOutAbs(handle, posixJoin(handle.rootDir, srcRelPath));
-          },
-        }
-      : {}),
-
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
-      const scratch = provOpts?.scratch;
-      const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-      const scope = writable?.scopeId ?? "default";
-      let name: string;
-      let coldStart: boolean;
-      if (scratch) {
-        ({ name, coldStart } = await ensureScratch(scratch.key));
-      } else {
-        name = spriteScopeName(prefix, scope);
-        scopeByName.set(name, scope);
-        ({ coldStart } = await ensureMachine(scope, name, provOpts?.onStatus));
-      }
-
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = {
-        ...turnEnv,
-        ...(forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!) : {}),
-      };
-      const handle: SandboxHandle = {
-        id: name,
-        rootDir: workspaceDir,
-        homeDir: HOME_DIR,
-        coldStart,
-        ...(scratch ? { scratch: true } : {}),
-        ...(Object.keys(env).length ? { env } : {}),
-      };
-
-      try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`smolmachines provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "smolmachines" },
-        );
-
-        return handle;
-      } catch (err) {
-        await sandbox
-          .teardown(handle)
-          .catch(swallowAs("smolmachines-sandbox: teardown after failed provision", undefined));
-        throw err;
-      }
-    },
-
-    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      const exports = Object.entries(handle.env ?? {})
-        .map(([k, v]) => `export ${k}=${shq(v)}`)
-        .join("; ");
-      const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(
-          swallowAs("smolmachines-sandbox: kill in-flight exec", undefined),
-        );
-      };
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        signal.throwIfAborted();
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
-
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
-
-    backupComputer: execBackup.backupComputer,
-
-    async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      if (handle.scratch) {
-        const key = scratchKeyByName.get(handle.id);
-        return provisionQueue(key ? `scratch:${key}` : handle.id, async () => {
-          const remaining = (activeScratch.get(handle.id) ?? 1) - 1;
-          if (remaining > 0) {
-            activeScratch.set(handle.id, remaining);
-            return;
-          }
-          activeScratch.delete(handle.id);
-          if (tdOpts?.destroy) await deleteMachine(handle.id);
-          else await deleteMachine(handle.id).catch(swallowAs("smolmachines-sandbox: scratch delete", undefined));
-        });
-      }
-      if (!tdOpts?.destroy) return;
-      await deleteMachine(handle.id).catch((e) => {
-        const scope = scopeByName.get(handle.id);
-        opts.onError?.({
-          category: "sandbox_teardown",
-          code: "machine_delete_failed",
-          message: errMessage(e),
-          ...(scope ? { scopeLabel: scope } : {}),
-        });
-      });
-    },
+    ...blobStaging,
+    provision: base.provision,
+    run: base.run,
+    writeFileBytes: base.writeFileBytes,
+    writeFile: base.writeFile,
+    readFileBytes: base.readFileBytes,
+    readFile: base.readFile,
+    exportFiles: execExport.exportFiles,
+    teardown: base.teardown,
   };
-
-  return sandbox;
 }

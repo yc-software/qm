@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { FETCH_SUBSTRATE, SCRIPT_RUNNER } from "../../src/sandbox/sprites-sandbox.ts";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SpritesClientLike } from "../../src/sandbox/sprites-sandbox.ts";
@@ -28,6 +29,8 @@ export interface FakeSprites {
   stallAfterRun(name: string): void;
   fail502(name: string): void;
   refuseRestart(name: string): void;
+  refuseForcedRestart(name: string): void;
+  setPressure(name: string, p: { full10: number; full60: number; load1: number }): void;
   restarts(): string[];
   reset(): void;
   cleanup(): void;
@@ -45,6 +48,7 @@ export function installFakeSprites(): FakeSprites {
   const gateway502 = new Set<string>();
   const stallAfterRun = new Set<string>();
   const refusedRestart = new Set<string>();
+  const refusedForcedRestart = new Set<string>();
   const restarts: string[] = [];
 
   const ensureDir = (name: string): string => {
@@ -65,6 +69,10 @@ export function installFakeSprites(): FakeSprites {
       `export HOME=${JSON.stringify(home)}; ` +
       script
         .replace(/\btimeout \d+ /g, "")
+        .replace(/\bsha256sum -c --status\b/g, "shasum -a 256 -c --status")
+        .replace(/\/proc\/pressure\/io/g, `${home}/.proc-pressure-io`)
+        .replace(/\/proc\/loadavg/g, `${home}/.proc-loadavg`)
+        .replace(/\/usr\/local/g, `${home}/.usr-local`)
         .replace(/\/home\/sprite/g, home)
         .replace(remapPath, (m) => (m.startsWith(home) ? m : `${home}/tmp/`))
     );
@@ -76,14 +84,15 @@ export function installFakeSprites(): FakeSprites {
     return Buffer.alloc(0);
   };
 
-  const runExec = (name: string, script: string, stdin?: Buffer): Buffer => {
+  const runExec = (name: string, script: string, stdin?: Buffer, viaBody = false): Buffer => {
     execScripts.push(script);
     mkdirSync(join(ensureDir(name), "tmp"), { recursive: true });
-    const r = spawnSync("sh", ["-c", remap(name, script)], {
+    const input = viaBody ? Buffer.from(remap(name, script), "utf8") : stdin;
+    const r = spawnSync("sh", ["-c", viaBody ? SCRIPT_RUNNER : remap(name, script)], {
       encoding: "buffer",
       maxBuffer: 128 * 1024 * 1024,
       env: { ...process.env, COPYFILE_DISABLE: "1" },
-      ...(stdin ? { input: stdin } : {}),
+      ...(input ? { input } : {}),
     });
     const code = r.status ?? (r.signal ? 137 : -1);
     const frame = (id: number, payload: Buffer): Buffer => Buffer.concat([Buffer.from([id]), payload]);
@@ -114,9 +123,12 @@ export function installFakeSprites(): FakeSprites {
     const boot = /^\/v1\/sprites\/([^/]+)\/restart$/.exec(url.pathname);
     if (boot && method === "POST") {
       const name = decodeURIComponent(boot[1]!);
+      const forced = url.searchParams.get("force") === "true";
       if (!sprites.has(name)) return new Response("sprite not found", { status: 404 });
-      if (refusedRestart.has(name)) return new Response('{"error":"upstream restart failed"}', { status: 502 });
-      restarts.push(name);
+      if (forced ? refusedForcedRestart.has(name) : refusedRestart.has(name)) {
+        return new Response('{"error":"upstream restart failed"}', { status: 502 });
+      }
+      restarts.push(forced ? `${name}?force=true` : name);
       gateway502.delete(name);
       return Response.json({ sprite_name: name });
     }
@@ -125,21 +137,23 @@ export function installFakeSprites(): FakeSprites {
       const name = decodeURIComponent(sub[1]!);
       if (sub[2] === "exec") {
         const argv = url.searchParams.getAll("cmd");
-        const script = argv[argv.length - 1] ?? "";
+        const body = url.searchParams.get("stdin") === "true" ? toBuf(init?.body) : undefined;
+        const viaBody = body !== undefined && argv[argv.length - 1] === SCRIPT_RUNNER;
+        const script = viaBody ? body.toString("utf8") : (argv[argv.length - 1] ?? "");
+        const stdin = viaBody ? undefined : body;
         calls[calls.length - 1]!.script = script;
-        const stdin = url.searchParams.get("stdin") === "true" ? toBuf(init?.body) : undefined;
         const stall = (): never => {
           throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
         };
         if (stallAfterRun.has(name)) {
           stallAfterRun.delete(name);
-          runExec(name, script, stdin);
+          runExec(name, script, stdin, viaBody);
           stall();
         }
         if (gateway502.has(name)) {
           return new Response('{"error":"bad gateway"}', { status: 502 });
         }
-        return new Response(runExec(name, script, stdin), { status: 200 });
+        return new Response(runExec(name, script, stdin, viaBody), { status: 200 });
       }
       if (method === "GET") return Response.json({ rules: policies.get(name) ?? [] });
       const parsed = JSON.parse(toBuf(init?.body).toString() || "{}") as { rules?: NetworkRule[] };
@@ -157,7 +171,9 @@ export function installFakeSprites(): FakeSprites {
     if (one) {
       const name = decodeURIComponent(one[1]!);
       if (method === "GET") {
-        return sprites.has(name) ? Response.json({ name }) : new Response("sprite not found", { status: 404 });
+        return sprites.has(name)
+          ? Response.json({ name, status: "warm" })
+          : new Response("sprite not found", { status: 404 });
       }
       if (method === "DELETE") {
         deleteSprite(name);
@@ -198,6 +214,17 @@ export function installFakeSprites(): FakeSprites {
     refuseRestart: (name) => {
       refusedRestart.add(name);
     },
+    refuseForcedRestart: (name) => {
+      refusedForcedRestart.add(name);
+    },
+    setPressure: (name, p) => {
+      const home = ensureDir(name);
+      writeFileSync(
+        join(home, ".proc-pressure-io"),
+        `some avg10=${p.full10} avg60=${p.full60} avg300=0.00 total=0\nfull avg10=${p.full10} avg60=${p.full60} avg300=0.00 total=0\n`,
+      );
+      writeFileSync(join(home, ".proc-loadavg"), `${p.load1} 0.00 0.00 1/100 1\n`);
+    },
     restarts: () => [...restarts],
     reset: () => {
       for (const name of Array.from(sprites.keys())) deleteSprite(name);
@@ -206,6 +233,7 @@ export function installFakeSprites(): FakeSprites {
       stallAfterRun.clear();
       gateway502.clear();
       refusedRestart.clear();
+      refusedForcedRestart.clear();
       restarts.length = 0;
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
@@ -220,7 +248,7 @@ export function installGlobalFakeSprites(): FakeSprites {
   if (globalFake) return globalFake;
   const fake = installFakeSprites();
   const realFetch = globalThis.fetch;
-  (globalThis as { fetch: typeof fetch }).fetch = async (input, init) => {
+  const patched: typeof fetch = async (input, init) => {
     let url: string;
     if (typeof input === "string") url = input;
     else if (input instanceof URL) url = input.href;
@@ -228,6 +256,8 @@ export function installGlobalFakeSprites(): FakeSprites {
     if (url.startsWith(`${API_ORIGIN}/`)) return fake.fetchImpl(input, init);
     return realFetch(input, init);
   };
+  (patched as typeof fetch & { [FETCH_SUBSTRATE]?: boolean })[FETCH_SUBSTRATE] = true;
+  (globalThis as { fetch: typeof fetch }).fetch = patched;
   globalFake = fake;
   return fake;
 }

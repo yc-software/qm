@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -6,12 +6,18 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../util/scope-storage-key.ts";
-import { swallow, swallowAs, errMessage } from "../util/errors.ts";
+import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
-import { createExecBackup, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
+import {
+  createBackendBlobStaging,
+  createExecExport,
+  createExecFileOps,
+  posixJoin,
+  type BlobStagingOptions,
+} from "./exec-file-ops.ts";
 import { createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "./aws-microvm-api.ts";
 import type {
   AgentComputerProfile,
@@ -22,7 +28,8 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
-import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
+import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
 import {
   ephemeralCredLinkPaths,
   ephemeralCredLinkScript,
@@ -32,20 +39,11 @@ import {
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
 const WORKSPACE_DIR = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
+const PREP_TIMEOUT_SEC = 30;
 const HOME_TAR = "/tmp/agent-home.tar";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
-const SNAPSHOT_PRUNE = [
-  "./.cache",
-  "./.cache/*",
-  "*/.cache",
-  "*/.cache/*",
-  "./__pycache__",
-  "*/__pycache__",
-  "*/__pycache__/*",
-  "./.npm",
-  "./.aws",
-];
+const SNAPSHOT_PRUNE = [...HOME_SNAPSHOT_PRUNE, "./.npm", "./.aws"];
 
 const DEFAULT_INGRESS = (region: string) =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:ALL_INGRESS`;
@@ -59,10 +57,11 @@ export interface StoredMicrovm {
   createdAtMs: number;
   lastSnapshotMs?: number;
   lastActivityMs?: number;
+  homeDirty?: boolean;
   orgId?: string;
 }
 
-export interface AwsSandboxOptions {
+export interface AwsSandboxOptions extends BlobStagingOptions {
   region: string;
   profile?: string;
   imageIdentifier: string;
@@ -172,42 +171,24 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     await client.ensureRunning(id, await resolveEndpoint(id));
   }
 
-  async function snapshotHome(scope: string, id: string): Promise<void> {
-    const credentialPrunes = ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`);
-    const pruneExpr = [...SNAPSHOT_PRUNE, ...credentialPrunes].map((p) => `-path ${shq(p)}`).join(" -o ");
-    const script = `cd ${shq(HOME_DIR)} 2>/dev/null || exit 0; find . \\( ${pruneExpr} \\) -prune -o -type f -print0 | tar --null -T - -cf ${shq(HOME_TAR)} 2>/dev/null`;
-    const made = await execRaw(id, script, 180);
-    if (made.code !== 0) throw new Error(`snapshot tar failed: ${made.stderr.slice(0, 200)}`);
-    const bytes = await readAbsBytes(id, HOME_TAR);
-    await execRaw(id, `rm -f ${shq(HOME_TAR)}`, 30).catch(() => {});
-    if (!bytes) throw new Error("snapshot read-back empty");
-    await s3.send(new PutObjectCommand({ Bucket: opts.s3Bucket, Key: s3KeyFor(scope), Body: bytes }));
-  }
+  const homeSnapshots = createHomeSnapshotOps<string>({
+    label: "aws",
+    homeDir: HOME_DIR,
+    homeTarPath: HOME_TAR,
+    prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`)],
+    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, keyFor: s3KeyFor }),
+    io: {
+      runCommand: async (id, script, timeoutMs) => {
+        const r = await execRaw(id, script, Math.ceil(timeoutMs / 1000));
+        return { exitCode: r.code, stdout: r.stdout, stderr: r.stderr };
+      },
+      readFileBytes: readAbsBytes,
+      writeFileBytes: writeAbsBytes,
+    },
+  });
 
-  async function hydrateHome(scope: string, id: string): Promise<boolean> {
-    let bytes: Uint8Array | null;
-    try {
-      const got = await s3.send(new GetObjectCommand({ Bucket: opts.s3Bucket, Key: s3KeyFor(scope) }));
-      const arr = await got.Body?.transformToByteArray();
-      bytes = arr ?? null;
-    } catch (e) {
-      const code = (e as { name?: string; $metadata?: { httpStatusCode?: number } })?.name ?? "";
-      const status =
-        (e as { $metadata?: { httpStatusCode?: number }; status?: number })?.$metadata?.httpStatusCode ??
-        (e as { status?: number })?.status;
-      if (!/NoSuchKey|NotFound/.test(code) && status !== 404) swallow("aws-sandbox: hydrate", e);
-      return false;
-    }
-    if (!bytes || !bytes.length) return false;
-    await writeAbsBytes(id, HOME_TAR, bytes);
-    const r = await execRaw(
-      id,
-      `mkdir -p ${shq(HOME_DIR)} && cd ${shq(HOME_DIR)} && tar -xf ${shq(HOME_TAR)}; rc=$?; rm -f ${shq(HOME_TAR)}; exit $rc`,
-      180,
-    );
-    if (r.code !== 0) throw new Error(`hydrate extract failed: ${r.stderr.slice(0, 200)}`);
-    return true;
-  }
+  const snapshotHome = (scope: string, id: string): Promise<void> => homeSnapshots.snapshotHome(scope, id);
+  const hydrateHome = (scope: string, id: string): Promise<boolean> => homeSnapshots.hydrateHome(scope, id);
 
   let resolvedImageArn: string | undefined;
   async function imageArn(): Promise<string> {
@@ -270,13 +251,25 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         }
         const body = await launchBody(scope);
         scopeByMicrovm.set(body.id, scope);
-        const hydrated = await hydrateHome(scope, body.id);
+        let hydrated: boolean;
+        try {
+          hydrated = await hydrateHome(scope, body.id);
+        } catch (e) {
+          reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
+          scopeByMicrovm.delete(body.id);
+          endpointById.delete(body.id);
+          client.evict(body.id);
+          await api.terminate(body.id).catch(swallowAs("aws-sandbox: terminate after failed hydrate", undefined));
+          throw new Error(`aws provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
+            cause: e,
+          });
+        }
         await store.put(scope, {
           microvmId: body.id,
           endpoint: body.endpoint,
           ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
           createdAtMs: Date.now(),
-          ...(hydrated ? { lastSnapshotMs: Date.now() } : {}),
+          ...(hydrated ? { lastSnapshotMs: Date.now(), homeDirty: false } : {}),
           orgId: configOrgId(),
         });
         return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
@@ -349,13 +342,15 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const execBackup = createExecBackup({
+  const execExport = createExecExport({
     label: "aws",
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => rel),
   });
+
+  const blobStaging = createBackendBlobStaging("aws", (id, script, t) => execRaw(id, script, t), opts);
 
   const sandbox: Sandbox = {
     profile,
@@ -365,6 +360,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
+    ...blobStaging,
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
@@ -378,9 +374,12 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       const prepared = await execRaw(
         id,
         `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`,
-        30,
+        PREP_TIMEOUT_SEC,
       );
-      if (prepared.code !== 0) throw new Error(`AWS sandbox credential setup failed: ${prepared.stderr.slice(0, 200)}`);
+      if (prepared.code !== 0)
+        throw new Error(
+          `AWS sandbox credential setup failed: ${execFailureDetail(prepared, PREP_TIMEOUT_SEC).slice(0, 200)}`,
+        );
 
       const env = provOpts?.env && Object.keys(provOpts.env).length ? provOpts.env : undefined;
       const handle: SandboxHandle = {
@@ -433,7 +432,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       return bytes === null ? null : Buffer.from(bytes).toString("utf8");
     },
 
-    backupComputer: execBackup.backupComputer,
+    exportFiles: execExport.exportFiles,
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const remaining = (activeByMicrovm.get(handle.id) ?? 1) - 1;
@@ -468,11 +467,11 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
       if (scope) {
         const stored = await store.get(scope);
-        const due = !stored?.lastSnapshotMs || Date.now() - stored.lastSnapshotMs > snapshotIntervalMs;
-        if (due) {
+        if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
+        if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
           try {
             await snapshotHome(scope, handle.id);
-            await store.merge(scope, { lastSnapshotMs: Date.now(), lastActivityMs: Date.now() });
+            await store.merge(scope, { lastSnapshotMs: Date.now(), lastActivityMs: Date.now(), homeDirty: false });
           } catch (e) {
             reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
             await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});

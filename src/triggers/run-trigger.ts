@@ -12,6 +12,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../core/turn-options.ts";
+import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { principalDestination, reachEnqueue } from "../reach/reach.ts";
 import { consentRequiredRecipient, recipientConsentSatisfied } from "./trigger-store.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
@@ -57,15 +58,25 @@ export interface TriggerSpec {
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
+  onClaimed?: () => Promise<void>;
+  deferWhenBusy?: boolean;
 }
 
 export interface TriggerOutcome {
   authzFailed: boolean;
   ran: boolean;
+  deferred?: boolean;
   status?: TurnResult["status"];
   note?: string;
+  userNote?: string;
   reply?: string;
   sessionId?: string;
+}
+
+class FireDeferred extends Error {
+  constructor() {
+    super("fire deferred: session busy");
+  }
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
@@ -236,6 +247,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
 
   let status: TurnResult["status"] | undefined;
   let note: string | undefined;
+  let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
   const ownerSkipNotice = async () => {
@@ -247,96 +259,112 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.shadow ? { shadow: true } : {}),
     });
   };
-  const ran = await deps.idempotency.once(spec.fireKey, async () => {
-    if (spec.message !== undefined) {
-      status = "ok";
-      if (!spec.destination) return;
-      if (!consented) {
-        status = "refused";
-        note = consentNote;
-        await ownerSkipNotice();
+  let deferred = false;
+  const ran = await deps.idempotency
+    .once(spec.fireKey, async () => {
+      await spec.onClaimed?.();
+      if (spec.message !== undefined) {
+        status = "ok";
+        if (!spec.destination) return;
+        if (!consented) {
+          status = "refused";
+          note = consentNote;
+          await ownerSkipNotice();
+          return;
+        }
+        if (!deliverable) {
+          status = "refused";
+          note = notVisibleNote;
+          return;
+        }
+        const attributeAs = await relayAttribution(deps, spec);
+        await reachEnqueue({
+          deliveries: deps.deliveries,
+          destination: spec.destination,
+          text: spec.message,
+          idempotencyKey: spec.fireKey,
+          provenance: deliveryProvenance(spec, threadRef),
+          ...(attributeAs ? { attributeAs } : {}),
+          ...(spec.shadow ? { shadow: true } : {}),
+        });
         return;
       }
-      if (!deliverable) {
-        status = "refused";
-        note = notVisibleNote;
+      if (!homeAccess.ok) {
+        note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
         return;
       }
-      const attributeAs = await relayAttribution(deps, spec);
-      await reachEnqueue({
-        deliveries: deps.deliveries,
-        destination: spec.destination,
-        text: spec.message,
+      const res = await deps.run({
+        surface: spec.surface,
+        actor: { externalId: actorId },
+        conversation,
+        text: spec.input,
+        ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
+        triggered: true,
+        ...(!isScopeFloor && !isScopeShared && spec.unattendedGrants
+          ? { unattendedGrants: spec.unattendedGrants }
+          : {}),
+        ...turnModelOptions({ triggered: true, ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}) }),
+        ...(spec.readOnly ? { readOnly: true } : {}),
+        ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
+        ...(spec.destination ? { triggerDestination: spec.destination } : {}),
+        ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
+        ...(isScopeShared ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
-        provenance: deliveryProvenance(spec, threadRef),
-        ...(attributeAs ? { attributeAs } : {}),
-        ...(spec.shadow ? { shadow: true } : {}),
       });
-      return;
-    }
-    if (!homeAccess.ok) {
-      note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
-      return;
-    }
-    const res = await deps.run({
-      surface: spec.surface,
-      actor: { externalId: actorId },
-      conversation,
-      text: spec.input,
-      ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
-      triggered: true,
-      ...(!isScopeFloor && !isScopeShared && spec.unattendedGrants ? { unattendedGrants: spec.unattendedGrants } : {}),
-      ...turnModelOptions({ triggered: true, ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}) }),
-      ...(spec.readOnly ? { readOnly: true } : {}),
-      ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-      ...(spec.destination ? { triggerDestination: spec.destination } : {}),
-      ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-      ...(isScopeShared ? { ownerKeychainUnion: true } : {}),
-      idempotencyKey: spec.fireKey,
+      if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
+      status = res.status;
+      reply = res.reply;
+      sessionId = res.sessionId;
+      if (res.status === "silent") return;
+      if (res.status === "pending_approval") {
+        note = "hit a require_approval command — failed closed (no human at fire/event time)";
+        console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
+        return;
+      }
+      if (res.status === "ok" && (res.reply || res.attachments?.length)) {
+        if (!spec.destination) return;
+        if (liveDelivery) return;
+        if (!consented) {
+          status = "refused";
+          note = consentNote;
+          await ownerSkipNotice();
+          return;
+        }
+        if (!deliverable) {
+          status = "refused";
+          note = notVisibleNote;
+          return;
+        }
+        await reachEnqueue({
+          deliveries: deps.deliveries,
+          destination: spec.destination,
+          text: res.reply ?? "",
+          ...(res.attachments?.length ? { attachments: res.attachments } : {}),
+          idempotencyKey: spec.fireKey,
+          provenance: deliveryProvenance(spec, threadRef, res),
+          ...(spec.shadow ? { shadow: true } : {}),
+        });
+        return;
+      }
+      if (res.status === "ok") note = "produced no reply";
+      else {
+        note = res.reason ? `${res.status}: ${res.reason}` : res.status;
+        userNote = userFacingFailureClause(res);
+      }
+    })
+    .catch((e: unknown) => {
+      if (!(e instanceof FireDeferred)) throw e;
+      deferred = true;
+      return false;
     });
-    status = res.status;
-    reply = res.reply;
-    sessionId = res.sessionId;
-    if (res.status === "silent") return;
-    if (res.status === "pending_approval") {
-      note = "hit a require_approval command — failed closed (no human at fire/event time)";
-      console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
-      return;
-    }
-    if (res.status === "ok" && (res.reply || res.attachments?.length)) {
-      if (!spec.destination) return;
-      if (liveDelivery) return;
-      if (!consented) {
-        status = "refused";
-        note = consentNote;
-        await ownerSkipNotice();
-        return;
-      }
-      if (!deliverable) {
-        status = "refused";
-        note = notVisibleNote;
-        return;
-      }
-      await reachEnqueue({
-        deliveries: deps.deliveries,
-        destination: spec.destination,
-        text: res.reply ?? "",
-        ...(res.attachments?.length ? { attachments: res.attachments } : {}),
-        idempotencyKey: spec.fireKey,
-        provenance: deliveryProvenance(spec, threadRef, res),
-        ...(spec.shadow ? { shadow: true } : {}),
-      });
-      return;
-    }
-    if (res.status === "ok") note = "produced no reply";
-    else note = res.reason ? `${res.status}: ${res.reason}` : res.status;
-  });
 
   const outcome: TriggerOutcome = {
     authzFailed: false,
     ran,
+    ...(deferred ? { deferred } : {}),
     ...(status ? { status } : {}),
     ...(note ? { note } : {}),
+    ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
@@ -344,7 +372,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   if (spec.errorNotice && spec.destination && consented && deliverable && isTriggerFailure(outcome)) {
     await deps.deliveries.enqueue({
       destination: spec.destination,
-      text: spec.errorNotice(note ?? status!),
+      text: spec.errorNotice(userNote ?? note ?? status!),
       idempotencyKey: `${spec.fireKey}:err`,
       provenance: deliveryProvenance(spec, threadRef),
       ...(spec.shadow ? { shadow: true } : {}),

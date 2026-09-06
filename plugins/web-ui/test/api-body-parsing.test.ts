@@ -75,6 +75,57 @@ test("an empty body on a strict route is refused, not read as a field-clearing o
   assert.equal(reached.length, 0, "no empty-body request may reach core (only the manage gate's list fetch may)");
 });
 
+test("a steer forwards a server-built TurnRequest; client-supplied identity fields are ignored", async () => {
+  const threadRef = "web:alice:steer-thread";
+  const r = await fetch(`${base}/api/runs/r1/signal`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      kind: "steer",
+      text: "louder",
+      threadRef,
+      ts: "client-forged",
+      actor: { externalId: "mallory" },
+      request: { surface: "web", actor: { externalId: "mallory" }, conversation: { kind: "dm", threadRef }, text: "x" },
+    }),
+  });
+  assert.equal(r.status, 200);
+  const forwarded = calls.at(-1);
+  assert.ok(forwarded?.url.startsWith("/v1/runs/r1/signal"));
+  const body = forwarded!.body as {
+    kind?: string;
+    text?: string;
+    ts?: string;
+    request?: { surface?: string; actor?: { externalId?: string }; conversation?: unknown; text?: string };
+  };
+  assert.equal(body.kind, "steer");
+  assert.equal(body.text, "louder");
+  assert.equal(body.ts, undefined, "a client-supplied ts is dropped; core mints its own");
+  assert.equal(body.request?.actor?.externalId, "alice", "the actor comes from the signed-in session");
+  assert.equal(body.request?.surface, "web");
+  assert.equal(body.request?.text, "louder");
+  assert.deepEqual(body.request?.conversation, { kind: "dm", threadRef });
+});
+
+test("a steer claiming a thread the user does not own is refused before reaching core", async () => {
+  const before = calls.length;
+  const r = await fetch(`${base}/api/runs/r1/signal`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ kind: "steer", text: "louder", threadRef: "web:bob:stolen" }),
+  });
+  assert.equal(r.status, 403);
+  assert.equal(calls.length, before, "nothing is forwarded to core");
+});
+
+test("a steer without a threadRef and an abort still forward the bare signal", async () => {
+  for (const body of [{ kind: "steer", text: "louder" }, { kind: "abort" }]) {
+    const r = await fetch(`${base}/api/runs/r1/signal`, { method: "POST", headers, body: JSON.stringify(body) });
+    assert.equal(r.status, 200);
+    assert.deepEqual(calls.at(-1)?.body, body);
+  }
+});
+
 test("routes that historically tolerated an empty body still do", async () => {
   const r = await fetch(`${base}/api/sessions/s1/fork`, { method: "POST", headers });
   assert.equal(r.status, 200, "fork with no body still forks from the tail");

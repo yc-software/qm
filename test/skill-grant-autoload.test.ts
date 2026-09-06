@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, skillRef, parseRef } from "../src/acl/resource-ref.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
-import { createSkillStore, type SkillManifest, type SkillStore } from "../src/skills/skill-store.ts";
+import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createSkillStore, type Skill, type SkillManifest, type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
 
 const ORG = scopeId("org", "default-org");
@@ -110,6 +111,43 @@ test("a grant redundant with scope visibility does not self-shadow", async () =>
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.skill!.id, own.id);
   assert.deepEqual(rows[0]!.shadowed, []);
+});
+
+test("visibleFor takes one snapshot instead of one per published name", async () => {
+  const backing = createMemoryMap<Skill>();
+  let allCalls = 0;
+  let getCalls = 0;
+  const counted: DurableMap<Skill> = {
+    ...backing,
+    all: () => {
+      allCalls += 1;
+      return backing.all();
+    },
+    get: (id) => {
+      getCalls += 1;
+      return backing.get(id);
+    },
+  };
+  const store = createSkillStore({ signingSecret: "snapshot-test", backing: counted });
+  const orgAlpha = await publishedSkill(store, ORG, "alpha-skill");
+  for (const name of ["beta-skill", "gamma-skill"]) await publishedSkill(store, ORG, name);
+  const own = await publishedSkill(store, ERIC, "alpha-skill");
+  const granted = await publishedSkill(store, JOSH, "delta-skill");
+
+  allCalls = 0;
+  getCalls = 0;
+  const rows = await store.visibleFor([ERIC, ORG], [{ id: granted.id, ownerScopeId: JOSH }]);
+  assert.equal(allCalls, 1);
+  assert.equal(getCalls, 0);
+
+  const byName = new Map(rows.map((r) => [r.skill!.manifest.name, r]));
+  assert.deepEqual([...byName.keys()].sort(), ["alpha-skill", "beta-skill", "delta-skill", "gamma-skill"]);
+  assert.equal(byName.get("alpha-skill")!.skill!.id, own.id);
+  assert.deepEqual(
+    byName.get("alpha-skill")!.shadowed.map((s) => s.id),
+    [orgAlpha.id],
+  );
+  assert.equal(byName.get("delta-skill")!.skill!.id, granted.id);
 });
 
 test("a grant whose claimed owner scope does not match the skill's home is ignored", async () => {

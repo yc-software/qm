@@ -23,19 +23,30 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
+  MAX_COMPACT_SUMMARY_CHARS,
+  boundCompactSummary,
   compactedScopeLabel,
-  contextSummaryPayload,
-  createContextSummaryPayload,
+  deterministicCompactSummary,
+  estimateHistoryTokens,
   forModelContext,
   overBudgetFraction,
   planCompaction,
 } from "../src/harness/context-compaction.ts";
+import { countTokens } from "../src/util/tokens.ts";
 import type { Harness, HarnessCompactInput } from "../src/harness/harness.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
+import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 
 const ORG = "default-org";
+const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
+const msgTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `msg ${i}`);
+const KEEP_RECENT_TOKEN_FRACTION = 0.6;
+const budgetBetweenSoftAndHard = (historyTokens: number): number =>
+  Math.round(historyTokens / ((COMPACT_SOFT_FRACTION + COMPACT_HARD_FRACTION) / 2));
+const budgetKeepingOnlyNewest = (...newestTwoTexts: string[]): number => tokensOf(...newestTwoTexts);
+const budgetWhoseKeepWindowFits = (keepTokens: number): number => Math.ceil(keepTokens / KEEP_RECENT_TOKEN_FRACTION);
 const actor: Principal = { id: "U1", type: "internal", teamIds: ["eng"] };
 const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
 const PERSONAL = scopeId("personal", "U1");
@@ -89,7 +100,7 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildOrchestrator(harness: Harness, maxContextEntries: number, maxContextTokens?: number) {
+function buildOrchestrator(harness: Harness, maxContextTokens?: number) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -116,8 +127,7 @@ function buildOrchestrator(harness: Harness, maxContextEntries: number, maxConte
     memory: createMemoryService(workspace),
     deploy,
     acl,
-    maxContextEntries,
-    ...(maxContextTokens !== undefined ? { maxContextTokens } : {}),
+    maxContextTokens,
   });
   return { orch, sessions };
 }
@@ -179,13 +189,13 @@ async function waitForLeaseRelease(sessions: SessionStore, sessionId: string, de
   }
 }
 
-test("overflow over the injected threshold summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
+test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
   const { harness, compactCalls, resetCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 4);
+  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(
     sessions,
-    Array.from({ length: 6 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(6).map((text) => ({ payload: { text } })),
   );
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -209,7 +219,7 @@ test("overflow over the injected threshold summarizes: compactHistory runs over 
 
 test("the background pass labels the lease it takes, so a turn it locks out can name what beat it", async () => {
   const { harness } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 4);
+  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
   const holders: Array<string | undefined> = [];
   const acquire = sessions.acquireLease.bind(sessions);
   sessions.acquireLease = async (sessionId, holder) => {
@@ -219,7 +229,7 @@ test("the background pass labels the lease it takes, so a turn it locks out can 
 
   const sid = await seed(
     sessions,
-    Array.from({ length: 6 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(6).map((text) => ({ payload: { text } })),
   );
   assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
 
@@ -233,9 +243,9 @@ test("the background pass labels the lease it takes, so a turn it locks out can 
   await waitForLeaseRelease(sessions, sid);
 });
 
-test("token overflow triggers compaction even when entry count is well under the limit (a few huge entries)", async () => {
+test("token overflow triggers compaction with only a few huge entries", async () => {
   const { harness, compactCalls, resetCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 100, 50);
+  const { orch, sessions } = buildOrchestrator(harness, 50);
 
   const big = "many different tokens here ".repeat(25);
   const sid = await seed(
@@ -258,7 +268,7 @@ test("token overflow triggers compaction even when entry count is well under the
 
 test("a prior summary that still fits is reused, not regenerated", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 4);
+  const { orch, sessions } = buildOrchestrator(harness, 1_000_000);
 
   const sid = await seed(sessions, [
     { payload: { text: "old 0" } },
@@ -286,11 +296,11 @@ test("a prior summary that still fits is reused, not regenerated", async () => {
 test("with no harness summarizer, overflow falls back to a plain slice — no summary entry written", async () => {
   const { harness, compactCalls, resetCalls } = spyHarness({ withSummarizer: false });
   assert.equal(harness.models.compactHistory, undefined, "fixture: summarizer is absent");
-  const { orch, sessions } = buildOrchestrator(harness, 4);
+  const { orch, sessions } = buildOrchestrator(harness, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
 
   const sid = await seed(
     sessions,
-    Array.from({ length: 6 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(6).map((text) => ({ payload: { text } })),
   );
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -300,20 +310,25 @@ test("with no harness summarizer, overflow falls back to a plain slice — no su
   assert.deepEqual(resetCalls, [], "no summarizer → no session reset");
   const summaries = await summaryEntries(sessions, sid);
   assert.equal(summaries.length, 0, "fallback must NOT write a summary entry");
-  assert.equal(res.reply, "history:4", "fallback returns the last `maxContextEntries` entries");
+  assert.equal(res.reply, "history:4", "fallback returns the newest entries that fit the token budget");
 });
 
 test("a tool_call at the summarize/keep boundary whose result is KEPT is not summarized as interrupted", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 4);
+  const callPayload = { tool: "execute", command: "bash refresh.sh", callId: "c1" };
+  const resultPayload = { tool: "execute", callId: "c1", result: "wrote inv=89", isError: false };
+  const { orch, sessions } = buildOrchestrator(
+    harness,
+    budgetKeepingOnlyNewest(JSON.stringify(callPayload), JSON.stringify(resultPayload)),
+  );
 
   const sid = await seed(sessions, [
     { payload: { text: "msg 0" } },
     { payload: { text: "msg 1" } },
     { payload: { text: "msg 2" } },
     { payload: { text: "msg 3" } },
-    { type: "tool_call", payload: { tool: "execute", command: "bash refresh.sh", callId: "c1" } },
-    { type: "tool_result", payload: { tool: "execute", callId: "c1", result: "wrote inv=89", isError: false } },
+    { type: "tool_call", payload: callPayload },
+    { type: "tool_result", payload: resultPayload },
   ]);
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -331,7 +346,7 @@ test("a tool_call at the summarize/keep boundary whose result is KEPT is not sum
 
 test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summary", async () => {
   const { harness } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 4);
+  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(sessions, [
     { type: "tool_call", payload: { tool: "execute", command: "bash refresh.sh", callId: "c1" } },
@@ -374,7 +389,7 @@ test("compactedScopeLabel inherits the narrowest audience and refuses ambiguous 
 
 test("a summary over narrower (team) data inherits the team label, never the broader session/org floor", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 4);
+  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("team 4", "recent 5"));
 
   const sid = await seed(sessions, [
     { payload: { text: "team 0" }, scopeLabel: TEAM },
@@ -410,28 +425,28 @@ const mkEntry = (over: Partial<SessionEntry> & { seq: number }): SessionEntry =>
 
 test("overBudgetFraction: soft < hard — the gap where a background pass runs but a turn need not block", () => {
   const history = Array.from({ length: 10 }, (_, i) => mkEntry({ seq: i }));
-  assert.equal(
-    overBudgetFraction(history, 12, 1_000_000, COMPACT_SOFT_FRACTION),
-    true,
-    "past soft ⇒ background pass fires",
-  );
-  assert.equal(
-    overBudgetFraction(history, 12, 1_000_000, COMPACT_HARD_FRACTION),
-    false,
-    "under hard ⇒ turn need not block",
-  );
+  const budget = budgetBetweenSoftAndHard(estimateHistoryTokens(history));
+  assert.equal(overBudgetFraction(history, budget, COMPACT_SOFT_FRACTION), true, "past soft ⇒ background pass fires");
+  assert.equal(overBudgetFraction(history, budget, COMPACT_HARD_FRACTION), false, "under hard ⇒ turn need not block");
   assert.ok(COMPACT_SOFT_FRACTION < COMPACT_HARD_FRACTION, "soft must be below hard");
 });
 
-test("overBudgetFraction trips on the token budget alone (a few huge entries under the count)", () => {
+test("entry count alone never triggers compaction: hundreds of tiny entries under the token budget stay uncompacted", () => {
+  const history = Array.from({ length: 500 }, (_, i) => mkEntry({ seq: i, payload: { text: `tiny ${i}` } }));
+  const budget = estimateHistoryTokens(history) * 4;
+  assert.equal(overBudgetFraction(history, budget, COMPACT_SOFT_FRACTION), false);
+  assert.equal(planCompaction(history, budget, 0.6), null);
+});
+
+test("overBudgetFraction trips on the token budget (a few huge entries)", () => {
   const big = "many different tokens here ".repeat(250);
   const history = Array.from({ length: 3 }, (_, i) => mkEntry({ seq: i, payload: { text: big } }));
-  assert.equal(overBudgetFraction(history, 100, 2_000, COMPACT_HARD_FRACTION), true);
+  assert.equal(overBudgetFraction(history, 2_000, COMPACT_HARD_FRACTION), true);
 });
 
 test("planCompaction summarizes ONLY the evicted (oldest overflow) chunk, not the whole transcript", () => {
   const history = Array.from({ length: 8 }, (_, i) => mkEntry({ seq: i }));
-  const plan = planCompaction(history, 4, 1_000_000, 0.6)!;
+  const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(5))), 0.6)!;
   assert.ok(plan, "over budget ⇒ a plan");
   assert.deepEqual(
     plan.toSummarize.map((e) => e.seq),
@@ -459,7 +474,7 @@ test("planCompaction chains a prior summary into the batch instead of accumulati
     },
     ...Array.from({ length: 6 }, (_, i) => mkEntry({ seq: i + 1 })),
   ];
-  const plan = planCompaction(history, 4, 1_000_000, 0.6)!;
+  const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(-3))), 0.6)!;
   assert.ok(
     plan.toSummarize.some((e) => contextSummaryPayload(e)),
     "the prior summary is folded into the new batch",
@@ -480,7 +495,7 @@ test("planCompaction returns null when nothing needs to move (a still-fitting pr
     mkEntry({ seq: 3 }),
     mkEntry({ seq: 4 }),
   ];
-  const plan = planCompaction(history, 4, 1_000_000, 0.6)!;
+  const plan = planCompaction(history, 1_000_000, 0.6)!;
   assert.equal(plan.toSummarize.length, 0, "nothing to summarize");
   assert.equal(plan.reuse?.seq, 0, "the fitting prior summary is reused");
 });
@@ -510,7 +525,7 @@ test("planCompaction never splits a tool_call from its kept tool_result (no fabr
     mkEntry({ seq: 4 }),
     mkEntry({ seq: 5 }),
   ];
-  const plan = planCompaction(history, 4, 1_000_000, 0.6)!;
+  const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(3))), 0.6)!;
   assert.deepEqual(
     plan.toSummarize.map((e) => e.seq),
     [0, 1],
@@ -528,10 +543,10 @@ for (const [kind, mkTurn] of [
 ] as const) {
   test(`a ${kind} turn between soft and hard does NOT block on compaction; the background pass sheds it`, async () => {
     const { harness, compactCalls } = spyHarness();
-    const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+    const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
     const sid = await seed(
       sessions,
-      Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+      msgTexts(8).map((text) => ({ payload: { text } })),
     );
 
     const res = await orch.handleTurn(mkTurn("!histcount"));
@@ -544,12 +559,37 @@ for (const [kind, mkTurn] of [
   });
 }
 
+test("a model-overridden session's background pass sizes against the override's budget, not the scope default", async () => {
+  const { harness, compactCalls } = spyHarness();
+  const OVERRIDE = "tiny-context-model";
+  const overrideBudget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
+  harness.models.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
+    model === OVERRIDE ? overrideBudget : 1_000_000;
+  const { orch, sessions } = buildOrchestrator(harness);
+  const sid = await seed(
+    sessions,
+    msgTexts(8).map((text) => ({ payload: { text } })),
+  );
+
+  const res = await orch.handleTurn({ ...turn("!histcount"), model: OVERRIDE });
+  assert.equal(res.status, "ok");
+  assert.equal(res.reply, "history:8", "between soft and hard for the override ⇒ the turn itself is unblocked");
+
+  const summaries = await waitForSummary(sessions, sid);
+  assert.equal(
+    summaries.length,
+    1,
+    "the background pass judges fullness by the override model's budget — under the scope default it would never fire",
+  );
+  assert.equal(compactCalls.length, 1, "exactly one background compaction against the override's budget");
+});
+
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 6, 1_000_000);
+  const { orch, sessions } = buildOrchestrator(harness, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
   await seed(
     sessions,
-    Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(8).map((text) => ({ payload: { text } })),
   );
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -560,7 +600,7 @@ test("a rapid follow-up that outran the background pass AND is over the HARD lim
 
 test("a session UNDER the soft threshold triggers no compaction at all (background pass is a no-op)", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+  const { orch, sessions } = buildOrchestrator(harness, 1_000_000);
   await seed(
     sessions,
     Array.from({ length: 3 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
@@ -574,10 +614,15 @@ test("a session UNDER the soft threshold triggers no compaction at all (backgrou
 
 test("a DM follow-up after the background pass reuses the summary — no blocking summarizer call on its hot path", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+  harness.models.compactHistory = async (input: HarnessCompactInput) => {
+    compactCalls.push(input);
+    return "tiny recap";
+  };
+  const keptAfterFirstTurn = ["msg 4", "msg 5", "msg 6", "msg 7", "!histcount", "history:8"];
+  const { orch, sessions } = buildOrchestrator(harness, budgetWhoseKeepWindowFits(tokensOf(...keptAfterFirstTurn)));
   const sid = await seed(
     sessions,
-    Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(8).map((text) => ({ payload: { text } })),
   );
 
   await orch.handleTurn(turn("!histcount"));
@@ -607,10 +652,10 @@ test("forModelContext strips thinking/text/soul (never laundered into a durable 
 
 test("background compaction excludes thinking entries from the summary batch (Bugbot: history filter)", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(sessions, [
-    ...Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
-    { type: "thinking", payload: { thinking: "signature-less reasoning" } },
+    ...msgTexts(8).map((text) => ({ payload: { text } })),
+    { type: "thinking" as const, payload: { thinking: "signature-less reasoning" } },
   ]);
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -626,10 +671,13 @@ test("background compaction excludes thinking entries from the summary batch (Bu
 
 test("a session parked over soft with a too-large prior summary re-summarizes (Bugbot: reuse-parked)", async () => {
   const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+  const { orch, sessions } = buildOrchestrator(
+    harness,
+    budgetBetweenSoftAndHard(tokensOf("prior recap", ...msgTexts(8))),
+  );
   await seed(sessions, [
-    { type: "system", payload: createContextSummaryPayload(-1, "prior recap"), scopeLabel: PERSONAL },
-    ...Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    { type: "system" as const, payload: createContextSummaryPayload(-1, "prior recap"), scopeLabel: PERSONAL },
+    ...msgTexts(8).map((text) => ({ payload: { text } })),
   ]);
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -651,6 +699,66 @@ test("the compaction prompt tells the summarizer to preserve constraints and NOT
   assert.match(p, /constraint/, "preserves stated constraints");
   assert.match(p, /launder/, "explicitly forbids laundering untrusted content into fact");
   assert.match(p, /trust label|attributed/, "preserves trust labels / author attribution");
+  assert.match(p, /do not continue the conversation/, "forbids continuing the conversation");
+  assert.match(p, /do not respond to/, "forbids answering questions or instructions in the transcript");
+  assert.match(p, /do not perform, resume, or plan any/, "forbids resuming the task");
+  assert.match(p, /output only the summary/, "requires summary-only output");
+  assert.match(p, /under 8,000 characters/, "gives the model a length target well under the hard cap");
+  assert.match(p, /index/, "frames the summary as an index into the transcript");
+  assert.match(p, /history tool/, "names the tool that dereferences pointers");
+  assert.match(p, /seq or seq range/, "asks for seq pointers in place of retrievable detail");
+  assert.match(p, /cannot be re-derived/, "keeps only non-re-derivable facts inline");
+  assert.match(p, /fold its still-relevant content/, "gives merge semantics for a folded prior summary");
+});
+
+test("boundCompactSummary passes a normal summary through trimmed", () => {
+  const history = [mkEntry({ seq: 1 }), mkEntry({ seq: 2 })];
+  assert.equal(boundCompactSummary("  a tidy summary  ", history), "a tidy summary");
+});
+
+test("boundCompactSummary falls back deterministically when the model output is empty or missing", () => {
+  const history = [mkEntry({ seq: 1 })];
+  const fallback = deterministicCompactSummary(history);
+  assert.equal(boundCompactSummary(undefined, history), fallback);
+  assert.equal(boundCompactSummary("   ", history), fallback);
+});
+
+test("boundCompactSummary falls back deterministically when the summarizer runs away instead of summarizing", () => {
+  const history = [mkEntry({ seq: 1 })];
+  const runaway = "I'll scan for new signed replies… ".repeat(2_000);
+  assert.ok(runaway.length > MAX_COMPACT_SUMMARY_CHARS);
+  const out = boundCompactSummary(runaway, history);
+  assert.equal(out, deterministicCompactSummary(history));
+  assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS, "the fallback itself fits the cap, so it never re-triggers");
+});
+
+test("the deterministic fallback keeps the newest entries — a late stated constraint survives the slice", () => {
+  const history = [
+    ...Array.from({ length: 40 }, (_, i) => mkEntry({ seq: i, payload: { text: `filler ${i} ${"x".repeat(400)}` } })),
+    mkEntry({ seq: 40, payload: { text: "don't touch prod" } }),
+  ];
+  const out = deterministicCompactSummary(history);
+  assert.match(out, /don't touch prod/);
+  assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS);
+});
+
+test("a runaway summarizer output is bounded at the orchestrator: the persisted summary is the deterministic fallback", async () => {
+  const { harness } = spyHarness();
+  harness.models.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
+  const sid = await seed(
+    sessions,
+    msgTexts(12).map((text) => ({ payload: { text } })),
+  );
+
+  const res = await orch.handleTurn(spineTurn("!histcount"));
+  assert.equal(res.status, "ok");
+
+  const summaries = await waitForSummary(sessions, sid);
+  assert.ok(summaries.length >= 1, "a summary is persisted");
+  const persisted = contextSummaryPayload(summaries[0]!)!.text;
+  assert.match(persisted, /^Compacted \d+ prior entr/, "the runaway output was replaced deterministically");
+  assert.ok(persisted.length <= MAX_COMPACT_SUMMARY_CHARS);
 });
 
 function assertSummaryBoundary(history: SessionEntry[], label: string): void {
@@ -731,7 +839,7 @@ test("hiding a tainted latest summary does not expose the raw entries it covers"
 test("under-HARD turn: the harness sees the boundary-filtered context, not stacked summaries over raw history", async () => {
   const base = spyHarness();
   const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(wrapped, 100, 1_000_000);
+  const { orch, sessions } = buildOrchestrator(wrapped, 1_000_000);
   await seed(sessions, stackedLog());
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -744,7 +852,10 @@ test("under-HARD turn: the harness sees the boundary-filtered context, not stack
 test("over-HARD turn with a summarizer: the rebuilt context honors the boundary", async () => {
   const base = spyHarness();
   const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(wrapped, 4);
+  const { orch, sessions } = buildOrchestrator(
+    wrapped,
+    Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
+  );
   await seed(sessions, stackedLog());
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -756,7 +867,7 @@ test("over-HARD turn with a summarizer: the rebuilt context honors the boundary"
 test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice", async () => {
   const base = spyHarness({ withSummarizer: false });
   const { wrapped, seen } = captureHarness(base.harness);
-  const { orch, sessions } = buildOrchestrator(wrapped, 2);
+  const { orch, sessions } = buildOrchestrator(wrapped, budgetKeepingOnlyNewest("recap B", "new 1"));
   await seed(sessions, stackedLog());
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -822,10 +933,10 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
 
 test("the background pass leaves the session writable while it summarizes — a follow-up turn is never locked out", async () => {
   const { harness, compactCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
-    Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(8).map((text) => ({ payload: { text } })),
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
@@ -839,12 +950,53 @@ test("the background pass leaves the session writable while it summarizes — a 
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "and the summary still lands afterwards");
 });
 
-test("the background pass waits out a turn that holds the lock rather than throwing its summary away", async () => {
-  const { harness, compactCalls, resetCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+test("the background pass summarizes first and requests its lease only after the summarizer returns", async () => {
+  const { harness, compactCalls, open } = gatedHarness();
+  const events: string[] = [];
+  const gated = harness.models.compactHistory!;
+  harness.models.compactHistory = async (input: HarnessCompactInput) => {
+    events.push("summarize:start");
+    const text = await gated(input);
+    events.push("summarize:end");
+    return text;
+  };
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const acquire = sessions.acquireLease.bind(sessions);
+  sessions.acquireLease = async (sessionId, holder) => {
+    if (holder === "compaction") events.push("acquire:compaction");
+    return acquire(sessionId, holder);
+  };
   const sid = await seed(
     sessions,
-    Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(8).map((text) => ({ payload: { text } })),
+  );
+
+  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
+  await untilTrue("the background summarizer to be in flight", () => events.includes("summarize:start"));
+
+  assert.ok(
+    !events.includes("acquire:compaction"),
+    `the pass must not request the session lease before the summarizer has returned (saw ${events.join(" → ")})`,
+  );
+  const { lease: probe } = await sessions.acquireLease(sid, "turn");
+  assert.ok(probe, "the session lease stays free for the whole summarization call");
+  await sessions.releaseLease(probe!);
+
+  open();
+  assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the lease is taken");
+  assert.ok(
+    events.indexOf("acquire:compaction") > events.indexOf("summarize:end"),
+    `the compaction lease must be requested strictly after the summarizer returns (saw ${events.join(" → ")})`,
+  );
+  assert.equal(compactCalls.length, 1, "and the model was called exactly once");
+});
+
+test("the background pass waits out a turn that holds the lock rather than throwing its summary away", async () => {
+  const { harness, compactCalls, resetCalls, open } = gatedHarness();
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const sid = await seed(
+    sessions,
+    msgTexts(8).map((text) => ({ payload: { text } })),
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
@@ -864,10 +1016,14 @@ test("the background pass waits out a turn that holds the lock rather than throw
 
 test("a turn landing mid-summarization does not disturb the fold: it covers a prefix, the turn's entries stay", async () => {
   const { harness, compactCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 20, 1_000_000);
+  const paddedTexts = Array.from(
+    { length: 15 },
+    (_, i) => `msg ${i} with enough padding words that a mid-summarization turn stays under the hard threshold`,
+  );
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
   const sid = await seed(
     sessions,
-    Array.from({ length: 15 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    paddedTexts.map((text) => ({ payload: { text } })),
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:15");
@@ -897,10 +1053,10 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
 
 test("a summary that landed while the pass was summarizing makes it drop its own — never two overlapping folds", async () => {
   const { harness, compactCalls, resetCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 10, 1_000_000);
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
-    Array.from({ length: 8 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    msgTexts(8).map((text) => ({ payload: { text } })),
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");

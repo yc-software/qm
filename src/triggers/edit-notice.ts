@@ -52,6 +52,7 @@ export function composeCronEditNotice(args: {
     const key = token.split("=")[0]!;
     if (LIFECYCLE_VERB[token]) verbs.push(LIFECYCLE_VERB[token]!);
     else if (key === "title") verbs.push("renamed");
+    else if (key === "note") verbs.push("left a shift-change note on");
     else if (key === "task") toClauses.push("to do something different");
     else if (key === "schedule") toClauses.push(scheduleClause(args.detail?.schedule));
     else if (key === "destination")

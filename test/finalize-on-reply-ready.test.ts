@@ -20,8 +20,9 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import type { Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { ErrorLog } from "../src/admin/error-log.ts";
+import type { SurfaceCache } from "../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 
 const ORG = "default-org";
@@ -41,6 +42,7 @@ function gatedSandbox() {
   let provisioned = 0;
   let teardownStarted = 0;
   let teardownFinished = 0;
+  const teardownOpts: Array<TeardownOptions | undefined> = [];
   const gates: Array<() => void> = [];
   const noop = async () => {};
   const sandbox = {
@@ -73,14 +75,16 @@ function gatedSandbox() {
       return [];
     },
     removeDir: noop,
-    async teardown() {
+    async teardown(_h: SandboxHandle, opts?: TeardownOptions) {
       teardownStarted++;
+      teardownOpts.push(opts);
       await new Promise<void>((res) => gates.push(res));
       teardownFinished++;
     },
   } as unknown as Sandbox;
   return {
     sandbox,
+    teardownOpts,
     release: () => gates.shift()?.(),
     get provisioned() {
       return provisioned;
@@ -94,7 +98,13 @@ function gatedSandbox() {
   };
 }
 
-function buildOrchestrator(sandbox: Sandbox, errors?: ErrorLog, harness = createMockHarness()) {
+function buildOrchestrator(
+  sandbox: Sandbox,
+  errors?: ErrorLog,
+  harness = createMockHarness(),
+  eagerProvision = false,
+  surfaceCache?: SurfaceCache,
+) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -121,7 +131,9 @@ function buildOrchestrator(sandbox: Sandbox, errors?: ErrorLog, harness = create
     memory: createMemoryService(workspace),
     deploy,
     acl,
+    eagerProvision,
     ...(errors ? { errors } : {}),
+    ...(surfaceCache ? { surfaceCache } : {}),
   });
   return { orch, sessions };
 }
@@ -146,6 +158,57 @@ test("background: the run finishes as soon as the reply is ready; backup/teardow
   g.release();
   for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
   assert.equal(g.teardownFinished, 1, "the detached tail completed once unblocked");
+});
+
+test("background: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
+  const g = gatedSandbox();
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), true);
+
+  const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4", background: true });
+  assert.equal(first.status, "ok");
+  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  g.release();
+  for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
+  assert.equal(g.provisioned, 1);
+
+  const second = await orch.handleTurn({ ...dm("dm:U1:t4", "just chatting"), runId: "r5", background: true });
+  assert.equal(second.status, "ok");
+  assert.equal(g.provisioned, 2, "the session had used tools before, so the box was provisioned eagerly");
+  assert.equal(g.teardownFinished, 1, "the reply returned without waiting for the unused box's teardown");
+
+  for (let i = 0; i < 200 && g.teardownStarted < 2; i++) await tick();
+  assert.equal(g.teardownStarted, 2, "the detached tail reached teardown");
+  assert.equal(g.teardownOpts[1]?.homeUnchanged, true, "an unused box tells the backend there is nothing to snapshot");
+  assert.equal(g.teardownOpts[0]?.homeUnchanged, undefined, "a used box does not");
+  g.release();
+  for (let i = 0; i < 200 && g.teardownFinished < 2; i++) await tick();
+  assert.equal(g.teardownFinished, 2);
+});
+
+test("background: the message edit catch-up still runs before the lease is released", async () => {
+  const g = gatedSandbox();
+  let asked = 0;
+  const surfaceCache = new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop) =>
+      prop === "revisedSince"
+        ? async () => {
+            asked++;
+            return [];
+          }
+        : async () => [],
+  }) as unknown as SurfaceCache;
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), false, surfaceCache);
+  const result = await orch.handleTurn({
+    ...dm("ch:C1:t1", "!run echo hi"),
+    surface: "slack",
+    conversation: { kind: "channel", threadRef: "ch:C1:t1", audience: [actor] } as Conversation,
+    runId: "r6",
+    background: true,
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(asked, 1, "the edit catch-up ran even though the tail was detached");
+  assert.equal(g.teardownFinished, 0);
+  g.release();
 });
 
 test("background: an error in the detached tail still reclaims the box (no machine refcount leak)", async () => {

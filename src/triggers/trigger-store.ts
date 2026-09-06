@@ -1,6 +1,7 @@
 import type { Destination, RecipientConsent, ScopeId, TriggerBase } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { samePerson } from "../directory/person.ts";
+import { canonicalJson } from "../util/objects.ts";
 
 export interface CreateTriggerInput {
   ownerScopeId: ScopeId;
@@ -43,17 +44,7 @@ export function decideRecipientConsent(
 }
 
 export function contentPart(value: unknown): string {
-  if (value === undefined) return "";
-  return JSON.stringify(value, (_k, v) => {
-    if (!v || typeof v !== "object" || Array.isArray(v)) return v;
-    return Object.fromEntries(
-      Object.entries(v as Record<string, unknown>).sort(([a], [b]) => {
-        if (a < b) return -1;
-        if (a > b) return 1;
-        return 0;
-      }),
-    );
-  });
+  return canonicalJson(value);
 }
 
 export function createDeduped<T extends { id: string }>(

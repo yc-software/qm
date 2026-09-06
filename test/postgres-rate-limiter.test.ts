@@ -9,6 +9,7 @@ beforeEach(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
+  await pool.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await pool.query("DROP TABLE IF EXISTS rate_limit_windows CASCADE");
   await pool.end();
 });

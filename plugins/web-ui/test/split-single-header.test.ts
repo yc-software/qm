@@ -7,13 +7,13 @@ const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("a pane renders one header: the chat's own session topbar stays out of panes", () => {
-  assert.match(chat, /\$\{glanceTier \|\| ctx\.pane \? nothing : sessionTopbar\([^)]*\)\}/);
+  assert.match(chat, /\$\{glanceTier \|\| ctx\.pane \? nothing : sessionTopbar\(\)\}/);
 });
 
 test("the pane tab carries the scope / title breadcrumb", () => {
   assert.match(split, /function paneCrumb\(panel: IDockviewPanel\): string \| null/);
   assert.match(split, /class="split-pane-crumb"/);
-  assert.match(split, /this\.element\.title = crumb \? `\$\{crumb\} \/ \$\{title\}` : title;/);
+  assert.match(split, /attachTooltip\(this\.element, crumb \? `\$\{crumb\} \/ \$\{title\}` : title\);/);
   // crumb changes must retrigger a header redraw
   assert.match(split, /\$\{paneCrumb\(p\) \?\? ""\}\|\$\{paneTitle\(p\)\}/);
   assert.match(css, /\.split-pane-crumb \{/);

@@ -6,10 +6,11 @@ type SecretGate =
   | "postgres"
   | "sprites"
   | "smolmachines"
+  | "e2b"
+  | "modal"
   | "porter"
   | "agent37"
   | "porter-deploy"
-  | "fly-sandbox"
   | "fly-deploy"
   | "aws-deploy-gate"
   | "google-oauth"
@@ -39,8 +40,10 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
+  { name: "E2B_API_KEY", requiredWhen: "e2b" },
+  { name: "MODAL_TOKEN_ID", requiredWhen: "modal" },
+  { name: "MODAL_TOKEN_SECRET", requiredWhen: "modal" },
   { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: ["porter", "porter-deploy"] },
-  { name: "FLY_API_TOKEN", requiredWhen: "fly-sandbox" },
   { name: "FLY_DEPLOY_API_TOKEN", requiredWhen: "fly-deploy" },
   { name: "AWS_DEPLOY_GATE_SECRET", requiredWhen: "aws-deploy-gate" },
   { name: "GOOGLE_OAUTH_CLIENT_SECRET", requiredWhen: "google-oauth" },
@@ -52,12 +55,13 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   production: (env) => env.NODE_ENV === "production",
   codex: (env) => env.HARNESS?.trim() === "codex" && !env.CODEX_AUTH_FILE?.trim() && !env.CODEX_AUTH_CREDENTIAL?.trim(),
   postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
-  sprites: (env) => env.SANDBOX_BACKEND === "sprites" || env.SANDBOX_SECONDARY_BACKEND === "sprites",
-  smolmachines: (env) => env.SANDBOX_BACKEND === "smolmachines" || env.SANDBOX_SECONDARY_BACKEND === "smolmachines",
-  porter: (env) => env.SANDBOX_BACKEND === "porter" || env.SANDBOX_SECONDARY_BACKEND === "porter",
-  agent37: (env) => env.SANDBOX_BACKEND === "agent37" || env.SANDBOX_SECONDARY_BACKEND === "agent37",
+  sprites: (env) => env.SANDBOX_BACKEND === "sprites",
+  smolmachines: (env) => env.SANDBOX_BACKEND === "smolmachines",
+  e2b: (env) => env.SANDBOX_BACKEND === "e2b",
+  modal: (env) => env.SANDBOX_BACKEND === "modal",
+  porter: (env) => env.SANDBOX_BACKEND === "porter",
+  agent37: (env) => env.SANDBOX_BACKEND === "agent37",
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
-  "fly-sandbox": (env) => env.SANDBOX_BACKEND === "fly",
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN),
   "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),

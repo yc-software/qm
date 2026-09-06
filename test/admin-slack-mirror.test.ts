@@ -89,6 +89,7 @@ test("the mirror index lists containers with name, members, watermark, and messa
     assert.equal(c1.lastTs, "103.000100");
     assert.equal(c1.oldestTs, "100.000100");
     assert.equal(c1.messageCount, 3, "deleted tombstones don't count as mirrored");
+    assert.equal(d.hasMore, false);
     assert.ok(
       (await s.built.auditLog.events()).some((e) => e.action === "slack_mirror.read"),
       "read is audited",
@@ -151,6 +152,99 @@ test("q= searches mirrored bodies, org-wide or narrowed to a container", async (
       narrowed.messages.map((m: any) => m.ts),
       ["102.000100"],
     );
+    assert.equal(narrowed.hasMore, false);
+  } finally {
+    await s.close();
+  }
+});
+
+test("search reports hasMore and the applied limit when matches exceed the page", async () => {
+  const s = start();
+  try {
+    await s.built.app.ingestSurfaceEvents(
+      [1, 2, 3].map((n) => ({
+        container: "C1",
+        ts: `10${n}.000100`,
+        authorId: "U1",
+        text: `needle number ${n}`,
+        createdAt: n * 1000,
+      })),
+    );
+    const capped = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=needle&limit=2");
+    assert.equal(capped.mode, "search");
+    assert.deepEqual(
+      capped.messages.map((m: any) => m.ts),
+      ["103.000100", "102.000100"],
+      "the slice keeps the best-ranked front of the result, not the tail",
+    );
+    assert.equal(capped.hasMore, true);
+    assert.equal(capped.limit, 2);
+    const exact = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=needle&limit=3");
+    assert.equal(exact.messages.length, 3);
+    assert.equal(exact.hasMore, false);
+    assert.equal(exact.limit, 3);
+  } finally {
+    await s.close();
+  }
+});
+
+test("search hasMore survives the store's read clamp at the route's maximum page size", async () => {
+  const s = start();
+  try {
+    await s.built.app.ingestSurfaceEvents(
+      Array.from({ length: 401 }, (_, i) => ({
+        container: "C1",
+        ts: `${1000 + i}.000100`,
+        authorId: "U1",
+        text: `needle number ${i}`,
+        createdAt: 1000 + i,
+      })),
+    );
+    const d = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=needle&limit=400");
+    assert.equal(d.messages.length, 400);
+    assert.equal(d.hasMore, true);
+    assert.equal(d.limit, 400);
+  } finally {
+    await s.close();
+  }
+});
+
+const seedContainers = (built: ReturnType<typeof start>["built"], count: number) =>
+  built.app.ingestSurfaceEvents(
+    Array.from({ length: count }, (_, i) => ({
+      container: `CT${i}`,
+      ts: "100.000100",
+      authorId: "U1",
+      text: "hello",
+      createdAt: 1000 + i,
+    })),
+  );
+
+test("the mirror index reports hasMore when more containers exist than the page cap", async () => {
+  const s = start();
+  try {
+    await seedContainers(s.built, 401);
+    await new Promise((r) => setTimeout(r, 5));
+    await s.built.app.ingestSurfaceEvents([
+      { container: "FRESH", ts: "999.000100", authorId: "U1", text: "hello", createdAt: 9000 },
+    ]);
+    const d = await getJson(s.base, "/v1/admin/slack-mirror");
+    assert.equal(d.containers.length, 400);
+    assert.equal(d.hasMore, true);
+    assert.equal(d.limit, 400);
+    assert.equal(d.containers[0].container, "FRESH", "the page keeps the most recently active containers");
+  } finally {
+    await s.close();
+  }
+});
+
+test("the mirror index reports hasMore false at exactly the page cap", async () => {
+  const s = start();
+  try {
+    await seedContainers(s.built, 400);
+    const d = await getJson(s.base, "/v1/admin/slack-mirror");
+    assert.equal(d.containers.length, 400);
+    assert.equal(d.hasMore, false);
   } finally {
     await s.close();
   }

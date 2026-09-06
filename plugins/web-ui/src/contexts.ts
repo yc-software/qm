@@ -7,10 +7,8 @@ import {
   Folder,
   FolderPlus,
   Hash,
-  ListFilter,
   Lock,
   Plus,
-  RefreshCw,
   Search,
   User,
   UserPlus,
@@ -22,10 +20,10 @@ import {
   api,
   isContinuable,
   sharedContextLabel,
-  withBase,
   type CoreContext,
   type CoreProject,
   type CoreSession,
+  fileContentUrl,
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
@@ -41,6 +39,7 @@ import { restoreDialogFocus } from "./dialog-focus";
 import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./ambient-policy";
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
+import { tip } from "./tooltip";
 
 interface ScopeFile {
   id: string;
@@ -208,7 +207,7 @@ function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconN
     };
   }
   if (c.kind === "personal") {
-    return { title: "Personal", sub: "Just you — your web chats and DMs with the agent live here.", glyph: User };
+    return { title: "Personal", sub: "Just you. Your web chats and DMs with the agent live here.", glyph: User };
   }
   if (c.kind === "group") {
     return {
@@ -269,8 +268,8 @@ export function scopeTitle(scopeId: string | null, fallbackName?: string | null)
 
 export function scopeChip(scopeId: string | null, fallbackName?: string | null): TemplateResult {
   const { title, glyph } = metaForScope(scopeId, fallbackName);
-  return html`<span class="scope-chip" title=${`In ${title}`}
-    >${icon(glyph, 12)}<span>${title.replace(/^#/, "")}</span></span
+  return html`<span class="scope-chip" ${tip(`In ${title}`)}
+    >${icon(glyph, 12)}<span dir="auto">${title.replace(/^#/, "")}</span></span
   >`;
 }
 
@@ -298,7 +297,7 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
   return html`
     <div class="menu-control form-menu-control scope-filter">
       <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" @click=${toggleFormMenu}>
-        ${icon(ListFilter, 14)}<span class="menu-label">Filter by: ${label}</span>${icon(ChevronDown, 14)}
+        <span class="menu-label">Filter by: ${label}</span>${icon(ChevronDown, 14)}
       </button>
       <div class="menu-popover" role="menu" hidden>
         <div class="menu-title">Filter by context</div>
@@ -374,32 +373,20 @@ function gridTpl(): TemplateResult {
   }
   return html`
     <div class="project-grid-content">
-      <div class="pane-head">
+      <div class="list-page-head">
         <h1 class="pane-title">Projects</h1>
-        <div class="project-head-actions">
-          <button
-            class="pane-refresh"
-            type="button"
-            aria-label="Refresh projects"
-            title="Refresh projects"
-            @click=${() => void renderContexts()}
-          >
-            ${icon(RefreshCw, 17)}
-          </button>
+        <div class="list-page-actions">
           <button
             class="btn primary project-create-button"
             type="button"
             aria-label="New project"
-            title="New project"
             @click=${openCreateProject}
           >
             ${icon(FolderPlus, 15)}<span>New project</span>
           </button>
         </div>
-      </div>
-      <div class="list-toolbar project-toolbar">
         <label class="list-search"
-          ><span class="sr-only">Search projects</span
+          >${icon(Search, 16)}<span class="sr-only">Search projects</span
           ><input
             data-focus-key="contexts-search"
             type="search"
@@ -411,6 +398,8 @@ function gridTpl(): TemplateResult {
               drawContexts();
             }}
         /></label>
+      </div>
+      <div class="list-toolbar">
         <label class="list-select"
           ><span>Show</span>${fieldSelect({
             compact: true,
@@ -436,10 +425,10 @@ function contextRow(c: CoreContext): TemplateResult {
     .filter(Boolean)
     .join(" · ");
   return html`
-    <button class="context-row" type="button" title=${sub} @click=${() => selectContext(c.scopeId)}>
+    <button class="context-row" type="button" ${tip(sub)} @click=${() => selectContext(c.scopeId)}>
       <span class="context-glyph">${icon(glyph, 15)}</span>
-      <span class="context-row-title">${title}</span>
-      ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 12)}</span>` : nothing}
+      <span class="context-row-title" dir="auto">${title}</span>
+      ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}
       <span class="context-row-meta">${meta}</span>
     </button>
   `;
@@ -459,7 +448,7 @@ function detailTpl(c: CoreContext): TemplateResult {
         <div class="context-detail-titles">
           <h1 class="pane-title">
             ${title}
-            ${c.isPrivate ? html`<span class="context-lock" title="Private channel">${icon(Lock, 14)}</span>` : nothing}
+            ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 14)}</span>` : nothing}
           </h1>
           <div class="context-sub">
             ${c.project ? sub : `${sub} The agent's files and memory here are separate from your other contexts.`}
@@ -574,7 +563,7 @@ async function linkProjectSlackChannel(context: CoreContext): Promise<void> {
     contextsState.slackValue = "";
   } catch (error) {
     if (resetSeq !== contextsResetSeq) return;
-    contextsState.slackError = errMessage(error, "Couldn't link that channel — you must be a member of it.");
+    contextsState.slackError = errMessage(error, "Couldn't link that channel. You must be a member of it.");
   } finally {
     if (resetSeq === contextsResetSeq) {
       contextsState.slackBusy = false;
@@ -615,12 +604,12 @@ function projectSlackLinked(context: CoreContext): TemplateResult {
   return html`
     <div class="project-member-row">
       <span class="context-glyph" aria-hidden="true">${icon(Hash, 15)}</span>
-      <span class="project-member-name">${linked.channelName}</span>
+      <span class="project-member-name" dir="auto">${linked.channelName}</span>
       <button
         class="project-icon-button danger"
         type="button"
         aria-label=${`Unlink #${linked.channelName}`}
-        title=${`Unlink #${linked.channelName}`}
+        ${tip(`Unlink #${linked.channelName}`)}
         ?disabled=${contextsState.slackBusy}
         @click=${() => void unlinkProjectSlackChannel(context)}
       >
@@ -696,7 +685,7 @@ function projectSlackIdle(): TemplateResult {
       ${icon(Hash, 15)}<span>Link a channel</span>
     </button>
     <p class="context-hint">
-      Give this project a home channel on Slack — the agent will post updates there, and everyone in the channel joins
+      Give this project a home channel on Slack. The agent will post updates there, and everyone in the channel joins
       the project.
     </p>
   `;
@@ -735,12 +724,12 @@ function projectMembersSection(context: CoreContext): TemplateResult {
           return html`
             <div class="project-member-row">
               <span class="project-member-avatar" aria-hidden="true">${initials(label)}</span>
-              <span class="project-member-name">${label}</span>
+              <span class="project-member-name" dir="auto">${label}</span>
               ${principalId === project.ownerId ? html`<span class="badge">Owner</span>` : nothing}
               ${
                 viaChannel && project.slackChannel
-                  ? html`<span class="badge" title="Joined via the linked Slack channel"
-                      >#${project.slackChannel.channelName}</span
+                  ? html`<span class="badge" ${tip("Joined via the linked Slack channel")}
+                      ><bdi>#${project.slackChannel.channelName}</bdi></span
                     >`
                   : nothing
               }
@@ -750,7 +739,7 @@ function projectMembersSection(context: CoreContext): TemplateResult {
                       class="project-icon-button danger"
                       type="button"
                       aria-label=${`Remove ${label}`}
-                      title=${`Remove ${label}`}
+                      ${tip(`Remove ${label}`)}
                       ?disabled=${contextsState.memberSearching || contextsState.memberBusy}
                       @click=${() => void removeProjectMember(context, principalId)}
                     >
@@ -805,7 +794,7 @@ function memberPicker(context: CoreContext): TemplateResult {
           class="project-icon-button"
           type="submit"
           aria-label="Search"
-          title="Search"
+          ${tip("Search")}
           ?disabled=${contextsState.memberSearching || contextsState.memberBusy}
         >
           ${icon(Search, 15)}
@@ -814,7 +803,7 @@ function memberPicker(context: CoreContext): TemplateResult {
           class="project-icon-button"
           type="button"
           aria-label="Close"
-          title="Close"
+          ${tip("Close")}
           ?disabled=${contextsState.memberBusy}
           @click=${closeMemberPicker}
         >
@@ -831,7 +820,7 @@ function memberPicker(context: CoreContext): TemplateResult {
               @click=${() => void addProjectMember(context, match)}
             >
               <span class="project-member-avatar" aria-hidden="true">${initials(match.displayName)}</span>
-              <span class="project-member-name">${match.displayName}</span>
+              <span class="project-member-name" dir="auto">${match.displayName}</span>
               ${icon(Plus, 15)}
             </button>
           `,
@@ -942,7 +931,7 @@ function resourceGroup(label: string, rows: TemplateResult[]): TemplateResult {
 function fileRow(f: ScopeFile): TemplateResult {
   return html`
     <div class="context-session-row context-resource-row">
-      <span class="context-session-title">${f.name}</span>
+      <span class="context-session-title" dir="auto">${f.name}</span>
       <span class="context-session-meta">
         <span>${formatBytes(f.sizeBytes)}</span>
         <span>${relTime(f.createdAt)}</span>
@@ -950,7 +939,7 @@ function fileRow(f: ScopeFile): TemplateResult {
           f.openable
             ? html`<a
                 class="context-resource-link"
-                href=${withBase(`/api/files/${encodeURIComponent(f.id)}/content`)}
+                href=${fileContentUrl(f.id, f.name)}
                 target="_blank"
                 rel="noreferrer"
                 >Open</a
@@ -985,11 +974,11 @@ function cronRow(c: CronView, manage = false): TemplateResult {
   const busy = resourceBusy.has(`cron:${c.id}`);
   return html`
     <div class="context-session-row context-resource-row">
-      <span class="context-session-title">${c.title ?? actionSnippet(c.message ?? c.action ?? "")}</span>
+      <span class="context-session-title" dir="auto">${c.title ?? actionSnippet(c.message ?? c.action ?? "")}</span>
       <span class="context-session-meta">
         <span class="badge">${cronScheduleSummary(c)}</span>
         <span class="badge">${status}</span>
-        <span title=${cronRunSummaryTitle(c)}>${cronRunSummary(c)}</span>
+        <span ${tip(cronRunSummaryTitle(c))}>${cronRunSummary(c)}</span>
         ${
           manage && !c.archived
             ? html`
@@ -1021,7 +1010,7 @@ function skillRow(s: ScopeSkill, manage = false): TemplateResult {
   const busy = resourceBusy.has(`skill:${s.id}`);
   return html`
     <div class="context-session-row context-resource-row">
-      <span class="context-session-title">${s.name}</span>
+      <span class="context-session-title" dir="auto">${s.name}</span>
       <span class="context-session-meta">
         ${s.description ? html`<span class="context-resource-desc">${s.description}</span>` : nothing}
         <span class="badge">${s.status}</span>
@@ -1045,7 +1034,7 @@ function skillRow(s: ScopeSkill, manage = false): TemplateResult {
 function deploymentRow(d: ScopeDeployment): TemplateResult {
   return html`
     <div class="context-session-row context-resource-row">
-      <span class="context-session-title">${d.name}</span>
+      <span class="context-session-title" dir="auto">${d.name}</span>
       <span class="context-session-meta">
         <span class="badge">v${d.currentVersion}</span>
         <span class="badge">${d.status}</span>
@@ -1095,7 +1084,7 @@ function createProjectDialog(): TemplateResult | typeof nothing {
             class="project-icon-button"
             type="button"
             aria-label="Close new project"
-            title="Close"
+            ${tip("Close")}
             @click=${closeCreateProject}
           >
             ${icon(X, 16)}
@@ -1432,10 +1421,10 @@ function contextSessionRow(s: CoreSession): TemplateResult {
   const readOnly = !isContinuable(s, appState.me?.user ?? "");
   return html`
     <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
-      <span class="context-session-title">${groupDmTitle(s)}</span>
+      <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>
       <span class="context-session-meta">
         ${surface === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : html`<span class="badge">${surface}</span>`}
-        ${readOnly ? html`<span class="ro-lock" title="Read-only — replies happen on the original surface">${icon(Lock, 12)}</span>` : nothing}
+        ${readOnly ? html`<span class="ro-lock" ${tip("Read-only. Replies happen on the original surface")}>${icon(Lock, 12)}</span>` : nothing}
         <span>${relTime(activityOf(s))}</span>
       </span>
     </button>

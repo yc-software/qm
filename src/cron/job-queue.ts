@@ -5,6 +5,7 @@ import { errMessage } from "../util/errors.ts";
 export interface CronFireJob {
   cronId: string;
   scheduledAt: number;
+  notBefore?: number;
 }
 
 interface CronQueueHandlers {
@@ -71,7 +72,7 @@ export function createPgBossCronQueue(
     async enqueueFire(job) {
       if (!started) return;
       await boss.send(FIRE_QUEUE, job, {
-        startAfter: new Date(job.scheduledAt),
+        startAfter: new Date(Math.max(job.scheduledAt, job.notBefore ?? 0)),
         singletonKey: `${job.cronId}:${job.scheduledAt}`,
         retryLimit: 0,
       });

@@ -1,5 +1,6 @@
 import { sleep } from "./util.ts";
 import { slackSectionBlocks } from "./mrkdwn.ts";
+import type { DeliveryMetadata } from "./delivery.ts";
 
 export const DEFAULT_ACK_REACTIONS = ["eyes", "mag", "hourglass_flowing_sand", "telescope", "saluting_face"] as const;
 
@@ -171,13 +172,13 @@ export interface TaskListPresenter {
   attach(ts: string, leadText: string): Promise<void>;
   addLead(leadText: string): Promise<boolean>;
   onTasks(tasks: RunTaskView[]): Promise<void>;
-  finalize(text: string): Promise<boolean>;
+  finalize(text: string, metadata?: DeliveryMetadata): Promise<boolean>;
   settle(): Promise<void>;
 }
 
 export function createTaskListPresenter(deps: {
   post(text: string, blocks: Array<Record<string, unknown>>): Promise<string | undefined>;
-  update(ts: string, text: string, blocks: Array<Record<string, unknown>>): Promise<void>;
+  update(ts: string, text: string, blocks: Array<Record<string, unknown>>, metadata?: DeliveryMetadata): Promise<void>;
   checkpoint(ts: string): Promise<void>;
   remove(ts: string): Promise<void>;
   onSurfacePosted(): void;
@@ -197,11 +198,12 @@ export function createTaskListPresenter(deps: {
     ts: string,
     text: string,
     blocks: Array<Record<string, unknown>>,
+    metadata?: DeliveryMetadata,
   ): Promise<boolean> => {
     for (const delay of [0, 250, 750]) {
       if (delay) await sleepFor(delay);
       try {
-        await deps.update(ts, text, blocks);
+        await deps.update(ts, text, blocks, metadata);
         return true;
       } catch (error) {
         if (delay === 750) deps.onError?.(error);
@@ -262,12 +264,71 @@ export function createTaskListPresenter(deps: {
       });
       await chain;
     },
-    async finalize(text) {
+    async finalize(text, metadata) {
       await chain;
       if (!messageTs || !tasks.length) return false;
       const taskText = renderTaskList(tasks);
       const finalBlocks = [...slackSectionBlocks(text), { type: "section", text: { type: "mrkdwn", text: taskText } }];
-      return updateWithRetry(messageTs, text || taskText, finalBlocks);
+      return updateWithRetry(messageTs, text || taskText, finalBlocks, metadata);
+    },
+    async settle() {
+      await chain;
+    },
+  };
+}
+
+export interface GoalNoticeView {
+  objective: string;
+  status: "active" | "paused" | "complete" | "blocked";
+  floor?: string;
+}
+
+export function renderGoalNotice(goal: GoalNoticeView): string {
+  const oneLine = goal.objective
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const bounded = oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
+  const objective = bounded.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (goal.status === "complete") return `✓ Goal complete: ${objective}`;
+  if (goal.status === "blocked") return `✕ Goal blocked: ${objective}`;
+  if (goal.status === "paused") return `⏸ Goal paused: ${objective}`;
+  return `◐ Pursuing goal: ${objective}${goal.floor ? ` · at least ${goal.floor}` : ""}`;
+}
+
+export interface GoalNoticePresenter {
+  onGoal(goal: GoalNoticeView): Promise<void>;
+  settle(): Promise<void>;
+}
+
+export function createGoalNoticePresenter(deps: {
+  post(text: string, blocks: Array<Record<string, unknown>>): Promise<string | undefined>;
+  update(ts: string, text: string, blocks: Array<Record<string, unknown>>): Promise<void>;
+  onError?(error: unknown): void;
+}): GoalNoticePresenter {
+  let messageTs: string | undefined;
+  let lastText = "";
+  let chain = Promise.resolve();
+  const blocksFor = (text: string): Array<Record<string, unknown>> => [
+    { type: "context", elements: [{ type: "mrkdwn", text }] },
+  ];
+  return {
+    async onGoal(goal) {
+      chain = chain.then(async () => {
+        const text = renderGoalNotice(goal);
+        if (text === lastText) return;
+        try {
+          if (messageTs) {
+            await deps.update(messageTs, text, blocksFor(text));
+          } else {
+            messageTs = await deps.post(text, blocksFor(text));
+          }
+          if (messageTs) lastText = text;
+        } catch (error) {
+          deps.onError?.(error);
+        }
+      });
+      await chain;
     },
     async settle() {
       await chain;

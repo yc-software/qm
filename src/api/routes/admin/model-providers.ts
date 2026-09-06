@@ -1,4 +1,4 @@
-import { isModelProvider, type ModelProvider } from "../../../model/pi-models.ts";
+import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
 import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";

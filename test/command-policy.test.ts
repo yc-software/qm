@@ -446,6 +446,7 @@ test("parseCommandPolicy rejects regexes with catastrophic repetition", () => {
     assert.ok("error" in parsed, pattern);
   }
 });
+
 test("a heredoc fed to a non-interpreter command (cat, gh) is data, not gated", () => {
   const policy = defaultOrgPolicy();
   const prBody = [

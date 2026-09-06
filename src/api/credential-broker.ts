@@ -1,7 +1,11 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
-import type { DecryptedServiceCredential, ServiceCredentialReader } from "../credentials/keychain.ts";
+import {
+  credentialInjectionError,
+  type DecryptedServiceCredential,
+  type ServiceCredentialReader,
+} from "../credentials/keychain.ts";
 
 interface BrokerFetchResponse {
   status: number;
@@ -51,15 +55,6 @@ function brokerHostMatches(requestHost: string, pinnedHost: string): boolean {
   return h === p || h.endsWith(`.${p}`);
 }
 
-/**
- * A pathname that could resolve to a parent directory upstream must never pass
- * the prefix check. The prefix match runs on the RAW pathname, but upstream
- * servers decode percent-escapes and normalize dot segments — so `..` hidden
- * behind any layer of percent-encoding (`..%2f`, `%2e%2e/`, `%252e%252e`) can
- * escape the allowed prefix after we've approved it. Decode to a fixed point
- * (bounded) and refuse any form that ever contains a dot segment; refuse
- * undecodable paths outright.
- */
 function resolvesToParentSegment(pathname: string): boolean {
   let current = pathname;
   for (let depth = 0; depth < 4; depth++) {
@@ -135,6 +130,22 @@ export async function brokerCredentialCall(opts: {
   if (!rec || !rec.enabled || rec.delivery === "env") {
     return deny(404, "credential_unavailable", "credential not found or disabled", rec?.host ?? "");
   }
+  if (claims.deployment && !rec.deployments) {
+    return deny(403, "not_available_to_deployments", "this credential is switched off for published apps", rec.host);
+  }
+  if (credentialInjectionError(rec.injection)) {
+    return deny(503, "invalid_injection", "credential injection configuration is invalid", rec.host);
+  }
+  if (
+    body.headers &&
+    typeof body.headers === "object" &&
+    Object.keys(body.headers).some((key) => key.toLowerCase() === "x-qm-actor")
+  ) {
+    return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
+  }
+  if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId))) {
+    return deny(403, "invalid_actor", "actor identity cannot be attested", rec.host);
+  }
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -142,8 +153,15 @@ export async function brokerCredentialCall(opts: {
     return deny(400, "bad_url", "url is not a valid absolute URL", rec.host);
   }
   if (parsed.protocol !== "https:") return deny(403, "scheme_not_allowed", "only https targets are allowed", rec.host);
-  if (!brokerHostMatches(parsed.hostname, rec.host)) {
+  if (
+    rec.injection?.actor
+      ? parsed.hostname.toLowerCase() !== rec.host.toLowerCase()
+      : !brokerHostMatches(parsed.hostname, rec.host)
+  ) {
     return deny(403, "host_not_allowed", "url host is not the credential's pinned host", rec.host);
+  }
+  if (rec.injection?.actor && parsed.port) {
+    return deny(403, "port_not_allowed", "actor-attested credentials require standard HTTPS", rec.host);
   }
   const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>
     m.toUpperCase(),
@@ -162,6 +180,7 @@ export async function brokerCredentialCall(opts: {
   }
   const [injHeader, injValue] = brokerCredentialAuthHeader(rec);
   headers[injHeader] = injValue;
+  if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
 
   let resp: BrokerFetchResponse;
   try {
@@ -211,6 +230,7 @@ export async function brokerCredentialCall(opts: {
     resource: slug,
     scopeLabel: claims.scopeId,
     status: "ok",
+    ...(claims.deployment ? { detail: `deployment:${claims.deployment}` } : {}),
   });
   return {
     status: 200,

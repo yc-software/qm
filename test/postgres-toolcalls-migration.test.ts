@@ -1,6 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tool_calls migration tests";
@@ -28,7 +29,8 @@ async function pkColumns(p: Pg): Promise<{ oid: string; columns: string[] } | un
 
 async function bootAndClose(): Promise<void> {
   const { runs, close } = createPostgresRunStore(URL!);
-  await runs.enqueue({ sessionId: "sMigrationPing", request: { text: "ping" } as never }).catch(() => undefined);
+  await migrateRegisteredPgSchemas(URL!);
+  await runs.enqueue({ sessionId: "sMigrationPing", request: { text: "ping" } as never });
   await close();
 }
 
@@ -36,20 +38,20 @@ before(async () => {
   if (!URL) return;
   const p = await pool();
   await p.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
+  await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
   await p.end();
 });
 
-// leave a clean slate for suites sharing this database
 after(async () => {
   if (!URL) return;
   const p = await pool();
   await p.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
+  await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
   await p.end();
 });
 
 test("tool_calls: a keyless table with duplicates heals on boot, keeping the newest row", { skip }, async () => {
   const p = await pool();
-  // the mid-crash state the old migration could leave: attempt column present, no PK, duplicates written
   await p.query(`CREATE TABLE tool_calls(
       run_id TEXT NOT NULL, attempt INT NOT NULL DEFAULT 1, call_index INT NOT NULL,
       output TEXT NOT NULL, created_at BIGINT NOT NULL)`);

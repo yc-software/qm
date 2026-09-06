@@ -43,13 +43,40 @@ Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
 `WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
 and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
+## On a phone
+
+Below 860px the same build behaves like an app rather than a shrunken desktop:
+
+- **Drawer, not rail.** The sidebar slides over the content from a floating menu button (or an
+  edge swipe); a leftward swipe or a tap on the scrim closes it. Every top bar reserves the
+  button's column so nothing renders under it.
+- **Bottom sheets.** Popover menus — composer settings, a session's ⋯, the user menu, the
+  per-session tools — render as sheets with a backdrop; tap outside or swipe down to dismiss.
+- **Compact composer.** Attach · input · settings · send on one row; model, harness, effort, and
+  Fast live in the settings sheet. Inputs are 16px so iOS never zooms on focus, and the layout
+  tracks the visual viewport so the composer stays above the on-screen keyboard.
+- **Touch targets.** Message actions, file chips, selects, drawer rows, approvals, and back
+  links are ≥44px; hover tooltips are suppressed on hoverless devices.
+- **Split canvas stays on the desk.** A phone never mounts the split layout and leaves the
+  persisted desktop layout untouched.
+- **Installable.** `manifest.webmanifest` (named after the org's brand label), home-screen
+  icons, Apple meta, and theme colors — "Add to Home Screen" opens standalone at `/`.
+
+The phone-class breakpoint is one constant (`src/viewport.ts`, `PHONE_MAX_WIDTH`), shared by
+the CSS media queries, the composer, and the split canvas.
+
 ## What you get
 
 - **Custom chat UI** — a first-party conversation surface with a left history rail, centered
   transcript, bottom composer, inline **model selector** (the models core reports as
   serviceable for the approved harnesses),
   explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
-  toggle, attachments, streaming partials, and a theme toggle.
+  toggle, attachments, streaming partials, and a theme picker. Settings → Theme takes
+  light, dark, or system, or an imported palette: drop in an iTerm2 `.itermcolors` preset or
+  a VS Code color theme `.json` and the app repaints from it (background, text, sidebar,
+  buttons, links, text selection, status badges, and code highlighting, mapped from the
+  terminal's ANSI colours or the theme's token scopes). The palette is kept per browser
+  alongside the light/dark choice.
   The UI drives Pi's `Agent` with a custom `streamFn` (`src/core-bridge.ts`) instead of
   mounting Pi's stock `AgentInterface`.
 - **Slash-command skill picker** — type `/` at the start of the composer for a Codex-style
@@ -117,8 +144,8 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
   (core's source-auth routes are operator-wide). A cron is either a **task** (a prompt the agent
   re-runs at each fire) or a **message** (literal text relayed as-is — requires a destination,
   since a relay with nowhere to deliver is a no-op), on an `everyMs` interval and/or a one-time
-  `firstFireAt`. The server enforces a 1-minute interval floor; the scheduler itself runs in the
-  core.
+  `firstFireAt` (which may not be in the past). The server enforces a 1-minute interval floor; the
+  scheduler itself runs in the core.
 - **Files / Connectors / Deploys** (sidebar views — management lives here in one place):
   - **Files** — the doc store (spec §19 `artifacts(kind=file)`; §3 "files & sharing =
     Google Docs"): one `GET /api/files` call (→ core `GET /v1/files?viewer=`) lists files you

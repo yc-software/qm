@@ -18,7 +18,6 @@ import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
 
 export const INBOX_DIR = "inbox";
-export const OUTBOX_DIR = "outbox";
 export const SHARED_DIR = "shared";
 export const TURN_FILES_DIR = ".agent-turn";
 
@@ -163,6 +162,27 @@ function uniqueName(name: string, used: Set<string>): string {
   let n = 2;
   while (used.has(`${stem}-${n}${ext}`)) n++;
   return `${stem}-${n}${ext}`;
+}
+
+export function withoutAlreadyIngested(
+  attachments: IncomingAttachment[],
+  contextEntries: readonly SessionEntry[],
+): IncomingAttachment[] {
+  const seen = new Set<string>();
+  for (const entry of contextEntries) {
+    if (entry.type !== "user") continue;
+    const metas = (entry.payload as { attachments?: unknown } | null)?.attachments;
+    if (!Array.isArray(metas)) continue;
+    for (const meta of metas as AttachmentMeta[]) {
+      if (meta.direction === "in" && typeof meta.sourceId === "string" && shownToModel(meta)) seen.add(meta.sourceId);
+    }
+  }
+  if (!seen.size) return attachments;
+  return attachments.filter((a) => !a.sourceId || !seen.has(a.sourceId));
+}
+
+function shownToModel(meta: AttachmentMeta): boolean {
+  return isVisionAttachment(meta) && meta.sizeBytes > 0 && meta.sizeBytes <= MAX_VISION_IMAGE_BYTES;
 }
 
 export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR): string {
@@ -322,6 +342,7 @@ export async function materializeInbound(
       sizeBytes: bytes.length,
       direction: "in",
       ...(a.author ? { author: a.author } : {}),
+      ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
     if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
@@ -337,66 +358,25 @@ export async function materializeInbound(
   return { metas, images, tooMany, unavailable, blocked, unscreened };
 }
 
-export function deliveryManifest(attachments: readonly OutgoingAttachment[]): string {
-  return attachments.map((a) => `${a.name} (${a.mimetype}, ${a.sizeBytes} bytes)`).join("; ");
+const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";
+
+export function deliveryNote(manifest: string): string {
+  return `${DELIVERY_NOTE_PREFIX}${manifest.replace(/\s+/g, " ").trim()}]`;
 }
 
-export function recentDeliveryNote(history: readonly SessionEntry[]): string {
-  const recent: string[] = [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    const e = history[i]!;
-    if (e.type !== "delivery") break;
-    const text = (e.payload as { text?: string } | null)?.text;
-    if (text) recent.unshift(text);
-  }
-  if (!recent.length) return "";
-  return `For your reference — file(s) you delivered to this conversation in your previous turn: ${recent.join("; ")}`;
+export function isDeliveryNote(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith(DELIVERY_NOTE_PREFIX) && t.endsWith("]") && !t.includes("\n");
 }
 
-export async function collectOutbound(
-  sandbox: Sandbox,
-  handle: SandboxHandle,
-  transfer: BlobTransferStore,
-  register?: ArtifactRegistration,
-  outboxDir = OUTBOX_DIR,
-): Promise<{ attachments: OutgoingAttachment[]; oversized: string[]; empty: string[]; dropped: number }> {
-  const paths = (await sandbox.listDir(handle, outboxDir)).sort();
-  const attachments: OutgoingAttachment[] = [];
-  const oversized: string[] = [];
-  const empty: string[] = [];
-  const usedNames = new Set<string>();
-  let dropped = 0;
-  for (const rel of paths) {
-    if (attachments.length + oversized.length + empty.length >= MAX_OUTBOUND_FILES) {
-      dropped++;
-      continue;
-    }
-    const bytes = await sandbox.readFileBytes(handle, rel);
-    if (!bytes) continue;
-    const name = uniqueName(safeAttachmentName(rel.split(/[\\/]/).pop() ?? rel), usedNames);
-    usedNames.add(name);
-    if (bytes.length === 0) {
-      empty.push(name);
-      continue;
-    }
-    if (bytes.length > MAX_ATTACHMENT_BYTES) {
-      oversized.push(name);
-      continue;
-    }
-    const mimetype = mimeFromName(name);
-    const { blobId } = await transfer.put(bytes);
-    const artifact = register
-      ? await registerArtifact(register, "out", attachments.length, name, mimetype, bytes)
-      : undefined;
-    attachments.push({
-      name,
-      mimetype,
-      sizeBytes: bytes.length,
-      blobId,
-      ...(artifact ? { artifactId: artifact.id, artifactViewerId: register!.createdBy } : {}),
-    });
-  }
-  return { attachments, oversized, empty, dropped };
+export function deliveryNoteManifest(text: string): string | null {
+  if (!isDeliveryNote(text)) return null;
+  return text.trim().slice(DELIVERY_NOTE_PREFIX.length, -1);
+}
+
+export function legacyDeliveryNoteManifest(text: string): string | null {
+  const m = /^\(delivered file\(s\) to the conversation: ([^\n]*)\)$/.exec(text.trim());
+  return m ? m[1]! : null;
 }
 
 export async function collectNamedOutbound(
@@ -405,14 +385,22 @@ export async function collectNamedOutbound(
   paths: readonly string[],
   transfer: BlobTransferStore,
   register?: ArtifactRegistration,
-): Promise<{ attachments: OutgoingAttachment[]; missing: string[]; empty: string[]; oversized: string[] }> {
+  reservedNames: readonly string[] = [],
+): Promise<{
+  attachments: OutgoingAttachment[];
+  missing: string[];
+  empty: string[];
+  oversized: string[];
+  createdArtifactIds: Set<string>;
+}> {
   const invalid = paths.filter(hasParentPathSegment);
-  if (invalid.length) return { attachments: [], missing: invalid, empty: [], oversized: [] };
+  if (invalid.length)
+    return { attachments: [], missing: invalid, empty: [], oversized: [], createdArtifactIds: new Set() };
   const attachments: OutgoingAttachment[] = [];
   const missing: string[] = [];
   const empty: string[] = [];
   const oversized: string[] = [];
-  const usedNames = new Set<string>();
+  const usedNames = new Set<string>(reservedNames);
   const doomed = () => missing.length > 0 || empty.length > 0 || oversized.length > 0;
   const createdArtifactIds = new Set<string>();
   let i = 0;
@@ -462,6 +450,24 @@ export async function collectNamedOutbound(
       }),
     );
     attachments.length = 0;
+    createdArtifactIds.clear();
   }
-  return { attachments, missing, empty, oversized };
+  return { attachments, missing, empty, oversized, createdArtifactIds };
+}
+
+export async function discardOutbound(
+  attachment: OutgoingAttachment,
+  transfer: BlobTransferStore,
+  register?: ArtifactRegistration,
+  created?: ReadonlySet<string>,
+): Promise<void> {
+  await transfer.delete(attachment.blobId).catch(swallowAs("attachments: discard blob delete", undefined));
+  if (!register || !attachment.artifactId || !created?.has(attachment.artifactId)) return;
+  await register.store.delete(attachment.artifactId).catch((e) => {
+    try {
+      register.onError?.(e);
+    } catch (err) {
+      swallowAs("attachments: discard onError", undefined)(err);
+    }
+  });
 }

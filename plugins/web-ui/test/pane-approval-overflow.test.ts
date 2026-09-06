@@ -36,7 +36,7 @@ test("pane glance renders no placeholder text for an empty chat", () => {
   assert.match(glance, /\$\{now \?\? snippet\}/, "strip falls back to the snippet alone");
   assert.match(
     glance,
-    /\$\{snippet \? html`<div class="pane-card-last">\$\{snippet\}<\/div>` : nothing\}/,
+    /\$\{snippet \? html`<div class="pane-card-last" dir="auto">\$\{snippet\}<\/div>` : nothing\}/,
     "card omits the last-reply row when empty",
   );
 });

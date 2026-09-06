@@ -1,7 +1,6 @@
 export interface TurnOutcomeInput {
   reply?: string;
   attachments: number;
-  issues: number;
   pendingApprovals: ReadonlyArray<{ kind?: string }>;
   terminatedOnApproval: boolean;
 }
@@ -14,7 +13,7 @@ export interface TurnOutcome {
 }
 
 export function deriveTurnOutcome(i: TurnOutcomeInput): TurnOutcome {
-  const completed = Boolean(i.reply?.trim()) || i.attachments > 0 || i.issues > 0;
+  const completed = Boolean(i.reply?.trim()) || i.attachments > 0;
   const paused = i.pendingApprovals.length > 0 && !completed;
   const approvalsBlock = paused || i.terminatedOnApproval;
   return {

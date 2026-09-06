@@ -311,7 +311,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     if (r.code !== 0) throw new Error(`data hydrate extract failed: ${r.stderr.slice(0, 200)}`);
   }
 
-  async function launchBody(deploymentId: string): Promise<{ id: string; endpoint: string }> {
+  async function launchBody(deploymentId: string, alwaysOn?: boolean): Promise<{ id: string; endpoint: string }> {
     const image = await imageArn();
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -322,7 +322,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           ingressNetworkConnectors: ingress,
           egressNetworkConnectors: egress,
           ...(opts.executionRoleArn ? { executionRoleArn: opts.executionRoleArn } : {}),
-          idlePolicy: { autoResumeEnabled: true, maxIdleDurationSeconds, suspendedDurationSeconds },
+          idlePolicy: {
+            autoResumeEnabled: true,
+            maxIdleDurationSeconds: alwaysOn ? maximumDurationInSeconds : maxIdleDurationSeconds,
+            suspendedDurationSeconds,
+          },
           maximumDurationInSeconds,
           clientToken: `deploy-${deploymentId}-${Date.now()}-${attempt}`,
         });
@@ -378,7 +382,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           }
         }
       }
-      const body = await launchBody(d.id);
+      const body = await launchBody(d.id, d.alwaysOn);
       try {
         await hydrateData(d.id, body.id, body.endpoint);
       } catch (e) {

@@ -3,6 +3,17 @@ variable "account_id" { type = string }
 variable "region" { type = string }
 variable "cluster_name" { type = string }
 variable "public_url" { type = string }
+variable "core_public_hosts" {
+  type    = set(string)
+  default = []
+  validation {
+    condition = alltrue([
+      for host in var.core_public_hosts :
+      can(regex("^(\\*\\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", host))
+    ])
+    error_message = "core_public_hosts entries must be normalized DNS hostnames with an optional leading wildcard"
+  }
+}
 variable "cloud_map_namespace" { type = string }
 variable "secrets_prefix" { type = string }
 variable "github_repository" {
@@ -10,6 +21,14 @@ variable "github_repository" {
   validation {
     condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository)) && var.github_repository != "replace-me/repository"
     error_message = "github_repository must be the explicit owner/name of the repository allowed to deploy"
+  }
+}
+variable "github_subject_prefix" {
+  type    = string
+  default = ""
+  validation {
+    condition     = var.github_subject_prefix == "" || can(regex("^repo:[A-Za-z0-9_.@-]+/[A-Za-z0-9_.@-]+$", var.github_subject_prefix))
+    error_message = "github_subject_prefix must be empty or an exact repo:owner/repository prefix"
   }
 }
 variable "github_ref" {
@@ -52,6 +71,12 @@ variable "certificate_arn" {
     error_message = "certificate_arn must be an ACM certificate ARN in the configured AWS partition"
   }
 }
+check "split_core_hosts_require_direct_tls" {
+  assert {
+    condition     = length(var.core_public_hosts) == 0 || var.certificate_arn != ""
+    error_message = "core_public_hosts requires certificate_arn because split host routing uses the public HTTPS ALB instead of the default CloudFront hostname"
+  }
+}
 variable "db_name" {
   type    = string
   default = "qm"
@@ -80,6 +105,14 @@ variable "ecr_force_delete" {
   type    = bool
   default = false
 }
+variable "ecs_blue_green_bake_minutes" {
+  type    = number
+  default = 5
+  validation {
+    condition     = var.ecs_blue_green_bake_minutes >= 0 && var.ecs_blue_green_bake_minutes <= 1440
+    error_message = "ecs_blue_green_bake_minutes must be between 0 and 1440"
+  }
+}
 variable "object_store_force_destroy" {
   type    = bool
   default = false
@@ -102,6 +135,8 @@ variable "services" {
     internal_port      = number
     task_role_arn      = optional(string)
     execution_role_arn = optional(string)
+    assume_role_arns   = optional(set(string))
+    manage_task_role   = optional(bool, false)
   }))
 }
 variable "secret_names" { type = set(string) }

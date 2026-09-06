@@ -64,7 +64,7 @@ export function createPostgresFileArtifactStore(
   connectionString: string,
   byteStore: DurableByteStore,
 ): FileArtifactStore {
-  const { q, query } = createPgPool(connectionString, SCHEMA);
+  const { q, query } = createPgPool(connectionString, "files/artifacts/0001", SCHEMA);
 
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
@@ -131,6 +131,10 @@ export function createPostgresFileArtifactStore(
       if (opts?.createdInScope != null) {
         params.push(opts.createdInScope);
         filters.push(`created_in_scope = $${params.length}::text`);
+      }
+      if (opts?.nameQuery != null) {
+        params.push(`%${opts.nameQuery.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+        filters.push(`name ILIKE $${params.length}::text`);
       }
       if (cursor) {
         params.push(cursor.createdAt, cursor.id);

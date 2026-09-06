@@ -26,9 +26,33 @@ export function neutralizeMassMentions(text: string): string {
 const RESERVED_MENTION_NAMES = new Set(["here", "channel", "everyone"]);
 
 let mentionIdByName: ReadonlyMap<string, string> = new Map();
+let mentionNameById: ReadonlyMap<string, string> = new Map();
 export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   mentionIdByName = index;
+  const byId = new Map<string, string>();
+  for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
+  mentionNameById = byId;
 }
+const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^>]*))?>/gi;
+
+function neutralizedMention(kind: string, label: string | undefined): string {
+  const name = label?.trim().replace(/^@/, "") || "";
+  if (kind.startsWith("@")) return `@${name || mentionNameById.get(kind.slice(1)) || kind.slice(1)}`;
+  const command = kind.slice(1);
+  if (command.toLowerCase().startsWith("subteam^")) return `@${name || command.slice("subteam^".length)}`;
+  return `@\u200b${command.toLowerCase()}`;
+}
+
+export function wireMentionKeys(text: string): Set<string> {
+  return new Set([...text.matchAll(WIRE_MENTION)].map((m) => m[1]!.toLowerCase()));
+}
+
+export function neutralizeMentions(text: string, only?: ReadonlySet<string>): string {
+  return text.replace(WIRE_MENTION, (m, kind: string, label?: string) =>
+    only && !only.has(kind.toLowerCase()) ? m : neutralizedMention(kind, label),
+  );
+}
+
 export function isReservedMentionName(name: string): boolean {
   return RESERVED_MENTION_NAMES.has(name);
 }
@@ -57,6 +81,47 @@ function armUserMentions(text: string, wrap: (armed: string) => string = (s) => 
   });
 }
 
+const TILDE_OPENER = /^[ \t]*~{3,}[^\n]*$/m;
+const TILDE_CLOSER = /^[ \t]*~{3,}[ \t]*$/m;
+
+function nextLineMatch(text: string, from: number, re: RegExp): { start: number; end: number } | undefined {
+  const scoped = new RegExp(re.source, "gm");
+  scoped.lastIndex = from;
+  const m = scoped.exec(text);
+  return m ? { start: m.index, end: m.index + m[0].length } : undefined;
+}
+
+function stashFencedBlocks(text: string, keep: (s: string) => string): string {
+  let out = "";
+  let i = 0;
+  let tildesExhausted = !text.includes("~~~");
+  while (i < text.length) {
+    const backtick = text.indexOf("```", i);
+    const tilde = tildesExhausted ? undefined : nextLineMatch(text, i, TILDE_OPENER);
+    if (tilde === undefined && backtick < 0) break;
+    if (backtick >= 0 && (tilde === undefined || backtick < tilde.start)) {
+      const close = text.indexOf("```", backtick + 3);
+      if (close < 0) break;
+      out += text.slice(i, backtick) + keep(text.slice(backtick, close + 3));
+      i = close + 3;
+      continue;
+    }
+    const opener = tilde!;
+    const closer = opener.end < text.length ? nextLineMatch(text, opener.end + 1, TILDE_CLOSER) : undefined;
+    if (closer === undefined) {
+      tildesExhausted = true;
+      continue;
+    }
+    const info = text.slice(opener.start, opener.end).replace(/^[ \t]*~+/, "");
+    const body = text.slice(opener.end + 1, closer.start);
+    const block = text.slice(opener.start, closer.end);
+    out += text.slice(i, opener.start);
+    out += keep(body.includes("```") ? block : "```" + info + "\n" + body + "```");
+    i = closer.end;
+  }
+  return out + text.slice(i);
+}
+
 export function toSlackMrkdwn(md: string): string {
   if (!md) return md;
   const stash: string[] = [];
@@ -64,7 +129,7 @@ export function toSlackMrkdwn(md: string): string {
 
   let text = md.replace(/\r\n/g, "\n");
 
-  text = text.replace(/```[\s\S]*?```/g, keep);
+  text = stashFencedBlocks(text, keep);
   text = text.replace(/`[^`\n]+`/g, keep);
   text = neutralizeMassMentions(text);
 

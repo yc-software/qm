@@ -10,9 +10,10 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
+import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { Principal } from "../src/types.ts";
+import type { Principal, TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
@@ -74,6 +75,203 @@ test("core route: signals for a pending run are accepted (abort, steer)", async 
   }
 });
 
+function steererRequest(externalId: string, threadRef: string, text: string, displayName?: string): TurnRequest {
+  return {
+    surface: "web",
+    actor: { externalId, ...(displayName ? { displayName } : {}) },
+    conversation: { kind: "dm", threadRef },
+    liveActor: true,
+    text,
+  };
+}
+
+test("core route: a steer's ts and request thread through to the signal store", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-fields", request: request("hi", "t-fields") });
+  const body = {
+    kind: "steer",
+    text: "go left",
+    ts: "1712.001",
+    request: steererRequest("internal:U1", "t-fields", "go left"),
+  };
+  const r = await coreSignal(run.id, body);
+  assert.equal(r.status, 200);
+  const [signal] = await built.signals.takePending(run.id);
+  assert.ok(signal);
+  assert.equal(signal.ts, "1712.001");
+  assert.equal(signal.request?.actor.externalId, "internal:U1");
+  assert.equal(signal.text, "go left", "the run owner's own steer is not attributed");
+});
+
+test("core route: another person's steer is attributed with their display name", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-foreign", request: request("hi", "t-foreign") });
+  const r = await coreSignal(run.id, {
+    kind: "steer",
+    text: "go right",
+    ts: "1712.002",
+    request: steererRequest("web-eve", "t-foreign", "go right", "Eve Example"),
+  });
+  assert.equal(r.status, 200);
+  const [signal] = await built.signals.takePending(run.id);
+  assert.equal(signal?.text, "Eve Example: go right");
+  assert.equal(signal?.request?.text, "go right", "the replayable request keeps the steerer's own words");
+});
+
+test("core route: a malformed request is rejected 400, and privileged fields are stripped", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-sanitize", request: request("hi", "t-sanitize") });
+  const bad = await coreSignal(run.id, { kind: "steer", text: "x", request: { text: "x" } });
+  assert.equal(bad.status, 400);
+
+  const smuggled = {
+    ...steererRequest("internal:U1", "t-sanitize", "x"),
+    ownerKeychainUnion: true,
+    spawned: true,
+    unattendedGrants: ["admin-read"],
+  };
+  const r = await coreSignal(run.id, { kind: "steer", text: "x", request: smuggled });
+  assert.equal(r.status, 200);
+  const [signal] = await built.signals.takePending(run.id);
+  assert.ok(signal?.request);
+  assert.equal("ownerKeychainUnion" in signal.request, false);
+  assert.equal("spawned" in signal.request, false);
+  assert.equal("unattendedGrants" in signal.request, false);
+});
+
+test("core route: a bare steer without a ts gets one minted so harnesses persist it", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-mint", request: request("hi", "t-mint") });
+  const r = await coreSignal(run.id, { kind: "steer", text: "keep going" });
+  assert.equal(r.status, 200);
+  const [signal] = await built.signals.takePending(run.id);
+  assert.ok(signal?.ts, "signalRun mints a ts when the caller sends none");
+});
+
+test("signalRun attributes a bare steer from a shared-scope viewer who is not the run's owner", async () => {
+  await built.app.upsertChannels(
+    [{ channelId: "C-STEER", name: "steer-room", isPrivate: true }],
+    [
+      { channelId: "C-STEER", principalId: "steer-owner" },
+      { channelId: "C-STEER", principalId: "steer-member" },
+    ],
+  );
+  await built.app.upsertDirectory([{ principalId: "steer-member", displayName: "Steer Member", type: "internal" }]);
+  const threadRef = "shared-steer:C-STEER";
+  const owner = { id: "steer-owner", type: "internal" as const };
+  const { run } = await built.runs.enqueue({
+    sessionId: threadRef,
+    request: {
+      actor: owner,
+      conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner] },
+      origin: { kind: "direct" },
+      text: "queued shared work",
+    },
+  });
+  const session = await built.sessions.getOrCreateByThread(threadRef, "channel", "channel:C-STEER", "C-STEER", "web");
+  await built.sessions.addParticipant(session.id, "steer-member");
+  const outcome = await built.app.signalRun(run.id, { kind: "steer", text: "try harder" }, "steer-member");
+  assert.equal(outcome.accepted, true);
+  const [signal] = await built.signals.takePending(run.id);
+  assert.equal(signal?.text, "Steer Member: try harder");
+  assert.ok(signal?.ts);
+});
+
+test("core route: a request claiming a different conversation than the run's is refused 400", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-bind", request: request("hi", "t-bind") });
+  const r = await coreSignal(run.id, {
+    kind: "steer",
+    text: "over here instead",
+    request: steererRequest("internal:U1", "somewhere-else", "over here instead"),
+  });
+  assert.equal(r.status, 400);
+  assert.equal(r.json.reason, "conversation_mismatch");
+  assert.deepEqual(await built.signals.takePending(run.id), []);
+});
+
+test("core route: a portal identity that does not match the request actor is refused 403", async () => {
+  const { run } = await built.runs.enqueue({ sessionId: "t-mismatch", request: request("hi", "t-mismatch") });
+  const path = `/v1/runs/${encodeURIComponent(run.id)}/signal`;
+  const raw = JSON.stringify({
+    kind: "steer",
+    text: "as someone else",
+    request: steererRequest("mallory", "t-mismatch", "as someone else"),
+  });
+  const r = await fetch(`${coreBase}${path}`, {
+    method: "POST",
+    headers: {
+      ...signedHeaders(SECRET, "POST", path, raw),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "eve", exp: Date.now() + 60_000 }, SECRET),
+    },
+    body: raw,
+  });
+  assert.equal(r.status, 403);
+  assert.deepEqual(await built.signals.takePending(run.id), []);
+});
+
+test("an orphaned steer with a request replays as the steerer, not the run's owner", async () => {
+  const threadRef = `web:web-eve:${crypto.randomUUID()}`;
+  const { run } = await built.runs.enqueue({
+    sessionId: "t-orphan",
+    request: { ...request("hi", "t-orphan"), timezone: "America/New_York" },
+  });
+  const attachment = { name: "notes.txt", mimetype: "text/plain", sizeBytes: 5, blobId: "blob-1" };
+  await built.signals.send(run.id, {
+    kind: "steer",
+    text: "finish this instead",
+    ts: "1712.003",
+    request: { ...steererRequest("web-eve", threadRef, "finish this instead"), attachments: [attachment] },
+  });
+  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  assert.ok(claimed);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(run.id);
+  let replayed = await built.runs.activeForThread(threadRef);
+  for (let i = 0; !replayed && i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    replayed = await built.runs.activeForThread(threadRef);
+  }
+  assert.ok(replayed, "the steer text was re-enqueued as its own turn");
+  assert.equal(replayed!.request.actor.id, "web-eve");
+  assert.equal(replayed!.request.text, "finish this instead");
+  assert.deepEqual(replayed!.request.attachments, [attachment], "the steer's own files survive the replay");
+  assert.equal(replayed!.request.timezone, "America/New_York", "turn options are inherited from the ended run");
+});
+
+test("an orphaned steer whose own request is refused falls back to replaying on the run's request", async () => {
+  const threadRef = "t-orphan-fallback";
+  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });
+  await built.signals.send(run.id, {
+    kind: "steer",
+    text: "still matters",
+    ts: "1712.004",
+    request: {
+      surface: "web",
+      actor: { externalId: "web-eve" },
+      conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
+      liveActor: true,
+      text: "still matters",
+    },
+  });
+  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  assert.ok(claimed);
+  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(run.id);
+  let replayed = await built.runs.activeForThread(threadRef);
+  for (let i = 0; !replayed && i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    replayed = await built.runs.activeForThread(threadRef);
+  }
+  assert.ok(replayed, "a refused steerer request still replays the text on the run's own request");
+  assert.equal(replayed!.request.actor.id, "internal:U1");
+  assert.equal(replayed!.request.text, "still matters");
+});
+
+test("attributedSteerText prefixes foreign and ambient steers only", () => {
+  const eve = { id: "web-eve", displayName: "Eve Example" };
+  assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
+  assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
+  assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
+  assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
+  assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
+});
+
 test("core route: steer without text is rejected 400", async () => {
   const { run } = await built.runs.enqueue({ sessionId: "t-notext", request: request("hi") });
   for (const body of [{ kind: "steer" }, { kind: "steer", text: "   " }]) {
@@ -118,6 +316,59 @@ test("web proxy: the submitting user can signal their run; others (and token-les
     asUser("bob", { method: "POST", body: JSON.stringify({ kind: "abort" }) }),
   );
   assert.equal(stranger.status, 404, "a non-owner without a token is told the run does not exist");
+});
+
+test("web proxy: a steer carries a server-built ts and TurnRequest for the signed-in user", async () => {
+  const threadRef = `web:alice:${crypto.randomUUID()}`;
+  const submit = (await (
+    await fetch(
+      `${webBase}/api/turn`,
+      asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me", threadRef }) }),
+    )
+  ).json()) as { runId?: string };
+  assert.ok(submit.runId);
+
+  const steer = await fetch(
+    `${webBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
+    asUser("alice", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "steer",
+        text: "louder",
+        threadRef,
+        ts: "client-forged",
+        request: steererRequest("mallory", threadRef, "louder"),
+      }),
+    }),
+  );
+  assert.equal(steer.status, 200);
+
+  const [signal] = await built.signals.takePending(submit.runId!);
+  assert.ok(signal);
+  assert.equal(signal.text, "louder");
+  assert.ok(
+    signal.ts && signal.ts !== "client-forged",
+    "the ts is minted server-side; a client-supplied one is ignored",
+  );
+  assert.equal(signal.request?.actor.externalId, "alice", "a client-supplied request/actor is ignored");
+  assert.equal(signal.request?.surface, "web");
+  assert.deepEqual(signal.request?.conversation, { kind: "dm", threadRef });
+});
+
+test("web proxy: a steer claiming another user's thread is refused", async () => {
+  const submit = (await (
+    await fetch(`${webBase}/api/turn`, asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me" }) }))
+  ).json()) as { runId?: string };
+  assert.ok(submit.runId);
+  const steer = await fetch(
+    `${webBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
+    asUser("alice", {
+      method: "POST",
+      body: JSON.stringify({ kind: "steer", text: "louder", threadRef: "web:bob:stolen" }),
+    }),
+  );
+  assert.equal(steer.status, 403);
+  assert.deepEqual(await built.signals.takePending(submit.runId!), []);
 });
 
 test("web proxy: Project roster revisions revoke pending run status, signals, and events", async () => {

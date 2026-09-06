@@ -16,6 +16,7 @@ import {
   recentProjectSeeds,
   reconcileSessions,
   splitPinned,
+  watchActivityLabel,
   withPendingSession,
   withoutUnsentPending,
 } from "../src/session-list.ts";
@@ -115,6 +116,26 @@ test("reconcile drops a pending chat once the server knows its threadRef", () =>
   assert.equal(out.length, 1);
   assert.equal(out[0]!.id, "9");
   assert.equal(out[0]!.title, "Bubble waffle order");
+});
+
+test("reconcile keeps the rows of conversations still on screen when the server omits them", () => {
+  const prev = [saved("1", "web:u:x"), saved("2", "web:u:y"), saved("3", "web:u:z")];
+  const server = [saved("3", "web:u:z")];
+  assert.deepEqual(
+    reconcileSessions(server, prev, ["1", "2"]).map((s) => s.id),
+    ["1", "2", "3"],
+    "every open pane keeps its row, not just one",
+  );
+  assert.deepEqual(
+    reconcileSessions(server, prev).map((s) => s.id),
+    ["3"],
+    "a row nobody is reading still goes when the server drops it",
+  );
+  assert.deepEqual(
+    reconcileSessions([saved("9", "web:u:x")], prev, ["1"]).map((s) => s.id),
+    ["9"],
+    "a threadRef the server now answers for under a new id must not render twice",
+  );
 });
 
 test("reconcile against an empty prev is just the server list", () => {
@@ -380,6 +401,12 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     label: "1 watch armed · 2 crons scheduled here",
   });
   assert.equal(backgroundLabel(0, 0, 0), null, "nothing running, nothing to say");
+});
+
+test("watchActivityLabel: shows the last check as relative minutes, and omits it before the first check", () => {
+  assert.equal(watchActivityLabel({ lastFiredAt: Date.now() - 3 * 60_000 }), "still watching · last check 3m ago");
+  assert.equal(watchActivityLabel({ lastFiredAt: Date.now() - 30_000 }), "still watching · last check just now");
+  assert.equal(watchActivityLabel({}), "still watching");
 });
 
 test("rowIndicators: background counts flow through backgroundLabel — zero counts treated as absent", () => {

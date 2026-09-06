@@ -12,14 +12,21 @@ export interface ResolutionService {
   resolve(conversation: Conversation, actor: Principal): Promise<Resolution>;
 }
 
+export function conversationScope(
+  conversation: Pick<Conversation, "kind" | "channelRef" | "threadRef">,
+  actorId: string,
+): ScopeId {
+  if (conversation.kind === "dm") return scopeId("personal", actorId);
+  const ref = conversation.channelRef ?? conversation.threadRef;
+  if (conversation.kind === "group") return scopeId("group", ref);
+  return scopeId("channel", ref);
+}
+
 export function createResolutionService(orgId: string, config: ScopedConfigStore, acl: AclStore): ResolutionService {
   const orgScope = scopeId("org", orgId);
 
   function scopeFor(conversation: Conversation, actor: Principal): ScopeId {
-    if (conversation.kind === "dm") return scopeId("personal", actor.id);
-    const ref = conversation.channelRef ?? conversation.threadRef;
-    if (conversation.kind === "group") return scopeId("group", ref);
-    return scopeId("channel", ref);
+    return conversationScope(conversation, actor.id);
   }
 
   return {

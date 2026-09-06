@@ -144,15 +144,57 @@ test("MEMORY_CONSOLIDATE_AFTER=0 disables consolidation entirely", () => {
   assert.equal(createConsolidator({ harness: oneShotHarness("NONE"), memory, afterN: 0 }), undefined);
 });
 
-test("a one-shot failure leaves the notebook untouched — consolidation is best-effort", async () => {
+test("a one-shot failure keeps every fact but still refreshes the marker, so the trigger doesn't refire on every capture", async () => {
   const { workspace, memory } = freshMemory();
   await memory.capture(SCOPE, ["a fact"], AT);
-  const before = await workspace.read(SCOPE, MEMORY_FILE);
   const harness: HarnessModelUtilities = {
     oneShot: () => Promise.reject(new Error("model down")),
   };
   await createConsolidator({ harness, memory })!.maintain(SCOPE);
-  assert.equal(await workspace.read(SCOPE, MEMORY_FILE), before);
+  const after = (await workspace.read(SCOPE, MEMORY_FILE)) ?? "";
+  assert.match(after, /a fact/, "facts survive the failure");
+  assert.match(after, /consolidated:/, "the marker lands, resetting the after-N trigger");
+  assert.equal(bulletsBelowMarker(after), 0);
+});
+
+test("an edit landing during consolidation survives without disabling later consolidation", async () => {
+  const { memory } = freshMemory();
+  await memory.capture(SCOPE, ["original fact"], AT);
+  let calls = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let modelStarted!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    modelStarted = resolve;
+  });
+  const logs: string[] = [];
+  const consolidator = createConsolidator({
+    harness: {
+      async oneShot() {
+        calls++;
+        modelStarted();
+        await blocked;
+        return "UPDATE 1: consolidated fact";
+      },
+    },
+    memory,
+    log: (message) => logs.push(message),
+  })!;
+
+  const first = consolidator.maintain(SCOPE);
+  await waiting;
+  await memory.replace(SCOPE, "# Memory\n\n- user edit");
+  release();
+  await first;
+
+  assert.match(await memory.read(SCOPE), /user edit/);
+  assert.doesNotMatch(await memory.read(SCOPE), /consolidated fact/);
+  assert.deepEqual(logs, []);
+
+  await consolidator.maintain(SCOPE);
+  assert.equal(calls, 2);
 });
 
 test("an edit landing during consolidation survives without disabling later consolidation", async () => {

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { errorAlreadyRecorded, type ErrorLog } from "../admin/error-log.ts";
+import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -13,6 +15,7 @@ export interface ProcessDeps {
   orchestrator: Orchestrator;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
+  errors?: ErrorLog;
 }
 
 export const LEASE_LOST_CONSECUTIVE = 3;
@@ -66,6 +69,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       background: opts?.background ?? false,
       cancel: cancel.signal,
       ...(queueMs !== undefined ? { queueMs } : {}),
+      ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
     stopBeat();
     if (!(await deps.runs.complete(run.id, token, result))) {
@@ -74,7 +78,15 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     return result;
   } catch (err) {
     stopBeat();
-    await deps.runs.fail(run.id, token, errMessage(err), {
+    console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
+    if (!errorAlreadyRecorded(err))
+      deps.errors?.record({
+        category: "turn",
+        code: "error",
+        message: `run ${run.id}: ${errMessage(err)}`,
+        scopeLabel: conversationScope(run.request.conversation, run.request.actor.id),
+      });
+    await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !(err instanceof NonRetryableTurnError),
     });
     throw err;

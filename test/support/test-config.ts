@@ -12,6 +12,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     pluginSkillDirs: [],
     memoryCaptureQuietMs: 0,
     shutdownDrainMs: 250,
+    turnLeaseWaitMs: 50,
     connectorSecretKey: "test-connector-key-distinct-from-ingress-auth",
     capabilitySecret: TEST_CAPABILITY_SECRET,
     sandboxBackend: "sprites" as const,

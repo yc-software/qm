@@ -5,6 +5,7 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { requireScopedResource } from "./common.ts";
+import { withoutFireLog } from "../crons.ts";
 
 function isAdminCronDestination(v: unknown): v is Destination {
   if (typeof v !== "object" || v === null) return false;
@@ -119,7 +120,7 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
     resource: id,
     scopeLabel: cron.ownerScopeId,
   });
-  return sendJson(res, 200, { cron: updated });
+  return sendJson(res, 200, { cron: updated ? withoutFireLog(updated) : null });
 }
 
 export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
@@ -130,6 +131,7 @@ export async function getAdminSkill(ctx: ApiCtx): Promise<void> {
     () => app.getSkill(id),
     (s) => s.scopeId,
     "skill",
+    "fallback",
   );
   if (!scoped) return;
   const { actor, record: skill } = scoped;

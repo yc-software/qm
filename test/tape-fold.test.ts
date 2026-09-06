@@ -8,7 +8,7 @@ import {
   rehydrateFoldImages,
   tapeNeedsInterruptHeal,
 } from "../src/harness/tape-fold.ts";
-import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
+import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
 import type { TapeRecord } from "../src/sessions/session-store.ts";
 import type { Principal, ScopeId } from "../src/types.ts";
 
@@ -44,6 +44,147 @@ test("message rows replay verbatim, annotations are invisible", () => {
   assert.equal(out.length, 2);
   assert.deepEqual(out[0], rows[0]!.payload);
   assert.deepEqual(out[1], rows[1]!.payload);
+});
+
+const legacyDeliveryLine = "(delivered file(s) to the conversation: flag.png (image/png, 100 bytes))";
+const healedDeliveryNote = "[files delivered to the conversation: flag.png (image/png, 100 bytes)]";
+
+test("fold heals a legacy_import assistant-voice delivery line into a user-voice note", () => {
+  seq = 0;
+  const imported = [
+    { role: "user", content: [{ type: "text", text: "make a flag" }], timestamp: 1 },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "here you go" },
+        { type: "text", text: legacyDeliveryLine },
+      ],
+      timestamp: 2,
+    },
+    { role: "user", content: [{ type: "text", text: "thanks" }], timestamp: 3 },
+  ];
+  const rows = [row({ kind: "context_event", payload: { event: "legacy_import", messages: imported } })];
+  const out = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }>; timestamp: number }>;
+  assert.deepEqual(
+    out.map((m) => m.role),
+    ["user", "assistant", "user", "user"],
+  );
+  assert.equal(out[1]!.content.map((c) => c.text).join(" "), "here you go");
+  assert.equal(out[2]!.content[0]!.text, healedDeliveryNote);
+  assert.equal(out[2]!.timestamp, 2);
+  assert.ok(lintFold(out).ok);
+});
+
+test("fold drops a legacy_import assistant message that was only the continuation shim", () => {
+  seq = 0;
+  const imported = [
+    { role: "user", content: [{ type: "text", text: "check the build" }], timestamp: 1 },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "execute", arguments: {} }],
+      timestamp: 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "c1",
+      toolName: "execute",
+      content: [{ type: "text", text: "built ok" }],
+      isError: false,
+      timestamp: 3,
+    },
+    { role: "assistant", content: [{ type: "text", text: "(continuing after the tool result above)" }], timestamp: 4 },
+    { role: "user", content: [{ type: "text", text: "ship it" }], timestamp: 5 },
+  ];
+  const rows = [row({ kind: "context_event", payload: { event: "legacy_import", messages: imported } })];
+  const out = foldTape(rows) as Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+  assert.deepEqual(
+    out.map((m) => m.role),
+    ["user", "assistant", "toolResult", "user"],
+  );
+  assert.ok(!out.some((m) => m.content.some((c) => c.text?.includes("continuing after the tool result"))));
+  assert.ok(lintFold(out).ok);
+});
+
+test("fold keeps genuine assistant text alongside a dropped continuation shim", () => {
+  seq = 0;
+  const imported = [
+    { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "real answer" },
+        { type: "text", text: "(continuing after the tool result above)" },
+      ],
+      timestamp: 2,
+    },
+    { role: "user", content: [{ type: "text", text: "thanks" }], timestamp: 3 },
+  ];
+  const rows = [row({ kind: "context_event", payload: { event: "legacy_import", messages: imported } })];
+  const out = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }> }>;
+  assert.deepEqual(
+    out.map((m) => m.role),
+    ["user", "assistant", "user"],
+  );
+  assert.equal(out[1]!.content.map((c) => c.text).join(" "), "real answer");
+  assert.ok(lintFold(out).ok);
+});
+
+test("fold drops a legacy_import assistant message that was only a delivery line", () => {
+  seq = 0;
+  const imported = [
+    { role: "user", content: [{ type: "text", text: "make a flag" }], timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: legacyDeliveryLine }], timestamp: 2 },
+    { role: "user", content: [{ type: "text", text: "thanks" }], timestamp: 3 },
+  ];
+  const rows = [row({ kind: "context_event", payload: { event: "legacy_import", messages: imported } })];
+  const out = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }> }>;
+  assert.deepEqual(
+    out.map((m) => m.role),
+    ["user", "user", "user"],
+  );
+  assert.equal(out[1]!.content[0]!.text, healedDeliveryNote);
+  assert.ok(lintFold(out).ok);
+});
+
+test("fold heals legacy_patch messages the same way", () => {
+  seq = 0;
+  const rows = [
+    user("make a flag"),
+    row({
+      kind: "context_event",
+      payload: {
+        event: "legacy_patch",
+        messages: [{ role: "assistant", content: [{ type: "text", text: legacyDeliveryLine }], timestamp: 2 }],
+      },
+    }),
+  ];
+  const out = foldTape(rows) as Array<{ role: string; content: Array<{ text: string }> }>;
+  assert.deepEqual(
+    out.map((m) => m.role),
+    ["user", "user"],
+  );
+  assert.equal(out[1]!.content[0]!.text, healedDeliveryNote);
+});
+
+test("fold never launders a live model-typed delivery line into an authoritative note", () => {
+  seq = 0;
+  const rows = [user("make a flag"), assistant([{ type: "text", text: legacyDeliveryLine }]), user("thanks")];
+  const out = foldTape(rows);
+  assert.deepEqual(
+    out,
+    rows.map((r) => r.payload),
+  );
+});
+
+test("fold leaves new-format delivery notes and ordinary parentheticals in imports untouched", () => {
+  seq = 0;
+  const imported = [
+    { role: "user", content: [{ type: "text", text: "make a flag" }], timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "(on it)" }], timestamp: 2 },
+    { role: "user", content: [{ type: "text", text: healedDeliveryNote }], timestamp: 3 },
+  ];
+  const rows = [row({ kind: "context_event", payload: { event: "legacy_import", messages: imported } })];
+  assert.deepEqual(foldTape(rows), imported);
 });
 
 test("fold is prefix-stable across message appends", () => {
@@ -104,7 +245,7 @@ test("compaction replaces the prefix up to its watermark boundary, keeps recent 
   const out = foldTape(rows) as Array<{ role: string; content: [{ text: string }] }>;
   assert.deepEqual(
     out.map((m) => m.content[0].text),
-    ["[Earlier conversation summary]\nthe old stuff", "recent q", "recent a", "post q"],
+    [`${CONTEXT_SUMMARY_HEADER}\nthe old stuff`, "recent q", "recent a", "post q"],
   );
 });
 
@@ -279,7 +420,7 @@ test("compaction with no boundary at/below its watermark keeps everything (dupli
   const out = foldTape(rows) as Array<{ content: [{ text: string }] }>;
   assert.deepEqual(
     out.map((m) => m.content[0].text),
-    ["[Earlier conversation summary]\nsum", "q1", "a1"],
+    [`${CONTEXT_SUMMARY_HEADER}\nsum`, "q1", "a1"],
   );
 });
 

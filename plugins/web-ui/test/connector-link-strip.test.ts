@@ -30,6 +30,12 @@ test("the link is still detected for the widget regardless of emphasis", () => {
   assert.equal(links[0]!.url, URL, "trailing emphasis must not bleed into the URL/provider");
 });
 
+test("a link glued to a long unbalanced emphasis run is rejected fast", () => {
+  const started = performance.now();
+  assert.deepEqual(connectorLinksIn(`${URL}${"*".repeat(60)}x`), []);
+  assert.ok(performance.now() - started < 100);
+});
+
 test("the legacy /v1 consent link is still detected and stripped during the migration overlap", () => {
   assert.equal(stripConnectorLinks(`**${LEGACY_URL}**`), "");
   const links = connectorLinksIn(`tap ${LEGACY_URL}`);

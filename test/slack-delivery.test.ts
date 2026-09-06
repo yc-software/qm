@@ -10,6 +10,8 @@ import {
   createDeliveryTracker,
   deliverWithRetry,
   postWithVerify,
+  SLACK_POST_SPLIT_LIMIT,
+  recoveryVerifyOldest,
   channelSurfaceUrl,
   channelWelcomeMessage,
   surfaceHeaderText,
@@ -373,7 +375,7 @@ test("onBotJoinedChannel: welcomes a normal internal channel and hands the pinne
 
 function verifyHarness(
   opts: {
-    postResults?: Array<{ ok?: { ts: string; channel?: string }; err?: unknown }>;
+    postResults?: Array<{ ok?: { ts?: string; channel?: string }; err?: unknown }>;
     historyMessages?: unknown[];
     historyThrows?: boolean;
   } = {},
@@ -454,7 +456,7 @@ test("postWithVerify: platform error rethrows without retry", async () => {
   assert.equal(h.historyCalled, false);
 });
 
-test("postWithVerify: rate limit retries without verify", async () => {
+test("postWithVerify: rate limit waits, verifies (the claim may have lapsed), then re-posts", async () => {
   const h = verifyHarness({
     postResults: [
       { err: { code: "slack_webapi_rate_limited_error", retryAfter: 0 } },
@@ -464,7 +466,17 @@ test("postWithVerify: rate limit retries without verify", async () => {
   const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
   assert.equal(res.ts, "2.2");
   assert.equal(h.postCalls, 2);
-  assert.equal(h.historyCalled, false, "a 429 didn't execute — no verify needed");
+  assert.equal(h.historyCalled, true, "the 429 wait may outlive our delivery claim — check for a sibling's post");
+});
+
+test("postWithVerify: rate limit wait finds a sibling relay's post and reuses it", async () => {
+  const h = verifyHarness({
+    postResults: [{ err: { code: "slack_webapi_rate_limited_error", retryAfter: 0 } }],
+    historyMessages: [foundMsg],
+  });
+  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
+  assert.deepEqual(res, { ts: "9.9", channel: "C1", reused: true });
+  assert.equal(h.postCalls, 1, "never re-posts over a sibling's landed message");
 });
 
 test("postWithVerify: ambiguous error + message found on verify returns existing ts, no re-post", async () => {
@@ -481,7 +493,7 @@ test("postWithVerify: ambiguous error + message found on verify returns existing
 test("postWithVerify: recovery preflight returns an existing keyed post without posting again", async () => {
   const h = verifyHarness({ historyMessages: [foundMsg] });
   const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY, { verifyFirst: true });
-  assert.deepEqual(res, { ts: "9.9", channel: "C1" });
+  assert.deepEqual(res, { ts: "9.9", channel: "C1", reused: true });
   assert.equal(h.postCalls, 0, "fresh-process recovery reuses the live post");
   assert.equal(h.historyCalled, true);
 });
@@ -504,8 +516,23 @@ test("postWithVerify: threaded recovery paginates within the delivery window bef
     verifyFirst: true,
     verifyOldest: "100.0",
   });
-  assert.deepEqual(res, { ts: "9.9", channel: "C1" });
+  assert.deepEqual(res, { ts: "9.9", channel: "C1", reused: true });
   assert.equal(replyReads, 2);
+});
+
+test("recoveryVerifyOldest widens the probe window to cover an edited-in-place task message", () => {
+  assert.equal(recoveryVerifyOldest(105_000, undefined), "45", "a minute of slack for slow enqueue and clock skew");
+  assert.equal(recoveryVerifyOldest(3_000_000, "50.5"), "45.5", "the edited task message's own ts wins when older");
+  assert.equal(recoveryVerifyOldest(50_000, "3000.5"), "-10", "the createdAt bound wins when older");
+  assert.equal(recoveryVerifyOldest(undefined, "50.5"), "45.5");
+  assert.equal(recoveryVerifyOldest(undefined, "not-a-ts"), undefined);
+  assert.equal(recoveryVerifyOldest(undefined, undefined), undefined);
+});
+
+test("postWithVerify: a ts-less ok response stays undefined, never the string 'undefined'", async () => {
+  const h = verifyHarness({ postResults: [{ ok: { channel: "C1" } }] });
+  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
+  assert.equal(res.ts, undefined);
 });
 
 test("postWithVerify: ambiguous error + not found retries the post", async () => {
@@ -1003,4 +1030,122 @@ test("surface header ensurer swallows a Slack failure instead of surfacing it to
   });
   assert.doesNotThrow(() => ensure({} as any, "D1", "personal:user.one@acme.dev", "dm"));
   for (let i = 0; i < 12; i++) await Promise.resolve();
+});
+
+test("postWithVerify: a reply over Slack's server-split threshold becomes sequential parts with derived marker keys", async () => {
+  const h = verifyHarness({
+    postResults: [
+      { ok: { ts: "1.1", channel: "C1" } },
+      { ok: { ts: "1.2", channel: "C1" } },
+      { ok: { ts: "1.3", channel: "C1" } },
+    ],
+  });
+  const text = "word ".repeat(2_000);
+  const res = await postWithVerify(h.client, { channel: "C1", text } as any, KEY);
+  assert.equal(h.postCalls, 3);
+  for (const args of h.postArgs) assert.ok(args.text.length <= 3_800, `part over the split limit: ${args.text.length}`);
+  assert.deepEqual(
+    h.postArgs.map((a) => a.metadata.event_payload.idempotency_key),
+    [KEY, `${KEY}#p2`, `${KEY}#p3`],
+  );
+  assert.equal(h.postArgs.map((a) => a.text).join(""), text, "the parts carry the whole reply");
+  assert.equal(res.ts, "1.1", "the first part anchors threading and attachments");
+  assert.deepEqual(
+    res.parts?.map((p) => p.ts),
+    ["1.1", "1.2", "1.3"],
+  );
+});
+
+test("postWithVerify: a verify-first replay of a split reply re-posts only the parts that never landed", async () => {
+  const landed = (key: string, ts: string) => ({
+    ts,
+    metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: key } },
+  });
+  const h = verifyHarness({
+    postResults: [{ ok: { ts: "3.3", channel: "C1" } }],
+    historyMessages: [landed(KEY, "9.1"), landed(`${KEY}#p2`, "9.2")],
+  });
+  const text = "word ".repeat(2_000);
+  const res = await postWithVerify(h.client, { channel: "C1", text } as any, KEY, { verifyFirst: true });
+  assert.equal(h.postCalls, 1, "parts 1 and 2 were found by their markers");
+  assert.equal(h.postArgs[0].metadata.event_payload.idempotency_key, `${KEY}#p3`);
+  assert.equal(res.ts, "9.1");
+  assert.ok(!res.reused, "a retry that posted any new part did new work — attachment replay must not be skipped");
+  assert.deepEqual(
+    res.parts?.map((p) => [p.ts, p.reused ?? false]),
+    [
+      ["9.1", true],
+      ["9.2", true],
+      ["3.3", false],
+    ],
+  );
+});
+
+test("postWithVerify: a replay that finds every part reports the whole post as reused", async () => {
+  const landed = (key: string, ts: string) => ({
+    ts,
+    metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: key } },
+  });
+  const h = verifyHarness({
+    historyMessages: [landed(KEY, "9.1"), landed(`${KEY}#p2`, "9.2")],
+  });
+  const text = "word ".repeat(1_200);
+  const res = await postWithVerify(h.client, { channel: "C1", text } as any, KEY, { verifyFirst: true });
+  assert.equal(h.postCalls, 0);
+  assert.equal(res.reused, true, "everything already landed — side effects were already done");
+});
+
+test("postWithVerify: a fence spanning the split boundary is closed and reopened per part", async () => {
+  const h = verifyHarness({
+    postResults: [{ ok: { ts: "1.1", channel: "C1" } }, { ok: { ts: "1.2", channel: "C1" } }],
+  });
+  const text = "intro\n```\n" + "code line\n".repeat(450) + "```\n";
+  await postWithVerify(h.client, { channel: "C1", text } as any, KEY);
+  assert.ok(h.postCalls >= 2);
+  for (const args of h.postArgs) {
+    assert.equal((args.text.match(/```/g) ?? []).length % 2, 0, "every part renders standalone");
+  }
+});
+
+test("postWithVerify: a message with blocks is never split — its over-limit fallback text is clipped instead", async () => {
+  const h = verifyHarness({ postResults: [{ ok: { ts: "1.1", channel: "C1" } }] });
+  const blocks = [{ type: "section" }];
+  const text = "word ".repeat(9_000);
+  await postWithVerify(h.client, { channel: "C1", text, blocks } as any, KEY);
+  assert.equal(h.postCalls, 1, "blocks carry the content; one message");
+  assert.equal(h.postArgs[0].blocks, blocks);
+  assert.ok(h.postArgs[0].text.length <= 39_001, "the notification fallback stays under Slack's truncation zone");
+  assert.ok(h.postArgs[0].text.endsWith("…"));
+});
+
+test("postWithVerify: a blocks message with a mid-size fallback keeps its text untouched", async () => {
+  const h = verifyHarness({ postResults: [{ ok: { ts: "1.1", channel: "C1" } }] });
+  const blocks = [{ type: "section" }];
+  const text = "word ".repeat(2_000);
+  await postWithVerify(h.client, { channel: "C1", text, blocks } as any, KEY);
+  assert.equal(h.postCalls, 1);
+  assert.equal(h.postArgs[0].text, text);
+});
+
+test("split parts verify strictly when the caller asked for verification, best-effort otherwise", async () => {
+  const historyFails = {
+    chat: { postMessage: async (args: { text: string }) => ({ ok: true, ts: `${args.text.length}.1`, channel: "C1" }) },
+    conversations: {
+      history: async () => {
+        throw new Error("ratelimited");
+      },
+      replies: async () => {
+        throw new Error("ratelimited");
+      },
+    },
+    search: { messages: async () => ({ ok: true, messages: { matches: [] } }) },
+  } as unknown as Parameters<typeof postWithVerify>[0];
+  const long = "x".repeat(SLACK_POST_SPLIT_LIMIT + 10);
+  const relaxed = await postWithVerify(historyFails, { channel: "C1", text: long }, "k1");
+  assert.equal(relaxed.parts?.length, 2, "a caller that did not ask for verification still gets all parts posted");
+  await assert.rejects(
+    postWithVerify(historyFails, { channel: "C1", text: long }, "k2", { verifyFirst: true }),
+    /ratelimited/,
+    "a caller that asked for verification keeps strict verification on every part",
+  );
 });

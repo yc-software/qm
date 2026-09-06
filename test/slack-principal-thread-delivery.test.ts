@@ -27,6 +27,7 @@ test("a threaded principal delivery posts and records the DM thread", async () =
   };
   const poller = createDeliveryPoller({
     core: {
+      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
       claimDeliveries: async (type: string) => {
         if (type !== "principal" || claimed) return [];
         claimed = true;
@@ -34,11 +35,7 @@ test("a threaded principal delivery posts and records the DM thread", async () =
       },
       ackDelivery: async (id: string, body: unknown) => void acks.push({ id, body }),
     } as any,
-    bridge: {
-      inFlightRuns: new Set(),
-      fetchBlobFromCore: async () => new Uint8Array(),
-      fetchFileArtifactFromCore: async () => new Uint8Array(),
-    } as any,
+    flow: { inFlightRuns: { add() {}, delete() {}, has: () => false } } as never,
     mirror: { mirrorSelfPost: () => undefined } as any,
     threads: { mark: () => undefined } as any,
     clientForIdentity: () => client,

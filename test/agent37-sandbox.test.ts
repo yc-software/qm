@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
-import { spriteScopeName } from "../src/sandbox/sprites-sandbox.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
@@ -228,7 +228,7 @@ test("an already-aborted command is never executed", async () => {
 test("an instance already named after the scope is adopted instead of duplicated", async () => {
   await fake.fetchImpl("https://api.agent37.com/v1/instances", {
     method: "POST",
-    body: JSON.stringify({ name: spriteScopeName("qmt", scope) }),
+    body: JSON.stringify({ name: sandboxScopeName("qmt", scope) }),
   });
   const h = await sandbox.provision(layers);
   assert.equal(h.coldStart, false);

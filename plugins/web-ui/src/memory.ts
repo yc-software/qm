@@ -1,10 +1,11 @@
 import { html, nothing, render } from "lit";
-import { Clock3, Pencil, RefreshCw, Search, Trash2 } from "lucide";
+import { Clock3, Pencil, Search, Trash2 } from "lucide";
 import { api, ApiError } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
+import { tip } from "./tooltip";
 
 interface RevisionRow {
   revision: string;
@@ -69,12 +70,11 @@ function drawMemory(loading = false): void {
   render(
     html`
       ${scopedViewTopbar("memory", () => drawMemory())}
-      <div class="pane-head">
+      <div class="list-page-head">
         <div>
           <h1 class="pane-title">Memory</h1>
-          <div class="pane-subtitle">Facts the agent carries into your conversations.</div>
         </div>
-        <div class="pane-head-actions">
+        <div class="list-page-actions">
           <button
             class="btn"
             type="button"
@@ -86,23 +86,26 @@ function drawMemory(loading = false): void {
             ${icon(Pencil, 15)} ${rawEditing ? "Facts view" : "Edit notebook"}
           </button>
           <button class="btn" type="button" @click=${() => void toggleHistory()}>${icon(Clock3, 15)} History</button>
-          <button
-            class="pane-refresh"
-            type="button"
-            aria-label="Refresh memory"
-            title="Refresh memory"
-            @click=${() => void renderMemory(true)}
-          >
-            ${icon(RefreshCw, 17)}
-          </button>
         </div>
+        ${
+          !rawEditing
+            ? html`<label class="list-search"
+                >${icon(Search, 16)}<input
+                  data-focus-key="memory-search"
+                  aria-label="Search memory"
+                  type="search"
+                  placeholder="Search remembered facts"
+                  .value=${search}
+                  @input=${(e: Event) => {
+                    search = (e.target as HTMLInputElement).value;
+                    drawMemory();
+                  }}
+              /></label>`
+            : nothing
+        }
       </div>
       ${memoryNotice || loading ? html`<div class="status">${memoryNotice || "Loading…"}</div>` : nothing}
       <div class="memory-editor">
-        <p class="memory-help">
-          Edit the notebook directly. Switch to Facts view to search or remove individual facts. Saves are protected if
-          the agent remembers something new while this page is open.
-        </p>
         ${
           rawEditing
             ? html`<textarea
@@ -116,44 +119,32 @@ function drawMemory(loading = false): void {
                 }}
                 .value=${memoryDraft}
               ></textarea>`
-            : html` <label class="memory-search"
-                  >${icon(Search, 16)}<input
-                    data-focus-key="memory-search"
-                    aria-label="Search memory"
-                    type="search"
-                    placeholder="Search remembered facts"
-                    .value=${search}
-                    @input=${(e: Event) => {
-                      search = (e.target as HTMLInputElement).value;
-                      drawMemory();
-                    }}
-                /></label>
-                <div class="memory-facts">
-                  ${
-                    visible.length
-                      ? visible.map(
-                          (fact) =>
-                            html`<div class="memory-fact">
-                              <div>
-                                <div>${fact.text}</div>
-                                ${fact.date ? html`<div class="card-meta">Captured ${fact.date}</div>` : nothing}
-                              </div>
-                              <button
-                                class="icon-btn"
-                                type="button"
-                                aria-label="Forget this fact"
-                                title="Forget this fact"
-                                @click=${() => removeFact(fact.line)}
-                              >
-                                ${icon(Trash2, 15)}
-                              </button>
-                            </div>`,
-                        )
-                      : html`<div class="empty-state">
-                          ${search ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet."}
-                        </div>`
-                  }
-                </div>`
+            : html` <div class="memory-facts">
+                ${
+                  visible.length
+                    ? visible.map(
+                        (fact) =>
+                          html`<div class="memory-fact">
+                            <div>
+                              <div>${fact.text}</div>
+                              ${fact.date ? html`<div class="card-meta">Captured ${fact.date}</div>` : nothing}
+                            </div>
+                            <button
+                              class="icon-btn"
+                              type="button"
+                              aria-label="Forget this fact"
+                              ${tip("Forget this fact")}
+                              @click=${() => removeFact(fact.line)}
+                            >
+                              ${icon(Trash2, 15)}
+                            </button>
+                          </div>`,
+                      )
+                    : html`<div class="empty-state">
+                        ${search ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet."}
+                      </div>`
+                }
+              </div>`
         }
         <div class="memory-actions">
           <button

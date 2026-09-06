@@ -29,13 +29,11 @@ const STYLE = `<style>
   :root{
     --bg:#ffffff; --surface:#ffffff; --text:#0a0a0a; --muted:#737373;
     --border:#e5e5e5; --secondary:#f5f5f5; --warn:#b42318; --warn-bg:#fdeceb;
-    --shadow:0 1px 3px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.05);
     --radius-md:10px; --radius-lg:16px;
   }
   @media (prefers-color-scheme:dark){
     :root{ --bg:#0a0a0a; --surface:#171717; --text:#fafafa; --muted:#a3a3a3;
-      --border:#2a2a2a; --secondary:#262626; --warn:#ff8a80; --warn-bg:#2a1a1a;
-      --shadow:0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.4); }
+      --border:#2a2a2a; --secondary:#262626; --warn:#ff8a80; --warn-bg:#2a1a1a; }
   }
   *{ box-sizing:border-box; }
   html,body{ height:100%; }
@@ -47,7 +45,7 @@ const STYLE = `<style>
   main{ margin:auto; padding:32px 20px; width:100%; display:grid; place-items:center; }
   .card{
     width:100%; max-width:420px; background:var(--surface); border:1px solid var(--border);
-    border-radius:var(--radius-lg); box-shadow:var(--shadow); padding:34px 32px 30px; text-align:center;
+    border-radius:var(--radius-lg); padding:34px 32px 30px; text-align:center;
   }
   .icon{ width:52px; height:52px; margin:0 auto 18px; border-radius:var(--radius-md); background:var(--secondary);
     display:grid; place-items:center; }
@@ -59,7 +57,7 @@ const STYLE = `<style>
   .reason{ margin:0 auto 22px; font-size:13px; color:var(--text);
     background:var(--warn-bg); border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px;
     text-align:left; word-break:break-word; }
-  .reason strong{ display:block; color:var(--warn); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-bottom:3px; }
+  .reason strong{ display:block; color:var(--warn); font-size:11px; margin-bottom:3px; }
   form{ display:grid; gap:10px; text-align:left; }
   label{ font-size:12.5px; font-weight:600; color:var(--muted); }
   input[type=email]{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text);
@@ -142,7 +140,7 @@ export function linkSentPage(o: { brandName: string; email: string; ttlMinutes: 
     brandName: o.brandName,
     icon: SENT_ICON,
     heading: "Check your email",
-    msg: `If that address can sign in, a one-time link is on its way. Open it in this browser — it works once and expires in ${o.ttlMinutes} minutes.`,
+    msg: `If that address can sign in, a one-time link is on its way. Open it in this browser. It works once and expires in ${o.ttlMinutes} minutes.`,
     body: `<p class="who">${escapeHtml(o.email)}</p>`,
     help: "Nothing after a minute or two? Check spam, then ask your administrator whether the address is allowed.",
   });
@@ -162,7 +160,7 @@ export function confirmSignInPage(o: { brandName: string; action: string }): str
         <button class="btn" type="submit" id="confirm">Sign in</button>
       </form>
       <script>${CONFIRM_SCRIPT}</script>`,
-    help: "Didn't ask to sign in? Close this page — nothing happens until you confirm.",
+    help: "Didn't ask to sign in? Close this page. Nothing happens until you confirm.",
   });
 }
 

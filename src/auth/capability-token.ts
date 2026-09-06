@@ -3,6 +3,7 @@ import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeI
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
+export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
 
 export const CONTROL_PLANE_AUD = "control-plane";
 export const OAUTH_CONSENT_AUD = "oauth-consent";
@@ -36,6 +37,8 @@ export interface CapabilityClaims {
   drop?: string;
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
   liveActor?: boolean;
+  runId?: string;
+  deployment?: string;
   botActor?: boolean;
   liveAuthor?: boolean;
   triggered?: boolean;
@@ -89,6 +92,8 @@ export async function verifyCapabilityToken(
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;
   if (claims.drop !== undefined && typeof claims.drop !== "string") return null;
+  if (claims.runId !== undefined && typeof claims.runId !== "string") return null;
+  if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
   if (now >= claims.exp) return null;
   return claims;
 }

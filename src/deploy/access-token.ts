@@ -1,4 +1,9 @@
+import { createHmac } from "node:crypto";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
+
+export function viewerIdentityKey(secret: string, deploymentId: string): string {
+  return createHmac("sha256", secret).update(`viewer:${deploymentId}`).digest("base64url");
+}
 
 export interface DeployOwnerSession {
   kind: "dpl-owner";

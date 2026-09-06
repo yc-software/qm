@@ -13,8 +13,6 @@ import { expectedDescriptors, runConformance } from "../src/commands/conformance
 
 const SECRET = "conformance-test-secret";
 
-const PINNED_SANDBOX_IMAGE = `registry.fly.io/acme-sandboxes@sha256:${"b".repeat(64)}`;
-
 function writeLayer(dir: string): void {
   mkdirSync(join(dir, "sandbox", "skills", "a"), { recursive: true });
   mkdirSync(join(dir, "sandbox", "skills", "a-b"), { recursive: true });
@@ -91,7 +89,7 @@ test("the deployment layer sync rejects a bundle over the core's 1 MB limit befo
       skills: [],
       env: {},
       imageOverrides: {},
-      sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+      sandbox: { app: "acme-sandboxes" },
     };
     process.env.CORE_SIGNING_SECRET = SECRET;
     try {
@@ -182,7 +180,7 @@ function makeConfig(publicUrl: string): QmConfig {
     skills: [],
     env: {},
     imageOverrides: {},
-    sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+    sandbox: { app: "acme-sandboxes" },
   };
 }
 
@@ -270,7 +268,7 @@ test("conformance passes against a live core: base-port override, signed request
         target: "docker",
         services: ["core"],
         basePort: 1,
-        sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+        sandbox: { app: "acme-sandboxes" },
       }),
     );
     await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, async () => {
@@ -328,7 +326,7 @@ test("conformance fails when the stored layer matches but the core still serves 
         target: "docker",
         services: ["core"],
         basePort: 1,
-        sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+        sandbox: { app: "acme-sandboxes" },
       }),
     );
     await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, async () => {
@@ -372,7 +370,7 @@ test("conformance reports a non-JSON layer response as a contract failure, not a
         target: "docker",
         services: ["core"],
         basePort: 1,
-        sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+        sandbox: { app: "acme-sandboxes" },
       }),
     );
     await withEnv({ CORE_SIGNING_SECRET: SECRET, QM_BASE_PORT: String(port) }, async () => {
@@ -798,6 +796,33 @@ test("a durable record whose bundle is missing still fails the read", async () =
     });
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the bundle carries every file a tool declares under install.files and fails when one is missing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-layer-install-files-"));
+  try {
+    const toolDir = join(dir, "sandbox", "tools", "acme");
+    mkdirSync(toolDir, { recursive: true });
+    writeFileSync(
+      join(toolDir, "tool.json"),
+      JSON.stringify({ id: "acme", install: { binary: "acme", files: [{ from: "acme", to: "/usr/local/bin/acme" }] } }),
+    );
+    assert.throws(
+      () => deploymentLayerBundle(join(dir, "sandbox")),
+      /declares install file acme but .* does not exist/,
+    );
+    writeFileSync(join(toolDir, "acme"), "#!/bin/sh\necho acme\n");
+    chmodSync(join(toolDir, "acme"), 0o755);
+    const bundle = deploymentLayerBundle(join(dir, "sandbox"));
+    assert.deepEqual(
+      bundle.tools.map((file) => file.path),
+      ["tools/acme/acme", "tools/acme/tool.json"],
+    );
+    assert.equal(bundle.tools[0]!.content, "#!/bin/sh\necho acme\n");
+    assert.equal(bundle.tools[0]!.executable, true);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

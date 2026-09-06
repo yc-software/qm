@@ -6,7 +6,7 @@ export const CORE_SIGNING_SECRET = secret(process.env.CORE_SIGNING_SECRET);
 export const PORTAL_IDENTITY_SECRET = secret(process.env.PORTAL_IDENTITY_SECRET) ?? CORE_SIGNING_SECRET;
 if (!secret(process.env.PORTAL_IDENTITY_SECRET) && CORE_SIGNING_SECRET) {
   console.warn(
-    "[chassis] PORTAL_IDENTITY_SECRET unset — signing portal identity with CORE_SIGNING_SECRET (dev fallback)",
+    "[chassis] PORTAL_IDENTITY_SECRET unset, signing portal identity with CORE_SIGNING_SECRET (dev fallback)",
   );
 }
 

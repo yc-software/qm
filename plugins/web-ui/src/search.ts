@@ -7,9 +7,11 @@
  */
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CornerDownLeft, Search } from "lucide";
-import { api, type CoreSession } from "./core-bridge";
+import { api, userSendMessage, type CoreSession } from "./core-bridge";
 import { mainConversation } from "./conversations";
 import { recencyGroup } from "./session-list";
+import { searchGroup } from "./search-group";
+import { slackWireToPlain, stripSlackDirectives } from "./slack-text";
 import { openSession, refreshSessions, sessionsState, sessionTitle } from "./sessions";
 import { icon } from "./ui";
 
@@ -29,8 +31,7 @@ interface ChatSearchHit {
 
 const MIN_QUERY_LEN = 2;
 const DEBOUNCE_MS = 150;
-const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
-export const SEARCH_HOTKEY_LABEL = isMac ? "⌘K" : "Ctrl+K";
+export const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
 
 const searchState = {
   open: false,
@@ -207,7 +208,9 @@ function askQm(): void {
   const conv = mainConversation();
   conv.newChat();
   void conv.state.agent?.prompt(
-    `Find my previous session based on the following search query, give me a link when you've identified it: ${q}`,
+    userSendMessage(
+      `Find my previous session based on the following search query, give me a link when you've identified it: ${q}`,
+    ),
   );
 }
 
@@ -222,6 +225,10 @@ function highlight(text: string): TemplateResult {
   return html`${parts.map((part, i) => (i % 2 ? html`<mark>${part}</mark>` : html`${part}`))}`;
 }
 
+function hitSnippet(hit: ChatSearchHit): string {
+  return hit.surface === "slack" ? slackWireToPlain(stripSlackDirectives(hit.snippet)) : hit.snippet;
+}
+
 function hitTitle(hit: ChatSearchHit): string {
   if (hit.title?.trim()) return hit.title;
   const session = sessionsState.list.find((s) => s.id === hit.sessionId);
@@ -234,14 +241,7 @@ function resultRows(): TemplateResult[] {
   searchState.hits.forEach((hit, i) => {
     if (hit.sessionId !== lastSession) {
       lastSession = hit.sessionId;
-      rows.push(
-        html`<div class="chat-search-group ${hit.archived ? "archived" : ""}">
-          <b>${hitTitle(hit)}</b
-          >${hit.archived ? html`<em class="chat-search-archived-tag">Archived</em>` : nothing}<span
-            >${recencyGroup(hit.createdAt)}</span
-          >
-        </div>`,
-      );
+      rows.push(searchGroup(hitTitle(hit), Boolean(hit.archived), recencyGroup(hit.createdAt)));
     }
     rows.push(html`
       <button
@@ -255,13 +255,13 @@ function resultRows(): TemplateResult[] {
           }
         }}
       >
-        <span class="chat-search-who ${hit.entryType === "user" ? "user" : "agent"}"
+        <span class="chat-search-who ${hit.entryType === "user" ? "user" : "agent"}" dir="auto"
           >${(hit.entryType === "user" ? (hit.author ?? "You") : "QM").slice(0, 1).toUpperCase()}</span
         >
         <span class="chat-search-text">
-          <span class="chat-search-snippet">${highlight(hit.snippet)}</span>
+          <span class="chat-search-snippet" dir="auto">${highlight(hitSnippet(hit))}</span>
           <span class="chat-search-meta"
-            >${hit.entryType === "user" ? (hit.author ?? "you") : "agent"} ·
+            ><bdi>${hit.entryType === "user" ? (hit.author ?? "you") : "agent"}</bdi> ·
             ${new Date(hit.createdAt).toLocaleDateString()}</span
           >
         </span>
@@ -287,7 +287,7 @@ function askRow(): TemplateResult {
     >
       <span class="chat-search-who ask">+</span>
       <span class="chat-search-text">
-        <span class="chat-search-snippet">Ask QM to find it: <b>“${searchState.query.trim()}”</b></span>
+        <span class="chat-search-snippet">Ask QM to find it: <b dir="auto">“${searchState.query.trim()}”</b></span>
         <span class="chat-search-meta">starts a new chat where QM hunts down the matching session and links it</span>
       </span>
       <span class="chat-search-kbd">${isMac ? "⌘" : "Ctrl"}${icon(CornerDownLeft, 11)}</span>
@@ -299,12 +299,12 @@ function paletteTpl(): TemplateResult {
   const q = searchState.query.trim();
   let body: TemplateResult;
   if (q.length < MIN_QUERY_LEN) {
-    body = html`<div class="chat-search-empty">Search every chat you can see — messages, not just titles.</div>`;
+    body = html`<div class="chat-search-empty">Search every chat you can see: messages, not just titles.</div>`;
   } else if (searchState.loading && !searchState.hits.length) {
     body = html`<div class="chat-search-empty">Searching…</div>`;
   } else if (searchState.failed) {
     body = html`<div class="chat-search-empty chat-search-failed">
-      Search failed — check the connection and try again.
+      Search failed. Check the connection and try again.
     </div>`;
   } else if (!searchState.hits.length) {
     body = html`<div class="chat-search-empty">No messages match “${q}”.</div>`;
@@ -331,6 +331,7 @@ function paletteTpl(): TemplateResult {
             @input=${onQueryInput}
           />
           <span class="chat-search-kbd">esc</span>
+          <button class="chat-search-cancel" type="button" @click=${closeChatSearch}>Cancel</button>
         </div>
         <div class="chat-search-results">${body}</div>
         ${askRowShown() ? html`<div class="chat-search-askbar">${askRow()}</div>` : nothing}

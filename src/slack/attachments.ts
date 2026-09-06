@@ -1,4 +1,6 @@
 import { sleep } from "./util.ts";
+import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
+import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 import { messageWithForwardedContent, type SlackMessageAttachment } from "./forwards.ts";
 
 export interface IncomingAttachment {
@@ -179,9 +181,11 @@ export async function processInboundFiles(
       const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
       attachments.push(attachmentFromBytes(f, bytes, blobId, author));
     } catch (err) {
-      issues.push(
-        `I couldn't read "${label}" — check my file-access permission (files:read) (${(err as Error).message})`,
-      );
+      const detail =
+        err instanceof BlobTooLargeError
+          ? "that request was too large — try fewer or smaller files"
+          : (err as Error).message;
+      issues.push(`I couldn't read "${label}" — check my file-access permission (files:read) (${detail})`);
     }
   }
   return { attachments, issues };
@@ -193,26 +197,22 @@ export interface UploadClient {
 
 async function waitForShareCommit(client: UploadClient, channel: string, fileId: string): Promise<string | undefined> {
   for (let i = 0; i < 60; i++) {
-    let shares: any;
+    let info: unknown;
     try {
-      shares = ((await client.files.info({ file: fileId })) as any)?.file?.shares ?? {};
+      info = await client.files.info({ file: fileId });
     } catch {
       return undefined;
     }
-    const here = [...(shares.public?.[channel] ?? []), ...(shares.private?.[channel] ?? [])];
-    const shared = here.find((share: any) => share?.ts);
-    if (shared?.ts) return String(shared.ts);
+    const ts = channelShareTs(info, channel);
+    if (ts) return ts;
     await sleep(250);
   }
   return undefined;
 }
 
-function uploadedFileIds(response: any): string[] {
-  const files = response?.file ? [response.file] : (response?.files ?? []);
-  return files.flatMap((entry: any) => {
-    if (entry?.id) return [String(entry.id)];
-    return (entry?.files ?? []).flatMap((file: any) => (file?.id ? [String(file.id)] : []));
-  });
+interface BlobSource {
+  readBlob(blobId: string): Promise<Buffer>;
+  readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
 }
 
 export async function uploadAttachments(
@@ -220,31 +220,29 @@ export async function uploadAttachments(
   channel: string,
   threadTs: string | undefined,
   attachments: readonly OutgoingAttachment[],
-  fetchBlob: (blobId: string) => Promise<Buffer>,
-  fetchArtifact?: (artifactId: string, viewerId: string) => Promise<Buffer>,
+  blobs: BlobSource,
   opts: { initialComment?: string } = {},
 ): Promise<{ uploaded: boolean; messageTs?: string }> {
   const fileUploads: Array<{ filename: string; file: Buffer }> = [];
-  for (const attachment of attachments) {
+  for (const a of attachments) {
     let file: Buffer;
     try {
-      file = await fetchBlob(attachment.blobId);
+      file = await blobs.readBlob(a.blobId);
     } catch (err) {
-      if (!fetchArtifact || !attachment.artifactId || !attachment.artifactViewerId) throw err;
-      file = await fetchArtifact(attachment.artifactId, attachment.artifactViewerId);
+      if (!a.artifactId || !a.artifactViewerId) throw err;
+      file = await blobs.readFileArtifact(a.artifactId, a.artifactViewerId);
     }
-    if (file.length > 0) fileUploads.push({ filename: attachment.name, file });
+    if (file.length > 0) fileUploads.push({ filename: a.name, file });
   }
   if (!fileUploads.length) return { uploaded: false };
-
-  const response = await client.files.uploadV2({
+  const res = await client.files.uploadV2({
     channel_id: channel,
     ...(threadTs ? { thread_ts: threadTs } : {}),
     ...(opts.initialComment ? { initial_comment: opts.initialComment } : {}),
     file_uploads: fileUploads,
   });
   let messageTs: string | undefined;
-  for (const fileId of uploadedFileIds(response)) {
+  for (const fileId of parseUploadedFileIds(res)) {
     const sharedTs = await waitForShareCommit(client, channel, fileId);
     messageTs ??= sharedTs;
   }
@@ -252,14 +250,14 @@ export async function uploadAttachments(
 }
 
 export function uploadFailureNote(err: unknown): string {
-  const e = err as { data?: { error?: string; needed?: string }; message?: string };
-  const code = e?.data?.error ?? "";
+  const e = err as { data?: { needed?: string }; message?: string };
+  const code = slackErrorCode(err) ?? "";
   const msg = e?.message ?? String(err);
   const isPermission =
     code === "missing_scope" || code === "not_allowed_token_type" || code === "access_denied" || /scope/i.test(msg);
   if (isPermission) {
     const needed = e?.data?.needed ?? "files:write";
-    return `⚠️ I couldn't attach the file(s) — check my upload permission (${needed}). (${msg})`;
+    return `⚠️ I couldn't attach the file(s) — check my upload permission (${needed}).`;
   }
-  return `⚠️ I couldn't attach the file(s): ${msg}`;
+  return `⚠️ I couldn't attach the file(s)${code ? ` (Slack said: ${code})` : ""}. Try again in a moment.`;
 }

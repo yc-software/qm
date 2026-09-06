@@ -5,8 +5,8 @@ import type { McpClient } from "../src/mcp/mcp-client.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
-    base: "http://brain.internal",
-    host: "brain.internal",
+    base: "http://knowledge.internal",
+    host: "knowledge.internal",
     async listTools() {
       return [];
     },
@@ -22,14 +22,14 @@ test("MCP provider passes query, actor, and explicit writes through configured t
   const memory = createMcpMemoryProvider({
     read: {
       client: client(calls),
-      tool: "read_brain",
+      tool: "search_knowledge",
       timeoutMs: 100,
       scopeArg: "namespace",
       maxCharsArg: "max_chars",
     },
     write: {
       client: client(calls),
-      tool: "write_brain",
+      tool: "write_knowledge",
       timeoutMs: 100,
       scopeArg: "namespace",
       capturedAtArg: "captured_at",
@@ -39,9 +39,9 @@ test("MCP provider passes query, actor, and explicit writes through configured t
   assert.equal(await memory.recall("org:yc", { query: "launch", actorId: "u1", maxChars: 2000 }), "result");
   assert.equal(await memory.capture("org:yc", ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
   assert.deepEqual(calls, [
-    { tool: "read_brain", args: { query: "launch", acting_user: "u1", namespace: "org:yc", max_chars: 2000 } },
+    { tool: "search_knowledge", args: { query: "launch", acting_user: "u1", namespace: "org:yc", max_chars: 2000 } },
     {
-      tool: "write_brain",
+      tool: "write_knowledge",
       args: { content: "decision", captured_at: 10, source: "explicit", acting_user: "u1", namespace: "org:yc" },
     },
   ]);
@@ -55,8 +55,8 @@ test("MCP recall is locally bounded and times out", async () => {
   assert.equal(await bounded.recall("org:yc", { maxChars: 4 }), "abcd");
 
   const hanging: McpClient = {
-    base: "http://brain.internal",
-    host: "brain.internal",
+    base: "http://knowledge.internal",
+    host: "knowledge.internal",
     async listTools() {
       return [];
     },

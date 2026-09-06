@@ -1,11 +1,19 @@
 import type { TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
+import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 function isTurnRequest(body: unknown): body is TurnRequest {
-  return isObj(body) && typeof body.text === "string" && isObj(body.actor) && isObj(body.conversation);
+  return (
+    isObj(body) &&
+    typeof body.text === "string" &&
+    isObj(body.actor) &&
+    typeof body.actor.externalId === "string" &&
+    body.actor.externalId !== "" &&
+    isObj(body.conversation)
+  );
 }
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
@@ -28,22 +36,31 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
   return { origin: resolveTurnOrigin({ ...body, ...(typed ? { origin: typed } : { origin: undefined }) }) };
 }
 
+function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
+  const {
+    ownerKeychainUnion: _ownerKeychainUnion,
+    spawned: _spawned,
+    unattendedGrants: _unattendedGrants,
+    redeliveryKey: _redeliveryKey,
+    ...safeBody
+  } = body;
+  if (typeof safeBody.idempotencyKey === "string" && safeBody.idempotencyKey.startsWith("slack:"))
+    return { error: "idempotencyKey must not use the reserved slack: prefix" };
+  const resolvedOrigin = publicTurnOrigin(safeBody);
+  if (resolvedOrigin.error) return { error: resolvedOrigin.error };
+  const origin = resolvedOrigin.origin;
+  return { request: { ...safeBody, ...(origin ? { origin } : {}) } };
+}
+
 async function postTurn(ctx: ApiCtx): Promise<void> {
   const { res, app, url, body } = ctx;
   if (!isTurnRequest(body)) {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
   }
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
-  const {
-    ownerKeychainUnion: _ownerKeychainUnion,
-    spawned: _spawned,
-    unattendedGrants: _unattendedGrants,
-    ...safeBody
-  } = body;
-  const resolvedOrigin = publicTurnOrigin(safeBody);
-  if (resolvedOrigin.error) return sendJson(res, 400, { error: "bad_request", message: resolvedOrigin.error });
-  const origin = resolvedOrigin.origin;
-  const result = await app.turn({ ...safeBody, ...(origin ? { origin } : {}), async: wantAsync });
+  const sanitized = sanitizedTurnRequest(body);
+  if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
+  const result = await app.turn({ ...sanitized.request, async: wantAsync });
   if (result.status === "queued") return sendJson(res, 202, result);
   const status = result.status === "refused" ? 403 : 200;
   return sendJson(res, status, result);
@@ -82,11 +99,34 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "kind must be abort or steer" });
   }
   const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
-  const outcome = await app.signalRun(id, { kind, ...(text !== undefined ? { text } : {}) }, actor?.p);
+  const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
+  let request: TurnRequest | undefined;
+  if (isObj(body) && body.request !== undefined) {
+    if (!isTurnRequest(body.request)) {
+      return sendJson(res, 400, { error: "bad_request", message: "request must be a TurnRequest" });
+    }
+    if (actor && !samePerson(body.request.actor.externalId, actor.p)) {
+      return sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
+    }
+    const sanitized = sanitizedTurnRequest(body.request);
+    if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
+    request = sanitized.request;
+  }
+  const outcome = await app.signalRun(
+    id,
+    { kind, ...(text !== undefined ? { text } : {}), ...(ts ? { ts } : {}), ...(request ? { request } : {}) },
+    actor?.p,
+  );
   if (outcome.accepted) return sendJson(res, 200, outcome);
   if (outcome.reason === "not_found") return sendJson(res, 404, { error: "not_found" });
   if (outcome.reason === "text_required")
     return sendJson(res, 400, { error: "bad_request", message: "text required", ...outcome });
+  if (outcome.reason === "conversation_mismatch")
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "request conversation does not match the run",
+      ...outcome,
+    });
   return sendJson(res, 409, outcome);
 }
 

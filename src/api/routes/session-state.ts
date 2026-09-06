@@ -26,9 +26,12 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
     "x-accel-buffering": "no",
   });
   res.write(": open\n\n");
-  const unsubscribe = app.subscribeSessionStates((event) => {
-    res.write(`event: session_state\ndata: ${JSON.stringify(event)}\n\n`);
-  });
+  const unsubscribe = app.subscribeSessionStates(
+    (event) => {
+      res.write(`event: session_state\ndata: ${JSON.stringify(event)}\n\n`);
+    },
+    { onResync: () => res.write("event: session_state_resync\ndata: {}\n\n") },
+  );
   const beat = setInterval(() => res.write(": ping\n\n"), HEARTBEAT_MS);
   beat.unref?.();
   req.on("close", () => {

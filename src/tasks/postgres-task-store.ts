@@ -89,7 +89,7 @@ function filterSql(filter: TaskFilter | OpenTaskFilter, open: boolean): { where:
 
 export function createPostgresTaskStore(connectionString: string, opts: { now?: () => number } = {}): TaskStore {
   const now = opts.now ?? (() => Date.now());
-  const pg = createPgPool(connectionString, SCHEMA);
+  const pg = createPgPool(connectionString, "tasks/store/0001", SCHEMA);
   const q = pg.query;
 
   return {

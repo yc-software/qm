@@ -1,8 +1,9 @@
 import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
 import { sleep } from "./util.ts";
 import { extractDirectives } from "./directives.ts";
+import { slackErrorCode } from "./payloads.ts";
 
-const REACTION_DIRECTIVE = /\[\[react:\s*([^\]]*)\]\]/gi;
+const REACTION_DIRECTIVE = /\[\[react:([^\]]*)\]\]/gi;
 const TRAILING_OPEN_DIRECTIVE = /\[\[react:[^\]]*$/i;
 const REACTION_TS = /^\d{6,}\.\d{1,}$/;
 const REACTION_ID = /^~([0-9a-z]+)$/;
@@ -125,7 +126,7 @@ export async function applyReactions(
         landed = true;
         break;
       } catch (err) {
-        const code = (err as { data?: { error?: string } })?.data?.error;
+        const code = slackErrorCode(err);
         if (code === "already_reacted") {
           landed = true;
           break;

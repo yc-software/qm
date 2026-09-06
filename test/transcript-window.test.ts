@@ -312,3 +312,18 @@ test("windowedTranscript: a sinceSeq re-read is never trimmed — it refreshes w
   assert.equal(w.entries.length, log.length - 1, "a refresh that shrinks the window makes read messages vanish");
   assert.equal(w.earlier, 1);
 });
+
+test("a turn larger than the byte budget leaves a window with nothing the person said", () => {
+  const big = "x".repeat(ENTRY_STRING_BUDGET);
+  const log: SessionEntry[] = [entry(0, "user")];
+  for (let seq = 1; seq <= 2 * Math.ceil(TRANSCRIPT_BYTE_BUDGET / ENTRY_STRING_BUDGET); seq++) {
+    log.push({ ...entry(seq, seq % 2 ? "tool_call" : "tool_result"), payload: { text: big } });
+  }
+  const w = windowedTranscript(log, { tailTurns: 25 });
+  assert.equal(
+    w.entries.some((e) => e.type === "user"),
+    false,
+    "the byte budget trims past the only user entry and the forward snap finds no other",
+  );
+  assert.ok(w.earlier > 0, "the dropped entries are still reported as earlier");
+});

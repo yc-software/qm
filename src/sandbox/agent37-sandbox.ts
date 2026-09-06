@@ -7,26 +7,18 @@ import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
-import {
-  BLOB_TRANSFER_TTL_MS,
-  createExecBackup,
-  createExecBlobStaging,
-  createExecFileOps,
-  posixJoin,
-} from "./exec-file-ops.ts";
+import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
-import { DROPPED_PROXY_ENV, forceThroughProxyEnv, proxyExportPrefix } from "./sandbox-env.ts";
-import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token.ts";
+import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { CAPABILITY_HEADER } from "../api/contract.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { spriteScopeName } from "./sprites-sandbox.ts";
+import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -388,7 +380,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   }
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = spriteScopeName(`${prefix}-scratch`, key);
+    const name = sandboxScopeName(`${prefix}-scratch`, key);
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
@@ -438,30 +430,9 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const blobSigningSecret = opts.capabilitySecret ?? opts.signingSecret;
-  const blobStaging =
-    opts.blobTransfer && blobSigningSecret && opts.apiBaseUrl
-      ? createExecBlobStaging({
-          label: "agent37",
-          exec: (id, script, t) => execRaw(id, script, t),
-          proxyPrefix: proxyExportPrefix,
-          apiBaseUrl: opts.apiBaseUrl,
-          capabilityHeader: CAPABILITY_HEADER,
-          mintToken: (grant) =>
-            mintCapabilityToken(
-              {
-                actorId: "agent37-sandbox",
-                aud: BLOB_TRANSFER_AUD,
-                scopeId: "personal:agent37-sandbox",
-                blob: grant,
-                exp: Date.now() + BLOB_TRANSFER_TTL_MS,
-              },
-              blobSigningSecret,
-            ),
-        })
-      : null;
+  const blobStaging = createBackendBlobStaging("agent37", (id, script, t) => execRaw(id, script, t), opts);
 
-  const execBackup = createExecBackup({
+  const execBackup = createExecExport({
     label: "agent37",
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
@@ -477,16 +448,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...(blobStaging
-      ? {
-          async stageIn(handle: SandboxHandle, destRelPath: string, blobId: string): Promise<void> {
-            await blobStaging.stageInAbs(handle, posixJoin(handle.rootDir, destRelPath), blobId);
-          },
-          async stageOut(handle: SandboxHandle, srcRelPath: string): Promise<string> {
-            return blobStaging.stageOutAbs(handle, posixJoin(handle.rootDir, srcRelPath));
-          },
-        }
-      : {}),
+    ...blobStaging,
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
@@ -497,7 +459,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       if (scratch) {
         ({ name, coldStart } = await ensureScratch(scratch.key));
       } else {
-        name = spriteScopeName(prefix, scope);
+        name = sandboxScopeName(prefix, scope);
         scopeByName.set(name, scope);
         ({ coldStart } = await ensureInstance(scope, name, provOpts?.onStatus));
       }
@@ -580,7 +542,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       return bytes === null ? null : Buffer.from(bytes).toString("utf8");
     },
 
-    backupComputer: execBackup.backupComputer,
+    exportFiles: execBackup.exportFiles,
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       if (handle.scratch) {

@@ -54,6 +54,7 @@ export interface ListOwnedOptions {
   cursor?: string;
   includeDisabled?: boolean;
   createdInScope?: ScopeId;
+  nameQuery?: string;
 }
 
 export interface FileArtifactStore {
@@ -168,9 +169,11 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
       const set = new Set(scopes);
       const limit = clampLimit(opts?.limit);
       const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
+      const nameQuery = opts?.nameQuery?.toLowerCase();
       const all = [...rows.values()]
         .filter((r) => set.has(r.ownerScopeId) && (opts?.includeDisabled || r.enabled))
         .filter((r) => opts?.createdInScope == null || r.createdInScope === opts.createdInScope)
+        .filter((r) => nameQuery == null || r.name.toLowerCase().includes(nameQuery))
         .filter((r) => (cursor ? afterCursor(r, cursor) : true))
         .sort((a, b) => b.createdAt - a.createdAt || idOrderDesc(a.id, b.id));
       const page = all.slice(0, limit);

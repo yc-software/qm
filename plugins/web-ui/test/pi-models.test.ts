@@ -19,6 +19,11 @@ test("web UI resolves models from the shared catalog without privileging a provi
 });
 
 test("models this pi-ai build lacks are cloned from a template of their own provider", () => {
+  const fable51 = getBaseModel("claude-fable-5-1");
+  assert.equal(fable51.id, "claude-fable-5-1");
+  assert.equal(fable51.name, "Claude Fable 5.1");
+  assert.equal(fable51.provider, "anthropic");
+
   const fable = getBaseModel("claude-fable-5");
   assert.equal(fable.id, "claude-fable-5");
   assert.equal(fable.name, "Claude Fable 5");

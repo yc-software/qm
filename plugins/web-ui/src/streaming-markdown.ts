@@ -1,3 +1,27 @@
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+export interface MarkdownFence {
+  marker: "`" | "~";
+  length: number;
+  info: string;
+}
+
+export function markdownFence(line: string): MarkdownFence | null {
+  const match = FENCE_LINE.exec(line);
+  const run = match?.[1];
+  const suffix = match?.[2] ?? "";
+  if (!run || (run.startsWith("`") && suffix.includes("`"))) return null;
+  return {
+    marker: run.charAt(0) as MarkdownFence["marker"],
+    length: run.length,
+    info: suffix.trim(),
+  };
+}
+
+export function fenceDelimiter(line: string): string | null {
+  return markdownFence(line)?.marker ?? null;
+}
+
 export function stableSplitPoint(text: string): number {
   let inFence = false;
   let fenceChar = "";
@@ -10,13 +34,12 @@ export function stableSplitPoint(text: string): number {
     const line = lines[i] ?? "";
     const lineStart = pos;
     pos += line.length + 1;
-    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (fence && fence[1]) {
-      const ch = fence[1].charAt(0);
+    const fence = fenceDelimiter(line);
+    if (fence) {
       if (!inFence) {
         inFence = true;
-        fenceChar = ch;
-      } else if (ch === fenceChar) {
+        fenceChar = fence;
+      } else if (fence === fenceChar) {
         inFence = false;
       }
       continue;
@@ -75,13 +98,12 @@ function firstSafeBoundaryAtOrAfter(text: string, min: number): number {
     const line = lines[i] ?? "";
     const lineStart = pos;
     pos += line.length + 1;
-    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (fence && fence[1]) {
-      const ch = fence[1].charAt(0);
+    const fence = fenceDelimiter(line);
+    if (fence) {
       if (!inFence) {
         inFence = true;
-        fenceChar = ch;
-      } else if (ch === fenceChar) {
+        fenceChar = fence;
+      } else if (fence === fenceChar) {
         inFence = false;
       }
       continue;

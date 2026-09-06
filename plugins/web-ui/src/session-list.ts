@@ -1,4 +1,5 @@
 import { sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge.ts";
+import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
@@ -123,10 +124,17 @@ export function bumpActivity(list: CoreSession[], threadRef: string, at: number)
   return list.map((s) => (s.threadRef === threadRef ? { ...s, lastActivityAt: at } : s));
 }
 
-export function reconcileSessions(server: CoreSession[], prev: CoreSession[]): CoreSession[] {
+export function reconcileSessions(
+  server: CoreSession[],
+  prev: CoreSession[],
+  openIds: readonly string[] = [],
+): CoreSession[] {
   const known = new Set(server.map((s) => s.threadRef));
   const pending = prev.filter((s) => !s.id && !known.has(s.threadRef));
-  return [...pending, ...server];
+  const served = new Set(server.map((s) => s.id));
+  const dropped = new Set(openIds.filter((id) => !served.has(id)));
+  const stillOpen = dropped.size ? prev.filter((s) => dropped.has(s.id) && !known.has(s.threadRef)) : [];
+  return [...pending, ...stillOpen, ...server];
 }
 
 export function markWorking(list: CoreSession[], threadRef: string): CoreSession[] {
@@ -180,6 +188,10 @@ export function backgroundLabel(
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
   if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
   return parts.length ? { jobs, watches, crons, label: parts.join(" · ") } : null;
+}
+
+export function watchActivityLabel(w: { lastFiredAt?: number }): string {
+  return w.lastFiredAt ? `still watching · last check ${relTime(w.lastFiredAt)}` : "still watching";
 }
 
 export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {

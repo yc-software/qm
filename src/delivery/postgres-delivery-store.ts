@@ -1,8 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
-import type { DeliveryStore } from "./delivery-store.ts";
-import { LEGACY_CRON_ID_PATTERN, STABLE_CRON_ID_PATTERN } from "../sessions/session-store.ts";
+import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
+import { cronIdOf, threadRefCronIdExpr } from "../sessions/session-store.ts";
+
+const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
+const SOURCE_CRON_ID_EXPR = threadRefCronIdExpr("provenance->>'sourceThreadRef'");
+
+export async function backfillDeliverySourceCronIdBatch(q: PgPool["q"], limit: number): Promise<number> {
+  const updated = await q(
+    `UPDATE deliveries
+        SET source_cron_id = ${SOURCE_CRON_ID_EXPR}
+      WHERE id IN (SELECT id FROM deliveries
+                    WHERE source_cron_id IS NULL AND ${SOURCE_CRON_ID_EXPR} IS NOT NULL
+                    LIMIT $1)
+      RETURNING 1`,
+    [limit],
+  );
+  return updated.length;
+}
 
 function rowToDelivery(r: Record<string, unknown>): Delivery {
   return {
@@ -14,6 +30,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     idempotencyKey: r.idempotency_key as string,
     createdAt: Number(r.created_at),
     deliveredAt: r.delivered_at === null ? null : Number(r.delivered_at),
+    ...(r.expired_at != null ? { expiredAt: Number(r.expired_at) } : {}),
     ...(r.shadow === true ? { shadow: true } : {}),
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
@@ -21,9 +38,13 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
   };
 }
 
-export function createPostgresDeliveryStore(connectionString: string): DeliveryStore {
+export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
+  const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
   const { q, query } = createPgPool(connectionString, [
-    `CREATE TABLE IF NOT EXISTS deliveries(
+    {
+      id: "delivery/store/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS deliveries(
         id TEXT PRIMARY KEY,
         idempotency_key TEXT NOT NULL UNIQUE,
         destination JSONB NOT NULL,
@@ -31,33 +52,84 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
         created_at BIGINT NOT NULL,
         delivered_at BIGINT
       )`,
-    `CREATE INDEX IF NOT EXISTS idx_deliveries_pending
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_pending
         ON deliveries ((destination->>'type'), created_at) WHERE delivered_at IS NULL`,
-    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS attachments JSONB`,
-    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS provenance JSONB`,
-    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS recipient_thread_ref TEXT`,
-    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS shadow BOOLEAN NOT NULL DEFAULT FALSE`,
-    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS deliver_latency_ms INT`,
-    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS slack_api_ms INT`,
-    `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS claim_expires_at BIGINT`,
-    `CREATE INDEX IF NOT EXISTS idx_deliveries_recipient_thread
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS attachments JSONB`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS provenance JSONB`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS recipient_thread_ref TEXT`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS shadow BOOLEAN NOT NULL DEFAULT FALSE`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS deliver_latency_ms INT`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS slack_api_ms INT`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS claim_expires_at BIGINT`,
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_recipient_thread
         ON deliveries (recipient_thread_ref, created_at) WHERE recipient_thread_ref IS NOT NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_deliveries_shadow
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_shadow
         ON deliveries (created_at) WHERE shadow AND delivered_at IS NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_deliveries_source_session
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_source_session
         ON deliveries ((provenance->>'sourceSessionId'), created_at) WHERE provenance IS NOT NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_deliveries_source_thread
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_source_thread
         ON deliveries ((provenance->>'sourceThreadRef'), created_at) WHERE provenance IS NOT NULL`,
+      ],
+    },
+    {
+      id: "delivery/store/0004",
+      statements: [`ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS expired_at BIGINT`],
+    },
+    {
+      id: "delivery/store/0005",
+      statements: [
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_pending_live
+        ON deliveries ((destination->>'type'), created_at) WHERE delivered_at IS NULL AND expired_at IS NULL`,
+      ],
+    },
+    {
+      id: "delivery/store/0006",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS source_cron_id TEXT`,
+      ],
+    },
   ]);
 
   const enqueueListeners = new Set<() => void>();
 
+  async function expireOveraged(): Promise<void> {
+    const rows = await q(
+      `UPDATE deliveries
+          SET expired_at = ${NOW_MS_SQL}
+        WHERE id IN (
+          SELECT id FROM deliveries
+           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
+             AND created_at <= ${NOW_MS_SQL} - $1
+             AND (claim_expires_at IS NULL
+               OR claim_expires_at <= ${NOW_MS_SQL})
+             FOR UPDATE SKIP LOCKED
+        )
+        RETURNING *`,
+      [maxAgeMs],
+    );
+    for (const r of rows) {
+      const d = rowToDelivery(r);
+      logDeliveryExpiry(d, d.expiredAt ?? Date.now());
+    }
+  }
+
   return {
     async enqueue(input) {
       const inserted = await q(
-        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (idempotency_key) DO NOTHING
+        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, source_cron_id, created_at, shadow)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (idempotency_key) DO UPDATE
+           SET destination = EXCLUDED.destination,
+               text = EXCLUDED.text,
+               attachments = EXCLUDED.attachments,
+               provenance = EXCLUDED.provenance,
+               source_cron_id = EXCLUDED.source_cron_id,
+               created_at = EXCLUDED.created_at,
+               shadow = EXCLUDED.shadow,
+               expired_at = NULL,
+               claim_expires_at = NULL
+           WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
          RETURNING *`,
         [
           randomUUID(),
@@ -66,6 +138,7 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
           input.text,
           input.attachments?.length ? JSON.stringify(input.attachments) : null,
           input.provenance ? JSON.stringify(input.provenance) : null,
+          cronIdOf(input.provenance?.sourceThreadRef),
           Date.now(),
           input.shadow === true,
         ],
@@ -80,20 +153,23 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
     },
     async pending(type) {
       const rows = await q(
-        "SELECT * FROM deliveries WHERE delivered_at IS NULL AND NOT shadow AND destination->>'type' = $1 ORDER BY created_at",
+        `SELECT * FROM deliveries
+          WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+          ORDER BY created_at`,
         [type],
       );
       return rows.map(rowToDelivery);
     },
     async claimPending(type, ttlMs) {
+      await expireOveraged();
       const rows = await q(
         `UPDATE deliveries
-            SET claim_expires_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT + $2
+            SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (
             SELECT id FROM deliveries
-             WHERE delivered_at IS NULL AND NOT shadow AND destination->>'type' = $1
+             WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
                AND (claim_expires_at IS NULL
-                 OR claim_expires_at <= (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT)
+                 OR claim_expires_at <= ${NOW_MS_SQL})
              ORDER BY created_at
                FOR UPDATE SKIP LOCKED
           )
@@ -114,6 +190,7 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
       await query(
         `UPDATE deliveries
             SET delivered_at = $2,
+                expired_at = NULL,
                 deliver_latency_ms = GREATEST(0, $2 - created_at),
                 slack_api_ms = COALESCE($3, slack_api_ms)
           WHERE id = $1 AND delivered_at IS NULL`,
@@ -125,7 +202,8 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
         `INSERT INTO deliveries (id, idempotency_key, destination, text, created_at, delivered_at)
          VALUES ($1, $2, '{"type":"ack-tombstone","target":""}', '', $3, $3)
          ON CONFLICT (idempotency_key)
-         DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at)`,
+         DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at),
+                       expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END`,
         [randomUUID(), idempotencyKey, at],
       );
     },
@@ -144,6 +222,7 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
       await query(
         `UPDATE deliveries
             SET recipient_thread_ref = $2,
+                expired_at = CASE WHEN delivered_at IS NULL THEN NULL ELSE expired_at END,
                 delivered_at = COALESCE(delivered_at, $3)
           WHERE id = $1 AND destination->>'type' = 'principal'`,
         [id, recipientThreadRef, at],
@@ -180,7 +259,7 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
                 provenance->>'sourceThreadRef' AS thread_ref,
                 COUNT(*)::int AS sent
            FROM deliveries
-          WHERE NOT shadow
+          WHERE NOT shadow AND expired_at IS NULL
             AND (provenance->>'sourceSessionId' = ANY($1)
               OR (provenance->>'sourceSessionId' IS NULL AND provenance->>'sourceThreadRef' = ANY($2)))
           GROUP BY 1, 2`,
@@ -197,11 +276,10 @@ export function createPostgresDeliveryStore(connectionString: string): DeliveryS
       if (!cronIds.length) return counts;
       const rows = await q(
         `SELECT d.cron_id, COUNT(DISTINCT d.run)::int AS runs
-           FROM (SELECT COALESCE(substring(provenance->>'sourceThreadRef' FROM '${STABLE_CRON_ID_PATTERN}'),
-                                 substring(provenance->>'sourceThreadRef' FROM '${LEGACY_CRON_ID_PATTERN}')) AS cron_id,
+           FROM (SELECT COALESCE(source_cron_id, ${SOURCE_CRON_ID_EXPR}) AS cron_id,
                         COALESCE(provenance->>'sourceSessionId', provenance->>'sourceThreadRef') AS run
                    FROM deliveries
-                  WHERE NOT shadow AND provenance->>'sourceThreadRef' IS NOT NULL) d
+                  WHERE NOT shadow AND expired_at IS NULL AND provenance->>'sourceThreadRef' IS NOT NULL) d
           WHERE d.cron_id = ANY($1)
           GROUP BY d.cron_id`,
         [cronIds],

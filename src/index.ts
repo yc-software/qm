@@ -5,12 +5,16 @@ import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage } from "./util/errors.ts";
-import { slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
+import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
+import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
 
 const built = buildApp(config);
+await migrateRegisteredPgSchemas(config.databaseUrl);
+const backfilledFires = await built.crons.backfillFires();
+if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);
@@ -84,7 +88,17 @@ const slackRuntime = createSlackRuntimeReconciler({
   startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
   onError: (error) => console.error(`[qm] slack plugin reconciliation failed: ${errMessage(error)}`),
 });
-slackRuntime.start();
+if (config.backgroundWorkEnabled) slackRuntime.start();
+
+const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((account) =>
+  createSlackRuntimeReconciler({
+    load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
+    startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
+    onError: (error) =>
+      console.error(`[qm] slack account "${account.accountId}" reconciliation failed: ${errMessage(error)}`),
+  }),
+);
+if (config.backgroundWorkEnabled) for (const runtime of slackAccountRuntimes) runtime.start();
 
 let shuttingDown = false;
 function shutdown(signal: string): void {
@@ -92,6 +106,8 @@ function shutdown(signal: string): void {
   shuttingDown = true;
   console.log(`[qm] ${signal} received, shutting down`);
   void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
+  for (const runtime of slackAccountRuntimes)
+    void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   built.scheduler.stop();
   built.deploymentLayerRefresh.stop();
   server.close();

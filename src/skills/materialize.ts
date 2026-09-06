@@ -1,4 +1,4 @@
-import type { Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
+import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { createHash } from "node:crypto";
 import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill-store.ts";
 import type { SkillBundle } from "./skill-bundle-store.ts";
@@ -197,12 +197,16 @@ function guardedBundlePaths(bundles: SkillBundle[]): string[] {
 
 async function layFiles(sandbox: Sandbox, handle: SandboxHandle, entries: LayEntry[]): Promise<void> {
   if (!entries.length) return;
-  if (sandbox.extractFiles) {
-    await sandbox.extractFiles(
-      handle,
-      entries.map((e) => ({ path: e.path, data: Buffer.from(e.content, "utf8") })),
-    );
-    return;
+  if (sandbox.importFiles) {
+    try {
+      await sandbox.importFiles(
+        handle,
+        entries.map((e) => ({ path: e.path, data: Buffer.from(e.content, "utf8") })),
+      );
+      return;
+    } catch (err) {
+      if (!(err instanceof CapabilityUnsupportedError)) throw err;
+    }
   }
   for (const e of entries) await sandbox.writeFile(handle, e.path, e.content);
 }

@@ -17,6 +17,7 @@ test("the built-in picker includes Fable alongside Opus/Sonnet/Haiku", () => {
   applyPickerModelIds(null);
   const values = getModelOptions().map((o) => o.value);
   assert.deepEqual(values, [
+    "claude-fable-5-1",
     "claude-fable-5",
     "claude-opus-5",
     "claude-opus-4-8",
@@ -34,11 +35,11 @@ test("the org base model is the default selection when it's an available option"
 
 test("without a base model (or one outside the picker) the first option is the default", () => {
   applyPickerModelIds(null);
-  assert.equal(defaultModelValue(), "claude-fable-5");
+  assert.equal(defaultModelValue(), "claude-fable-5-1");
   applyPickerModelIds(["claude-sonnet-5", "claude-haiku-4-5"], "claude-fable-5");
   assert.equal(defaultModelValue(), "claude-sonnet-5");
   applyPickerModelIds(null, "not-a-real-model");
-  assert.equal(defaultModelValue(), "claude-fable-5");
+  assert.equal(defaultModelValue(), "claude-fable-5-1");
 });
 
 test("an admin-configured list filters and orders the picker", () => {
@@ -146,7 +147,7 @@ test("unknown ids are dropped; an all-unknown list falls back to the built-in se
   applyPickerModelIds(["nope-1", "nope-2"]);
   assert.deepEqual(
     getModelOptions().map((o) => o.value),
-    ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
+    ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
   );
 });
 
@@ -208,23 +209,4 @@ test("runtime options include custom-provider models from the catalog", () => {
   assert.ok(acme);
   assert.equal(acme.label, "Acme Large");
   assert.equal(acme.model.provider, "acme-gateway");
-});
-
-test("runtime model options expose useful provider groups for long OpenRouter catalogs", () => {
-  const options = runtimeModelOptions(
-    ["pi"],
-    {
-      pi: ["openai/o3-pro", "anthropic/claude-opus-4.7", "google/gemini-2.5-pro-preview", "arcee-ai/virtuoso-large"],
-    },
-    {
-      "openai/o3-pro": { name: "OpenAI: o3 Pro", provider: "openrouter" },
-      "anthropic/claude-opus-4.7": { name: "Anthropic: Claude Opus 4.7", provider: "openrouter" },
-      "google/gemini-2.5-pro-preview": { name: "Google: Gemini 2.5 Pro Preview", provider: "openrouter" },
-      "arcee-ai/virtuoso-large": { name: "Arcee AI: Virtuoso Large", provider: "openrouter" },
-    },
-  );
-  assert.deepEqual(
-    options.map((option) => option.groupLabel),
-    ["OpenAI", "Anthropic", "Google", "Arcee AI"],
-  );
 });

@@ -116,6 +116,78 @@ test("map iteration is deterministic id order — metadata updates (recordUse-st
   );
 });
 
+interface SelectRow {
+  id: string;
+  owner: string;
+  secretEnc?: string;
+  nested: { keep: string };
+}
+
+test("memory map select filters case-insensitively on one field and strips omitted top-level keys", async () => {
+  const map = createMemoryMap<SelectRow>();
+  await map.put("b", { id: "b", owner: "U1", secretEnc: "enc-b", nested: { keep: "b" } });
+  await map.put("a", { id: "a", owner: "u1", secretEnc: "enc-a", nested: { keep: "a" } });
+  await map.put("c", { id: "c", owner: "Alice@X.com", secretEnc: "enc-c", nested: { keep: "c" } });
+
+  const mine = await map.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U1"] } });
+  assert.deepEqual(mine, [
+    { id: "a", owner: "u1", nested: { keep: "a" } },
+    { id: "b", owner: "U1", nested: { keep: "b" } },
+  ]);
+
+  const alice = await map.select({ where: { field: "owner", anyOfFold: ["alice@x.COM"] } });
+  assert.equal(alice.length, 1);
+  assert.equal(alice[0]!.secretEnc, "enc-c", "without omit the full value comes back");
+
+  assert.deepEqual(await map.select({ where: { field: "owner", anyOfFold: [] } }), []);
+  assert.equal((await map.select({})).length, 3, "no filter and no projection reads everything");
+});
+
+test("select sweeps non-ASCII field values into the candidate set — SQL and JS case folding disagree there, so the caller's exact refilter decides", async () => {
+  const map = createMemoryMap<SelectRow>();
+  await map.put("t", { id: "t", owner: "İstanbul@X.com", nested: { keep: "t" } });
+  await map.put("u", { id: "u", owner: "U1", nested: { keep: "u" } });
+  const candidates = await map.select({ where: { field: "owner", anyOfFold: ["no-such-owner"] } });
+  assert.deepEqual(
+    candidates.map((r) => r.id),
+    ["t"],
+    "a non-ASCII value is never silently dropped by the fold prefilter",
+  );
+});
+
+test("memory map select returns clones — mutating a result cannot poison the store", async () => {
+  const map = createMemoryMap<SelectRow>();
+  await map.put("x", { id: "x", owner: "U1", nested: { keep: "x" } });
+  const [row] = await map.select({ where: { field: "owner", anyOfFold: ["u1"] } });
+  row!.nested.keep = "EVIL";
+  assert.equal((await map.get("x"))!.nested.keep, "x");
+});
+
+test("the Postgres map select projects and filters inside SQL, never fetching the omitted key", async () => {
+  const reads: Array<{ sql: string; params?: unknown[] }> = [];
+  const pg = {
+    query: async () => ({ rows: [] }),
+    q: async (sql: string, params?: unknown[]) => {
+      reads.push({ sql, params });
+      return [];
+    },
+    registerMigration: () => {},
+    migrate: async () => {},
+  };
+  const map = createPostgresMap<SelectRow>(pg as never, "select_probe");
+  await map.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U1", "Alice@X.com"] } });
+  assert.equal(reads.length, 1);
+  assert.match(
+    reads[0]!.sql,
+    /^SELECT json - \$1::text\[\] AS json FROM select_probe WHERE lower\(json->>\$2\) = ANY\(\$3::text\[\]\) OR json->>\$2 ~ '\[\^\\x01-\\x7f\]' ORDER BY id$/,
+  );
+  assert.deepEqual(reads[0]!.params, [["secretEnc"], "owner", ["u1", "alice@x.com"]]);
+
+  await map.select({});
+  assert.match(reads[1]!.sql, /^SELECT json - \$1::text\[\] AS json FROM select_probe ORDER BY id$/);
+  assert.deepEqual(reads[1]!.params, [[]]);
+});
+
 test("the Postgres map reads with ORDER BY id — heap order is not a contract", async () => {
   const selects: string[] = [];
   const pg = {
@@ -124,6 +196,8 @@ test("the Postgres map reads with ORDER BY id — heap order is not a contract",
       selects.push(sql);
       return [];
     },
+    registerMigration: () => {},
+    migrate: async () => {},
   };
   const map = createPostgresMap<{ x: number }>(pg as never, "order_probe");
   await map.all();

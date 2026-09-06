@@ -26,7 +26,7 @@ test("the release is the sole sandbox-base publisher and bakes in the browser en
   assert.equal(existsSync(".github/workflows/publish-images.yml"), false);
 });
 
-test("the release signs private images without requiring anonymous registry access", () => {
+test("the release verifies the sandbox base digest is anonymously pullable", () => {
   const workflow = readFileSync(".github/workflows/release-package.yml", "utf8");
 
   assert.doesNotMatch(workflow, /anonymously pullable|DOCKER_CONFIG="\$probe"/);
@@ -69,7 +69,7 @@ test("publishing the CLI is a separate, attested, main-only operation", () => {
   assert.match(workflow, /^ {2}workflow_call:$/m);
   assert.doesNotMatch(workflow, /^ {2}push:$/m);
   assert.doesNotMatch(workflow, /^ {2}pull_request:$/m);
-  assert.match(workflow, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /if: github\.repository == 'yc-software\/qm' && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /permissions:\s+contents: read\s+id-token: write/);
   assert.match(workflow, /registry-url: https:\/\/registry\.npmjs\.org/);
   assert.match(workflow, /npm publish --provenance --access public/);

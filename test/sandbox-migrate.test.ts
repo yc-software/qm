@@ -78,6 +78,36 @@ test("copyHome moves $HOME, sha-verifies, rewrites paths, and nukes venvs", asyn
   }
 });
 
+test("a tar that warns about files changing mid-read (exit 1) still copies — the resync pass covers deltas", async () => {
+  const root = mkdtempSync(join(tmpdir(), "copyhome-warn-"));
+  const fromHome = join(root, "src");
+  const toHome = join(root, "dst");
+  const shims = join(root, "shims");
+  mkdirSync(shims, { recursive: true });
+  const realTar = spawnSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).stdout.trim();
+  writeFileSync(join(shims, "tar"), `#!/bin/sh\n"${realTar}" "$@"\nexit 1\n`, { mode: 0o755 });
+  const src = hostSandbox(fromHome);
+  const origRun = src.sandbox.run.bind(src.sandbox);
+  src.sandbox.run = (h, command, opts) =>
+    origRun(h, command.includes("tar czf") ? `PATH="${shims}:$PATH"; ${command}` : command, opts);
+  const dst = hostSandbox(toHome);
+  try {
+    writeFileSync(join(fromHome, "notes.txt"), "busy home\n");
+    const res = await copyHome({
+      fromSandbox: src.sandbox,
+      fromHandle: src.handle,
+      fromHome,
+      toSandbox: dst.sandbox,
+      toHandle: dst.handle,
+      toHome,
+    });
+    assert.match(res.sha, /^[0-9a-f]{64}$/);
+    assert.equal(readFileSync(join(toHome, "notes.txt"), "utf8"), "busy home\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("copyHome never mutates the source", async () => {
   const root = mkdtempSync(join(tmpdir(), "copyhome-src-"));
   const fromHome = join(root, "src");

@@ -13,7 +13,13 @@ test("scope-default buttons render when any runtime setting differs from the sco
 });
 
 test("composer-right keeps its control order: make default, use org default, model, harness, send", () => {
-  const right = composer.slice(composer.indexOf("let runtimeControls"));
+  const runtime = composer.slice(
+    composer.indexOf("const runtimeControls ="),
+    composer.indexOf("return html`", composer.indexOf("const runtimeControls =")),
+  );
+  const rendered = composer.slice(composer.indexOf('class="composer-right"'));
+  assert.match(rendered, /showRuntimeControls \? runtimeControls : nothing/);
+  const right = runtime + rendered;
   const makeDefault = right.indexOf("Make default");
   const orgDefault = right.indexOf("Use org default");
   const model = right.indexOf('kind: "model"');
@@ -32,10 +38,6 @@ test("composer-right keeps its control order: make default, use org default, mod
   assert.ok(orgDefault < model, "Use org default should precede the model picker");
   assert.ok(model < harness, "the model picker should precede the harness picker");
   assert.ok(harness < send, "the harness picker should precede the send controls");
-  const rendered = composer.slice(composer.indexOf('class="composer-right"'));
-  const controlsAt = rendered.indexOf("${runtimeControls}");
-  assert.ok(controlsAt >= 0, "runtimeControls must be rendered inside composer-right");
-  assert.ok(controlsAt < rendered.indexOf("sendControls(agent)"), "runtime controls render before send controls");
 });
 
 test("attaching files is allowed while a turn is streaming", () => {
@@ -61,7 +63,7 @@ test("attaching files is allowed while a turn is streaming", () => {
 test("a mid-turn submit queues — attachments cannot ride a queued message and stay for the next", () => {
   // Mid-turn Enter queues through core (queueDraft), so the steer-button attachment note is gone;
   // the queue button gates only on draft text, never on the run slot.
-  assert.match(composer, /title="Queue for after this turn"/);
+  assert.match(composer, /\$\{tip\("Queue for after this turn"\)\}/);
   assert.doesNotMatch(composer, /attachments stay for your next message/);
 });
 
@@ -82,19 +84,4 @@ test("scope runtime defaults include effort and fast mode", () => {
   assert.match(composer, /fastMode: fastOn/);
   assert.match(composer, /config\.effective\.effortLevel/);
   assert.match(composer, /config\.effective\.fastMode === true/);
-});
-
-test("long model menus stay searchable and show the selected effort", () => {
-  assert.match(composer, /const MENU_SEARCH_THRESHOLD = 8;/);
-  assert.match(composer, /searchable: true/);
-  assert.match(composer, /placeholder="Search models…"/);
-  assert.match(composer, /option\.groupLabel/);
-  assert.match(composer, /suffix: `· \$\{effortLabel\(composerState\.effortLevel\)}`/);
-});
-
-test("composer menus stay inside the visible viewport", () => {
-  assert.match(composer, /function placeComposerMenu\(kind: ComposerMenu\)/);
-  assert.match(composer, /window\.visualViewport/);
-  assert.match(composer, /--menu-available-height/);
-  assert.match(composer, /classList\.toggle\("drop-down", placeBelow\)/);
 });

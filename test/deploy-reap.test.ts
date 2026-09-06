@@ -68,3 +68,18 @@ test("managed provider: reap is a no-op — the platform sleeps/wakes it, endpoi
   assert.equal((await deployStore.get(d.id))!.status, "running");
   assert.deepEqual((await deployStore.get(d.id))!.endpoint, { host: "127.0.0.1", port: 5000 });
 });
+
+test("unmanaged provider: an always-on deployment is never reaped", async () => {
+  const { deploy, deployStore } = svc(false);
+  const d = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+  });
+  await deploy.setDeploymentAlwaysOn(d.id, true);
+
+  const stopped = await deploy.reapIdleDeployments(60_000, future);
+  assert.equal(stopped, 0);
+  assert.equal((await deployStore.get(d.id))!.status, "running");
+});

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collectOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
+import { collectNamedOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -56,11 +56,11 @@ async function drain(store: FileArtifactStore, id: string): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-test("collectOutbound registers an 'out' artifact at the registration owner, openable", async () => {
+test("collectNamedOutbound registers an 'out' artifact at the registration owner, openable", async () => {
   const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const { sandbox } = memSandbox({ "outbox/flag.png": PNG });
+  const { sandbox } = memSandbox({ "flag.png": PNG });
 
-  const out = await collectOutbound(sandbox, HANDLE, createMemoryBlobTransferStore(), reg(store));
+  const out = await collectNamedOutbound(sandbox, HANDLE, ["flag.png"], createMemoryBlobTransferStore(), reg(store));
   assert.equal(out.attachments.length, 1, "the file is still delivered");
 
   const page = await store.listOwnedByScopes([owner]);
@@ -74,12 +74,12 @@ test("collectOutbound registers an 'out' artifact at the registration owner, ope
   assert.deepEqual(await drain(store, a.id), PNG, "bytes captured into the doc store");
 });
 
-test("collectOutbound is idempotent on re-run with the same seed (G6 requeue: no dup row)", async () => {
+test("collectNamedOutbound is idempotent on re-run with the same seed (G6 requeue: no dup row)", async () => {
   const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const { sandbox } = memSandbox({ "outbox/a.txt": "one", "outbox/b.txt": "two" });
+  const { sandbox } = memSandbox({ "a.txt": "one", "b.txt": "two" });
 
-  await collectOutbound(sandbox, HANDLE, createMemoryBlobTransferStore(), reg(store));
-  await collectOutbound(sandbox, HANDLE, createMemoryBlobTransferStore(), reg(store));
+  await collectNamedOutbound(sandbox, HANDLE, ["a.txt", "b.txt"], createMemoryBlobTransferStore(), reg(store));
+  await collectNamedOutbound(sandbox, HANDLE, ["a.txt", "b.txt"], createMemoryBlobTransferStore(), reg(store));
   assert.equal((await store.listOwnedByScopes([owner])).files.length, 2, "two files, not four");
 });
 
@@ -89,12 +89,13 @@ test("a doc-store fault does NOT break delivery (best-effort registration)", asy
       throw new Error("doc store down");
     },
   } as unknown as FileArtifactStore;
-  const { sandbox } = memSandbox({ "outbox/report.csv": "a,b,c" });
+  const { sandbox } = memSandbox({ "report.csv": "a,b,c" });
   const errors: unknown[] = [];
 
-  const out = await collectOutbound(
+  const out = await collectNamedOutbound(
     sandbox,
     HANDLE,
+    ["report.csv"],
     createMemoryBlobTransferStore(),
     reg(throwing, { onError: (e) => errors.push(e) }),
   );
@@ -183,7 +184,7 @@ test("write+share registers an artifact keyed on the SAME (owner, path) as the g
     acl,
     files: store,
     createdBy: "U1",
-    persistWritesToStore: { excludeDirs: ["inbox", "outbox"] },
+    persistWritesToStore: { excludeDirs: ["inbox"] },
   });
 
   await ctx.write("redline.md", undefined, [{ scope: grantee, permission: "read" }]);

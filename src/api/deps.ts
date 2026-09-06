@@ -1,3 +1,5 @@
+import type { DurableByteStore } from "../files/durable-byte-store.ts";
+import type { SessionShareStore } from "../sessions/session-share.ts";
 import type { ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
@@ -22,6 +24,7 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
+import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
@@ -32,6 +35,7 @@ import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
   ConnectorTokenStore,
   Keychain,
@@ -44,6 +48,7 @@ import type { DropResolution } from "../triggers/keychain-ask.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { ControlService } from "./control-service.ts";
+import type { LoopServiceDeps } from "./routes/loops.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { BrowserSessionStore } from "../connectors/browser-session-store.ts";
@@ -53,6 +58,7 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import type { UiStateStore } from "../surfaces/ui-state.ts";
+import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
@@ -71,6 +77,7 @@ export interface ServerDeps {
   slackInstallationFetch?: typeof fetch;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
+  slackEventsPort?: number;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;
@@ -85,6 +92,7 @@ export interface ServerDeps {
   acl?: AclStore;
   credentialUsage?: CredentialUsageSink;
   deviceFlowCutover?: DeviceFlowCutoverStore;
+  featureFlags?: FeatureFlagStore;
   egressAudit?: EgressAuditSink;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
@@ -112,7 +120,9 @@ export interface ServerDeps {
   errors?: ErrorLog;
   metrics?: MetricsSink;
   crons?: CronStore;
+  loops?: LoopServiceDeps;
   runs?: RunStore;
+  signals?: RunSignalStore;
   workspace?: WorkspaceStore;
   files?: FileArtifactStore;
   memory?: MemoryService;
@@ -130,8 +140,13 @@ export interface ServerDeps {
   ackEmojiPicks?: AckEmojiPickStore;
   channelPolicy?: ChannelPolicyStore;
   uiState?: UiStateStore;
+  loopSourceTokens?: ConnectorTokenSource;
+  loopSlackClient?: (token: string) => SlackUserClient;
+  sessionShares?: SessionShareStore;
+  sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;
   deploymentLayer?: DeploymentLayerStore;
+  credentialServices?: () => readonly string[];
   brokeredServices?: () => readonly string[];
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;

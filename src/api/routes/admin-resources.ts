@@ -3,9 +3,11 @@ import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
-import { parseScopeId, scopeId, type CommandPolicy, type Grant } from "../../types.ts";
+import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModelForHarness,
+  FAST_MODE_MODEL_IDS,
+  harnessSupportsFastMode,
   HARNESS_IDS,
   isHarnessId,
   modelSupportedByHarness,
@@ -13,12 +15,14 @@ import {
   modelProviderAvailabilityFor,
   resolveModel,
   SELECTABLE_BASE_MODELS,
+  thinkingLevelsForHarness,
   ALL_PROVIDERS_AVAILABLE,
   type HarnessId,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoiceDurable } from "../../harness/harness-router.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import {
+  credentialInjectionError,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
   type CredentialInjection,
@@ -41,6 +45,7 @@ import {
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
+import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
 
 export interface AutoFlaggerDraft {
   harnessId: HarnessId;
@@ -131,8 +136,16 @@ const orgOnly = (scope: string, label: string): { error: string } | null =>
 
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
 
-const brokeredServices = (deps: Pick<ServerDeps, "brokeredServices">): readonly string[] =>
-  deps.brokeredServices?.() ?? [];
+const credentialServices = async (
+  deps: Pick<ServerDeps, "credentialServices" | "brokeredServices" | "deviceFlowCutover">,
+  scope: ScopeId,
+): Promise<string[]> => [
+  ...new Set([
+    ...(deps.credentialServices?.() ?? []),
+    ...(deps.brokeredServices?.() ?? []),
+    ...((await deps.deviceFlowCutover?.listServices(scope)) ?? []),
+  ]),
+];
 
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
@@ -308,16 +321,48 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "feature-flags",
+    kind: "custom",
+    target: "org",
+    readKey: "featureFlags",
+    label: "Live feature rollout table. Each feature maps to the scopes where it is enabled.",
+    get: (deps) => deps.featureFlags?.list(),
+    apply: async (ctx, actor, scope) => {
+      if (!ctx.deps.featureFlags) return { error: "not available on this deployment", status: 404 };
+      const body = (ctx.body ?? {}) as { featureName?: unknown; scopeId?: unknown; on?: unknown };
+      if (typeof body.featureName !== "string" || !(FEATURE_NAMES as readonly string[]).includes(body.featureName)) {
+        return { error: `feature-flags requires featureName: ${FEATURE_NAMES.join(" | ")}` };
+      }
+      if (typeof body.scopeId !== "string" || !body.scopeId.trim()) {
+        return { error: "feature-flags requires scopeId" };
+      }
+      const before = await ctx.deps.featureFlags.enabled(body.featureName as FeatureName, body.scopeId as ScopeId);
+      await ctx.deps.featureFlags.setEnabled(
+        body.featureName as FeatureName,
+        body.scopeId as ScopeId,
+        body.on === true,
+        actor.id,
+      );
+      audit(ctx.deps, {
+        principalId: actor.id,
+        action: "feature-flag.update",
+        resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
+        scopeLabel: scope,
+      });
+      return { ok: true };
+    },
+  },
+  {
     id: "device-flow-cutover",
     kind: "custom",
     target: "any",
     readKey: "deviceFlowCutover",
     label:
-      "Credential-file migration by service. legacy restores resident files; prefer_ephemeral uses the isolated adapter with legacy fallback; ephemeral_only quarantines the stored legacy copy without deleting it; inherit clears a scope override.",
+      "Credential-file migration by service. legacy restores resident files; prefer_ephemeral retains resident files without capturing replacements; ephemeral_only quarantines the stored legacy copy without deleting it; inherit clears a scope override.",
     get: async (deps, scope) => {
       if (!deps.deviceFlowCutover) return undefined;
       const out: Record<string, unknown> = {};
-      for (const service of brokeredServices(deps)) {
+      for (const service of await credentialServices(deps, scope)) {
         out[service] = {
           configured: await deps.deviceFlowCutover.get(scope, service),
           effective: await deps.deviceFlowCutover.resolve(scope, service),
@@ -334,8 +379,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         };
       }
       const service = body.service;
-      if (body.mode !== "inherit" && !brokeredServices(ctx.deps).includes(service)) {
-        return { error: `device-flow-cutover has no isolated adapter for service: ${service}` };
+      if (body.mode !== "inherit" && !(await credentialServices(ctx.deps, scope)).includes(service)) {
+        return { error: `device-flow-cutover has no credential paths for service: ${service}` };
       }
       const beforeConfigured = await ctx.deps.deviceFlowCutover.get(scope, service);
       const beforeEffective = await ctx.deps.deviceFlowCutover.resolve(scope, service);
@@ -386,6 +431,35 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       },
       (deps, scope, on) => deps.config!.setExternalSlackParticipants(scope, on),
     ),
+  },
+  {
+    id: "internal-member-overrides",
+    kind: "string-list",
+    target: "org",
+    clearable: true,
+    label:
+      "Members listed here (lowercased emails or Slack user ids) are treated as internal even if Slack marks them guest/restricted or the directory sync removed them; use it for contractor accounts that are genuinely internal.",
+    readKey: "internalMemberOverrides",
+    get: (deps) => deps.config!.getInternalMemberOverrides(),
+    apply: async (ctx, actor, scope) => {
+      const bad = orgOnly(scope, "internal member overrides are org-wide");
+      if (bad) return bad;
+      const raw = (ctx.body as { members?: unknown }).members;
+      if (!Array.isArray(raw)) return { error: "internal-member-overrides requires { members: string[] }" };
+      if (raw.length > 500) return { error: "internal-member-overrides accepts at most 500 entries" };
+      if (raw.some((m) => typeof m !== "string" || !m.trim() || m.length > 320))
+        return { error: "each member must be a non-empty string of at most 320 characters" };
+      const before = ctx.deps.config!.getInternalMemberOverrides();
+      ctx.deps.config!.setInternalMemberOverrides(raw as string[]);
+      const after = ctx.deps.config!.getInternalMemberOverrides();
+      audit(ctx.deps, {
+        principalId: actor.id,
+        action: "identity.internal-override.update",
+        resource: `${before.length}->${after.length}: ${after.join(", ")}`,
+        scopeLabel: scope,
+      });
+      return { ok: true };
+    },
   },
   {
     id: "channel-header-pin-default",
@@ -484,7 +558,19 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           return { error: `model ${modelId} is not supported by ${runtime.harnessId}` };
         const bad = unserviceable(runtime.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, { harnessId: runtime.harnessId, modelId });
+        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+          harnessId: runtime.harnessId,
+          modelId,
+          ...(runtime.effortLevel ? { effortLevel: runtime.effortLevel } : {}),
+          ...(typeof runtime.fastMode === "boolean"
+            ? {
+                fastMode:
+                  runtime.fastMode &&
+                  harnessSupportsFastMode(runtime.harnessId) &&
+                  FAST_MODE_MODEL_IDS.includes(modelId),
+              }
+            : {}),
+        });
       } else {
         const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
         const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
@@ -495,7 +581,19 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           return { error: `model ${modelId} is not supported by ${effective.harnessId}` };
         const bad = unserviceable(effective.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, { harnessId: effective.harnessId, modelId });
+        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+          harnessId: effective.harnessId,
+          modelId,
+          ...(effective.effortLevel ? { effortLevel: effective.effortLevel } : {}),
+          ...(typeof effective.fastMode === "boolean"
+            ? {
+                fastMode:
+                  effective.fastMode &&
+                  harnessSupportsFastMode(effective.harnessId) &&
+                  FAST_MODE_MODEL_IDS.includes(modelId),
+              }
+            : {}),
+        });
       }
       return { ok: true };
     },
@@ -514,17 +612,29 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const harnessId = (ctx.body as { harnessId?: unknown }).harnessId;
       const modelId = (ctx.body as { modelId?: unknown }).modelId;
+      const effortLevel = (ctx.body as { effortLevel?: unknown }).effortLevel ?? "auto";
+      const fastMode = (ctx.body as { fastMode?: unknown }).fastMode ?? false;
       if (!isHarnessId(harnessId)) return { error: `runtime requires harnessId (${HARNESS_IDS.join(" | ")})` };
       const approved = (await ctx.deps.config!.getApprovedHarnessesDurable()) ?? [ctx.deps.harnessId ?? "pi"];
       if (!approved.includes(harnessId)) return { error: `harness ${harnessId} is not approved` };
       if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
         return { error: `model ${String(modelId)} is not supported by ${harnessId}` };
-      const runtimeKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, runtimeKeys)))
+      const thinkingLevels = thinkingLevelsForHarness(harnessId);
+      if (typeof effortLevel !== "string" || !thinkingLevels.includes(effortLevel))
+        return { error: `runtime requires effortLevel (${thinkingLevels.join(" | ")}) for ${harnessId}` };
+      if (typeof fastMode !== "boolean") return { error: "runtime requires fastMode (boolean)" };
+      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
+      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys)))
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harnessId} harness`,
         };
-      await ctx.deps.config!.setRuntimeSelectionLatest(scope, { harnessId, modelId });
+      await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+        harnessId,
+        modelId,
+        effortLevel,
+        fastMode: fastMode && harnessSupportsFastMode(harnessId) && FAST_MODE_MODEL_IDS.includes(modelId),
+      });
       return { ok: true };
     },
   },
@@ -638,11 +748,21 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "branding is org-wide");
       if (bad) return bad;
-      const body = (ctx.body ?? {}) as { accent?: unknown; mark?: unknown; selfLabel?: unknown; orgName?: unknown };
+      const body = (ctx.body ?? {}) as {
+        accent?: unknown;
+        mark?: unknown;
+        markUrl?: unknown;
+        selfLabel?: unknown;
+        orgName?: unknown;
+      };
       const accentInput = typeof body.accent === "string" ? body.accent.trim() : "";
+      const markUrlInput = typeof body.markUrl === "string" ? body.markUrl.trim() : "";
       const value = sanitizeBranding(body);
       if (accentInput && !value?.accent) {
         return { error: "branding accent must be a hex color (e.g. #4f46e5)" };
+      }
+      if (markUrlInput && !value?.markUrl) {
+        return { error: "branding mark image must be an https URL" };
       }
       ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };
@@ -798,6 +918,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         injection?: unknown;
         allowedMethods?: unknown;
         allowedPathPrefixes?: unknown;
+        deployments?: unknown;
         enabled?: unknown;
         grantees?: unknown;
         delete?: unknown;
@@ -853,6 +974,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(credential.injection ? { injection: credential.injection } : {}),
         ...(credential.allowedMethods ? { allowedMethods: credential.allowedMethods } : {}),
         ...(credential.allowedPathPrefixes ? { allowedPathPrefixes: credential.allowedPathPrefixes } : {}),
+        deployments: credential.deployments,
         enabled: credential.enabled,
         ...(credential.updatedBy ? { updatedBy: credential.updatedBy } : {}),
       });
@@ -867,6 +989,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           injection: credential.injection ?? null,
           allowedMethods: credential.allowedMethods ?? null,
           allowedPathPrefixes: credential.allowedPathPrefixes ?? null,
+          deployments: credential.deployments,
           enabled: credential.enabled,
           hasSecret: credential.hasSecret,
           updatedBy: credential.updatedBy ?? null,
@@ -1008,29 +1131,19 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const badGrantee = desired?.find((g) => {
         const parsed = parseScopeId(g);
         return (
-          !["org", "personal", "team"].includes(parsed.kind ?? "") ||
+          !["org", "personal", "team", "channel"].includes(parsed.kind ?? "") ||
           !parsed.ref ||
           parsed.ref.includes(":") ||
           (parsed.kind === "org" && g !== scope)
         );
       });
       if (badGrantee !== undefined)
-        return { error: `grantee must be this org or a valid personal:/team: scope (got ${badGrantee})` };
-      const injection =
-        b.injection && typeof b.injection === "object"
-          ? ({
-              ...(typeof (b.injection as CredentialInjection).header === "string"
-                ? { header: (b.injection as CredentialInjection).header }
-                : {}),
-              ...(typeof (b.injection as CredentialInjection).scheme === "string"
-                ? { scheme: (b.injection as CredentialInjection).scheme }
-                : {}),
-            } as CredentialInjection)
-          : undefined;
-      if (injection?.header && !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(injection.header))
-        return { error: "authentication header must be a valid HTTP header name" };
-      if (injection?.scheme && /[\r\n]/.test(injection.scheme))
-        return { error: "authentication value prefix must be a single line" };
+        return { error: `grantee must be this org or a valid personal:/team:/channel: scope (got ${badGrantee})` };
+      if (b.deployments !== undefined && typeof b.deployments !== "boolean")
+        return { error: "deployments must be true or false" };
+      const injectionError = credentialInjectionError(b.injection);
+      if (injectionError) return { error: injectionError };
+      const injection = b.injection as CredentialInjection | undefined;
       const effectiveInjection = b.injection === undefined ? existing?.injection : injection;
       let brokerMethods: { allowedMethods?: string[] } = {};
       if (methods) brokerMethods = { allowedMethods: methods };
@@ -1045,11 +1158,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(delivery === "env" ? { envKey } : {}),
         host: delivery === "env" ? "" : host,
         ...(typeof b.secret === "string" && b.secret ? { secret: b.secret } : {}),
-        ...(delivery === "broker" && effectiveInjection && (effectiveInjection.header || effectiveInjection.scheme)
+        ...(delivery === "broker" &&
+        effectiveInjection &&
+        (effectiveInjection.header || effectiveInjection.scheme || effectiveInjection.actor !== undefined)
           ? { injection: effectiveInjection }
           : {}),
         ...(delivery === "broker" ? brokerMethods : {}),
         ...(delivery === "broker" ? brokerPaths : {}),
+        deployments: typeof b.deployments === "boolean" ? b.deployments : (existing?.deployments ?? true),
         enabled: typeof b.enabled === "boolean" ? b.enabled : (existing?.enabled ?? true),
         updatedBy: actor.id,
       };

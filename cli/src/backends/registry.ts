@@ -1,21 +1,19 @@
-import { awsWorkloadArchitecture, loadConfigAt, sandboxImagePinErrors, type QmConfig } from "../config.ts";
+import { awsWorkloadArchitecture, type QmConfig } from "../config.ts";
 import { CliError, errMessage, note } from "../log.ts";
 import type { Target } from "../providers.ts";
 import { syncDeploymentLayer, type DeploymentLayerTransport } from "../deployment-layer.ts";
 import { TARGET_ENV_DEFAULTS, type TargetEnvDefaults } from "../target-env-defaults.ts";
 import { renderTerraformVars } from "../terraform.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "../commands/infra.ts";
-import { runSandboxPublish, type SandboxPublishOpts } from "../commands/sandbox.ts";
 import { awsScaffold, dockerScaffold, flyScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
 import { runnableServices } from "../services.ts";
 import {
-  assertAwsSandboxPinRecordable,
   awsCheckLive,
   awsDoctor,
   awsDown,
   awsLogs,
-  awsPinSandbox,
+  awsMigrateCandidate,
   awsRollback,
   awsSecretsPush,
   awsStatus,
@@ -29,7 +27,6 @@ import {
   flyDoctor,
   flyDown,
   flyLogs,
-  flyPinSandbox,
   flyRollback,
   flySecretsPush,
   flyStatus,
@@ -61,8 +58,6 @@ export interface HostingProvider {
   upOptions(ctx: DeployContext, flags: Readonly<Record<string, string | boolean>>, dryRun: boolean): BackendUpOptions;
   createBackend(ctx: DeployContext): Backend;
   coordinates(config: QmConfig): { accountOrOrganization?: string; region?: string };
-  requiresSandboxApp: boolean;
-  publishSandbox(ctx: DeployContext, opts: SandboxPublishOpts): Promise<void>;
   scaffold: ProviderScaffold;
   validateConfig(config: QmConfig, plugins: readonly ResolvedPlugin[]): Array<{ clause: string; message: string }>;
 }
@@ -96,24 +91,6 @@ const onlyOptions = (flags: Readonly<Record<string, string | boolean>>): string[
   if (duplicate) throw new CliError(`--only lists ${duplicate} more than once`);
   return names;
 };
-
-async function publishFlySandbox(ctx: DeployContext, opts: SandboxPublishOpts, pin: boolean): Promise<void> {
-  const published = runSandboxPublish(opts);
-  if (!published || opts.dryRun) return;
-  const config = loadConfigAt(ctx.configPath, { target: ctx.target }).config;
-  await syncDeploymentLayer({
-    config,
-    transport: hostingProvider(ctx.target).deploymentLayerTransport,
-    configDir: ctx.configDir,
-    sandboxDir: ctx.sandboxDir,
-    ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
-    allowUnavailable: true,
-  });
-  if (pin)
-    await hostingProvider(ctx.target)
-      .createBackend({ ...ctx, config })
-      .pinSandbox(published.image);
-}
 
 const docker: HostingProvider = {
   id: "docker",
@@ -163,14 +140,9 @@ const docker: HostingProvider = {
     secretsPush: () => {
       note("docker reads .env directly; no secret upload is needed");
     },
-    pinSandbox: () => {
-      note("sandbox pin recorded; re-run `qm up` to restart a local core with it");
-    },
   }),
   coordinates: () => ({}),
-  requiresSandboxApp: true,
-  publishSandbox: (ctx, opts) => publishFlySandbox(ctx, opts, false),
-  validateConfig: (config) => sandboxImagePinErrors(config),
+  validateConfig: () => [],
 };
 
 const fly: HostingProvider = {
@@ -221,20 +193,17 @@ const fly: HostingProvider = {
     status: () => flyStatus(ctx.config, ctx.configDir),
     logs: (service, opts) => flyLogs(ctx.config, ctx.configDir, service, opts),
     down: () => flyDown(ctx.config, ctx.configDir),
-    rollback: (to) => flyRollback(ctx.config, ctx.configPath, to),
+    rollback: () => flyRollback(),
     doctor: () => flyDoctor(ctx.config, ctx.configDir, ctx.envFile),
     secretsPush: (envFile) => flySecretsPush(ctx.config, ctx.configDir, envFile),
     checkLive: (opts) => flyCheckLive(ctx.config, ctx.configDir, opts),
-    pinSandbox: (image) => flyPinSandbox(ctx.config, image, ctx.configDir),
   }),
   coordinates: (config) => ({
     ...(config.flyOrg ? { accountOrOrganization: config.flyOrg } : {}),
     ...(config.region ? { region: config.region } : {}),
   }),
-  requiresSandboxApp: true,
-  publishSandbox: (ctx, opts) => publishFlySandbox(ctx, opts, true),
   validateConfig: (config) => {
-    const errors: Array<{ clause: string; message: string }> = [...sandboxImagePinErrors(config)];
+    const errors: Array<{ clause: string; message: string }> = [];
     if (!config.region?.trim())
       errors.push({ clause: "config.v1", message: 'contract config.fly.region: target "fly" requires "region"' });
     if (!config.flyOrg?.trim())
@@ -270,17 +239,23 @@ const aws: HostingProvider = {
     "delete-task-definitions": (ctx) => deleteAwsTaskDefinitions(ctx.config),
   },
   scaffold: awsScaffold,
-  upFlags: ["build-from", "only", "yes", "image-label"],
+  upFlags: ["build-from", "only", "yes", "image-label", "build-only", "candidate", "candidate-out", "inactive"],
   upOptions: (ctx, flags, dryRun) => {
     const only = onlyOptions(flags);
     const unknown = only?.filter((name) => !ctx.config.aws?.services[name]) ?? [];
     if (unknown.length) throw new CliError(`--only has unknown AWS workload(s): ${unknown.join(", ")}`);
     const imageLabel = stringFlag(flags, "image-label");
+    const candidate = stringFlag(flags, "candidate");
+    const candidateOut = stringFlag(flags, "candidate-out");
     return {
       dryRun,
       yes: flags["yes"] === true,
+      buildOnly: flags["build-only"] === true,
+      inactive: flags["inactive"] === true,
       ...buildFromOptions(flags),
       ...(imageLabel ? { imageLabel } : {}),
+      ...(candidate ? { candidate } : {}),
+      ...(candidateOut ? { candidateOut } : {}),
       ...(only ? { only } : {}),
     };
   },
@@ -292,6 +267,10 @@ const aws: HostingProvider = {
         ...(opts.buildFrom !== undefined ? { buildFrom: opts.buildFrom } : {}),
         ...(opts.buildFromPath ? { buildFromPath: opts.buildFromPath } : {}),
         ...(opts.imageLabel ? { imageLabel: opts.imageLabel } : {}),
+        ...(opts.buildOnly ? { buildOnly: true } : {}),
+        ...(opts.candidate ? { candidate: opts.candidate } : {}),
+        ...(opts.candidateOut ? { candidateOut: opts.candidateOut } : {}),
+        ...(opts.inactive ? { inactive: true } : {}),
         ...(opts.only ? { only: opts.only } : {}),
         sandboxDir: ctx.sandboxDir,
         ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
@@ -310,30 +289,10 @@ const aws: HostingProvider = {
         sandboxDir: ctx.sandboxDir,
         ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
       }),
-    pinSandbox: (image) =>
-      awsPinSandbox(ctx.config, image, {
-        configDir: ctx.configDir,
-        sandboxDir: ctx.sandboxDir,
-        ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
-      }),
+    migrateCandidate: (candidate) => awsMigrateCandidate(ctx.config, ctx.configDir, candidate),
   }),
   coordinates: (config) =>
     config.aws ? { accountOrOrganization: config.aws.accountId, region: config.aws.region } : {},
-  requiresSandboxApp: false,
-  publishSandbox: async (ctx, opts) => {
-    if (ctx.config.sandbox?.backend !== "sprites") {
-      throw new CliError(
-        `this AWS deployment runs Lambda MicroVM sandboxes (sandbox.backend is not "sprites"); use \`qm sandbox build\` to validate the layer and \`qm infra build-image\` to publish the runtime — or set "sandbox.backend": "sprites" with "sandbox.app" to host sandboxes in an operator-published layer image`,
-      );
-    }
-    if (!opts.dryRun) assertAwsSandboxPinRecordable(ctx.config);
-    const published = runSandboxPublish(opts);
-    if (!published || opts.dryRun) return;
-    const config = loadConfigAt(ctx.configPath, { target: ctx.target }).config;
-    await hostingProvider(ctx.target)
-      .createBackend({ ...ctx, config })
-      .pinSandbox(published.image);
-  },
   validateConfig: (config, plugins) => {
     if (!config.aws) return [];
     const errors: Array<{ clause: string; message: string }> = [];

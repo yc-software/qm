@@ -406,7 +406,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
     assert.equal(pending[0]!.text, "Carol asked me to pass on:\nthe deploy is done 🚀");
   });
 
-  it("a fire's outbox attachments ride the delivery with the reply (the tweet-digest regression)", async () => {
+  it("a fire's attachments ride the delivery with the reply (the tweet-digest regression)", async () => {
     const files = [
       {
         name: "1_tweet.png",

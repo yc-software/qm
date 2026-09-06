@@ -5,6 +5,23 @@ import { errMessage } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
 import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
+import emojiData from "emoji-datasource/emoji.json" with { type: "json" };
+
+type StandardEmojiEntry = [name: string, char: string, category: string];
+let standardEmojiCache: StandardEmojiEntry[] | undefined;
+function standardEmoji(): StandardEmojiEntry[] {
+  if (!standardEmojiCache) {
+    standardEmojiCache = [...emojiData]
+      .filter((e) => e.category !== "Component" && e.unified)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((e) => [
+        e.short_name,
+        String.fromCodePoint(...e.unified.split("-").map((h) => parseInt(h, 16))),
+        e.category,
+      ]);
+  }
+  return standardEmojiCache;
+}
 
 export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
@@ -81,7 +98,13 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const managed = await ctx.deps.slackInstallation?.get();
   const botToken = managed?.botToken ?? ctx.deps.slackEnvBotToken ?? "";
-  if (!botToken) return sendJson(ctx.res, 404, { error: "not_configured" });
+  if (!botToken) {
+    const cached = await ctx.deps.config?.getSlackEmojiCatalogDurable(scope);
+    if (cached && Object.keys(cached.emoji).length) {
+      return sendJson(ctx.res, 200, { emoji: cached.emoji, standard: standardEmoji() });
+    }
+    return sendJson(ctx.res, 404, { error: "not_configured" });
+  }
   const doFetch = ctx.deps.slackInstallationFetch ?? fetch;
   try {
     const res = await doFetch("https://slack.com/api/emoji.list", {
@@ -95,7 +118,7 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
       if (typeof url === "string" && url.startsWith("alias:")) continue;
       emoji[name] = url;
     }
-    return sendJson(ctx.res, 200, { emoji });
+    return sendJson(ctx.res, 200, { emoji, standard: standardEmoji() });
   } catch (error) {
     return sendJson(ctx.res, 502, { error: "slack_unreachable", message: errMessage(error) });
   }

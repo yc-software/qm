@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { CliError, die, errMessage } from "./log.ts";
+import { CliError, die, errMessage, warn } from "./log.ts";
 import {
   AUTH_BROKER_ENV_KEYS,
   SERVICE_NAMES,
@@ -42,6 +42,7 @@ export interface PluginEntry {
   image?: string;
   env?: Record<string, string>;
   secrets?: PluginSecret[];
+  coreAccess?: boolean;
 }
 
 export interface SandboxConfig {
@@ -69,6 +70,7 @@ export interface AwsServiceConfig {
   architecture?: "arm64" | "amd64";
   taskRoleArn?: string;
   executionRoleArn?: string;
+  assumeRoleArns?: string[];
   buildArgs?: Record<string, string>;
   dockerfile?: string;
   targetGroup?: string;
@@ -203,25 +205,8 @@ export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
-const SANDBOX_PIN_PENDING = `"sandbox.app" is set but no sandbox layer image is pinned; run \`qm sandbox publish\` to build and record the digest-pinned "sandbox.image" agents boot from`;
-
 export const localSandboxActive = (config: QmConfig): boolean =>
   config.target === "docker" && config.sandbox?.backend === "local";
-
-export const sandboxPinPending = (config: QmConfig): boolean =>
-  config.target !== "aws" && !localSandboxActive(config) && Boolean(config.sandbox?.app && !config.sandbox.image);
-
-export function sandboxImagePinErrors(config: QmConfig): Array<{ clause: string; message: string }> {
-  if (localSandboxActive(config)) return [];
-  const sb = config.sandbox;
-  if (!sb?.app || !sb.image || isDigestPinned(sb.image)) return [];
-  return [
-    {
-      clause: "config.v1",
-      message: `"sandbox.image" must be pinned by digest (registry/repository@sha256:…) so a machine's image reference decides whether it is stale; got ${sb.image}`,
-    },
-  ];
-}
 
 export function sandboxCoreEnv(
   config: QmConfig,
@@ -239,15 +224,6 @@ export function sandboxCoreEnv(
   if (sb.backend === "agent37") {
     env.SANDBOX_BACKEND = "agent37";
     return { env, missingSecrets };
-  }
-  if (sb.app) {
-    if (!sb.image) throw new CliError(SANDBOX_PIN_PENDING, { clause: "config.v1" });
-    const violation = sandboxImagePinErrors(config)[0];
-    if (violation) throw new CliError(violation.message, { clause: violation.clause });
-    env.FLY_SANDBOX_APP_NAME = sb.app;
-    env.FLY_BASE_IMAGE = sb.image;
-    const backend = sb.backend ?? (config.target === "fly" ? "sprites" : undefined);
-    if (backend) env.SANDBOX_BACKEND = backend;
   }
   for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
   for (const name of sb.secretEnv ?? []) {
@@ -385,9 +361,6 @@ function updateConfigStringMap(raw: string, key: string, updates: Record<string,
   for (const e of edits) out = out.slice(0, e.start) + e.text + out.slice(e.end);
   return out;
 }
-
-export const updateConfigSandbox = (raw: string, updates: Record<string, string>): string =>
-  updateConfigStringMap(raw, "sandbox", updates);
 
 export const updateConfigImageOverrides = (raw: string, updates: Record<string, string>): string =>
   updateConfigStringMap(raw, "imageOverrides", updates);
@@ -798,14 +771,20 @@ export function mockHarnessWarning(config: QmConfig): string | undefined {
   return `env.core.HARNESS is ${unset ? "unset, which means" : "set to"} "mock": this deployment answers every message with canned text and calls no model provider. Set it to "pi" for a deployment that runs real agent turns.`;
 }
 
+export function effectiveModelProvider(config: QmConfig): ModelProvider | undefined {
+  const override = config.env.core?.MODEL_PROVIDER?.trim();
+  return isModelProvider(override) ? override : config.modelProvider;
+}
+
 function validateModelProvider(config: QmConfig, path: string): void {
   const override = config.env.core?.MODEL_PROVIDER?.trim();
+  if (override === "") delete config.env.core!.MODEL_PROVIDER;
   if (override !== undefined && override !== "" && !isModelProvider(override)) {
     throw new CliError(
       `${path}: env.core.MODEL_PROVIDER must be one of ${MODEL_PROVIDERS.join(", ")}, or unset to use "modelProvider"`,
     );
   }
-  const provider = isModelProvider(override) ? override : config.modelProvider;
+  const provider = effectiveModelProvider(config);
   if (!provider) return;
   const harness = configuredHarness(config);
   if (!MODEL_PROVIDER_HARNESSES[provider].includes(harness)) {
@@ -1004,6 +983,20 @@ function validatePlugins(raw: unknown, path: string): PluginEntry[] {
     }
     if (e["env"] !== undefined) entry.env = validateStringMap(e["env"], path, `plugins[${i}].env`);
     if (e["secrets"] !== undefined) entry.secrets = validatePluginSecrets(e["secrets"], path, i);
+    if (e["coreAccess"] !== undefined) {
+      if (typeof e["coreAccess"] !== "boolean") {
+        throw new CliError(`${path}: plugins[${i}].coreAccess must be a boolean`);
+      }
+      entry.coreAccess = e["coreAccess"];
+    }
+    if (entry.coreAccess === false) {
+      const forbidden = ["CORE_API_URL", "CORE_SIGNING_SECRET"].filter(
+        (name) => entry.env?.[name] !== undefined || entry.secrets?.some((secret) => secret.name === name),
+      );
+      if (forbidden.length) {
+        throw new CliError(`${path}: plugins[${i}] cannot declare ${forbidden.join(", ")} when coreAccess is false`);
+      }
+    }
     return entry;
   });
 }
@@ -1101,7 +1094,7 @@ function validateAws(
   if (raw["predeployDbSnapshot"] !== undefined) {
     if (typeof raw["predeployDbSnapshot"] !== "boolean") {
       throw new CliError(
-        `${path}: "aws.predeployDbSnapshot" must be a boolean (false skips the pre-deploy RDS snapshot)`,
+        `${path}: "aws.predeployDbSnapshot" must be a boolean (false skips the pre-deploy RDS restore-point check)`,
       );
     }
     predeployDbSnapshot = raw["predeployDbSnapshot"];
@@ -1233,6 +1226,25 @@ function validateAws(
     for (const role of ["taskRoleArn", "executionRoleArn"] as const) {
       if (value[role] !== undefined) service[role] = roleArn(value[role], `services.${name}.${role}`);
     }
+    if (value["assumeRoleArns"] !== undefined) {
+      const arns = validateStringArray(value["assumeRoleArns"], path, `aws.services.${name}.assumeRoleArns`);
+      if (arns.length === 0) {
+        throw new CliError(`${path}: "aws.services.${name}.assumeRoleArns" must contain at least one IAM role ARN`);
+      }
+      for (const arn of arns) {
+        if (!/^arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@/-]{1,512}$/.test(arn)) {
+          throw new CliError(
+            `${path}: "aws.services.${name}.assumeRoleArns" must contain commercial AWS IAM role ARNs`,
+          );
+        }
+      }
+      service.assumeRoleArns = [...new Set(arns)];
+      if (!service.taskRoleArn && `${cluster}-${name}-task`.length > 64) {
+        throw new CliError(
+          `${path}: "aws.services.${name}.assumeRoleArns" requires an explicit taskRoleArn because the derived IAM role name exceeds 64 characters`,
+        );
+      }
+    }
     if (value["architecture"] !== undefined) {
       if (value["architecture"] !== "arm64" && value["architecture"] !== "amd64") {
         throw new CliError(`${path}: "aws.services.${name}.architecture" must be "arm64" or "amd64"`);
@@ -1292,6 +1304,27 @@ function validateAws(
       service.dockerfile = dockerfile;
     }
     services[name] = service;
+  }
+  const effectiveTaskRoleArn = (name: string, service: AwsServiceConfig): string => {
+    if (service.taskRoleArn) return service.taskRoleArn;
+    if (name === "core") return `arn:aws:iam::${accountId}:role/${cluster}-core-task`;
+    const roleName = service.assumeRoleArns ? `${cluster}-${name}-task` : `${cluster}-task`;
+    return `arn:aws:iam::${accountId}:role/${roleName}`;
+  };
+  const taskRoleOwners = new Map<string, string[]>();
+  for (const [name, service] of Object.entries(services)) {
+    const role = effectiveTaskRoleArn(name, service);
+    taskRoleOwners.set(role, [...(taskRoleOwners.get(role) ?? []), name]);
+  }
+  for (const [name, service] of Object.entries(services)) {
+    if (!service.assumeRoleArns) continue;
+    const role = effectiveTaskRoleArn(name, service);
+    const owners = taskRoleOwners.get(role)!;
+    if (owners.length > 1) {
+      throw new CliError(
+        `${path}: "aws.services.${name}.taskRoleArn" must be unique because assumeRoleArns grants workload-scoped permissions; ${role} is also used by ${owners.filter((owner) => owner !== name).join(", ")}`,
+      );
+    }
   }
   for (const name of enabledServices) {
     if (!services[name]) throw new CliError(`${path}: "aws.services.${name}" is required because ${name} is enabled`);
@@ -1358,10 +1391,16 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     out.app = o["app"];
   }
   if (o["image"] !== undefined) {
-    if (typeof o["image"] !== "string" || !o["image"].trim()) {
-      throw new CliError(`${path}: "sandbox.image" must be a non-empty string (a pullable rootfs image ref)`);
+    if (o["backend"] === "local") {
+      if (typeof o["image"] !== "string" || !o["image"].trim()) {
+        throw new CliError(`${path}: "sandbox.image" must be a non-empty runnable image ref for the local backend`);
+      }
+      out.image = o["image"];
+    } else {
+      warn(
+        `${path}: "sandbox.image" is retired and ignored — sandboxes boot the platform's stock image; remove the key`,
+      );
     }
-    out.image = o["image"];
   }
   if (o["baseImage"] !== undefined) {
     if (typeof o["baseImage"] !== "string" || !o["baseImage"].trim()) {
@@ -1400,7 +1439,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
-        `${path}: "sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly layer-image settings) — remove them or set "sandbox.backend": "sprites"`,
+        `${path}: "sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly sandbox settings) — remove them or set "sandbox.backend": "sprites"`,
       );
     }
   }
@@ -1422,7 +1461,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   }
   if (SANDBOX_BACKEND_POLICY[target].requireExplicit && out.backend === undefined) {
     throw new CliError(
-      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" boots the operator-published layer image in "sandbox.app"; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
+      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" runs Fly Sprites; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
     );
   }
   return out;

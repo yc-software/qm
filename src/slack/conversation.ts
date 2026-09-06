@@ -1,4 +1,5 @@
 import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
+import { utcMinute } from "../util/time.ts";
 import { MAX_ATTACHMENTS_PER_TURN } from "./attachments.ts";
 
 export interface ContextWireMessage {
@@ -174,7 +175,7 @@ const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string 
 export function formatSlackTs(ts: string): string {
   const sec = Number(ts);
   if (!Number.isFinite(sec) || sec <= 0) return "";
-  return new Date(sec * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z";
+  return utcMinute(sec * 1000);
 }
 
 function messageTurnText(

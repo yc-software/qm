@@ -1,8 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
@@ -10,9 +9,8 @@ import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.t
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
-import { swallow } from "../util/errors.ts";
+import { asError, swallow } from "../util/errors.ts";
 import { countTokens } from "../util/tokens.ts";
-import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
 import { CodexAppServer, CodexRpcError, redactCodexDiagnostics } from "./codex-app-server.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./codex-auth.ts";
 import {
@@ -22,26 +20,28 @@ import {
   type CodexAuthStore,
 } from "./codex-auth-store.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
-import { coreToolOptions, createPiTools, type PiToolsOptions, type ToolContextRef } from "./pi-tools.ts";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import { coreToolOptions, type ToolContextRef } from "./agent-tools.ts";
+import {
+  bridgedTools,
+  bridgedToolText,
+  harnessToolContext,
+  harnessToolOptions,
+  oneShotModelUtilities,
+  oneShotRunner,
+  tapeReplyCheckpoint,
+  transitionTask,
+  type BridgedTool,
+  type HarnessToolPlumbing,
+} from "./harness-shared.ts";
 import { reconstructMessagesFromHistory, seedPriorTurns, type PiReplayMessage } from "./replay.ts";
 
-export interface CodexHarnessOptions {
+export interface CodexHarnessOptions extends HarnessToolPlumbing {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
   defaultModelId?: string;
   judgeModelId?: string;
   binaryPath?: string;
   env?: NodeJS.ProcessEnv;
-  scratchExec?: boolean;
-  ownerAuthExec?: boolean;
-  reachExec?: boolean;
-  mcpTools?: () => McpToolDescriptor[];
-  controlTools?: boolean;
   turnWallClockMs?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
   appServerStartTimeoutMs?: number;
   /** Cap on simultaneous per-user app-server launches (default 8). */
   maxConcurrentUserServers?: number;
@@ -63,31 +63,6 @@ export function codexHarnessConfigOptions(config: Config): CodexHarnessOptions {
     turnWallClockMs: config.turnWallClockMs,
   };
 }
-
-export function codexToolContext(turn: HarnessTurnInput): ToolContextRef {
-  return {
-    current: turn.tools,
-    pendingApprovals: [],
-    pausedOnApproval: false,
-    silentRequested: false,
-    pollFire: Boolean(turn.pollFire),
-    emit: turn.emit,
-    scopeLabel: turn.scopeLabel,
-    orgScopeId: turn.orgScopeId,
-    screenExternalContent: turn.screenExternalContent,
-    toolApprovalGate: turn.toolApprovalGate,
-  };
-}
-
-type BridgedTool = {
-  name: string;
-  description: string;
-  parameters: unknown;
-  execute(
-    callId: string,
-    args: unknown,
-  ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
-};
 
 type CodexItem = Record<string, unknown> & { type: string };
 type CodexTurn = { id: string; status: string; error?: { message?: string } | null; items?: CodexItem[] };
@@ -160,7 +135,7 @@ type ActiveTurn = {
   usageByThread: Map<string, LlmCallUsage>;
   firstOutputAt: number | null;
   fallbackInputTokens: number;
-  tapeWriteFailed: boolean;
+  tapeError?: Error;
   interrupt?: () => Promise<void>;
   stopped: boolean;
 };
@@ -304,44 +279,6 @@ export function prepareCodexHome(
   return target;
 }
 
-async function transitionTask(
-  store: TaskStore | undefined,
-  id: string,
-  expected: TaskStatus,
-  next: TaskStatus,
-  runId: string,
-): Promise<void> {
-  if (!store) return;
-  const updated = await store.transitionStatus(id, expected, next, runId);
-  if (!updated) throw new Error(`task ${id} was not ${expected} while transitioning to ${next}`);
-}
-
-function toolOptions(opts: CodexHarnessOptions, turn?: HarnessTurnInput): PiToolsOptions {
-  return {
-    scratchExec: opts.scratchExec,
-    ownerAuthExec: opts.ownerAuthExec,
-    reachExec: opts.reachExec,
-    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
-    controlTools: opts.controlTools,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    ...(turn
-      ? {
-          readOnly: turn.readOnly,
-          surfaceTools: turn.surfaceTools,
-          surfaceName: turn.surfaceName,
-          credentialExecServices: turn.credentialExecServices,
-        }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
-}
-
-function asTools(ref: ToolContextRef, options: PiToolsOptions): BridgedTool[] {
-  return createPiTools(ref, options) as unknown as BridgedTool[];
-}
-
 function userInput(text: string): Record<string, unknown> {
   return { type: "text", text, text_elements: [] };
 }
@@ -406,13 +343,6 @@ function reasoningFromTurn(turn: CodexTurn): string[] {
       ? item.summary.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
       : [],
   );
-}
-
-function toolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
-  return (result.content ?? [])
-    .filter((item): item is { type?: string; text: string } => typeof item.text === "string")
-    .map((item) => item.text)
-    .join("\n");
 }
 
 export function codexTaskTitle(prompt: unknown): string {
@@ -574,7 +504,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           const item = p.item as CodexItem;
           if (method === "item/completed") {
             state.completedItems.push(item);
-            if (state.turn.tape) {
+            if (state.turn.tape && !state.tapeError) {
               try {
                 await state.turn.tape({
                   kind: "message",
@@ -583,8 +513,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
                   payload: item,
                 });
               } catch (error) {
-                state.tapeWriteFailed = true;
-                swallow("codex: tape append", error);
+                state.tapeError = asError(error);
+                void state.interrupt?.();
               }
             }
           }
@@ -619,7 +549,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         });
         try {
           const result = await tool.execute(callId, p.arguments ?? {});
-          const output = toolText(result);
+          const output = bridgedToolText(result);
           state.responseItems.push({ type: "function_call_output", call_id: callId, output });
           if (result.terminate || state.turn.cancel?.aborted)
             setImmediate(() => {
@@ -939,17 +869,19 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     let model: string | undefined;
     let threadStartRequest!: Record<string, unknown>;
     try {
-      ref = codexToolContext(turn);
+      ref = harnessToolContext(turn);
       toolAbort = new AbortController();
       ref.abortSignal = toolAbort.signal;
-      tools = toolsEnabled ? asTools(ref, toolOptions(opts, turn)) : [];
+      tools = toolsEnabled ? bridgedTools(ref, harnessToolOptions(opts, turn)) : [];
       dynamicTools = tools.map((tool) => ({
         type: "function",
         name: tool.name,
         description: tool.description,
         inputSchema: tool.parameters,
       }));
-      model = modelSupportedByHarness(turn.model, "codex") ? turn.model! : resolveModelId(turn.scopeLabel);
+      const requestedModel = turn.runtime?.modelId;
+      model = modelSupportedByHarness(requestedModel, "codex") ? requestedModel! : resolveModelId(turn.scopeLabel);
+      const reasoningEffort = codexReasoningEffort(turn.runtime?.effortLevel);
       threadStartRequest = {
         ...(model ? { model } : {}),
         cwd: rt.jail,
@@ -964,9 +896,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         environments: [],
         config: {
           web_search: "disabled",
-          ...(codexReasoningEffort(turn.thinkingLevel)
-            ? { model_reasoning_effort: codexReasoningEffort(turn.thinkingLevel) }
-            : {}),
+          ...(turn.runtime?.fastMode === true ? { service_tier: "priority" } : {}),
+          ...(reasoningEffort ? { model_reasoning_effort: reasoningEffort } : {}),
           features: {
             shell_tool: false,
             unified_exec: false,
@@ -1074,9 +1005,32 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         usageByThread: new Map(),
         firstOutputAt: null,
         fallbackInputTokens: countTokens(JSON.stringify({ replay, input })),
-        tapeWriteFailed: false,
         stopped: false,
       };
+      if (turn.tape) {
+        await turn.tape({
+          kind: "message",
+          harness: "codex",
+          scopeLabel: turn.scopeLabel,
+          entrySeq: userEntry.seq,
+          meta: {
+            bareText: turn.input,
+            ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
+          },
+          payload: {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: inputText },
+              ...(turn.images ?? []).map((image) => ({
+                type: "input_image",
+                image_url: "[image bytes omitted]",
+                media_type: image.mimeType,
+              })),
+            ],
+          },
+        });
+      }
     } catch (error) {
       return failSetup(error);
     }
@@ -1122,35 +1076,6 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (recordTimer) clearTimeout(recordTimer);
       }
     };
-    if (turn.tape) {
-      try {
-        await turn.tape({
-          kind: "message",
-          harness: "codex",
-          scopeLabel: turn.scopeLabel,
-          entrySeq: userEntry.seq,
-          meta: {
-            bareText: turn.input,
-            ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
-          },
-          payload: {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_text", text: inputText },
-              ...(turn.images ?? []).map((image) => ({
-                type: "input_image",
-                image_url: "[image bytes omitted]",
-                media_type: image.mimeType,
-              })),
-            ],
-          },
-        });
-      } catch (error) {
-        state.tapeWriteFailed = true;
-        swallow("codex: tape append", error);
-      }
-    }
     let turnId = "";
     const interrupt = async (stopped: boolean) => {
       state.stopped ||= stopped;
@@ -1174,11 +1099,25 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             {
               onAbort: async () => interrupt(true),
               onSteer: async (text, ts) => {
-                await turn.emit({
+                const steered = await turn.emit({
                   type: "user",
                   payload: { text, ...(ts ? { ts } : {}), steered: true },
                   scopeLabel: turn.scopeLabel,
                 });
+                if (turn.tape) {
+                  await turn.tape({
+                    kind: "message",
+                    harness: "codex",
+                    scopeLabel: turn.scopeLabel,
+                    entrySeq: steered.seq,
+                    meta: {
+                      bareText: text,
+                      ...(ts ? { ts } : {}),
+                      entryCreatedAt: steered.createdAt,
+                    },
+                    payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+                  });
+                }
                 await rt.server.request("turn/steer", { threadId, expectedTurnId: turnId, input: [userInput(text)] });
               },
             },
@@ -1238,6 +1177,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               }),
             ])
           : await completed;
+      if (state.tapeError) throw state.tapeError;
       if (state.modelCalls === 0) {
         state.modelCalls = 1;
         turn.recordModelCall({
@@ -1246,7 +1186,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           entryCount: turn.history.length,
         });
       }
-      if (result.status === "failed") throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
+      if (result.status === "failed" && !state.stopped)
+        throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
       if (turn.cancel?.aborted) {
         runtimeCleanupRequested = true;
         turnResult = { reply: "", stopped: true };
@@ -1255,12 +1196,14 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         const reply = terminal ? "" : textFromTurn(result);
         for (const thinking of reasoningFromTurn(result))
           await turn.emit({ type: "thinking", payload: { thinking }, scopeLabel: turn.scopeLabel });
-        if (reply && !terminal)
-          await turn.emit({
+        if (reply && !terminal) {
+          const finalEntry = await turn.emit({
             type: "assistant",
-            payload: { text: reply, stopped: state.stopped || undefined },
+            payload: { text: reply, ...(state.stopped ? { stopped: true } : {}) },
             scopeLabel: turn.scopeLabel,
           });
+          await tapeReplyCheckpoint(turn, finalEntry);
+        }
         turnResult = {
           reply,
           ...(state.stopped ? { stopped: true as const } : {}),
@@ -1268,7 +1211,6 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
           ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
           modelCalls: state.modelCalls,
-          ...(state.tapeWriteFailed ? { tapeWriteFailed: true } : {}),
         };
       }
     } catch (error) {
@@ -1311,45 +1253,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     return turnResult;
   };
 
-  const single = async (
-    systemPrompt: string,
-    prompt: string,
-    signal?: AbortSignal,
-    observe?: Pick<HarnessTurnInput, "recordModelCall" | "recordLlmRequest">,
-    modelOverride?: string,
-  ): Promise<string | undefined> => {
-    const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as HarnessTurnInput["session"];
-    const scope = { kind: "org", id: "oneshot" } as unknown as ScopeId;
-    const emitted: SessionEntry[] = [];
-    const result = await runPrompt(
-      {
-        session,
-        input: prompt,
-        systemPrompt,
-        history: [],
-        tools: {} as HarnessTurnInput["tools"],
-        scopeLabel: scope,
-        orgScopeId: scope,
-        ...(signal ? { cancel: signal } : {}),
-        ...(modelOverride ? { model: modelOverride } : {}),
-        readOnly: true,
-        emit: async (entry) => {
-          const saved = {
-            ...entry,
-            sessionId: session.id,
-            seq: emitted.length + 1,
-            createdAt: Date.now(),
-          } as SessionEntry;
-          emitted.push(saved);
-          return saved;
-        },
-        recordModelCall: observe?.recordModelCall ?? (() => {}),
-        ...(observe?.recordLlmRequest ? { recordLlmRequest: observe.recordLlmRequest } : {}),
-      },
-      false,
-    );
-    return result.reply || undefined;
-  };
+  const single = oneShotRunner((turn) => runPrompt(turn, false));
 
   return defineHarness(
     {
@@ -1381,35 +1285,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         }
       },
       resetSession: () => {},
-      oneShot: (system, prompt) => single(system, prompt),
-      judge: (system, prompt) => single(system, prompt, undefined, undefined, judgeModelId),
-      screenSecurity: async ({
-        payload,
-        modelId,
-        systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
-        signal,
-        recordModelCall,
-        recordLlmRequest,
-      }) =>
-        parseSecurityScreenVerdict(
-          await single(
-            systemPrompt,
-            payload,
-            signal,
-            {
-              recordModelCall,
-              ...(recordLlmRequest ? { recordLlmRequest } : {}),
-            },
-            modelId,
-          ),
-        ),
-      generateTitle: async (transcript) =>
-        sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
-      summarizeApproval: async (command, reason, purpose) =>
-        single(
-          "Explain this command in one plain-English sentence for an approver.",
-          [command, reason, purpose].filter(Boolean).join("\n"),
-        ),
+      ...oneShotModelUtilities(single, judgeModelId),
     },
   );
 }

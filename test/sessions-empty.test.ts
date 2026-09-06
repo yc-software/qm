@@ -94,7 +94,7 @@ test("a turn refused with 'session busy' does not surface a stranded shell", asy
 
   const outcome = await app.turn(dm("hello again", thread));
   assert.equal(outcome.status, "refused");
-  assert.match((outcome as { reason?: string }).reason ?? "", /busy/);
+  assert.equal((outcome as { refusalKind?: string }).refusalKind, "session_busy");
 
   const raw = await sessions.listByParticipant("U1");
   assert.equal(raw.find((s) => s.id === shell.id)?.hasEntries, false, "the shell exists, participant attached");

@@ -238,11 +238,11 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   if (!deps.keychain)
     return sendJson(res, 200, { scopeId: scope, people: [], credentials: [], grants: [], asks: [], enabled: false });
 
-  const [credentials, grants, asks, participants, adminGrants] = await Promise.all([
+  const [credentials, grants, asks, participantIds, adminGrants] = await Promise.all([
     deps.keychain.listAllMetadata(),
     deps.keychain.listGrants({}),
     deps.keychain.listAsks({}),
-    deps.sessions?.listParticipants() ?? Promise.resolve([]),
+    deps.sessions?.distinctParticipants() ?? Promise.resolve([]),
     deps.admin?.listGrants() ?? Promise.resolve([]),
   ]);
   const ids = new Set<string>([
@@ -251,7 +251,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     ...grants.map((g) => g.usedBy).filter((id): id is string => !!id),
     ...asks.map((a) => a.ownerId),
     ...asks.map((a) => a.requesterId),
-    ...participants.map((p) => p.principalId),
+    ...participantIds,
     ...adminGrants.map((g) => g.principalId),
   ]);
 
@@ -276,7 +276,15 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     pendingAskCount: asks.filter((a) => samePerson(a.ownerId, principalId) && a.status === "pending").length,
   }));
 
-  return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });
+  const tally = (await deps.auditLog?.tallyByResource?.("keychain.materialize")) ?? new Map<string, number>();
+  const useCountByGrant = new Map<string, number>();
+  for (const [resource, n] of tally) {
+    const m = /\(grant ([0-9a-f]+)\)$/.exec(resource);
+    if (m) useCountByGrant.set(m[1]!, (useCountByGrant.get(m[1]!) ?? 0) + n);
+  }
+  const grantsWithUse = grants.map((g) => ({ ...g, useCount: useCountByGrant.get(g.id) ?? 0 }));
+
+  return sendJson(res, 200, { scopeId: scope, people, credentials, grants: grantsWithUse, asks, enabled: true });
 }
 
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {
@@ -320,7 +328,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
   const turns = [...turnsBySession.values()].reduce((a, b) => a + b, 0);
 
   const summaries = mySessionIds.size
-    ? ((await deps.sessions?.scopeSessionSummaries(org, true, undefined, true, [...mySessionIds])) ?? [])
+    ? ((await deps.sessions?.scopeSessionSummaries(org, true, undefined, [...mySessionIds])) ?? [])
     : [];
   const conversations = summaries
     .sort((a, b) => b.lastActivity - a.lastActivity)

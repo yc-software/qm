@@ -9,7 +9,7 @@ test("collapsed sidebar is an in-flow rail, not a floating button", () => {
   assert.doesNotMatch(shell, /sidebar-peek-toggle/);
   assert.doesNotMatch(css, /sidebar-peek-toggle/);
   assert.match(css, /--rail-w: 50px/);
-  assert.match(css, /\.layout\.sidebar-closed \.sidebar \{\s*width: var\(--rail-w\);\s*\}/);
+  assert.match(css, /\.layout\.sidebar-closed \.sidebar \{\s*width: var\(--rail-w\);\s*padding-right: 8px;\s*\}/);
   assert.match(css, /\.sidebar \{[^}]*transition: width 0\.18s ease;/);
   assert.match(css, /body\.resizing-sidebar \.sidebar \{\s*transition: none;/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.sidebar \{\s*transition: none;/);
@@ -19,9 +19,10 @@ test("hidden sidebar innards are out of the focus order and keep their layout wh
   assert.match(css, /\.sidebar > :not\(\.brand\) \{\s*min-width: calc\(var\(--sidebar-w\) - 16px\);/);
   assert.match(
     css,
-    /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;\s*\}/,
+    /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\):not\(#sidebar-footer\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;\s*\}/,
   );
-  assert.doesNotMatch(css, /transition:[^;}]*visibility/);
+
+  assert.doesNotMatch(css.slice(0, css.indexOf("Mobile shell")), /transition:[^;}]*visibility/);
   assert.doesNotMatch(shell, /sidebar\.inert/);
 });
 
@@ -32,22 +33,36 @@ test("the collapsed rail keeps icon-only navigation instead of going empty", () 
   );
   assert.match(
     css,
-    /\.layout\.sidebar-closed #sidebar-top \.new-chat span,\s*\.layout\.sidebar-closed #sidebar-top \.navrow span,\s*\.layout\.sidebar-closed #sidebar-top \.nav-section-toggle,\s*\.layout\.sidebar-closed #sidebar-top \.section-label \{\s*display: none;/,
+    /\.layout\.sidebar-closed #sidebar-top \.navrow span,\s*\.layout\.sidebar-closed #sidebar-top \.section-label \{\s*display: none;/,
   );
-  assert.match(css, /\.layout\.sidebar-closed #sidebar-top \.nav-group\.collapsed \{[^}]*grid-template-rows: 1fr;/);
-  assert.match(
-    css,
-    /\.layout\.sidebar-closed #sidebar-top \.new-chat,\s*\.layout\.sidebar-closed #sidebar-top \.navrow \{\s*justify-content: center;/,
-  );
+  assert.match(css, /\.layout\.sidebar-closed #sidebar-top \.navrow \{\s*justify-content: center;/);
+
+  assert.match(css, /\.layout\.sidebar-closed #sidebar-footer \{\s*min-width: 0;\s*justify-content: center;\s*\}/);
+  assert.match(css, /\.layout\.sidebar-closed #sidebar-footer \.user-menu \{\s*display: none;\s*\}/);
   // Icon-only rows need tooltips to carry their labels.
-  assert.match(shell, /class="navrow[^`]*title=\$\{label\}/);
+  assert.match(shell, /class="navrow[^`]*\$\{tip\(sidebarOpen \? "" : label\)\}/);
 });
 
-test("narrow viewports keep the rail in flow and size it for touch + safe area", () => {
-  const narrow = css.slice(css.indexOf("@media (max-width: 860px)"));
-  assert.match(narrow, /--rail-w: calc\(max\(8px, env\(safe-area-inset-left\)\) \+ 52px\)/);
-  assert.match(narrow, /\.layout\.sidebar-closed \.sidebar \{\s*position: static;\s*box-shadow: none;/);
-  assert.match(narrow, /\.sidebar \{[^}]*transition: none;/);
+test("rail tooltips open beside the icons on first paint and on every toggle", () => {
+  assert.match(shell, /data-tip-placement=\$\{sidebarOpen \? "top" : "right"\}/);
+  assert.match(shell, /setAttribute\("data-tip-placement", open \? "top" : "right"\)/);
+});
+
+test("the collapse toggle's tooltip is pushed in step with the aria-label it mirrors", () => {
+  assert.match(shell, /btn\.setAttribute\("aria-label", collapseLabel\);\s*attachTooltip\(btn, collapseLabel\);/);
+});
+
+test("phone viewports swap the rail for a slide-over drawer with one floating menu button", () => {
+  const mobile = css.slice(css.indexOf("Mobile shell"));
+
+  assert.match(mobile, /\.layout\.sidebar-closed \.sidebar \{\s*transform: translateX\(-106%\);\s*visibility: hidden;/);
+  assert.match(mobile, /\.mobile-menu-btn \{\s*display: inline-flex;\s*position: absolute;/);
+
+  assert.match(mobile, /\.chat-topbar \{[^}]*padding-left: calc\(max\(4px, env\(safe-area-inset-left\)\) \+ 48px\);/);
+
+  assert.match(shell, /class="icon-btn sidebar-toggle mobile-menu-btn"[^`]*@click=\$\{toggleSidebar\}/);
+
+  assert.match(css, /\.mobile-menu-btn \{\s*display: none;\s*\}/);
 });
 
 test("per-view clearance hacks for the old floating button are gone", () => {

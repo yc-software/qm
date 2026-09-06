@@ -1,4 +1,5 @@
 import type { AttachmentMeta, ConversationTurn, ScopeId, Session, SessionEntry } from "../types.ts";
+import type { HarnessId } from "../model/pi-models.ts";
 import type {
   GapPhases,
   GapWork,
@@ -13,6 +14,13 @@ import type { OverheardEntryPayload } from "./replay.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
+
+export interface RuntimeChoice {
+  harnessId: HarnessId;
+  modelId: string;
+  effortLevel?: string;
+  fastMode?: boolean;
+}
 
 interface HarnessImage {
   mimeType: string;
@@ -73,10 +81,7 @@ export interface HarnessTurnInput {
   overheard?: OverheardEntryPayload[];
   attachments?: AttachmentMeta[];
   images?: HarnessImage[];
-  model?: string;
-  harness?: string;
-  thinkingLevel?: string;
-  fastMode?: boolean;
+  runtime?: Partial<RuntimeChoice>;
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
@@ -87,6 +92,7 @@ export interface HarnessTurnInput {
   history: SessionEntry[];
   tools: ToolContext;
   credentialExecServices?: readonly { service: string; binary: string }[];
+  commandCredentialHandles?: readonly string[];
   screenExternalContent?(input: {
     content: string;
     tool: string;
@@ -110,13 +116,18 @@ export interface HarnessTurnInput {
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
   onTextBlockStart?(): void;
-  screenToolResult?(tool: string, result: string, unscreenable: boolean): Promise<boolean | "unscreened">;
+  screenToolResult?(
+    tool: string,
+    result: string,
+    unscreenable: boolean,
+  ): Promise<boolean | "unscreened" | "quarantine_pending">;
 }
 
 export interface HarnessTurnResult {
   reply: string;
   silent?: boolean;
   stopped?: true;
+  stoppedTapeComplete?: true;
   pendingApprovals?: Array<{
     command: string;
     reason: string;
@@ -129,7 +140,6 @@ export interface HarnessTurnResult {
   modelCalls?: number;
   cacheUsage?: { cacheRead: number; cacheWrite: number; uncachedInput: number };
   compileMs?: number;
-  tapeWriteFailed?: boolean;
 }
 
 export interface HarnessDetectInput {
@@ -175,7 +185,8 @@ export interface HarnessModelUtilities {
 
 type HarnessControlTransport = "mock" | "in-process" | "sdk" | "http" | "json-rpc" | "api";
 type HarnessToolTransport = "mock" | "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
-type HarnessCapability = "abort" | "steer" | "images" | "thinking-level" | "fast-mode" | "provider-sessions";
+type HarnessCapability =
+  "abort" | "steer" | "images" | "thinking-level" | "fast-mode" | "provider-sessions" | "native-tape";
 
 export interface HarnessAdapterProfile {
   id: string;

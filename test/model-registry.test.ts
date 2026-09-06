@@ -13,6 +13,11 @@ import {
 } from "../src/model/pi-models.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 
+test("registry model identifiers are unique", () => {
+  const ids = MODEL_REGISTRY.map((model) => model.id);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
 test("every registry model resolves via pi-ai (nothing offered that turns can't serve)", () => {
   for (const m of MODEL_REGISTRY) {
     assert.ok(resolveModel(m.id), `registry model ${m.id} must resolve`);
@@ -122,7 +127,7 @@ test("web-turn gate refuses a keyless model cleanly, accepts it once the provide
 
 test("fast-mode support is registry-driven", () => {
   assert.equal(modelSupportsFastMode("claude-opus-4-8"), true);
-  assert.equal(modelSupportsFastMode("gpt-5.6-sol"), false);
+  assert.equal(modelSupportsFastMode("gpt-5.6-sol"), true);
   assert.equal(modelSupportsFastMode(undefined), false);
   assert.equal(modelSupportsFastMode("nonexistent-model"), false);
 });

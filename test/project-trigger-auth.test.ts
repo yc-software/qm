@@ -14,6 +14,7 @@ import { createControlService } from "../src/api/control-service.ts";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { runNowSettled } from "./support/settle.ts";
 
 const SECRET = "project-trigger-secret".repeat(3);
 
@@ -131,7 +132,7 @@ test("Project trigger access follows current membership while Slack-group owner 
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
 
-  await built.scheduler.runNow(projectCron.id);
+  await runNowSettled(built.scheduler, projectCron.id);
   assert.equal(
     (await built.crons.get(projectCron.id))?.enabled,
     false,

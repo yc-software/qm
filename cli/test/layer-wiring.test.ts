@@ -18,8 +18,6 @@ function makeDeployment(config: Record<string, unknown>, setup: (dir: string) =>
       services: ["core"],
       sandbox: {
         app: "wiretest-sandboxes",
-        image:
-          "registry.fly.io/wiretest-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
       },
       ...config,
     }),
@@ -115,7 +113,6 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
     {
       sandbox: {
         app: "wire-sandboxes",
-        image: "registry.fly.io/wire-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
         env: { TZ: "UTC" },
         secretEnv: ["COMPANY_API_TOKEN"],
       },
@@ -124,8 +121,6 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
   );
   try {
     const out = await plan(dir);
-    assert.match(out, /FLY_SANDBOX_APP_NAME/);
-    assert.match(out, /FLY_BASE_IMAGE/);
     assert.match(out, /FLY_RESIDENT_ENV_TZ/);
     assert.match(out, /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/);
   } finally {
@@ -137,7 +132,6 @@ test("a missing secretEnv value is warned, not invented", async () => {
   const dir = makeDeployment({
     sandbox: {
       app: "s",
-      image: "registry.fly.io/s@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
       secretEnv: ["NOPE_TOKEN"],
     },
   });

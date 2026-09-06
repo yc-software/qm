@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { createGzip, gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { json, readBody, cookie } from "../../chassis/src/http.ts";
+import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
@@ -32,12 +32,13 @@ const BASE_HTML = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"),
   "utf8",
 ).replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH);
+const BRAND_MARK = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/brand-mark.svg"));
 const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
 const ADMIN_CSP = [
   "default-src 'self'",
   `script-src 'sha256-${createHash("sha256").update(ADMIN_SCRIPT).digest("base64")}'`,
   "style-src 'unsafe-inline'",
-  "img-src 'self' data:",
+  "img-src 'self' data: https:", // https: so Slack workspace emoji previews (emoji.slack-edge.com) render
   "connect-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
@@ -56,6 +57,7 @@ async function fetchBrand(): Promise<OrgBranding> {
   return {
     ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
     ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
+    ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
     ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
   };
 }
@@ -64,26 +66,18 @@ async function refreshBrandNow(): Promise<void> {
   await brandCache.refreshNow();
   shellCache = null;
 }
-let shellCache: { key: string; html: string; gzip: Buffer; etag: string } | null = null;
-function brandedShell(branding: OrgBranding): { html: string; gzip: Buffer; etag: string } {
-  const key = JSON.stringify([branding.accent, branding.mark, branding.selfLabel]);
+type Shell = { key: string; html: string; gzip: Buffer; etag: string; gzipEtag: string };
+let shellCache: Shell | null = null;
+function brandedShell(branding: OrgBranding): Shell {
+  const key = JSON.stringify([branding.accent, branding.mark, branding.markUrl, branding.selfLabel]);
   if (shellCache?.key === key) return shellCache;
   const html = injectBranding(BASE_HTML, branding, { titleSuffix: "Admin" });
-  shellCache = {
-    key,
-    html,
-    gzip: gzipSync(html),
-    etag: `"${createHash("sha256").update(html).digest("hex").slice(0, 16)}"`,
-  };
+  const digest = createHash("sha256").update(html).digest("hex").slice(0, 16);
+  shellCache = { key, html, gzip: gzipSync(html), etag: `"${digest}"`, gzipEtag: `"${digest}-gzip"` };
   return shellCache;
 }
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
-
-function acceptsGzip(req: IncomingMessage): boolean {
-  const ae = req.headers["accept-encoding"];
-  return typeof ae === "string" && /\bgzip\b/.test(ae);
-}
 
 const cookiePrincipal = (req: IncomingMessage): string | null => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
@@ -127,8 +121,12 @@ async function forward(
       },
       ...(body ? { body } : {}),
     });
-    if (r.body && acceptsGzip(req)) {
-      res.writeHead(r.status, { "content-type": "application/json", "content-encoding": "gzip" });
+    if (r.body && gzipAccepted(req)) {
+      res.writeHead(r.status, {
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+        vary: "accept-encoding",
+      });
       const src = Readable.fromWeb(r.body as Parameters<typeof Readable.fromWeb>[0]);
       const gz = createGzip();
       src.on("error", () => res.destroy());
@@ -142,7 +140,7 @@ async function forward(
       src.pipe(gz).pipe(res);
       return;
     }
-    res.writeHead(r.status, { "content-type": "application/json" });
+    res.writeHead(r.status, { "content-type": "application/json", vary: "accept-encoding" });
     pipeBody(res, r.body);
   } catch (err) {
     console.error("[admin] core request failed:", String(err));
@@ -342,20 +340,28 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   const serveShell = async (): Promise<void> => {
     const shell = brandedShell(await brandCache.forRender());
-    if (req.headers["if-none-match"] === shell.etag) {
-      res.writeHead(304, { etag: shell.etag, "cache-control": "no-cache" });
+    const gz = gzipAccepted(req);
+    const etag = gz ? shell.gzipEtag : shell.etag;
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304, { etag, "cache-control": "no-cache", vary: "accept-encoding" });
       return void res.end();
     }
-    const gz = acceptsGzip(req);
+    const body = gz ? shell.gzip : Buffer.from(shell.html);
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
-      etag: shell.etag,
+      etag,
       "cache-control": "no-cache",
+      vary: "accept-encoding",
+      "content-length": String(body.length),
       ...(gz ? { "content-encoding": "gzip" } : {}),
     });
-    return void res.end(gz ? shell.gzip : shell.html);
+    return void res.end(body);
   };
   if (method === "GET" && pathname === "/") return serveShell();
+  if (method === "GET" && pathname === "/brand-mark.svg") {
+    res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" });
+    return void res.end(BRAND_MARK);
+  }
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
   if (method === "GET" && (pathname === "/api/me" || pathname === "/api/whoami")) {
@@ -479,7 +485,7 @@ export function startServer(): void {
   server.listen(PORT, () => {
     console.log(`[admin-plugin] http://localhost:${PORT}  → core ${CORE} (org=${ORG})`);
     console.warn(
-      "[admin-plugin] trusting the portal-synthesized admin cookie as identity — this app MUST stay private (no public http_service); reachable only through the private portal service.",
+      "[admin-plugin] trusting the portal-synthesized admin cookie as identity. This app MUST stay private (no public http_service); reachable only through the private portal service.",
     );
   });
 }

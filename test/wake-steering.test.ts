@@ -89,6 +89,37 @@ test("spine ON: a mid-turn DM message STEERS the live run instead of forking a s
   assert.equal(runs.filter((r) => r.sessionId === `dm:${channel}`).length, 1, "no second run enqueued for the DM");
 });
 
+test("a mid-turn message from a DIFFERENT person is attributed and its author durably recorded", async () => {
+  const built = freshApp();
+  const channel = "C_FOREIGN";
+  const root = "100.9";
+  const first = await built.app.turn(mention("@bot file the ticket", channel, root));
+  const liveRunId = first.runId!;
+
+  const second = await built.app.turn({
+    ...mention("you can use my linear key", channel, root),
+    actor: { externalId: "U_PAUL", displayName: "Paul" },
+  });
+  assert.equal(second.runId, liveRunId);
+  assert.equal(second.steered, true);
+
+  const signals = await built.signals.takePending(liveRunId);
+  assert.equal(signals[0]!.text, "Paul: you can use my linear key", "a foreign human steer names its author");
+  assert.deepEqual(
+    await built.signals.steerAuthors(liveRunId),
+    ["U_PAUL"],
+    "the steer author is durably recorded so keychain onBehalfOf can verify them",
+  );
+
+  const third = await built.app.turn(mention("also add a screenshot", channel, root));
+  assert.equal(third.steered, true);
+  assert.equal(
+    (await built.signals.takePending(liveRunId))[0]!.text,
+    "also add a screenshot",
+    "a steer from the turn's own actor stays unprefixed",
+  );
+});
+
 test("spine ON: a mid-turn message STEERS the live run instead of forking a second turn", async () => {
   const built = freshApp();
   const channel = "C1";
@@ -440,6 +471,22 @@ test("a same-key REDELIVERY of a live keyed turn never steers — it dedupes to 
   assert.equal(runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length, 1, "one run for the message");
 });
 
+test("an approval decision reusing the original send's key is never deduped against that turn", async () => {
+  const built = freshApp();
+  const keyed = { ...dm("run the risky thing", "D18"), idempotencyKey: "web:U1:gesture-18" };
+  const first = await built.app.turn(keyed);
+  const approved = await built.app.turn({
+    ...keyed,
+    approval: { requestId: "req-18", approved: true },
+  });
+  assert.notEqual(approved.runId, first.runId, "the approval enqueued its own run instead of replaying the old one");
+  const replayed = await built.app.turn({
+    ...keyed,
+    approval: { requestId: "req-18", approved: true },
+  });
+  assert.equal(replayed.runId, approved.runId, "a redelivered copy of the same decision deduped to its run");
+});
+
 test("a spawned worker turn never steers — a duplicate spawn DEDUPES at enqueue", async () => {
   const built = freshApp();
   const channel = "C15";
@@ -566,6 +613,29 @@ test("web's queue is durable and readable: core names the live run, then what wa
   assert.deepEqual(await built.app.withdrawRun("no-such-run"), { withdrawn: false, reason: "not_found" });
 });
 
+test("an automation wake queued behind a live turn stays out of the composer queue", async () => {
+  const built = freshApp();
+  const threadRef = "web:U1:wake";
+  const first = await built.app.turn(web("summarize the incident", threadRef));
+  await built.runs.claimById(first.runId!, "w1", 30_000);
+  const wake = await built.app.turn({
+    surface: "monitor",
+    actor,
+    conversation: { kind: "dm", threadRef, audience: [actor] },
+    text: '<wake reason="monitor" surface="monitor" process-id="p1" at="2026-09-02T00:00:00.000Z">…</wake>',
+    triggered: true,
+    async: true,
+  });
+  const typed = await built.app.turn(web("and who was paged", threadRef));
+
+  assert.notEqual(wake.runId, first.runId, "the wake is its own run, waiting behind the live turn");
+  assert.deepEqual(
+    (await built.app.activeRunForThread(threadRef))?.queued,
+    [{ runId: typed.runId!, text: "and who was paged" }],
+    "only what a person typed is offered back to them as a steerable, withdrawable queued message",
+  );
+});
+
 test("a queued web turn runs on its own — the sender's client need never come back", async () => {
   const built = freshApp();
   const threadRef = "web:U1:unattended";
@@ -671,9 +741,10 @@ test("signalRun: a steer already terminal at send is refused up front", async ()
 function completeOnSend(built: ReturnType<typeof freshApp>): void {
   const origSend = built.signals.send.bind(built.signals);
   built.signals.send = async (runId, signal) => {
-    await origSend(runId, signal);
+    const sent = await origSend(runId, signal);
     const claimed = await built.runs.claim("w1", 30_000);
     if (claimed) await built.runs.complete(claimed.id, claimed.leaseToken!, { status: "silent" });
+    return sent;
   };
 }
 

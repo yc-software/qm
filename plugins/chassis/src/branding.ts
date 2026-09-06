@@ -1,6 +1,7 @@
 export interface OrgBranding {
   accent?: string;
   mark?: string;
+  markUrl?: string;
   selfLabel?: string;
 }
 
@@ -59,12 +60,20 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
 const escapeAttr = (v: string): string =>
   v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+const CSS_HOSTILE = /[<>{}"'();\\]/;
+const cssSafe = (v: string | undefined): v is string => !!v && !CSS_HOSTILE.test(v);
+const cssUrlSafe = (v: string | undefined): v is string => cssSafe(v) && /^https:\/\/\S+$/.test(v);
+
 export function injectBranding(html: string, branding: OrgBranding, opts?: { titleSuffix?: string }): string {
-  const { accent, mark, selfLabel } = branding;
+  const { accent, mark, markUrl, selfLabel } = branding;
   let out = html;
   if (selfLabel) {
     out = out.replace(
       /(<meta name="brand-self-label" content=")[^"]*(")/,
+      (_m, pre: string, post: string) => `${pre}${escapeAttr(selfLabel)}${post}`,
+    );
+    out = out.replace(
+      /(<meta name="apple-mobile-web-app-title" content=")[^"]*(")/,
       (_m, pre: string, post: string) => `${pre}${escapeAttr(selfLabel)}${post}`,
     );
     if (opts?.titleSuffix) {
@@ -72,9 +81,11 @@ export function injectBranding(html: string, branding: OrgBranding, opts?: { tit
       out = out.replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`);
     }
   }
-  const decls = [...(accent ? [`--brand-accent:${accent}`] : []), ...(mark ? [`--brand-mark:"${mark}"`] : [])].join(
-    ";",
-  );
+  const decls = [
+    ...(cssSafe(accent) ? [`--brand-accent:${accent}`] : []),
+    ...(cssSafe(mark) ? [`--brand-mark:"${mark}"`] : []),
+    ...(cssUrlSafe(markUrl) ? [`--brand-mark-image:url("${markUrl}")`] : []),
+  ].join(";");
   if (decls) out = out.replace("</head>", () => `<style>:root{${decls}}</style></head>`);
   return out;
 }

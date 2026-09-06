@@ -13,7 +13,7 @@ test("a mid-turn Enter queues the message — it no longer steers the running tu
   assert.match(composer, /if \(agent\.state\.isStreaming\) return queueDraft\(agent\);/);
   assert.doesNotMatch(composer, /isStreaming\) return sendSteer\(/);
   assert.match(composer, /placeholder = "Queue a message for after this turn…"/);
-  assert.match(composer, /title="Queue for after this turn"/);
+  assert.match(composer, /\$\{tip\("Queue for after this turn"\)\}/);
 });
 
 // The whole point of the rewrite: the queue is core's, not the browser's. A queued message is a
@@ -33,10 +33,13 @@ test("the queue lives in core, not in the browser", () => {
     /const queuedRuns = new Map<string, QueuedRun\[\]>\(\);/,
     "what the composer holds is a view of core's queue, rebuilt from core — not a store",
   );
-  assert.match(composer, /const queued = await queueTurn\(threadRef, text, agent, ctx\.chat\.currentTurnOptions\);/);
+  assert.match(
+    composer,
+    /const queued = await queueTurn\(threadRef, text, agent, ctx\.chat\.currentTurnOptions, idempotencyKey, attachments\);/,
+  );
   assert.match(
     bridge,
-    /export async function queueTurn\([\s\S]{0,600}?api<\{ runId\?: string \}>\("\/api\/turn"/,
+    /export async function queueTurn\([\s\S]{0,600}?api<\{ status\?: string; runId\?: string; reason\?: string \}>\("\/api\/turn"/,
     "queuing is an ordinary turn submission; core enqueues it behind the live run",
   );
 });
@@ -46,8 +49,14 @@ test("a queued turn carries the same model, effort and scope a typed one would",
   const body = bridge.slice(bridge.indexOf("function turnRequestBody"));
   assert.match(body, /thinkingLevel/);
   assert.match(body, /scopeId: turnOptions\.scopeId/);
-  assert.match(bridge, /\.\.\.turnRequestBody\(threadRef, text, model, agent, getTurnOptions, attachments\),/);
-  assert.match(bridge, /turnRequestBody\(threadRef, text, agent\.state\.model, agent, getTurnOptions\)/);
+  assert.match(
+    bridge,
+    /\.\.\.turnRequestBody\(threadRef, text, model, agent, getTurnOptions, \{ idempotencyKey, attachments \}\),/,
+  );
+  assert.match(
+    bridge,
+    /turnRequestBody\(threadRef, text, agent\.state\.model, agent, getTurnOptions, \{ idempotencyKey, attachments \}\)/,
+  );
 });
 
 // Found in live QA: when the Steer control was swapped in and out of an existing strip, a tab that
@@ -60,7 +69,11 @@ test("the Steer control's presence is fixed for the conversation; only enablemen
     composer.indexOf("function queuedStrip"),
     composer.indexOf("function composerApprovalPanel"),
   );
-  assert.match(strip, /\?disabled=\$\{!steerable\}/, "an unusable Steer is disabled, never removed");
+  assert.match(
+    strip,
+    /\?disabled=\$\{!steerable \|\| q\.hasAttachments\}/,
+    "an unusable Steer is disabled, never removed",
+  );
   assert.doesNotMatch(
     strip,
     /steerable\s*\?\s*html`<button/,
@@ -121,8 +134,13 @@ test("Steer withdraws the queued run before it signals, and only then shows the 
   );
   assert.match(
     fn,
-    /catch \(err\) \{[\s\S]{0,600}?Could not steer the running task[\s\S]{0,600}?await enqueueTurn\(agent, threadRef, queued\.text\)/,
+    /catch \(err\) \{[\s\S]{0,1400}?Could not steer the running task[\s\S]{0,600}?await enqueueTurn\(agent, threadRef, queued\.text\)/,
     "a steer that never reached core puts the message back on the queue as its own turn",
+  );
+  assert.match(
+    fn,
+    /if \(steerSessionId && \(await verifySteerDelivered\(steerSessionId, queued\.text, sentAt, undefined, sinceSeq\)\)\)[\s\S]{0,120}?return ctx\.chat\.drawActiveChat\(agent\)/,
+    "an ambiguous failure verifies the steer landed before it would re-enqueue",
   );
 });
 
@@ -175,14 +193,10 @@ test("the queued strip sits behind and outside the composer form", () => {
   assert.match(queuedRule, /width: min\(calc\(var\(--content-w\) - 24px\), calc\(100% - 56px\)\);/);
   assert.match(queuedRule, /margin: 0 auto -10px;/);
   assert.match(composerRule, /position: relative;\s*z-index: 1;/);
-  const midWidth = shell.slice(
-    shell.indexOf("@container chat (max-width: 860px)"),
-    shell.indexOf("@container chat (max-width: 470px)"),
-  );
-  const narrow = shell.slice(
-    shell.indexOf("@container chat (max-width: 470px)"),
-    shell.indexOf('[data-density="card"]', shell.indexOf("@container chat (max-width: 470px)")),
-  );
+  const midStart = shell.indexOf("@container chat (max-width: 860px)");
+  const narrowStart = shell.indexOf("@container chat (max-width: 470px)", midStart);
+  const midWidth = shell.slice(midStart, narrowStart);
+  const narrow = shell.slice(narrowStart, shell.indexOf('[data-density="card"]', narrowStart));
   assert.match(
     midWidth,
     /\.queued-strip \{[^}]*margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);[^}]*margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);[^}]*\}/,
@@ -205,7 +219,7 @@ test("settling a turn follows the next queued run instead of sending it", () => 
   assert.doesNotMatch(fn, /queueTurn/, "it never submits anything");
   assert.match(
     fn,
-    /await \(recorded \? agent\.continue\(\) : agent\.prompt\(next!\.text\)\)/,
+    /await \(next && !recorded \? agent\.prompt\(next\.text\) : agent\.continue\(\)\)/,
     "an already-recorded turn is resumed, never prompted a second time onto the screen",
   );
   assert.match(fn, /await refreshTranscriptFromEntries\(agent\)/);

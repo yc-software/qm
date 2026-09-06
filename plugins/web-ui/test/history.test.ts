@@ -378,6 +378,28 @@ test("a hidden proactive-opener user entry never renders, but its assistant gree
   assert.equal((msgs[0] as { role?: string }).role, "assistant");
 });
 
+test("a materialized delivery entry (cron reply written into the thread) renders as an assistant reply", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "remind me later" }, createdAt: 100 },
+    { type: "assistant", payload: { text: "will do" }, createdAt: 110 },
+    {
+      type: "assistant",
+      payload: {
+        text: "Reminder: standup in 10 minutes",
+        deliveryKey: "agent:main:cron:c1:100",
+        via: "cron",
+      },
+      createdAt: 200,
+      seq: 2,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal(msgs.length, 3, "user + reply + delivered reminder");
+  const delivered = msgs[2] as { role?: string; content?: Array<{ text?: string }> };
+  assert.equal(delivered.role, "assistant");
+  assert.equal(delivered.content?.[0]?.text, "Reminder: standup in 10 minutes");
+});
+
 test("a durable turn_failure entry renders like the live inline error (survives reload)", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "how did it go?" }, createdAt: 100 },
@@ -393,6 +415,63 @@ test("a durable turn_failure entry renders like the live inline error (survives 
   assert.equal(err.role, "assistant");
   assert.equal(err.stopReason, "error");
   assert.equal(err.errorMessage, "API integrators: you can reduce refusals…");
+});
+
+test("user entries carry the stored speaker name and slack ts onto the rebuilt message", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "hi", name: "Alice Example", ts: "100.1" }, createdAt: 100 },
+    { type: "user", payload: { text: "anonymous web message" }, createdAt: 110 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const [slack, web] = msgs as Array<{ speaker?: string; ts?: string }>;
+  assert.equal(slack?.speaker, "Alice Example");
+  assert.equal(slack?.ts, "100.1");
+  assert.equal(web?.speaker, undefined);
+  assert.equal(web?.ts, undefined);
+});
+
+test("a message_revision marker renders as a system note and badges the original bubble", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "original", name: "Alice Example", ts: "100.1" }, createdAt: 100 },
+    { type: "assistant", payload: { text: "reply" }, createdAt: 110 },
+    {
+      type: "system",
+      payload: { kind: "message_revision", action: "edited", ts: "100.1", text: "fixed", name: "Alice Example" },
+      createdAt: 120,
+    },
+    {
+      type: "system",
+      payload: { kind: "message_revision", action: "deleted", ts: "100.1", name: "Alice Example" },
+      createdAt: 130,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal(msgs.length, 4, "user + reply + edit note + delete note");
+  const original = msgs[0] as { edited?: boolean; deleted?: boolean };
+  assert.equal(original.edited, true);
+  assert.equal(original.deleted, true);
+  const note = msgs[2] as { role?: string; action?: string; content?: string; speaker?: string; timestamp?: number };
+  assert.equal(note.role, "system-note");
+  assert.equal(note.action, "edited");
+  assert.equal(note.content, "fixed");
+  assert.equal(note.speaker, "Alice Example");
+  assert.equal(note.timestamp, 120);
+  assert.equal((msgs[3] as { action?: string }).action, "deleted");
+});
+
+test("a revision marker whose original message is outside the window still renders as a note", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "later message", ts: "200.0" }, createdAt: 200 },
+    {
+      type: "system",
+      payload: { kind: "message_revision", action: "deleted", ts: "100.1" },
+      createdAt: 210,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal(msgs.length, 2);
+  assert.equal((msgs[0] as { deleted?: boolean }).deleted, undefined, "the wrong bubble is never badged");
+  assert.equal((msgs[1] as { role?: string }).role, "system-note");
 });
 
 test("other system entries (file events, context summaries) still never render", () => {
@@ -495,6 +574,71 @@ test("delivery entries attach openable files to the preceding assistant message"
   assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
     { name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" },
   ]);
+});
+
+test("an attach tool result attaches openable files to the turn's assistant message", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "make a report" }, createdAt: 100 },
+    { type: "tool_call", payload: { tool: "attach", files: ["report.md"], callId: "c1" }, createdAt: 110, seq: 2 },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "attach",
+        ok: true,
+        callId: "c1",
+        files: [{ name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId: "art-9" }],
+      },
+      createdAt: 111,
+      seq: 3,
+      parentSeq: 2,
+    },
+    { type: "assistant", payload: { text: "Here it is." }, createdAt: 120 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
+    { name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId: "art-9" },
+  ]);
+});
+
+test("re-attaching a path renders one chip, not two", () => {
+  const attachResult = (callId: string, artifactId: string, seq: number): SessionEntry => ({
+    type: "tool_result",
+    payload: {
+      tool: "attach",
+      ok: true,
+      callId,
+      files: [{ name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId }],
+    },
+    createdAt: 110 + seq,
+    seq,
+    parentSeq: seq - 1,
+  });
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "make a report" }, createdAt: 100 },
+    attachResult("c1", "art-draft", 3),
+    attachResult("c2", "art-fixed", 5),
+    { type: "assistant", payload: { text: "Here it is." }, createdAt: 120 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
+    { name: "report.md", mimetype: "text/markdown", sizeBytes: 12, artifactId: "art-fixed" },
+  ]);
+});
+
+test("a failed attach tool result attaches no files", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "make a report" }, createdAt: 100 },
+    {
+      type: "tool_result",
+      payload: { tool: "attach", ok: false, callId: "c1" },
+      createdAt: 111,
+      seq: 3,
+      parentSeq: 2,
+    },
+    { type: "assistant", payload: { text: "I could not find it." }, createdAt: 120 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal((msgs[1] as AssistantWork).deliveredFiles, undefined);
 });
 
 test("delivery-only turns still rebuild an assistant message for the file chips", () => {
@@ -885,7 +1029,15 @@ test("a posted turn that closes empty is NOT promoted — the post bubble is alr
 
 test("a turn that closed empty after narrating surfaces the last narration as the reply", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] fetch done", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>fetch done</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     {
       type: "text",
       payload: { text: "All benign — building the replay harness." },
@@ -927,7 +1079,15 @@ test("a turn that closed empty after narrating surfaces the last narration as th
 
 test("a delivered-silence turn (finish_silently → silent:true) stays collapsed — no promotion", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] still running", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>still running</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     { type: "text", payload: { text: "Heartbeat check." }, createdAt: 110, seq: 2, parentSeq: 1 },
     {
       type: "tool_call",
@@ -1054,7 +1214,15 @@ test("a still-running turn (no closing entry yet) is not promoted", () => {
 
 test("a closed empty turn with no narration stays a bare work row", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] tick", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>tick</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     { type: "tool_call", payload: { tool: "execute", command: "tail log" }, createdAt: 110, seq: 2, parentSeq: 1 },
     { type: "tool_result", payload: { tool: "execute", code: 0 }, createdAt: 120, seq: 3, parentSeq: 2 },
     { type: "assistant", payload: { text: "" }, createdAt: 130, seq: 4 },
@@ -1069,7 +1237,15 @@ test("a closed empty turn with no narration stays a bare work row", () => {
 
 test("a mid-turn hidden entry (resume/wake note) does not split the turn; promotion still fires", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] fetch done", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>fetch done</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     { type: "text", payload: { text: "Applying the fixes." }, createdAt: 110, seq: 2, parentSeq: 1 },
     { type: "tool_call", payload: { tool: "execute", command: "node apply.js" }, createdAt: 120, seq: 3, parentSeq: 2 },
     { type: "tool_result", payload: { tool: "execute", code: 0 }, createdAt: 130, seq: 4, parentSeq: 3 },
@@ -1093,7 +1269,15 @@ test("a mid-turn hidden entry (resume/wake note) does not split the turn; promot
 
 test("a turn resumed past a hidden note renders as one block with the real reply", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "[background job update] fetch done", hidden: true }, createdAt: 100, seq: 1 },
+    {
+      type: "user",
+      payload: {
+        text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>fetch done</why></wake>',
+        hidden: true,
+      },
+      createdAt: 100,
+      seq: 1,
+    },
     {
       type: "tool_call",
       payload: { tool: "execute", command: "node rebuild.js" },

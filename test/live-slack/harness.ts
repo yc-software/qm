@@ -28,6 +28,10 @@ export function liveRunExitCode(failures: number, observational: boolean): 0 | 1
   return failures > 0 && !observational ? 1 : 0;
 }
 
+export function releaseBlockers<T extends Pick<ScenarioResult, "status">>(results: readonly T[]): T[] {
+  return results.filter((result) => result.status !== "pass");
+}
+
 export type TimelineSnapshot = ReturnType<Timeline["toJSON"]>;
 
 export interface Env {

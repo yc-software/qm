@@ -3,7 +3,7 @@ import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
 import { supportsBlobStaging, type Sandbox, type SandboxHandle } from "./sandbox.ts";
 
-function translateScript(toHome: string, fromHome: string): string {
+export function translateScript(toHome: string, fromHome: string): string {
   const H = shq(toHome);
   const FROM = fromHome.replace(/\/+$/, "");
   const pat = FROM.replace(/[.[\]*^$\\#]/g, "\\$&");
@@ -34,6 +34,40 @@ export interface CopyHomeResult {
   destFiles: number;
 }
 
+export interface PackedHome {
+  tarPath: string;
+  tarRel: string;
+  sha: string;
+  bytes: number;
+  sourceFiles: number;
+}
+
+export async function packHome(
+  fromSandbox: Sandbox,
+  fromHandle: SandboxHandle,
+  fromHome: string,
+  timeoutMs: number,
+): Promise<PackedHome> {
+  const uid = randomUUID();
+  const tarPath = `/tmp/.home-${uid}.tgz`;
+  const H = shq(fromHome);
+  const packed = await fromSandbox.run(
+    fromHandle,
+    `cd ${H} && tar czf ${tarPath} . 2>/dev/null; rc=$?; [ "$rc" -le 1 ] || exit "$rc"; sha256sum ${tarPath} | cut -d' ' -f1 && wc -c < ${tarPath} && find . -type f | wc -l`,
+    { timeoutMs },
+  );
+  if (packed.code !== 0)
+    throw new Error(`packHome: source tar failed (${packed.code}): ${(packed.stderr || packed.stdout).slice(0, 200)}`);
+  const [shaLine = "", sizeLine = "", filesLine = ""] = packed.stdout.trim().split("\n");
+  const sha = shaLine.trim();
+  const bytes = Number.parseInt(sizeLine.trim(), 10);
+  const sourceFiles = Number.parseInt(filesLine.trim(), 10);
+  if (!/^[0-9a-f]{64}$/.test(sha) || !Number.isFinite(bytes) || !Number.isFinite(sourceFiles)) {
+    throw new Error(`packHome: unreadable source manifest: ${packed.stdout.slice(0, 200)}`);
+  }
+  return { tarPath, tarRel: posix.relative(fromHandle.rootDir, tarPath), sha, bytes, sourceFiles };
+}
+
 export interface CopyHomeArgs {
   fromSandbox: Sandbox;
   fromHandle: SandboxHandle;
@@ -47,31 +81,20 @@ export interface CopyHomeArgs {
 export async function copyHome(args: CopyHomeArgs): Promise<CopyHomeResult> {
   const { fromSandbox, fromHandle, fromHome, toSandbox, toHandle, toHome } = args;
   const timeoutMs = (args.timeoutSec ?? 900) * 1000;
-  const uid = randomUUID();
-  const tarPath = `/tmp/.home-${uid}.tgz`;
-  const H = shq(fromHome);
   const T = shq(toHome);
-  const fromRel = posix.relative(fromHandle.rootDir, tarPath);
+  const {
+    tarPath,
+    tarRel: fromRel,
+    sha,
+    bytes,
+    sourceFiles,
+  } = await packHome(fromSandbox, fromHandle, fromHome, timeoutMs);
   const toRel = posix.relative(toHandle.rootDir, tarPath);
 
-  const packed = await fromSandbox.run(
-    fromHandle,
-    `cd ${H} && tar czf ${tarPath} . 2>/dev/null && sha256sum ${tarPath} | cut -d' ' -f1 && wc -c < ${tarPath} && find . -type f | wc -l`,
-    { timeoutMs },
-  );
-  if (packed.code !== 0)
-    throw new Error(`copyHome: source tar failed (${packed.code}): ${(packed.stderr || packed.stdout).slice(0, 200)}`);
-  const [shaLine = "", sizeLine = "", filesLine = ""] = packed.stdout.trim().split("\n");
-  const sha = shaLine.trim();
-  const bytes = Number.parseInt(sizeLine.trim(), 10);
-  const sourceFiles = Number.parseInt(filesLine.trim(), 10);
-  if (!/^[0-9a-f]{64}$/.test(sha) || !Number.isFinite(bytes) || !Number.isFinite(sourceFiles)) {
-    throw new Error(`copyHome: unreadable source manifest: ${packed.stdout.slice(0, 200)}`);
-  }
-
   if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
-    const blobId = await fromSandbox.stageOut(fromHandle, fromRel);
-    await toSandbox.stageIn(toHandle, toRel, blobId);
+    const stageOpts = { timeoutSec: timeoutMs / 1000 };
+    const blobId = await fromSandbox.stageOut(fromHandle, fromRel, stageOpts);
+    await toSandbox.stageIn(toHandle, toRel, blobId, stageOpts);
   } else {
     const tarBytes = await fromSandbox.readFileBytes(fromHandle, fromRel);
     if (!tarBytes) throw new Error("copyHome: source tar vanished before read");

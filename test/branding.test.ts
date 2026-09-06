@@ -24,6 +24,19 @@ test("sanitizeBranding strips template braces and control characters from every 
   assert.equal(sanitizeBranding({ selfLabel: "  ", orgName: "{{}}" }), undefined);
 });
 
+test("sanitizeBranding accepts only https mark image urls that cannot break out of a CSS declaration", () => {
+  assert.deepEqual(sanitizeBranding({ markUrl: "https://cdn.example.com/icon.png" }), {
+    markUrl: "https://cdn.example.com/icon.png",
+  });
+  assert.equal(sanitizeBranding({ markUrl: "http://cdn.example.com/icon.png" }), undefined);
+  assert.equal(sanitizeBranding({ markUrl: "javascript:alert(1)" }), undefined);
+  assert.equal(sanitizeBranding({ markUrl: 'https://a/");background:url("evil' }), undefined);
+  assert.equal(sanitizeBranding({ markUrl: "https://a/x;color:red" }), undefined);
+  assert.equal(sanitizeBranding({ markUrl: "https://a/</style><script>alert(1)</script>" }), undefined);
+  assert.equal(sanitizeBranding({ markUrl: "https://a/ b" }), undefined);
+  assert.equal(sanitizeBranding({ markUrl: `https://a/${"x".repeat(500)}` }), undefined);
+});
+
 test("resolveBranding prefers the store per field and fills the rest from the default", async () => {
   const config = { getBrandingDurable: async () => ({ selfLabel: "storebot" }) };
   assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot", orgName: "Env Org" }), {

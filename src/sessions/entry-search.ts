@@ -1,6 +1,7 @@
-import type { SessionEntry } from "../types.ts";
+import type { EntryType, SessionEntry } from "../types.ts";
 
 export const SEARCH_HIT_LIMIT = 40;
+export const SEARCHABLE_ENTRY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["user", "assistant", "text"]);
 const MAX_TERMS = 8;
 
 /** Lowercased alphanumeric terms, in query order — the shared tokenizer for both stores. */

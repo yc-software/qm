@@ -93,6 +93,34 @@ test("team grant: usable when every member is on the team, fails closed otherwis
   assert.deepEqual(slugs(oneOutsider), []);
 });
 
+test("channel grant: usable in that channel's conversations regardless of who is present, nowhere else", async () => {
+  const acl = await aclWith([scopeId("channel", "C1")]);
+  const inChannel = await acl.grantsOfKind(
+    "service-cred",
+    [P("U1"), P("U2"), P("U3")],
+    scopeId("channel", "C1"),
+    ORG,
+    principalEntitledToScope,
+  );
+  assert.deepEqual(slugs(inChannel), ["x"]);
+  const otherChannel = await acl.grantsOfKind(
+    "service-cred",
+    [P("U1"), P("U2")],
+    scopeId("channel", "C2"),
+    ORG,
+    principalEntitledToScope,
+  );
+  assert.deepEqual(slugs(otherChannel), []);
+  const memberDm = await acl.grantsOfKind(
+    "service-cred",
+    [P("U1")],
+    scopeId("personal", "U1"),
+    ORG,
+    principalEntitledToScope,
+  );
+  assert.deepEqual(slugs(memberDm), []);
+});
+
 test("empty audience is entitled to nothing (fail closed)", async () => {
   const acl = await aclWith([ORG]);
   assert.deepEqual(

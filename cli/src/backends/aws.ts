@@ -50,7 +50,12 @@ import {
   streamLabeled,
 } from "../util.ts";
 import { doctorCommon } from "./doctor.ts";
-import { awsObjectStoreBucket, declaredVariables, terraformVarsDrift } from "../terraform.ts";
+import {
+  assertTerraformScaffoldSupportsConfig,
+  awsObjectStoreBucket,
+  declaredVariables,
+  terraformVarsDrift,
+} from "../terraform.ts";
 import {
   currentDeploymentLayerState,
   deploymentLayerBody,
@@ -91,6 +96,23 @@ export interface AwsUpOpts {
   only?: string[];
   sandboxDir?: string;
   envFile?: string;
+  buildOnly?: boolean;
+  candidate?: string;
+  candidateOut?: string;
+  inactive?: boolean;
+}
+
+interface AwsMigrationService {
+  status?: string;
+  launchType?: string;
+  platformVersion?: string;
+  networkConfiguration?: {
+    awsvpcConfiguration?: {
+      subnets?: string[];
+      securityGroups?: string[];
+      assignPublicIp?: string;
+    };
+  };
 }
 
 export interface EcsTaskDefinition {
@@ -119,6 +141,7 @@ function awsTopology(
   configDir: string,
 ): { aws: AwsConfig; workloads: string[]; plugins: ResolvedPlugin[] } {
   const aws = requireAws(config);
+  assertTerraformScaffoldSupportsConfig(config, configDir);
   const discovered = discoverPlugins(configDir, config);
   if (discovered.errors.length) throw new CliError(discovered.errors.join("\n"));
   const workloads = [...runnableServices(config.services), ...discovered.plugins.map((plugin) => plugin.name)];
@@ -269,8 +292,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         ...stores,
       });
     } else {
-      delete env.FLY_BASE_IMAGE;
-      delete env.FLY_SANDBOX_APP_NAME;
       Object.assign(env, {
         SANDBOX_BACKEND: "aws",
         AWS_SANDBOX_REGION: aws.region,
@@ -312,7 +333,9 @@ function workloadEnvironment(config: QmConfig, workload: string): Record<string,
   const plugin = config.plugins.find((entry) => entry.name === workload);
   return Object.fromEntries(
     Object.entries({
-      CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080`,
+      ...(plugin?.coreAccess === false
+        ? {}
+        : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
       ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
       ...plugin?.env,
       PORT: "8080",
@@ -324,7 +347,12 @@ function workloadSecrets(config: QmConfig, workload: string, available?: Record<
   const secrets = secretsForService(config, workload).filter(
     (secret) => secret.required || Boolean(available?.[secret.name]),
   );
-  if (!isServiceName(workload) && !secrets.some((secret) => secret.name === "CORE_SIGNING_SECRET")) {
+  const plugin = config.plugins.find((entry) => entry.name === workload);
+  if (
+    !isServiceName(workload) &&
+    plugin?.coreAccess !== false &&
+    !secrets.some((secret) => secret.name === "CORE_SIGNING_SECRET")
+  ) {
     const signing = computedSecrets(config).find((secret) => secret.name === "CORE_SIGNING_SECRET");
     if (signing) return [...secrets, signing];
   }
@@ -346,12 +374,12 @@ export function renderTaskDefinition(
   const aws = requireAws(config);
   const spec = aws.services[service];
   if (!spec) throw new CliError(`aws.services.${service} is missing`);
-  if (service === "core" && usesFlySandboxes(config)) resolveAwsSandboxPin(config, () => undefined);
   const internalPort = isServiceName(service) ? serviceDef(service).docker.internalPort : 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
-  const taskRoleArn =
-    spec.taskRoleArn ??
-    `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-${service === "core" ? "core-task" : "task"}`;
+  const managedTaskRole = spec.assumeRoleArns?.length
+    ? `${aws.cluster}-${service}-task`
+    : `${aws.cluster}-${service === "core" ? "core-task" : "task"}`;
+  const taskRoleArn = spec.taskRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${managedTaskRole}`;
   const secrets = workloadSecrets(config, service, secretArns)
     .flatMap((secret) =>
       containerSecretNames(service, secret).map((name) => ({
@@ -393,7 +421,15 @@ export function renderTaskDefinition(
         essential: true,
         environment: Object.entries(workloadEnvironment(config, service)).map(([name, value]) => ({ name, value })),
         secrets,
-        portMappings: [{ containerPort: internalPort, hostPort: internalPort, protocol: "tcp" }],
+        portMappings: [
+          {
+            name: service,
+            containerPort: internalPort,
+            hostPort: internalPort,
+            protocol: "tcp",
+            appProtocol: "http",
+          },
+        ],
         ...(healthCheck ? { healthCheck } : {}),
         ...(spec.stopTimeout !== undefined ? { stopTimeout: spec.stopTimeout } : {}),
         logConfiguration: {
@@ -581,11 +617,173 @@ function publishWorkloadImage(
   return `${ecrHost(aws)}/${spec.ecrRepository}@${digest}`;
 }
 
-function secretArns(config: QmConfig): Record<string, string> {
+function releaseCandidate(config: QmConfig, path: string): AwsReleaseCandidate {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new CliError(`could not read AWS release candidate ${path}: ${errMessage(error)}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new CliError(`AWS release candidate ${path} is not an object`);
+  }
+  const candidate = parsed as Partial<AwsReleaseCandidate>;
+  const aws = requireAws(config);
+  if (
+    candidate.contract !== 1 ||
+    candidate.accountId !== aws.accountId ||
+    candidate.region !== aws.region ||
+    typeof candidate.label !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(candidate.label) ||
+    !candidate.images ||
+    typeof candidate.images !== "object" ||
+    Array.isArray(candidate.images) ||
+    !candidate.imageProvenance ||
+    typeof candidate.imageProvenance !== "object" ||
+    Array.isArray(candidate.imageProvenance)
+  ) {
+    throw new CliError(`AWS release candidate ${path} has an invalid contract or targets another AWS account/region`);
+  }
+  for (const [workload, image] of Object.entries(candidate.images)) {
+    const provenance = candidate.imageProvenance[workload];
+    const validProvenance =
+      provenance?.kind === "configured"
+        ? typeof provenance.source === "string"
+        : provenance?.kind === "source-build" &&
+          (provenance.source === undefined || provenance.source === "plugin" || provenance.source === "checkout") &&
+          (provenance.gitCommit === undefined || typeof provenance.gitCommit === "string") &&
+          (provenance.dirty === undefined || typeof provenance.dirty === "boolean");
+    if (
+      !aws.services[workload] ||
+      typeof image !== "string" ||
+      !isPinnedWorkloadImage(config, workload, image) ||
+      !validProvenance
+    ) {
+      throw new CliError(`AWS release candidate ${path} has an invalid ${workload} image or provenance`);
+    }
+  }
+  return candidate as AwsReleaseCandidate;
+}
+
+export async function awsMigrateCandidate(config: QmConfig, configDir: string, candidatePath: string): Promise<void> {
+  const { aws, workloads } = awsTopology(config, configDir);
+  if (!workloads.includes("core")) throw new CliError("AWS migrations require the core workload");
+  const candidate = releaseCandidate(config, candidatePath);
+  const coreImage = candidate.images.core;
+  if (!coreImage) throw new CliError(`AWS release candidate ${candidatePath} does not contain core`);
+  assertAwsCallerAccount(aws);
+  await withAwsLease(aws, async () => {
+    if (aws.predeployDbSnapshot === false)
+      note("pre-migration database restore point: disabled (aws.predeployDbSnapshot)");
+    else assertPredeployDbRestorePoint(config);
+    await runAwsCandidateMigration(config, coreImage, candidate.label);
+  });
+}
+
+async function runAwsCandidateMigration(config: QmConfig, coreImage: string, label: string): Promise<void> {
+  const aws = requireAws(config);
+  const spec = aws.services.core;
+  if (!spec) throw new CliError("AWS migrations require the core workload");
+  const service = awsJson<{ services?: AwsMigrationService[]; failures?: Array<{ arn?: string; reason?: string }> }>(
+    aws,
+    ["ecs", "describe-services", "--cluster", aws.cluster, "--services", spec.ecsService],
+  );
+  if (service.failures?.length || service.services?.[0]?.status !== "ACTIVE") {
+    throw new CliError(`AWS core service ${spec.ecsService} is not active`);
+  }
+  const live = service.services[0]!;
+  const network = live.networkConfiguration?.awsvpcConfiguration;
+  if (
+    live.launchType !== "FARGATE" ||
+    !network?.subnets?.length ||
+    !network.securityGroups?.length ||
+    (network.assignPublicIp !== "ENABLED" && network.assignPublicIp !== "DISABLED")
+  ) {
+    throw new CliError(`AWS core service ${spec.ecsService} does not expose a reusable Fargate network configuration`);
+  }
+  const temp = mkdtempSync(join(tmpdir(), "qm-migration-task-"));
+  let taskDefinition: string | undefined;
+  try {
+    const definitionPath = join(temp, "core.json");
+    const definition = renderTaskDefinition(config, "core", coreImage, secretArns(config));
+    const container = definition.containerDefinitions.find((candidate) => candidate.name === "core");
+    if (!container) throw new CliError("AWS migration task definition has no core container");
+    delete container.healthCheck;
+    writeFileSync(definitionPath, JSON.stringify(definition));
+    taskDefinition = registerTaskDefinition(config, definitionPath);
+    header(`qm migrate — ${config.orgId} (AWS candidate ${label})`);
+    const started = awsJson<{
+      tasks?: Array<{ taskArn?: string }>;
+      failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
+    }>(aws, [
+      "ecs",
+      "run-task",
+      "--cluster",
+      aws.cluster,
+      "--task-definition",
+      taskDefinition,
+      "--launch-type",
+      "FARGATE",
+      ...(live.platformVersion ? ["--platform-version", live.platformVersion] : []),
+      "--network-configuration",
+      JSON.stringify({ awsvpcConfiguration: network }),
+      "--overrides",
+      JSON.stringify({ containerOverrides: [{ name: "core", command: ["node", "src/migrate-main.ts"] }] }),
+      "--started-by",
+      "qm-migration",
+    ]);
+    const taskArn = started.tasks?.[0]?.taskArn;
+    if (!taskArn || started.failures?.length) {
+      const failures = started.failures
+        ?.map((failure) => `${failure.arn ?? "unknown"}: ${failure.reason ?? failure.detail ?? "unknown"}`)
+        .join(", ");
+      throw new CliError(`AWS could not start the migration task${failures ? ` (${failures})` : ""}`);
+    }
+    step(`migration task: ${taskArn}`);
+    awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
+    const stopped = awsJson<{
+      tasks?: Array<{
+        stoppedReason?: string;
+        containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
+      }>;
+      failures?: Array<{ arn?: string; reason?: string }>;
+    }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
+    const task = stopped.tasks?.[0];
+    const core = task?.containers?.find((container) => container.name === "core");
+    if (stopped.failures?.length || core?.exitCode !== 0) {
+      throw new CliError(
+        `AWS migration task failed (${core?.reason ?? task?.stoppedReason ?? `exit ${core?.exitCode ?? "unknown"}`})`,
+      );
+    }
+    ok(`candidate ${label} migrations applied`);
+  } finally {
+    if (taskDefinition) {
+      try {
+        awsText(aws, ["ecs", "deregister-task-definition", "--task-definition", taskDefinition]);
+      } catch (error) {
+        warn(`could not deregister migration task definition ${taskDefinition}: ${errMessage(error)}`);
+      }
+    }
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+export function secretArns(config: QmConfig): Record<string, string> {
   const aws = requireAws(config);
   const pairs = computedSecrets(config).flatMap((secret) => {
     const id = `${aws.secretsPrefix}${secret.name}`;
     try {
+      if (!secret.required) {
+        const metadata = awsJson<{
+          ARN?: string;
+          DeletedDate?: string;
+          VersionIdsToStages?: Record<string, string[]>;
+        }>(aws, ["secretsmanager", "describe-secret", "--secret-id", id]);
+        const hasCurrent = Object.values(metadata.VersionIdsToStages ?? {}).some((stages) =>
+          stages.includes("AWSCURRENT"),
+        );
+        return metadata.ARN && !metadata.DeletedDate && hasCurrent ? [[secret.name, metadata.ARN] as const] : [];
+      }
       const value = awsJson<{ ARN?: string; SecretString?: string }>(aws, [
         "secretsmanager",
         "get-secret-value",
@@ -593,7 +791,6 @@ function secretArns(config: QmConfig): Record<string, string> {
         id,
       ]);
       if (!value.ARN || isInvalidSecret(secret.name, value.SecretString)) {
-        if (!secret.required) return [];
         throw new CliError(`required AWS secret ${secret.name} has no usable, non-placeholder AWSCURRENT value`);
       }
       return [[secret.name, value.ARN] as const];
@@ -774,6 +971,7 @@ interface EcsServiceState {
   desiredCount?: number;
   runningCount?: number;
   taskDefinition?: string;
+  deploymentConfiguration?: { strategy?: string };
   networkConfiguration?: {
     awsvpcConfiguration?: {
       subnets?: string[];
@@ -785,10 +983,57 @@ interface EcsServiceState {
   tags?: Array<{ key?: string; value?: string }>;
 }
 
+interface EcsServiceDeploymentSummary {
+  targetServiceRevisionArn?: string;
+  status?: string;
+  createdAt?: string | number;
+}
+
+interface EcsServiceRevision {
+  serviceRevisionArn?: string;
+  taskDefinition?: string;
+}
+
 function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
   const aws = requireAws(config);
   if (!core.taskDefinition) throw new Error("core service has no live task definition");
   if (!core.networkConfiguration?.awsvpcConfiguration) throw new Error("core service has no VPC network configuration");
+  const taskArns =
+    awsJson<{ taskArns?: string[] }>(aws, [
+      "ecs",
+      "list-tasks",
+      "--cluster",
+      aws.cluster,
+      "--service-name",
+      aws.services.core!.ecsService,
+      "--desired-status",
+      "RUNNING",
+    ]).taskArns ?? [];
+  if (!taskArns.length) throw new Error("core service has no running tasks for the private canary");
+  let address: string | undefined;
+  for (let offset = 0; offset < taskArns.length && !address; offset += 100) {
+    const tasks =
+      awsJson<{
+        tasks?: Array<{
+          taskDefinitionArn?: string;
+          lastStatus?: string;
+          healthStatus?: string;
+          containers?: Array<{ name?: string; networkInterfaces?: Array<{ privateIpv4Address?: string }> }>;
+        }>;
+      }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", ...taskArns.slice(offset, offset + 100)])
+        .tasks ?? [];
+    address = tasks
+      .filter(
+        (task) =>
+          task.taskDefinitionArn === core.taskDefinition &&
+          task.lastStatus === "RUNNING" &&
+          task.healthStatus !== "UNHEALTHY",
+      )
+      .flatMap((task) => task.containers?.filter((container) => container.name === "core") ?? [])
+      .flatMap((container) => container.networkInterfaces ?? [])
+      .find((network) => network.privateIpv4Address)?.privateIpv4Address;
+  }
+  if (!address) throw new Error("core service has no current running task with a private IPv4 address");
   const started = awsJson<{
     tasks?: Array<{ taskArn?: string }>;
     failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
@@ -808,12 +1053,7 @@ function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
       containerOverrides: [
         {
           name: "core",
-          command: [
-            "node",
-            "src/deployment/postdeploy-smoke.ts",
-            "session",
-            `http://core.${aws.networking.cloudMapNamespace}:8080`,
-          ],
+          command: ["node", "src/deployment/postdeploy-smoke.ts", "session", `http://${address}:8080`],
         },
       ],
     }),
@@ -847,58 +1087,26 @@ type DeploymentImageProvenance =
   | { kind: "configured"; source: string }
   | { kind: "source-build"; source?: "plugin" | "checkout"; gitCommit?: string; dirty?: boolean };
 
+interface AwsReleaseCandidate {
+  contract: 1;
+  accountId: string;
+  region: string;
+  label: string;
+  images: Record<string, string>;
+  imageProvenance: Record<string, DeploymentImageProvenance>;
+}
+
 interface DeploymentManifest {
   id: string;
   previous?: string;
   createdAt: string;
   imageLabel?: string;
-  sandboxImage?: string;
   dbSnapshot?: string;
+  dbRestorePoint?: string;
   tasks: Record<string, string>;
+  counts?: Record<string, number>;
   imageProvenance?: Record<string, DeploymentImageProvenance>;
   layer?: { key: string; sha256: string };
-}
-
-function usesFlySandboxes(config: QmConfig): boolean {
-  return config.sandbox?.backend === "sprites";
-}
-
-interface AwsSandboxPin {
-  image: string;
-  source: "config" | "manifest";
-}
-
-function resolveAwsSandboxPin(config: QmConfig, currentManifest: () => DeploymentManifest | undefined): AwsSandboxPin {
-  const override = config.sandbox?.image;
-  if (override) {
-    if (!isDigestPinned(override)) {
-      throw new CliError("the sandbox.image override must be pinned by digest (registry/repository@sha256:…)", {
-        clause: "config.v1",
-      });
-    }
-    return { image: override, source: "config" };
-  }
-  const image = currentManifest()?.sandboxImage;
-  if (image) {
-    if (!config.sandbox?.app) {
-      throw new CliError(
-        "the deployment manifest records a sandbox pin but the config has no sandbox.app to boot it in",
-        { clause: "config.v1" },
-      );
-    }
-    return { image, source: "manifest" };
-  }
-  throw new CliError(
-    "AWS deploys take the sandbox layer-image pin from the deployment manifest, which has none; for the first deploy on this stack set sandbox.image as an explicit override and run `qm up` (which records the manifest), then remove the override — `qm sandbox publish` maintains the pin from then on",
-    { clause: "config.v1" },
-  );
-}
-
-const pinSourceLabel = (pin: AwsSandboxPin): string =>
-  pin.source === "config" ? "config sandbox.image override" : "deployment manifest";
-
-function withSandboxPin(config: QmConfig, image: string): QmConfig {
-  return config.sandbox?.image === image ? config : { ...config, sandbox: { ...config.sandbox, image } };
 }
 
 const DEPLOYMENT_POINTER_KEY = "deployment/current";
@@ -938,6 +1146,50 @@ function describedServices(config: QmConfig, workloads: string[]): Map<string, E
   return out;
 }
 
+function nativeBlueGreenStatus(
+  config: QmConfig,
+  workload: string,
+  taskDefinition: string | undefined,
+): string | undefined {
+  if (!taskDefinition) return undefined;
+  const aws = requireAws(config);
+  const listed = awsJson<{ serviceDeployments?: EcsServiceDeploymentSummary[] }>(aws, [
+    "ecs",
+    "list-service-deployments",
+    "--cluster",
+    aws.cluster,
+    "--service",
+    aws.services[workload]!.ecsService,
+  ]);
+  const deployments = listed.serviceDeployments ?? [];
+  const revisionArns = deployments.flatMap((deployment) =>
+    deployment.targetServiceRevisionArn ? [deployment.targetServiceRevisionArn] : [],
+  );
+  if (!revisionArns.length) return undefined;
+  const described = awsJson<{ serviceRevisions?: EcsServiceRevision[] }>(aws, [
+    "ecs",
+    "describe-service-revisions",
+    "--service-revision-arns",
+    ...revisionArns,
+  ]);
+  const tasksByRevision = new Map(
+    (described.serviceRevisions ?? []).flatMap((revision) =>
+      revision.serviceRevisionArn && revision.taskDefinition
+        ? [[revision.serviceRevisionArn, revision.taskDefinition] as const]
+        : [],
+    ),
+  );
+  const timestamp = (deployment: EcsServiceDeploymentSummary): number =>
+    typeof deployment.createdAt === "number" ? deployment.createdAt : Date.parse(deployment.createdAt ?? "") || 0;
+  return deployments
+    .filter(
+      (deployment) =>
+        deployment.targetServiceRevisionArn &&
+        tasksByRevision.get(deployment.targetServiceRevisionArn) === taskDefinition,
+    )
+    .sort((a, b) => timestamp(b) - timestamp(a))[0]?.status;
+}
+
 function assertOwnedServices(config: QmConfig, states: Map<string, EcsServiceState>, workloads: string[]): void {
   for (const workload of workloads) {
     const service = states.get(workload)!;
@@ -967,8 +1219,16 @@ async function awaitServiceTargets(config: QmConfig, expected: Record<string, Ro
   const failing = new Map<string, { polls: number; baseRunning: number }>();
   for (;;) {
     let states: ReadonlyMap<string, EcsServiceState>;
+    let nativeStatuses: ReadonlyMap<string, string | undefined>;
     try {
       states = describedServices(config, Object.keys(expected));
+      nativeStatuses = new Map(
+        Object.entries(expected).flatMap(([workload, want]) =>
+          states.get(workload)?.deploymentConfiguration?.strategy === "BLUE_GREEN"
+            ? [[workload, nativeBlueGreenStatus(config, workload, want.taskDefinition)] as const]
+            : [],
+        ),
+      );
       describeFailures = 0;
     } catch (error) {
       describeFailures += 1;
@@ -1037,6 +1297,14 @@ async function awaitServiceTargets(config: QmConfig, expected: Record<string, Ro
         }
       } else if (running < want.desiredCount) {
         waiting.push(`${workload} (${running}/${want.desiredCount})`);
+      } else if (state.deploymentConfiguration?.strategy === "BLUE_GREEN") {
+        const nativeStatus = nativeStatuses.get(workload);
+        if (nativeStatus === "SUCCESSFUL") continue;
+        if (nativeStatus && nativeStatus !== "PENDING" && nativeStatus !== "IN_PROGRESS") {
+          fail(workload, "native-blue-green", `${workload}: native blue/green deployment is ${nativeStatus}`);
+        } else {
+          waiting.push(`${workload} (blue/green traffic shift or bake is still in progress)`);
+        }
       } else if (deployment.rolloutState !== "COMPLETED") {
         draining += 1;
       }
@@ -1184,59 +1452,28 @@ function recordDeploymentManifest(
   tasks: Record<string, string>,
   release: {
     id?: string;
-    sandboxImage?: string;
     imageLabel?: string;
-    dbSnapshot?: string;
+    dbRestorePoint?: string;
     layer?: DeploymentManifest["layer"];
     imageProvenance?: DeploymentManifest["imageProvenance"];
+    counts?: DeploymentManifest["counts"];
   },
 ): DeploymentManifest {
   const current = currentDeploymentManifest(aws);
+  const counts = release.counts ?? current?.counts;
   const manifest: DeploymentManifest = {
     id: release.id ?? randomUUID(),
     ...(current ? { previous: current.id } : {}),
     createdAt: new Date().toISOString(),
     ...(release.imageLabel ? { imageLabel: release.imageLabel } : {}),
-    ...(release.sandboxImage ? { sandboxImage: release.sandboxImage } : {}),
-    ...(release.dbSnapshot ? { dbSnapshot: release.dbSnapshot } : {}),
+    ...(release.dbRestorePoint ? { dbRestorePoint: release.dbRestorePoint } : {}),
     tasks,
+    ...(counts ? { counts } : {}),
     ...(release.imageProvenance ? { imageProvenance: release.imageProvenance } : {}),
     ...(release.layer ? { layer: release.layer } : {}),
   };
   manifestTransaction(aws, manifest, manifest.id);
   return manifest;
-}
-
-function requireSandboxPinManifest(aws: AwsConfig): DeploymentManifest {
-  const current = currentDeploymentManifest(aws);
-  if (!current) {
-    throw new CliError(
-      "cannot durably record the sandbox pin: no AWS deployment manifest exists yet; set sandbox.image as an explicit override for the first `qm up` (which records the manifest), then remove it — `sandbox publish` maintains the pin from then on",
-    );
-  }
-  return current;
-}
-
-export function assertAwsSandboxPinRecordable(config: QmConfig): void {
-  const aws = requireAws(config);
-  assertAwsCallerAccount(aws);
-  if (config.sandbox?.image) {
-    throw new CliError(
-      `the config sets sandbox.image ${config.sandbox.image}, which freezes the sandbox pin — a newly published image would be silently reverted by the next \`qm up\`; remove the override before \`qm sandbox publish\``,
-    );
-  }
-  requireSandboxPinManifest(aws);
-}
-
-function recordCarriedSandboxPin(aws: AwsConfig, image: string): DeploymentManifest {
-  const current = requireSandboxPinManifest(aws);
-  if (current.sandboxImage === image) return current;
-  return recordDeploymentManifest(aws, current.tasks, {
-    sandboxImage: image,
-    ...(current.imageLabel ? { imageLabel: current.imageLabel } : {}),
-    ...(current.layer ? { layer: current.layer } : {}),
-    ...(current.imageProvenance ? { imageProvenance: current.imageProvenance } : {}),
-  });
 }
 
 function putDeploymentLayerArtifact(config: QmConfig, body: string): NonNullable<DeploymentManifest["layer"]> {
@@ -1347,9 +1584,8 @@ function trustedDeploymentBaseline(
   action = "deploy --only",
 ): DeploymentManifest {
   const aws = requireAws(config);
-  const allWorkloads = Object.keys(aws.services);
   const current = currentDeploymentManifest(aws);
-  if (!current || allWorkloads.some((workload) => !current.tasks[workload])) {
+  if (!current || workloads.some((workload) => !current.tasks[workload])) {
     throw new CliError(
       "the first AWS deployment must include every workload; omit --only until a complete deployment manifest exists",
     );
@@ -1383,6 +1619,27 @@ function trustedDeploymentBaseline(
   return current;
 }
 
+function adoptMissingWorkloads(
+  manifest: DeploymentManifest,
+  snapshot: ReturnType<typeof serviceSnapshot>,
+  workloads: string[],
+): boolean {
+  const missing = workloads.filter((workload) => !manifest.tasks[workload]);
+  const active = missing.filter((workload) => snapshot.counts[workload] !== 0);
+  if (active.length) {
+    throw new CliError(
+      `selected workload ${active.join(", ")} is missing from the current deployment manifest and must be scaled to zero before adoption`,
+    );
+  }
+  if (!missing.length) return false;
+  manifest.counts ??= {};
+  for (const workload of missing) {
+    manifest.tasks[workload] = snapshot.tasks[workload]!;
+    manifest.counts[workload] = snapshot.counts[workload]!;
+  }
+  return true;
+}
+
 async function applyServiceTargets(
   config: QmConfig,
   targets: Record<string, string>,
@@ -1410,8 +1667,6 @@ async function applyServiceTargets(
         targets[workload]!,
         "--desired-count",
         String(expectedCounts[workload]),
-        "--deployment-configuration",
-        "deploymentCircuitBreaker={enable=true,rollback=true}",
       ];
       changed.push(workload);
       awsText(aws, args);
@@ -1440,8 +1695,6 @@ async function applyServiceTargets(
           before.tasks[workload]!,
           "--desired-count",
           String(before.counts[workload]),
-          "--deployment-configuration",
-          "deploymentCircuitBreaker={enable=true,rollback=true}",
         ]);
       } catch (restoreError) {
         restoreFailures.push(`${workload}: ${errMessage(restoreError)}`);
@@ -1521,27 +1774,30 @@ function promoteStagedImage(config: QmConfig, service: string, image: string, la
   }
 }
 
-const PREDEPLOY_SNAPSHOT_INFIX = "-predeploy-";
-const PREDEPLOY_SNAPSHOT_CLUSTER_TAG = "QmCluster";
-
 function dbSnapshotRestoreHint(aws: AwsConfig, snapshot: string): string {
   return `restore: aws rds restore-db-instance-from-db-snapshot --db-snapshot-identifier ${snapshot} --db-instance-identifier ${rdsInstanceIdentifier(aws)}-restored --region ${aws.region}, then repoint the stack at the restored instance`;
 }
 
-async function takePredeployDbSnapshot(
-  config: QmConfig,
-  deploymentId: string,
-  manifestDbSnapshot?: string,
-): Promise<string> {
+function dbRestorePointHint(aws: AwsConfig, restorePoint: string): string {
+  const database = rdsInstanceIdentifier(aws);
+  return `restore: aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier ${database} --target-db-instance-identifier ${database}-restored --restore-time ${restorePoint} --region ${aws.region}, then repoint the stack at the restored instance; valid only while ${restorePoint} is inside the instance's automated-backup retention window`;
+}
+
+function manifestDbRestoreHint(aws: AwsConfig, manifest: DeploymentManifest): string | undefined {
+  if (manifest.dbRestorePoint) return dbRestorePointHint(aws, manifest.dbRestorePoint);
+  if (manifest.dbSnapshot) return dbSnapshotRestoreHint(aws, manifest.dbSnapshot);
+  return undefined;
+}
+
+function assertPredeployDbRestorePoint(config: QmConfig): string {
   const aws = requireAws(config);
   const database = rdsInstanceIdentifier(aws);
-  const instance = awsJson<{ DBInstances?: Array<{ DBInstanceStatus?: string; BackupRetentionPeriod?: number }> }>(
-    aws,
-    ["rds", "describe-db-instances", "--db-instance-identifier", database],
-  ).DBInstances?.[0];
+  const instance = awsJson<{
+    DBInstances?: Array<{ DBInstanceStatus?: string; BackupRetentionPeriod?: number; LatestRestorableTime?: string }>;
+  }>(aws, ["rds", "describe-db-instances", "--db-instance-identifier", database]).DBInstances?.[0];
   if (instance?.DBInstanceStatus !== "available") {
     throw new CliError(
-      `database ${database} is ${instance?.DBInstanceStatus ?? "missing"}; refusing to deploy without an available source for the pre-deploy snapshot`,
+      `database ${database} is ${instance?.DBInstanceStatus ?? "missing"}; refusing to deploy without an available source for the pre-deploy restore point`,
     );
   }
   const retention = instance.BackupRetentionPeriod ?? 0;
@@ -1551,87 +1807,52 @@ async function takePredeployDbSnapshot(
       `database ${database} keeps ${retention} day(s) of automated backups, below the required ${minimumRetention}; raise its backup retention (db_backup_retention_days in the reference module) or lower aws.dbRetentionMinDays before deploying`,
     );
   }
-  const snapshot = `${database}${PREDEPLOY_SNAPSHOT_INFIX}${deploymentId}`;
-  step(`pre-deploy database snapshot: creating ${snapshot}`);
-  awsText(aws, [
-    "rds",
-    "create-db-snapshot",
-    "--db-instance-identifier",
-    database,
-    "--db-snapshot-identifier",
-    snapshot,
-    "--tags",
-    JSON.stringify([
-      { Key: "ManagedBy", Value: "qm-cli" },
-      { Key: PREDEPLOY_SNAPSHOT_CLUSTER_TAG, Value: aws.cluster },
-    ]),
-  ]);
-  const pollMs = envNum("QM_AWS_DB_SNAPSHOT_POLL_MS", 15_000);
-  const deadline = Date.now() + envNum("QM_AWS_DB_SNAPSHOT_DEADLINE_MS", 30 * 60_000);
-  let describeFailures = 0;
-  for (;;) {
-    let status: string | undefined;
-    try {
-      status = awsJson<{ DBSnapshots?: Array<{ Status?: string }> }>(aws, [
-        "rds",
-        "describe-db-snapshots",
-        "--db-snapshot-identifier",
-        snapshot,
-      ]).DBSnapshots?.[0]?.Status;
-      describeFailures = 0;
-    } catch (error) {
-      describeFailures += 1;
-      if (describeFailures > 2 || Date.now() > deadline) throw error;
-      note(`could not poll pre-deploy database snapshot ${snapshot} (${errMessage(error)}); retrying`);
-      await sleep(pollMs);
-      continue;
-    }
-    if (status === "available") break;
-    if (status !== "creating" && status !== "pending") {
-      throw new CliError(`pre-deploy database snapshot ${snapshot} is ${status ?? "missing"} instead of creating`);
-    }
-    if (Date.now() > deadline)
-      throw new CliError(`timed out waiting for pre-deploy database snapshot ${snapshot} to become available`);
-    await sleep(pollMs);
+  const latestRestorable = Date.parse(instance.LatestRestorableTime ?? "");
+  if (!Number.isFinite(latestRestorable)) {
+    throw new CliError(
+      `database ${database} reports no LatestRestorableTime; point-in-time recovery is not active, refusing to deploy without a restore point`,
+    );
   }
-  ok(`pre-deploy database snapshot ${snapshot} is available (${dbSnapshotRestoreHint(aws, snapshot)})`);
-  prunePredeployDbSnapshots(aws, database, new Set([snapshot, ...(manifestDbSnapshot ? [manifestDbSnapshot] : [])]));
-  return snapshot;
+  const lagMs = Date.now() - latestRestorable;
+  const maxLagMs = envNum("QM_AWS_DB_MAX_RESTORE_LAG_MS", 10 * 60_000);
+  if (lagMs > maxLagMs) {
+    throw new CliError(
+      `database ${database} is restorable only up to ${instance.LatestRestorableTime} (${Math.round(lagMs / 1000)}s ago, above the allowed ${Math.round(maxLagMs / 1000)}s); its continuous backup stream is behind, refusing to deploy without a fresh restore point`,
+    );
+  }
+  const restorePoint = new Date().toISOString();
+  ok(
+    `pre-deploy database restore point: ${restorePoint} (continuous backups current to ${Math.round(lagMs / 1000)}s ago; ${dbRestorePointHint(aws, restorePoint)})`,
+  );
+  return restorePoint;
 }
 
-function prunablePredeploySnapshot(tags: Array<{ Key?: string; Value?: string }>, cluster: string): boolean {
-  const owner = tags.find((tag) => tag.Key === PREDEPLOY_SNAPSHOT_CLUSTER_TAG);
-  if (owner) return owner.Value === cluster;
-  return tags.some((tag) => tag.Key === "ManagedBy" && tag.Value === "qm-cli");
-}
-
-function prunePredeployDbSnapshots(aws: AwsConfig, database: string, referenced: Set<string>): void {
-  const keep = Math.max(envNum("QM_AWS_DB_SNAPSHOT_KEEP", 20), 1);
-  const stale = (
-    awsJson<{
-      DBSnapshots?: Array<{
-        DBSnapshotIdentifier?: string;
-        SnapshotCreateTime?: string;
-        TagList?: Array<{ Key?: string; Value?: string }>;
-      }>;
-    }>(aws, ["rds", "describe-db-snapshots", "--db-instance-identifier", database, "--snapshot-type", "manual"])
-      .DBSnapshots ?? []
-  )
-    .filter(
-      (item) =>
-        item.DBSnapshotIdentifier?.startsWith(`${database}${PREDEPLOY_SNAPSHOT_INFIX}`) &&
-        !referenced.has(item.DBSnapshotIdentifier) &&
-        prunablePredeploySnapshot(item.TagList ?? [], aws.cluster),
-    )
-    .sort((a, b) => (b.SnapshotCreateTime ?? "\uffff").localeCompare(a.SnapshotCreateTime ?? "\uffff"))
-    .slice(keep - 1);
-  for (const snapshot of stale) {
-    try {
-      awsText(aws, ["rds", "delete-db-snapshot", "--db-snapshot-identifier", snapshot.DBSnapshotIdentifier!]);
-      step(`pruned pre-deploy database snapshot ${snapshot.DBSnapshotIdentifier}`);
-    } catch (error) {
-      warn(`could not prune pre-deploy database snapshot ${snapshot.DBSnapshotIdentifier}: ${errMessage(error)}`);
-    }
+function confirmDbRestorePointCovered(config: QmConfig, restorePoint: string): void {
+  const aws = requireAws(config);
+  const database = rdsInstanceIdentifier(aws);
+  let latestRestorable: string | undefined;
+  try {
+    latestRestorable = awsJson<{ DBInstances?: Array<{ LatestRestorableTime?: string }> }>(aws, [
+      "rds",
+      "describe-db-instances",
+      "--db-instance-identifier",
+      database,
+    ]).DBInstances?.[0]?.LatestRestorableTime;
+  } catch (error) {
+    warn(`could not confirm the pre-deploy restore point ${restorePoint} is restorable yet: ${errMessage(error)}`);
+    return;
+  }
+  const latest = Date.parse(latestRestorable ?? "");
+  if (Number.isFinite(latest) && latest >= Date.parse(restorePoint)) {
+    ok(`pre-deploy database restore point ${restorePoint} is covered by continuous backups`);
+  } else if (Date.now() - Date.parse(restorePoint) <= envNum("QM_AWS_DB_MAX_RESTORE_LAG_MS", 10 * 60_000)) {
+    note(
+      `pre-deploy database restore point ${restorePoint} is not covered by continuous backups yet (database ${database} is restorable up to ${latestRestorable ?? "an unknown time"}); the stream catches up within minutes — leave the instance intact until it does`,
+    );
+  } else {
+    warn(
+      `pre-deploy database restore point ${restorePoint} is still not restorable: database ${database} is restorable only up to ${latestRestorable ?? "an unknown time"}; if the instance is lost before its backup stream passes the restore point, that point is unrecoverable — leave the instance intact until this catches up`,
+    );
   }
 }
 
@@ -1646,7 +1867,50 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   const plugins = new Map(topology.plugins.map((plugin) => [plugin.name, plugin]));
   const services = opts.only ?? topology.workloads;
   for (const service of services) workloadArchitecture(config, service);
+  if (opts.buildOnly && opts.candidate) throw new CliError("--build-only and --candidate are mutually exclusive");
+  if (opts.candidate && opts.buildFrom) throw new CliError("--candidate and --build-from are mutually exclusive");
+  if (opts.inactive && (opts.dryRun || !opts.candidate)) {
+    throw new CliError("--inactive is only valid for an exact candidate deployment");
+  }
+  if (opts.buildOnly && !opts.imageLabel) throw new CliError("--build-only requires --image-label <label>");
+  if (opts.buildOnly && !opts.candidateOut) throw new CliError("--build-only requires --candidate-out <path>");
+  if (opts.imageLabel && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(opts.imageLabel)) {
+    throw new CliError("--image-label must be a valid ECR tag");
+  }
   if (opts.buildFrom) resolveBuildRepoRoot(opts.buildFromPath, services.filter(isServiceName));
+  if (opts.buildOnly) {
+    assertAwsCallerAccount(aws);
+    header(`qm ${opts.dryRun ? "plan" : "build"} — ${config.orgId} (aws candidate ${opts.imageLabel})`);
+    if (opts.dryRun) {
+      for (const service of services) step(`${service}: build immutable candidate image`);
+      note(`Plan only. Candidate manifest would be written to ${opts.candidateOut}.`);
+      return;
+    }
+    dockerLogin(aws);
+    const images: Record<string, string> = {};
+    const imageProvenance: Record<string, DeploymentImageProvenance> = {};
+    for (const service of services) {
+      imageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
+      images[service] = publishWorkloadImage(config, service, plugins.get(service), opts.imageLabel!, opts);
+    }
+    const release: AwsReleaseCandidate = {
+      contract: 1,
+      accountId: aws.accountId,
+      region: aws.region,
+      label: opts.imageLabel!,
+      images,
+      imageProvenance,
+    };
+    writeFileSync(opts.candidateOut!, `${JSON.stringify(release, null, 2)}\n`, { mode: 0o600 });
+    ok(`AWS release candidate written to ${opts.candidateOut}`);
+    return;
+  }
+  const candidate = opts.candidate ? releaseCandidate(config, opts.candidate) : undefined;
+  for (const service of services) {
+    if (candidate && (!candidate.images[service] || !candidate.imageProvenance[service])) {
+      throw new CliError(`AWS release candidate ${opts.candidate} does not contain ${service}`);
+    }
+  }
   if (opts.imageLabel && opts.imageLabel !== aws.imageLabel) {
     throw new CliError(
       `--image-label ${opts.imageLabel} differs from durable aws.imageLabel ${aws.imageLabel}; update and commit the deployment directory first`,
@@ -1657,7 +1921,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (!opts.dryRun && !opts.yes) throw new CliError("AWS deploy requires --yes after reviewing `qm plan`");
   assertAwsCallerAccount(aws);
   assertAwsPublicFrontDoor(config);
-  if (!opts.dryRun) await assertAwsPublicNetwork(config);
+  if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
   header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
@@ -1665,27 +1929,28 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   assertOwnedServices(config, describedServices(config, allServices), allServices);
   const arns = secretArns(config);
   if (opts.dryRun) {
-    if (usesFlySandboxes(config) && services.includes("core")) {
-      const pin = resolveAwsSandboxPin(config, () => currentDeploymentManifest(aws));
-      step(`sandbox pin: ${pin.image} (${pinSourceLabel(pin)})`);
-      config = withSandboxPin(config, pin.image);
-    }
     step(
       aws.predeployDbSnapshot === false
-        ? "pre-deploy database snapshot: disabled (aws.predeployDbSnapshot)"
-        : `pre-deploy database snapshot: ${rdsInstanceIdentifier(aws)}${PREDEPLOY_SNAPSHOT_INFIX}<deployment-id> before the first mutation`,
+        ? "pre-deploy database restore point: disabled (aws.predeployDbSnapshot)"
+        : `pre-deploy database restore point: verify ${rdsInstanceIdentifier(aws)} point-in-time recovery is current before the first mutation`,
     );
     const before = serviceSnapshot(config, allServices);
     const selected = new Set(services);
     if (allServices.some((service) => !selected.has(service))) {
-      trustedDeploymentBaseline(
+      const baseline = trustedDeploymentBaseline(
         config,
         before,
         allServices.filter((name) => !selected.has(name)),
       );
+      adoptMissingWorkloads(baseline, before, services);
     }
     const images: Record<string, string> = {};
     for (const service of services) {
+      if (candidate) {
+        images[service] = candidate.images[service]!;
+        step(`${service}: immutable candidate ${candidate.label}`);
+        continue;
+      }
       const spec = aws.services[service]!;
       const sourceBuild = (opts.buildFrom && isServiceName(service)) || plugins.get(service)?.kind === "source";
       if (sourceBuild) {
@@ -1710,7 +1975,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     } else {
       step("deployment layer: preserved (no sandbox directory selected for core)");
     }
-    note("Plan only. Re-run `qm up --yes` to deploy.");
+    note(`Plan only. Re-run \`qm up${opts.candidate ? ` --candidate ${opts.candidate}` : ""} --yes\` to deploy.`);
     return;
   }
   const lease = acquireLease(aws);
@@ -1729,24 +1994,28 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   let desiredLayer: DeploymentManifest["layer"];
   let layerChanged = false;
   let layerAttempted = false;
-  let sandboxPinImage: string | undefined;
-  let dbSnapshot: string | undefined;
+  let dbRestorePoint: string | undefined;
+  let migratedCandidate = false;
   try {
     assertAwsDeployImage(config);
     before = serviceSnapshot(config, allServices);
     current = currentDeploymentManifest(aws);
-    if (usesFlySandboxes(config)) {
-      if (services.includes("core")) {
-        const pin = resolveAwsSandboxPin(config, () => current);
-        step(`sandbox pin: ${pin.image} (${pinSourceLabel(pin)})`);
-        sandboxPinImage = pin.image;
-        config = withSandboxPin(config, pin.image);
-      } else {
-        sandboxPinImage = current?.sandboxImage;
-      }
+    const selected = new Set(services);
+    if (allServices.some((service) => !selected.has(service))) {
+      current = trustedDeploymentBaseline(
+        config,
+        before,
+        allServices.filter((name) => !selected.has(name)),
+      );
+      if (adoptMissingWorkloads(current, before, services)) manifestTransaction(aws, current, current.id);
     }
-    if (aws.predeployDbSnapshot === false) note("pre-deploy database snapshot: disabled (aws.predeployDbSnapshot)");
-    else dbSnapshot = await takePredeployDbSnapshot(config, releaseId, current?.dbSnapshot);
+    if (aws.predeployDbSnapshot === false)
+      note("pre-deploy database restore point: disabled (aws.predeployDbSnapshot)");
+    else dbRestorePoint = assertPredeployDbRestorePoint(config);
+    if (candidate?.images.core && services.includes("core")) {
+      await runAwsCandidateMigration(config, candidate.images.core, candidate.label);
+      migratedCandidate = true;
+    }
     if (current?.layer) {
       desiredLayer = current.layer;
     } else {
@@ -1792,21 +2061,18 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         }
       }
     }
-    const selected = new Set(services);
-    if (allServices.some((service) => !selected.has(service))) {
-      trustedDeploymentBaseline(
-        config,
-        before,
-        allServices.filter((name) => !selected.has(name)),
-      );
-    }
-    dockerLogin(aws);
+    if (!candidate) dockerLogin(aws);
     const images: Record<string, string> = {};
     const selectedImageProvenance: Record<string, DeploymentImageProvenance> = {};
     for (const service of services) {
-      staged.add(service);
-      selectedImageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
-      images[service] = publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
+      if (candidate) {
+        selectedImageProvenance[service] = candidate.imageProvenance[service]!;
+        images[service] = candidate.images[service]!;
+      } else {
+        staged.add(service);
+        selectedImageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
+        images[service] = publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
+      }
     }
     const desired = reportTaskChanges(config, services, images, arns);
     const targets: Record<string, string> = {};
@@ -1862,35 +2128,34 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       );
     }
     const releaseTasks = { ...before.tasks, ...targets };
+    const releaseCounts = Object.fromEntries(
+      allServices.map((service) => [service, workloadDesiredCount(config, service)]),
+    );
     const releaseImageProvenance = { ...current?.imageProvenance, ...selectedImageProvenance };
     const sameTasks = current && allServices.every((service) => current!.tasks[service] === releaseTasks[service]);
+    const sameCounts = current && canonicalJson(current.counts ?? {}) === canonicalJson(releaseCounts);
     const sameImageProvenance =
       current && canonicalJson(current.imageProvenance ?? {}) === canonicalJson(releaseImageProvenance);
     releaseSucceeded = true;
     if (
       !current ||
       !sameTasks ||
+      !sameCounts ||
       !sameImageProvenance ||
       current.imageLabel !== label ||
       layerChanged ||
-      current.sandboxImage !== sandboxPinImage
+      migratedCandidate
     ) {
       recorded = recordDeploymentManifest(aws, releaseTasks, {
         id: releaseId,
-        ...(sandboxPinImage ? { sandboxImage: sandboxPinImage } : {}),
+        counts: releaseCounts,
         imageLabel: label,
-        ...(dbSnapshot ? { dbSnapshot } : {}),
+        ...(dbRestorePoint ? { dbRestorePoint } : {}),
         ...(desiredLayer ? { layer: desiredLayer } : {}),
         imageProvenance: releaseImageProvenance,
       });
-    } else if (dbSnapshot) {
-      try {
-        awsText(aws, ["rds", "delete-db-snapshot", "--db-snapshot-identifier", dbSnapshot]);
-        note(`nothing changed, so no manifest references pre-deploy database snapshot ${dbSnapshot}; deleted it`);
-      } catch (error) {
-        warn(`could not delete the unreferenced pre-deploy database snapshot ${dbSnapshot}: ${errMessage(error)}`);
-      }
     }
+    if (recorded && dbRestorePoint) confirmDbRestorePointCovered(config, dbRestorePoint);
     for (const service of services) {
       try {
         promoteStagedImage(config, service, images[service]!, label);
@@ -2014,13 +2279,21 @@ export async function awsDown(config: QmConfig, configDir = process.cwd()): Prom
   );
 }
 
-function firstRolledBackDbSnapshot(aws: AwsConfig, current: DeploymentManifest, targetId: string): string | undefined {
+function firstRolledBackDbRestore(
+  aws: AwsConfig,
+  current: DeploymentManifest,
+  targetId: string,
+): { kind: "restore point" | "snapshot"; hint: string } | undefined {
   const seen = new Set<string>();
-  let oldest: string | undefined;
+  let oldest: { kind: "restore point" | "snapshot"; hint: string } | undefined;
   let manifest: DeploymentManifest | undefined = current;
   while (manifest && !seen.has(manifest.id)) {
     if (manifest.id === targetId) return oldest;
-    if (manifest.dbSnapshot) oldest = manifest.dbSnapshot;
+    if (manifest.dbRestorePoint) {
+      oldest = { kind: "restore point", hint: `${manifest.dbRestorePoint} (${manifestDbRestoreHint(aws, manifest)})` };
+    } else if (manifest.dbSnapshot) {
+      oldest = { kind: "snapshot", hint: `${manifest.dbSnapshot} (${manifestDbRestoreHint(aws, manifest)})` };
+    }
     seen.add(manifest.id);
     if (!manifest.previous) return undefined;
     try {
@@ -2058,11 +2331,6 @@ export async function awsRollback(
     const missing = services.filter((service) => !targetManifest.tasks[service]);
     if (missing.length)
       throw new CliError(`target AWS deployment manifest is missing workloads: ${missing.join(", ")}`);
-    if (usesFlySandboxes(config) && !targetManifest.sandboxImage && !config.sandbox?.image) {
-      warn(
-        `target deployment manifest ${targetManifest.id} predates recorded sandbox pins; the next \`qm up\` needs \`qm sandbox publish\` or an explicit sandbox.image first`,
-      );
-    }
     let targetLayerBody: string | undefined;
     let layerNeedsSync = false;
     if (layerOpts) {
@@ -2073,16 +2341,21 @@ export async function awsRollback(
       layerNeedsSync = currentManifest?.layer?.sha256 !== targetManifest.layer!.sha256;
     }
     const targets = Object.fromEntries(services.map((service) => [service, targetManifest!.tasks[service]!]));
+    const targetCounts = Object.fromEntries(
+      services.map((service) => [service, targetManifest.counts?.[service] ?? before!.counts[service]!]),
+    );
     const changedTargets = Object.fromEntries(
       services
-        .filter((service) => before!.tasks[service] !== targets[service])
+        .filter(
+          (service) => before!.tasks[service] !== targets[service] || before!.counts[service] !== targetCounts[service],
+        )
         .map((service) => [service, targets[service]!]),
     );
     if (Object.keys(changedTargets).length) {
       await applyServiceTargets(
         config,
         changedTargets,
-        Object.fromEntries(Object.keys(changedTargets).map((service) => [service, before!.counts[service]!])),
+        Object.fromEntries(Object.keys(changedTargets).map((service) => [service, targetCounts[service]!])),
       );
       applied = true;
     }
@@ -2091,12 +2364,12 @@ export async function awsRollback(
       Object.fromEntries(
         services.map((service) => [
           service,
-          { taskDefinition: targets[service]!, desiredCount: before!.counts[service]! },
+          { taskDefinition: targets[service]!, desiredCount: targetCounts[service]! },
         ]),
       ),
     );
     if (targetLayerBody && layerOpts && layerNeedsSync) {
-      if (before.counts.core === 0) {
+      if (targetCounts.core === 0) {
         note(
           "deployment layer sync deferred: core is scaled to zero, so `check --live` will flag the layer until the next `qm up` applies it",
         );
@@ -2117,10 +2390,10 @@ export async function awsRollback(
     rolledBack = true;
     if (currentManifest?.id !== targetManifest.id) {
       manifestTransaction(aws, undefined, targetManifest.id);
-      const dbSnapshot = currentManifest && firstRolledBackDbSnapshot(aws, currentManifest, targetManifest.id);
-      if (dbSnapshot) {
+      const dbRestore = currentManifest && firstRolledBackDbRestore(aws, currentManifest, targetManifest.id);
+      if (dbRestore) {
         note(
-          `rollback restores code and configuration, not data; the database snapshot taken before the first rolled-back deployment is ${dbSnapshot} (${dbSnapshotRestoreHint(aws, dbSnapshot)})`,
+          `rollback restores code and configuration, not data; the database ${dbRestore.kind} taken before the first rolled-back deployment is ${dbRestore.hint}`,
         );
       }
     }
@@ -2217,9 +2490,6 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       const affected = workloads.filter((workload) =>
         workloadSecrets(config, workload, uploaded).some((secret) => uploaded[secret.name]),
       );
-      if (usesFlySandboxes(config) && baseline && affected.includes("core")) {
-        config = withSandboxPin(config, resolveAwsSandboxPin(config, () => baseline).image);
-      }
       for (const secret of staged) {
         try {
           awsText(aws, [
@@ -2323,7 +2593,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         rotated = true;
         if (Object.keys(changed).length) {
           recordDeploymentManifest(aws, targets, {
-            ...(baseline.sandboxImage ? { sandboxImage: baseline.sandboxImage } : {}),
+            ...(baseline.counts ? { counts: baseline.counts } : {}),
             imageLabel: baseline.imageLabel ?? aws.imageLabel,
             ...(baseline.layer ? { layer: baseline.layer } : {}),
             ...(baseline.imageProvenance ? { imageProvenance: baseline.imageProvenance } : {}),
@@ -2370,13 +2640,22 @@ export function githubTrustSubject(configDir: string, deployBranch?: string, dep
     repo = remote.match(/github\.com[/:]([^/]+\/[^/.]+)(?:\.git)?$/)?.[1];
     if (!repo) throw new Error("cannot derive the GitHub repository from this deployment checkout");
   }
-  if (deployEnvironment) return `repo:${repo}:environment:${deployEnvironment}`;
+  const configuredPrefix = tfValue("github_subject_prefix");
+  if (
+    configuredPrefix !== undefined &&
+    configuredPrefix !== "" &&
+    !/^repo:[A-Za-z0-9_.@-]+\/[A-Za-z0-9_.@-]+$/.test(configuredPrefix)
+  ) {
+    throw new Error("infra/terraform.tfvars github_subject_prefix must be an exact repo:owner/repository prefix");
+  }
+  const subjectPrefix = configuredPrefix || `repo:${repo}`;
+  if (deployEnvironment) return `${subjectPrefix}:environment:${deployEnvironment}`;
   const tfRef = tfValue("github_ref");
   if (tfRef !== undefined && !/^refs\/heads\/\S+$/.test(tfRef)) {
     throw new Error("infra/terraform.tfvars github_ref must be a refs/heads/* branch ref");
   }
   const ref = deployBranch ? `refs/heads/${deployBranch}` : (tfRef ?? "refs/heads/main");
-  return `repo:${repo}:ref:${ref}`;
+  return `${subjectPrefix}:ref:${ref}`;
 }
 
 export function assertGithubDeployTrust(statements: unknown, accountId: string, expectedSubject: string): void {
@@ -2404,7 +2683,10 @@ export function assertGithubDeployTrust(statements: unknown, accountId: string, 
   const rawSubjects: unknown[] = Array.isArray(live) ? live : [live].filter((s) => s !== undefined);
   const withoutIdPins = (subject: string): string =>
     subject.replace(/^repo:([^/:@]+)(?:@\d+)?\/([^/:@]+)(?:@\d+)?:/, "repo:$1/$2:");
-  const subjects = rawSubjects.map((subject) => (typeof subject === "string" ? withoutIdPins(subject) : subject));
+  const expectedPinsIds = withoutIdPins(expectedSubject) !== expectedSubject;
+  const subjects = expectedPinsIds
+    ? rawSubjects
+    : rawSubjects.map((subject) => (typeof subject === "string" ? withoutIdPins(subject) : subject));
   const repoPrefix = `${expectedSubject.split(":").slice(0, 2).join(":")}:`;
   if (
     !condition ||
@@ -2489,11 +2771,40 @@ function isHttpsRedirectListener(listener: AwsPublicListener): boolean {
   return actions.length === 1 && actions[0]?.Type === "redirect" && actions[0].RedirectConfig?.Protocol === "HTTPS";
 }
 
+interface AwsServiceConnectConfiguration {
+  enabled?: boolean;
+  namespace?: string;
+  services?: Array<{
+    portName?: string;
+    discoveryName?: string;
+    clientAliases?: Array<{ dnsName?: string; port?: number }>;
+  }>;
+}
+
 interface AwsEcsRoutingService {
   serviceName?: string;
   status?: string;
-  serviceRegistries?: Array<{ registryArn?: string }>;
-  loadBalancers?: Array<{ targetGroupArn?: string }>;
+  serviceConnectConfiguration?: AwsServiceConnectConfiguration;
+  deployments?: Array<{
+    status?: string;
+    serviceConnectConfiguration?: AwsServiceConnectConfiguration;
+  }>;
+  loadBalancers?: Array<{
+    targetGroupArn?: string;
+    advancedConfiguration?: {
+      alternateTargetGroupArn?: string;
+      productionListenerRule?: string;
+    };
+  }>;
+}
+
+function awsServiceConnectConfiguration(
+  service: Pick<AwsEcsRoutingService, "serviceConnectConfiguration" | "deployments">,
+): AwsServiceConnectConfiguration | undefined {
+  return (
+    service.serviceConnectConfiguration ??
+    service.deployments?.find((deployment) => deployment.status === "PRIMARY")?.serviceConnectConfiguration
+  );
 }
 
 function awsEcsRoutingServices(config: QmConfig): ReadonlyMap<string, AwsEcsRoutingService> {
@@ -2623,15 +2934,33 @@ function assertAwsPublicRouting(
     ]).TargetGroups ?? [];
   const routingServices = ecsServices ?? awsEcsRoutingServices(config);
   const targets = new Map<string, string>();
+  const alternateTargets = new Map<string, string>();
+  const productionRules = new Map<string, string>();
+  const expectedTargetArns = new Set<string>();
   for (const name of ingress) {
     const expectedName = targetName(name);
     const target = targetGroups.find((group) => group.TargetGroupName === expectedName);
     if (!target?.TargetGroupArn) throw new Error(`target group for ${name} is missing`);
     targets.set(name, target.TargetGroupArn);
-    if (
-      !(routingServices.get(name)?.loadBalancers ?? []).some((item) => item.targetGroupArn === target.TargetGroupArn)
-    ) {
+    expectedTargetArns.add(target.TargetGroupArn);
+    const attachment = (routingServices.get(name)?.loadBalancers ?? []).find(
+      (item) => item.targetGroupArn === target.TargetGroupArn,
+    );
+    if (!attachment) {
       throw new Error(`ECS service ${name} is not attached to its target group`);
+    }
+    const alternate = attachment.advancedConfiguration?.alternateTargetGroupArn;
+    const productionRule = attachment.advancedConfiguration?.productionListenerRule;
+    if (Boolean(alternate) !== Boolean(productionRule)) {
+      throw new Error(`ECS service ${name} has an incomplete blue/green load-balancer configuration`);
+    }
+    if (alternate && productionRule) {
+      if (!targetGroups.some((group) => group.TargetGroupArn === alternate)) {
+        throw new Error(`alternate target group for ${name} is missing`);
+      }
+      alternateTargets.set(name, alternate);
+      productionRules.set(name, productionRule);
+      expectedTargetArns.add(alternate);
     }
   }
   for (const name of Object.keys(aws.services)) {
@@ -2639,9 +2968,26 @@ function assertAwsPublicRouting(
       throw new Error(`private ECS service ${name} is attached to a load balancer`);
     }
   }
-  if (targetGroups.length !== ingress.length) throw new Error("ALB has target groups for private or unknown services");
+  if (
+    targetGroups.length !== expectedTargetArns.size ||
+    targetGroups.some((group) => !group.TargetGroupArn || !expectedTargetArns.has(group.TargetGroupArn))
+  ) {
+    throw new Error("ALB has target groups for private or unknown services");
+  }
+  if (alternateTargets.size && alternateTargets.size !== ingress.length) {
+    throw new Error("ALB cannot mix rolling and blue/green ingress services");
+  }
   const defaults = listener.DefaultActions ?? [];
-  if (hasPortal) {
+  if (alternateTargets.size) {
+    if (
+      defaults.length !== 1 ||
+      defaults[0]?.Type !== "fixed-response" ||
+      defaults[0].FixedResponseConfig?.StatusCode !== "404" ||
+      defaults[0].TargetGroupArn
+    ) {
+      throw new Error("blue/green listener default must return a fixed 404 response");
+    }
+  } else if (hasPortal) {
     if (
       defaults.length !== 1 ||
       defaults[0]?.Type !== "forward" ||
@@ -2660,8 +3006,13 @@ function assertAwsPublicRouting(
   const rules =
     awsJson<{
       Rules?: Array<{
+        RuleArn?: string;
         IsDefault?: boolean;
-        Actions?: Array<{ Type?: string; TargetGroupArn?: string }>;
+        Actions?: Array<{
+          Type?: string;
+          TargetGroupArn?: string;
+          ForwardConfig?: { TargetGroups?: Array<{ TargetGroupArn?: string; Weight?: number }> };
+        }>;
         Conditions?: Array<{
           Field?: string;
           Values?: string[];
@@ -2671,6 +3022,49 @@ function assertAwsPublicRouting(
       }>;
     }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
   const nonDefault = rules.filter((rule) => !rule.IsDefault);
+  if (alternateTargets.size) {
+    if (nonDefault.length !== ingress.length) {
+      throw new Error("blue/green ALB has unexpected non-default rules");
+    }
+    for (const name of ingress) {
+      const rule = nonDefault.find((candidate) => candidate.RuleArn === productionRules.get(name));
+      const action = rule?.Actions?.length === 1 ? rule.Actions[0] : undefined;
+      const weightedTargets = action?.ForwardConfig?.TargetGroups ?? [];
+      const primary = targets.get(name)!;
+      const alternate = alternateTargets.get(name)!;
+      const expected = new Set([primary, alternate]);
+      const active = weightedTargets.filter((target) => (target.Weight ?? 0) > 0);
+      if (
+        action?.Type !== "forward" ||
+        weightedTargets.length !== 2 ||
+        weightedTargets.some((target) => !target.TargetGroupArn || !expected.has(target.TargetGroupArn)) ||
+        active.length !== 1 ||
+        !active[0]?.TargetGroupArn
+      ) {
+        throw new Error(`blue/green ALB rule for ${name} must route to exactly one of its two target groups`);
+      }
+      const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
+      const pathValues =
+        condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
+      const hostValues =
+        condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
+      let expectedPaths: string[];
+      if (name === "portal") expectedPaths = ["/*"];
+      else if (hasPortal) expectedPaths = [];
+      else expectedPaths = ["/v1/*"];
+      const expectedHosts = name === "core" && hasPortal ? coreHosts : [];
+      if (
+        pathValues.length !== expectedPaths.length ||
+        expectedPaths.some((value) => !pathValues.includes(value)) ||
+        hostValues.length !== expectedHosts.length ||
+        expectedHosts.some((value) => !hostValues.map((host) => host.toLowerCase()).includes(value))
+      ) {
+        throw new Error(`blue/green ALB rule for ${name} does not match its production route`);
+      }
+      targets.set(name, active[0].TargetGroupArn);
+    }
+    return targets;
+  }
   if (hasPortal && !coreHosts.length && nonDefault.length)
     throw new Error("portal mode must not expose non-default ALB rules");
   if (hasPortal && coreHosts.length) {
@@ -2974,13 +3368,14 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   for (const service of Object.keys(aws.services)) {
     const spec = aws.services[service]!;
     check(`ECS service ${spec.ecsService}`, () => {
-      const found = awsJson<{
-        services?: Array<{
-          status?: string;
-          serviceRegistries?: Array<{ registryArn?: string }>;
-          loadBalancers?: Array<{ targetGroupArn?: string }>;
-        }>;
-      }>(aws, ["ecs", "describe-services", "--cluster", aws.cluster, "--services", spec.ecsService]).services?.[0];
+      const found = awsJson<{ services?: AwsEcsRoutingService[] }>(aws, [
+        "ecs",
+        "describe-services",
+        "--cluster",
+        aws.cluster,
+        "--services",
+        spec.ecsService,
+      ]).services?.[0];
       if (found?.status !== "ACTIVE") throw new Error(`service is ${found?.status ?? "missing"}`);
       ecsServices.set(service, found);
     });
@@ -3031,28 +3426,49 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     for (const name of Object.keys(aws.services)) {
       const discovery = services.find((service) => service.Name === name);
       if (!discovery?.Arn) throw new Error(`service ${name} is missing from ${aws.networking.cloudMapNamespace}`);
-      const registries = ecsServices.get(name)?.serviceRegistries ?? [];
-      if (!registries.some((registry) => registry.registryArn === discovery.Arn))
-        throw new Error(`ECS service ${name} is not registered to its Cloud Map service`);
+      const ecsService = ecsServices.get(name);
+      const connect = ecsService ? awsServiceConnectConfiguration(ecsService) : undefined;
+      if (!connect?.enabled) throw new Error(`ECS service ${name} does not have Service Connect enabled`);
+      const endpoint = connect.services?.find((service) => service.discoveryName === name);
+      const expectedDns = `${name}.${aws.networking.cloudMapNamespace}`;
+      const expectedPort = isServiceName(name) ? serviceDef(name).docker.internalPort : 8080;
+      if (endpoint?.portName !== name) {
+        throw new Error(`ECS service ${name} does not publish its named ${name} port through Service Connect`);
+      }
+      if (!endpoint.clientAliases?.some((alias) => alias.dnsName === expectedDns && alias.port === expectedPort)) {
+        throw new Error(`ECS service ${name} does not publish the ${expectedDns}:${expectedPort} client alias`);
+      }
     }
   });
   check("ALB routing", () => assertAwsPublicRouting(config, ecsServices));
   await checkAsync("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
-  const probe = probeAwsSecretStore(
-    computedSecrets(config),
-    (name) =>
-      awsText(aws, [
-        "secretsmanager",
-        "get-secret-value",
-        "--secret-id",
-        `${aws.secretsPrefix}${name}`,
-        "--query",
-        "SecretString",
-      ]),
-    () => assertAwsPublicApiUrl(config),
-  );
-  failures.push(...probe.failures);
-  const runtimeSecrets = probe.values;
+  const runtimeSecrets = new Map<string, string>();
+  for (const secret of computedSecrets(config)) {
+    const inspect = (): void => {
+      const id = `${aws.secretsPrefix}${secret.name}`;
+      const value = awsText(aws, ["secretsmanager", "get-secret-value", "--secret-id", id, "--query", "SecretString"]);
+      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
+      runtimeSecrets.set(secret.name, value);
+    };
+    if (secret.required)
+      check(`secret ${secret.name}`, () => {
+        inspect();
+        if (secret.name === "PUBLIC_API_URL") assertAwsPublicApiUrl(config);
+      });
+    else {
+      try {
+        inspect();
+        step(`optional secret ${secret.name}: configured`);
+      } catch (error) {
+        if (/ResourceNotFoundException|AccessDeniedException/.test(errMessage(error)))
+          warn(`optional secret ${secret.name}: not configured or not readable`);
+        else {
+          failures.push(`optional secret ${secret.name}: ${errMessage(error)}`);
+          warn(`optional secret ${secret.name}: failed`);
+        }
+      }
+    }
+  }
   if (failures.length) throw new CliError(`doctor failed:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`);
   const runtimeNames = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"] as const;
   const priorRuntime = new Map(runtimeNames.map((name) => [name, process.env[name]]));
@@ -3062,7 +3478,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     else delete process.env[name];
   }
   try {
-    await doctorCommon(config, runtimeSecrets, { configDir, requiredSecretValues: probe.pending.length === 0 });
+    await doctorCommon(config, runtimeSecrets, { configDir, requiredSecretValues: true });
   } finally {
     for (const name of runtimeNames) {
       const prior = priorRuntime.get(name);
@@ -3092,22 +3508,6 @@ async function checkLive(
   const manifest = currentDeploymentManifest(aws);
   if (!manifest)
     throw new CliError("live drift detected: no current AWS deployment manifest", { clause: "aws.live-drift" });
-  let sandboxPinUnresolved = false;
-  if (usesFlySandboxes(config)) {
-    let pin: AwsSandboxPin | undefined;
-    try {
-      pin = resolveAwsSandboxPin(config, () => manifest);
-    } catch (error) {
-      sandboxPinUnresolved = true;
-      failures.push(
-        `sandbox pin: ${errMessage(error)} (skipped only the core expected-environment and rendered task-definition comparisons; runtime, health, and manifest checks still ran)`,
-      );
-    }
-    if (pin) {
-      if (opts.report ?? true) step(`sandbox pin: ${pin.image} (${pinSourceLabel(pin)})`);
-      config = withSandboxPin(config, pin.image);
-    }
-  }
   const desiredImages: Record<string, string> = {};
   for (const service of services) {
     const provenance = manifest.imageProvenance?.[service];
@@ -3181,21 +3581,18 @@ async function checkLive(
       failures.push(`${service}: no live task definition`);
       continue;
     }
-    const renderable = service !== "core" || !sandboxPinUnresolved;
     const container = (live.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
       (item) => item.name === service,
     );
-    if (renderable) {
-      const liveEnv = Object.fromEntries(
-        ((container?.environment as Array<{ name: string; value: string }> | undefined) ?? []).map((item) => [
-          item.name,
-          item.value,
-        ]),
-      );
-      const expectedEnv = workloadEnvironment(config, service);
-      if (canonicalJson(liveEnv) !== canonicalJson(expectedEnv))
-        failures.push(`${service}: environment drift (including live-only keys)`);
-    }
+    const liveEnv = Object.fromEntries(
+      ((container?.environment as Array<{ name: string; value: string }> | undefined) ?? []).map((item) => [
+        item.name,
+        item.value,
+      ]),
+    );
+    const expectedEnv = workloadEnvironment(config, service);
+    if (canonicalJson(liveEnv) !== canonicalJson(expectedEnv))
+      failures.push(`${service}: environment drift (including live-only keys)`);
     const expectedSecrets = workloadSecrets(config, service, arns)
       .flatMap((secret) => containerSecretNames(service, secret))
       .sort();
@@ -3210,13 +3607,11 @@ async function checkLive(
       if (desiredImage && container.image !== desiredImage) {
         failures.push(`${service}: image drift (live ${container.image}, desired ${desiredImage})`);
       }
-      if (renderable) {
-        const comparisonImage = desiredImage ?? `${repository}@sha256:${"0".repeat(64)}`;
-        const fields = taskDefinitionDiff(renderTaskDefinition(config, service, comparisonImage, arns), live).filter(
-          (field) => desiredImage || field !== `taskDefinition.containerDefinitions.${service}.image`,
-        );
-        if (fields.length) failures.push(`${service}: task-definition drift (${fields.join(", ")})`);
-      }
+      const comparisonImage = desiredImage ?? `${repository}@sha256:${"0".repeat(64)}`;
+      const fields = taskDefinitionDiff(renderTaskDefinition(config, service, comparisonImage, arns), live).filter(
+        (field) => desiredImage || field !== `taskDefinition.containerDefinitions.${service}.image`,
+      );
+      if (fields.length) failures.push(`${service}: task-definition drift (${fields.join(", ")})`);
     }
   }
   try {
@@ -3281,195 +3676,4 @@ export async function awsCheckLive(
     if (error instanceof CliError && error.clause === "aws.live-drift") throw error;
     throw new CliError(errMessage(error), { clause: "aws.live-drift", cause: error });
   }
-}
-
-export async function awsPinSandbox(
-  config: QmConfig,
-  image: string,
-  layerOpts?: { configDir: string; sandboxDir: string; envFile?: string },
-): Promise<void> {
-  if (!usesFlySandboxes(config)) {
-    throw new CliError(
-      `this AWS deployment runs Lambda MicroVM sandboxes (sandbox.backend is not "sprites"); use \`qm infra build-image\` instead of \`sandbox publish\``,
-    );
-  }
-  if (config.sandbox?.image && config.sandbox.image !== image) {
-    throw new CliError(
-      `the config sets sandbox.image ${config.sandbox.image}, which freezes the sandbox pin — pinning ${image} now would be silently reverted by the next \`qm up\`; remove the override (or update it to this image) before publishing`,
-    );
-  }
-  const { aws } = awsTopology(config, layerOpts?.configDir ?? process.cwd());
-  assertAwsCallerAccount(aws);
-  const service = "core";
-  const spec = aws.services[service]!;
-  const lease = acquireLease(aws);
-  let before: ReturnType<typeof serviceSnapshot> | undefined;
-  let baseline: DeploymentManifest | undefined;
-  let applied = false;
-  let recorded: DeploymentManifest | undefined;
-  let previousLayerBody: string | undefined;
-  let previousLayerBootstrapped = false;
-  let layerAttempted = false;
-  let pinned = false;
-  try {
-    before = serviceSnapshot(config, Object.keys(aws.services));
-    if (before.counts.core === 0) {
-      recorded = recordCarriedSandboxPin(aws, image);
-      note(
-        `sandbox pin recorded in deployment manifest ${recorded.id}; ${spec.ecsService} is scaled to zero and will use it on the next \`qm up\``,
-      );
-      return;
-    }
-    const live =
-      awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-        "ecs",
-        "describe-task-definition",
-        "--task-definition",
-        before.tasks.core!,
-      ]).taskDefinition ?? null;
-    const container = (live?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-      (item) => item.name === service,
-    );
-    if (!container || typeof container.image !== "string" || !isPinnedWorkloadImage(config, service, container.image)) {
-      recorded = recordCarriedSandboxPin(aws, image);
-      note(
-        `sandbox pin recorded in deployment manifest ${recorded.id}; ${spec.ecsService} has no trusted digest-pinned workload image and will use it on the next \`qm up\``,
-      );
-      return;
-    }
-    baseline = trustedDeploymentBaseline(
-      config,
-      before,
-      Object.keys(aws.services).filter((name) => name !== service),
-      "publish the sandbox pin",
-    );
-    let desiredLayer: DeploymentManifest["layer"] = baseline.layer;
-    let desiredLayerBody: string | undefined;
-    let layerChanged = false;
-    if (layerOpts) {
-      await assertAwsPublicNetwork(config);
-      const liveLayer = await currentDeploymentLayerState({
-        config,
-        transport: awsDeploymentLayerTransport,
-        configDir: layerOpts.configDir,
-        ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
-      });
-      previousLayerBody = liveLayer.body;
-      previousLayerBootstrapped = liveLayer.bootstrapped;
-      if (!baseline.layer && !previousLayerBootstrapped) {
-        baseline.layer = putDeploymentLayerArtifact(config, previousLayerBody);
-        manifestTransaction(aws, baseline, baseline.id);
-      }
-      if (existsSync(layerOpts.sandboxDir)) {
-        desiredLayerBody = deploymentLayerBody(layerOpts.sandboxDir);
-        desiredLayer = putDeploymentLayerArtifact(config, desiredLayerBody);
-        layerChanged = desiredLayer.sha256 !== baseline.layer?.sha256;
-        if (
-          !layerChanged &&
-          liveLayer.status === "applied" &&
-          liveLayer.contentHash === desiredLayer.sha256 &&
-          liveLayer.runtimeContentHash === desiredLayer.sha256
-        ) {
-          desiredLayerBody = undefined;
-        }
-      }
-    }
-    const pinnedConfig = withSandboxPin(config, image);
-    const task = renderTaskDefinition(pinnedConfig, service, container.image, secretArns(config));
-    const taskChanged = taskDefinitionChanges(task, live).length > 0;
-    const coreCarried = before.tasks.core === baseline.tasks.core;
-    if (!coreCarried) {
-      const manifestTask = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-        "ecs",
-        "describe-task-definition",
-        "--task-definition",
-        baseline.tasks.core!,
-      ]).taskDefinition;
-      const pinOnlyDrift =
-        manifestTask !== undefined &&
-        taskDefinitionChanges(manifestTask as unknown as EcsTaskDefinition, live).every(
-          (change) => change.path === `taskDefinition.containerDefinitions.${service}.environment.FLY_BASE_IMAGE`,
-        );
-      if (!pinOnlyDrift) {
-        throw new CliError(
-          `cannot publish the sandbox pin while core runs ${before.tasks.core}, which differs from the deployment manifest's core task beyond the sandbox pin; run \`qm up --yes\` to converge first`,
-        );
-      }
-    }
-    let taskDefinition = before.tasks.core!;
-    if (taskChanged) {
-      const file = join(mkdtempSync(join(tmpdir(), "qm-task-")), "core.json");
-      writeFileSync(file, JSON.stringify(task));
-      taskDefinition = registerTaskDefinition(config, file);
-      await applyServiceTargets(config, { core: taskDefinition }, { core: before.counts.core! });
-      applied = true;
-    }
-    await awaitServiceTargets(config, { core: { taskDefinition, desiredCount: before.counts.core! } });
-    if (desiredLayerBody && layerOpts) {
-      layerAttempted = true;
-      await syncAwsLayerAfterRoll(
-        {
-          config,
-          transport: awsDeploymentLayerTransport,
-          configDir: layerOpts.configDir,
-          ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
-        },
-        desiredLayerBody,
-        desiredLayer!,
-      );
-    }
-    pinned = true;
-    if (taskChanged || layerChanged || !coreCarried || baseline.sandboxImage !== image) {
-      const layer = desiredLayer ?? baseline.layer;
-      recorded = recordDeploymentManifest(
-        aws,
-        { ...baseline.tasks, core: taskDefinition },
-        {
-          sandboxImage: image,
-          imageLabel: baseline.imageLabel ?? aws.imageLabel,
-          ...(layer ? { layer } : {}),
-          ...(baseline.imageProvenance ? { imageProvenance: baseline.imageProvenance } : {}),
-        },
-      );
-    }
-  } catch (error) {
-    if (pinned) {
-      throw new CliError(
-        `${errMessage(error)}; ${spec.ecsService} already boots sandboxes from ${image} — rerun \`qm sandbox publish\` to record the pin in the deployment manifest`,
-        { cause: error },
-      );
-    }
-    const compensationFailures: string[] = [];
-    if (layerAttempted && previousLayerBody && layerOpts && !previousLayerBootstrapped) {
-      try {
-        await syncAwsLayerAfterRoll(
-          {
-            config,
-            transport: awsDeploymentLayerTransport,
-            configDir: layerOpts.configDir,
-            ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
-          },
-          previousLayerBody,
-          createHash("sha256").update(previousLayerBody).digest("hex"),
-        );
-      } catch (restoreError) {
-        compensationFailures.push(`restoring the pre-pin deployment layer: ${errMessage(restoreError)}`);
-      }
-    } else if (layerAttempted && previousLayerBootstrapped) {
-      warn(
-        `the pre-pin layer snapshot was synthesized (the core had no durable layer record) — leaving the core's layer as the failed sync left it rather than durably installing the empty bundle`,
-      );
-    }
-    if (applied && before) {
-      try {
-        await applyServiceTargets(config, { core: before.tasks.core! }, { core: before.counts.core! });
-      } catch (restoreError) {
-        compensationFailures.push(`restoring the pre-pin core task: ${errMessage(restoreError)}`);
-      }
-    }
-    throwAfterCompensation(error, compensationFailures);
-  } finally {
-    releaseLease(aws, lease);
-  }
-  ok(`${spec.ecsService} now boots sandboxes from ${image} (deployment ${recorded?.id ?? baseline?.id})`);
 }

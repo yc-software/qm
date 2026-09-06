@@ -362,7 +362,7 @@ const appSandbox = (): Sandbox => {
   return {
     listDir: async (_h: SandboxHandle, dir: string) => under(dir).map((f) => f.path),
     readFileBytes: async (_h: SandboxHandle, p: string) => APP_FILES.find((f) => f.path === p)?.data ?? null,
-    backupComputer: async (
+    exportFiles: async (
       _h: SandboxHandle,
       opts?: { include?: Array<"workspace" | "home">; includePaths?: readonly string[] },
     ) => {

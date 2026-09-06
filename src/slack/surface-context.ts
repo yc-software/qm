@@ -11,8 +11,8 @@ import {
   oversizeMsg,
   parseDeliveryTarget,
 } from "./lib.ts";
+import { type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
-import type { CoreBridge } from "./core-bridge.ts";
 import type { Directory } from "./directory.ts";
 import {
   type ConversationSerializer,
@@ -23,7 +23,6 @@ import {
 
 export function createSurfaceContextFulfiller(deps: {
   core: SlackCoreClient;
-  bridge: CoreBridge;
   directory: Directory;
   serializer: ConversationSerializer;
   botToken: string;
@@ -31,7 +30,7 @@ export function createSurfaceContextFulfiller(deps: {
   userToken?: string;
   clientOptions: Record<string, unknown>;
 }): { fulfillSurfaceContext(client: any, r: SurfaceContextRequest): Promise<void> } {
-  const { core, bridge, directory, serializer, botToken, trustedFileHost, userToken, clientOptions } = deps;
+  const { core, directory, serializer, botToken, trustedFileHost, userToken, clientOptions } = deps;
 
   async function fulfillLiveSearch(
     query: string,
@@ -46,8 +45,8 @@ export function createSurfaceContextFulfiller(deps: {
     }
     try {
       const userClient = new WebClient(token, { ...clientOptions });
-      const res = (await userClient.search.messages({ query, count: Math.min(count, 100) })) as any;
-      const matches: any[] = res?.messages?.matches ?? [];
+      const res = await userClient.search.messages({ query, count: Math.min(count, 100) });
+      const matches = res.messages?.matches ?? [];
       const shaped: RecentMessage[] = matches
         .map((m) => ({
           ts: String(m?.ts ?? ""),
@@ -72,14 +71,18 @@ export function createSurfaceContextFulfiller(deps: {
     channel: string,
     threadTs: string | undefined,
     before: string | undefined,
-  ): Promise<{ raw: any[]; hasMore: boolean }> {
+  ): Promise<{ raw: SlackHistoryMessage[]; hasMore: boolean }> {
     const page = before ? { latest: before, inclusive: false } : {};
     if (threadTs) {
-      const res = await client.conversations.replies({ channel, ts: threadTs, limit: RECENT_THREAD_LIMIT, ...page });
-      return { raw: res.messages ?? [], hasMore: Boolean(res.has_more) };
+      const { messages, hasMore } = parseMessageList(
+        await client.conversations.replies({ channel, ts: threadTs, limit: RECENT_THREAD_LIMIT, ...page }),
+      );
+      return { raw: messages, hasMore };
     }
-    const res = await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT, ...page });
-    return { raw: ((res.messages ?? []) as any[]).slice().reverse(), hasMore: Boolean(res.has_more) };
+    const { messages, hasMore } = parseMessageList(
+      await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT, ...page }),
+    );
+    return { raw: messages.slice().reverse(), hasMore };
   }
 
   async function findMessageAt(
@@ -87,15 +90,14 @@ export function createSurfaceContextFulfiller(deps: {
     channel: string,
     ts: string,
     threadTs: string | undefined,
-  ): Promise<any | undefined> {
+  ): Promise<SlackHistoryMessage | undefined> {
     if (threadTs) {
       const res = await client.conversations.replies({ channel, ts: threadTs, oldest: ts, inclusive: true, limit: 2 });
-      const hit = ((res.messages ?? []) as any[]).find((m) => m?.ts === ts);
+      const hit = parseMessageList(res).messages.find((m) => m?.ts === ts);
       if (hit) return hit;
     }
     const res = await client.conversations.history({ channel, latest: ts, inclusive: true, limit: 1 });
-    const hit = ((res.messages ?? []) as any[]).find((m) => m?.ts === ts);
-    return hit;
+    return parseMessageList(res).messages.find((m) => m?.ts === ts);
   }
 
   async function fetchSurfaceFile(
@@ -111,7 +113,7 @@ export function createSurfaceContextFulfiller(deps: {
         error: "I couldn't find that message — if it's a thread reply, pass its threadTs (the parent message's ts) too",
       };
     }
-    const files = ((msg.files ?? []) as SlackFile[]).filter((f) => f?.id);
+    const files = (msg.files ?? []).filter((f) => f?.id);
     if (!files.length) return { error: "that message has no files attached" };
     let file: SlackFile | undefined;
     if (ref.name) {
@@ -138,7 +140,7 @@ export function createSurfaceContextFulfiller(deps: {
         token: botToken,
         ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
       });
-      ({ blobId } = await bridge.stageBlobInCore(bytes));
+      ({ blobId } = await core.stageBlob(bytes));
     } catch (err) {
       swallow("slack: surface-file fetch", err);
       return { error: `I couldn't read "${slackFileName(file)}" — it may be restricted, deleted, or too large for me` };
@@ -167,7 +169,7 @@ export function createSurfaceContextFulfiller(deps: {
     try {
       groupId = await openConversationFor(client, people);
     } catch (err) {
-      const code = (err as any)?.data?.error;
+      const code = slackErrorCode(err);
       if (code === "method_not_supported_for_channel_type" || code === "missing_scope")
         return { error: "I'm not allowed to open group DMs in this workspace (the app needs the mpim:write scope)" };
       return { error: `I couldn't open that group DM: ${(err as Error).message}` };
@@ -212,7 +214,7 @@ export function createSurfaceContextFulfiller(deps: {
         const info = await directory.getChannelInfo(client, channel);
         if (!info) return post({ error: "I can't see that channel" });
         if (isExternallyShared(info)) return post({ error: "that channel is externally shared, so I won't read it" });
-        if ((info as any).is_member === false)
+        if (info.is_member === false)
           return post({ error: "I'm not a member of that channel — ask someone to /invite me there" });
       } else {
         return post({ error: "malformed context request" });
@@ -226,9 +228,9 @@ export function createSurfaceContextFulfiller(deps: {
         fetchContextHistory(client, channel, undefined, before),
         threadTs
           ? fetchContextHistory(client, channel, threadTs, before)
-          : Promise.resolve({ raw: [] as any[], hasMore: false }),
+          : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
       ]);
-      const byTs = new Map<string, any>();
+      const byTs = new Map<string, SlackHistoryMessage>();
       for (const m of [...chanPage.raw, ...threadPage.raw]) if (m?.ts) byTs.set(m.ts, m);
       const raw = [...byTs.values()];
       const hasMore = chanPage.hasMore || threadPage.hasMore;
@@ -243,7 +245,7 @@ export function createSurfaceContextFulfiller(deps: {
         }),
       );
     } catch (err) {
-      const code = (err as any)?.data?.error;
+      const code = slackErrorCode(err);
       let msg = `Slack read failed: ${(err as Error).message}`;
       if (code === "not_in_channel") msg = "I'm not a member of that channel — ask someone to /invite me there";
       else if (code === "channel_not_found") msg = "I can't see that channel";

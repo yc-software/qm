@@ -4,6 +4,7 @@ import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
+import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -17,6 +18,7 @@ import {
 import { isVisible } from "../directory/visibility.ts";
 import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
+import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
@@ -33,12 +35,15 @@ export function createMessagingMethods(
   App,
   | "createCron"
   | "getCron"
-  | "getCronRuns"
   | "listCrons"
   | "listCronsForViewer"
   | "updateCron"
   | "deleteCron"
   | "setCronEnabled"
+  | "setCronFireNote"
+  | "listCronFires"
+  | "cronFiresByThreadRefs"
+  | "latestCronFireForThread"
   | "setCronDestination"
   | "setCronRecipientConsent"
   | "createWebhook"
@@ -145,8 +150,14 @@ export function createMessagingMethods(
     getCron(id) {
       return deps.crons.get(id);
     },
-    getCronRuns(id, limit) {
-      return deps.crons.getRuns(id, limit);
+    listCronFires(id, opts) {
+      return deps.crons.listFires(id, opts);
+    },
+    cronFiresByThreadRefs(threadRefs) {
+      return deps.crons.firesByThreadRefs(threadRefs);
+    },
+    latestCronFireForThread(id, threadRef) {
+      return deps.crons.latestFireForThread(id, threadRef);
     },
     listCrons() {
       return deps.crons.list();
@@ -220,6 +231,21 @@ export function createMessagingMethods(
     setCronEnabled(id, enabled) {
       return deps.crons.setEnabled(id, enabled);
     },
+    async setCronFireNote(id, note) {
+      const before = await deps.crons.get(id);
+      if (!before) return "missing";
+      const outcome = await deps.crons.setFireNote(id, note);
+      if (outcome === "applied") {
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: note.by ?? before.owner,
+          action: "cron_note",
+          resource: id,
+          scopeLabel: before.ownerScopeId,
+        });
+      }
+      return outcome;
+    },
     async setCronDestination(id, destination) {
       const before = await deps.crons.get(id);
       if (!before) return null;
@@ -269,6 +295,11 @@ export function createMessagingMethods(
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
+      if (surface === "slack" && hasRevisionEvents(events)) {
+        void recordMessageRevisions(deps.sessions, events).catch((e) =>
+          console.error("[revisions] surface revision record failed:", errMessage(e)),
+        );
+      }
       for (const container of new Set(events.filter((e) => !e.self).map((e) => e.container))) {
         void judgeAmbientContainer(surface, container).catch((e) =>
           console.error("[ambient] judge failed:", errMessage(e)),
@@ -377,7 +408,7 @@ export function createMessagingMethods(
 
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
-      if (!(await deps.directory.replace(members, syncedAt))) return;
+      if (!(await deps.directory.replace(members, syncedAt))) return false;
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
@@ -401,13 +432,21 @@ export function createMessagingMethods(
           scopeLabel: orgScope,
         });
       }
+      return true;
     },
     async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations) {
-      await deps.directory.replaceChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations);
+      const applied = await deps.directory.replaceChannels(
+        channels,
+        channelMembers,
+        syncedAt,
+        channelRosterIds,
+        revocations,
+      );
       await h.syncLinkedProjectRosters();
+      return applied;
     },
     async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
-      await deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
+      return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
     },
     async setDirectoryWorkspaceUrl(url) {
       await deps.directory.setWorkspaceUrl(url);
@@ -461,9 +500,7 @@ export function createMessagingMethods(
       return samePersonMatcher(deps.directory, actorId);
     },
     cronAdminUrl(cron) {
-      return adminBase
-        ? `${adminBase}/admin/history?scope=${encodeURIComponent(cron.ownerScopeId)}&origin=cron&cron=${encodeURIComponent(cron.id)}`
-        : undefined;
+      return adminBase ? adminCronHistoryUrl(adminBase, cron.ownerScopeId, cron.id) : undefined;
     },
     async channelName(channelId) {
       const chan = (await deps.directory.listChannels()).find((c) => c.channelId === channelId);

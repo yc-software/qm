@@ -47,10 +47,25 @@ function parseStatus(raw: string): ProcessState {
   return { state: "running" };
 }
 
+function redactPipedIntoWithToken(command: string): string {
+  const segments = command.split("|");
+  let sink = segments.length - 1;
+  while (sink > 0 && !/--with-token\b/i.test(segments[sink]!)) sink--;
+  if (sink === 0) return command;
+  const upstream = segments.slice(0, sink).join("|");
+  const producer = /(?:printf|echo)\s/i.exec(upstream);
+  if (!producer || !upstream.slice(producer.index + producer[0].length).trim()) return command;
+  const consumed = /^[\s\S]*--with-token\b/i.exec(segments[sink]!)![0];
+  const rest = command.slice(upstream.length + 1 + consumed.length);
+  return `${upstream.slice(0, producer.index)}echo <redacted>${upstream.slice(upstream.trimEnd().length)}|${consumed}${rest}`;
+}
+
 export function redactCommand(command: string, env?: Record<string, string>): string {
-  return createSecretValueMasker(env)(command)
-    .replace(/(--?(?:token|password|secret|client[-_]?secret|api[-_]?key)[ =])\S+/gi, "$1<redacted>")
-    .replace(/(?:printf|echo)(?:\s+(?:"[^"]*"|'[^']*'|[^\s"']\S*))+(\s*\|[^|]*--with-token\b)/gi, "echo <redacted>$1")
+  const flagsRedacted = createSecretValueMasker(env)(command).replace(
+    /(--?(?:token|password|secret|client[-_]?secret|api[-_]?key)[ =])\S+/gi,
+    "$1<redacted>",
+  );
+  return redactPipedIntoWithToken(flagsRedacted)
     .replace(
       /(export\s+\w*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|IDENTIFIER|CREDENTIAL|PROXY_USER)\w*=')[^']*'/gi,
       "$1<redacted>'",

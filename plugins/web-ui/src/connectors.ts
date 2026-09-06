@@ -1,12 +1,13 @@
 import { html, render, type TemplateResult } from "lit";
-import { Activity, KeyRound, Link, LockKeyhole, Plug, Plus, RefreshCw, ShieldCheck } from "lucide";
+import { KeyRound, Link, Plug } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
-import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "./keychain-state";
+import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keychain-state";
+import { listPageTpl } from "./list-page";
 
 interface ConnectorProvider {
   connected?: boolean;
@@ -16,41 +17,34 @@ interface ConnectorProvider {
   hosts?: Array<{ host?: string } | string>;
 }
 
-const CONNECTOR_LABELS: Record<string, { name: string; hosts: string; desc?: string }> = {
+const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> = {
   google: {
     name: "Google Workspace",
     hosts: "Gmail, Calendar, Drive, Sheets",
-    desc: "Lets the agent read and act in your Gmail, Calendar, and Sheets on your behalf, and read your Drive (it can save new files there, but not edit your existing ones).",
   },
   slack: {
     name: "Slack",
     hosts: "Channels & messages",
-    desc: "Lets the agent act in Slack as you — read your channels and post messages on your behalf. (To chat with the agent in Slack, just DM it — you don't need this.)",
   },
   notion: {
     name: "Notion",
     hosts: "Pages & databases",
-    desc: "Lets the agent read the Notion pages and databases you share with it (and edit them if you grant that access).",
   },
   linear: {
     name: "Linear",
     hosts: "Issues & projects",
-    desc: "Lets the agent read and update your Linear issues on your behalf.",
   },
   github: {
     name: "GitHub",
     hosts: "Repos, issues & PRs",
-    desc: "Lets the agent read and update your GitHub repos, issues, and PRs on your behalf.",
   },
   dropbox: {
     name: "Dropbox",
     hosts: "Files & folders",
-    desc: "Lets the agent browse, download, and upload files in your Dropbox on your behalf, and manage shared links.",
   },
   x: {
     name: "X (Twitter)",
     hosts: "Posts & profile",
-    desc: "Lets the agent read X and post, like, and follow as you — used when an action should come from your account rather than the org's.",
   },
 };
 
@@ -120,26 +114,24 @@ interface KeychainAsk {
   expiresAt: number;
 }
 
-interface KeychainUsage {
-  credentialId: string;
-  ts: number;
-  scopeLabel: string;
-  status: string;
-}
-
 let connectorProviders: Record<string, ConnectorProvider> = {};
 let keychainCredentials: KeychainCredential[] = [];
 let keychainConnectorCredentials: KeychainConnectorCredential[] = [];
 let keychainGrants: KeychainGrant[] = [];
 let keychainAsks: KeychainAsk[] = [];
-let keychainUsage: KeychainUsage[] = [];
 let keychainScopeNames: Record<string, string> = {};
 let connectorNotice = "";
+let loadNotice = "";
 let addingCredential: { service: string; envKey: string; purpose: string } | null = null;
 let secureDropUrl: string | null = null;
 let confirmation: { title: string; body: string; action: string; run: () => Promise<void> } | null = null;
 let confirmationOpener: HTMLElement | null = null;
 const keychainOperations = new KeychainOperations();
+
+let connectorsLoading = false;
+let keysLoading = false;
+let connectorsEverLoaded = false;
+let keysEverLoaded = false;
 
 export function resetKeychainState(): void {
   keychainOperations.reset();
@@ -148,9 +140,13 @@ export function resetKeychainState(): void {
   keychainConnectorCredentials = [];
   keychainGrants = [];
   keychainAsks = [];
-  keychainUsage = [];
   keychainScopeNames = {};
   connectorNotice = "";
+  loadNotice = "";
+  connectorsLoading = false;
+  keysLoading = false;
+  connectorsEverLoaded = false;
+  keysEverLoaded = false;
   addingCredential = null;
   secureDropUrl = null;
   confirmation = null;
@@ -166,15 +162,15 @@ function fmtDate(ms?: number): string {
   }
 }
 
+function accessModeLabel(mode?: "once" | "standing"): string {
+  return mode === "standing" ? "standing" : "one-time";
+}
+
 function credentialCard(c: KeychainCredential): TemplateResult {
   const subtitle = [c.accountLabel, c.host, c.envKey].filter(Boolean).join(" · ");
   const expired = isExpiredCredential(c);
   const grants = keychainGrants.filter((grant) => grant.credentialId === c.id && isActiveGrant(grant, c));
   const asks = keychainAsks.filter((ask) => ask.credentialId === c.id);
-  const lastUse = keychainUsage.find((usage) => usage.credentialId === c.id);
-  let added = "Encrypted at rest";
-  if (c.kind !== "file" && c.expiresAt) added = `Expires ${fmtDate(c.expiresAt)}`;
-  else if (c.createdAt) added = `Added ${fmtDate(c.createdAt)}`;
   return html`
     <article class="kc-resource kc-credential">
       <div class="kc-resource-main">
@@ -185,12 +181,6 @@ function credentialCard(c: KeychainCredential): TemplateResult {
             ${expired ? html`<span class="kc-state warning">Expired</span>` : ""}
           </div>
           ${subtitle ? html`<div class="kc-resource-meta">${subtitle}</div>` : ""}
-          <div class="kc-credential-facts">
-            <div class="kc-audit-line">
-              ${icon(Activity, 14)}${lastUse ? html`Last used ${fmtDate(lastUse.ts)} in ${scopeName(lastUse.scopeLabel)} · ${lastUse.status}` : "No audited use yet"}
-            </div>
-            <div class="kc-resource-foot">${added}</div>
-          </div>
         </div>
         <button
           class="kc-text-action danger"
@@ -205,14 +195,16 @@ function credentialCard(c: KeychainCredential): TemplateResult {
       ${
         asks.length
           ? html`<div class="kc-access-block pending">
-              <div class="kc-access-label">Pending requests</div>
               ${asks.map(
                 (ask) =>
                   html`<div class="kc-access-row">
                     <div>
-                      <strong>${scopeName(ask.requesterScopeId)}</strong> requested ${ask.requestedMode ?? "one-time"}
-                      access
-                      <div>${ask.purpose} · expires ${fmtDate(ask.expiresAt)}</div>
+                      <span class="kc-access-label">Pending</span>
+                      <bdi><strong>${scopeName(ask.requesterScopeId)}</strong></bdi>
+                      <span
+                        >· ${accessModeLabel(ask.requestedMode)} · ${ask.purpose} · expires
+                        ${fmtDate(ask.expiresAt)}</span
+                      >
                     </div>
                   </div>`,
               )}
@@ -222,13 +214,16 @@ function credentialCard(c: KeychainCredential): TemplateResult {
       ${
         grants.length
           ? html`<div class="kc-access-block">
-              <div class="kc-access-label">${icon(ShieldCheck, 14)} Active access</div>
               ${grants.map(
                 (grant) =>
                   html` <div class="kc-access-row">
                     <div>
-                      <strong>${scopeName(grant.audienceScopeId)}</strong> · ${grant.mode}
-                      <div>${grant.purpose}${grant.expiresAt ? ` · expires ${fmtDate(grant.expiresAt)}` : ""}</div>
+                      <span class="kc-access-label">Access</span>
+                      <bdi><strong>${scopeName(grant.audienceScopeId)}</strong></bdi>
+                      <span
+                        >· ${accessModeLabel(grant.mode)} ·
+                        ${grant.purpose}${grant.expiresAt ? ` · expires ${fmtDate(grant.expiresAt)}` : ""}</span
+                      >
                     </div>
                     <button
                       class="kc-text-action"
@@ -277,14 +272,9 @@ function addCredentialCard(): TemplateResult {
   return html`<section class="kc-add-card" aria-labelledby="kc-add-title">
     <div class="kc-panel-head">
       <div>
-        <span class="kc-eyebrow">New credential</span>
         <h2 id="kc-add-title">Add a credential</h2>
-        <p>
-          Describe the credential here, then paste the secret itself on a private one-time page. It goes straight to
-          your encrypted keychain — it is never shown in chat or stored on this page.
-        </p>
+        <p>You’ll paste the secret on an encrypted one-time page next.</p>
       </div>
-      <div class="kc-panel-icon">${icon(LockKeyhole, 20)}</div>
     </div>
     ${
       secureDropUrl
@@ -422,19 +412,16 @@ export function noteConnectorResult(provider: string, status: string): void {
   connectorNotice = status === "connected" ? `${name}: connected.` : `${name}: connection failed.`;
 }
 
-function drawConnectors(loading = false): void {
+function loadingPlaceholder(label: string): TemplateResult {
+  return html`<div class="kc-loading"><span class="spinner"></span>${label}</div>`;
+}
+
+function drawConnectors(): void {
   if (appState.currentView !== "keychain") return;
+  const accountsLoading = connectorsLoading && !connectorsEverLoaded;
+  const keysLoadingFresh = keysLoading && !keysEverLoaded;
+  const loading = accountsLoading || keysLoadingFresh;
   const entries = Object.entries(connectorProviders);
-  const connectorCredentialStates = keychainConnectorCredentials.map((credential) => ({
-    id: credential.credentialId,
-    kind: "connector",
-  }));
-  const summary = keychainSummary(
-    entries.map(([, provider]) => provider),
-    [...keychainCredentials, ...connectorCredentialStates],
-    keychainGrants,
-    keychainAsks,
-  );
   const connectorCards = entries.map(([id, p]) => {
     const meta = CONNECTOR_LABELS[id] ?? { name: id, hosts: "" };
     const connected = Boolean(p.connected);
@@ -464,19 +451,25 @@ function drawConnectors(loading = false): void {
             </div>
             ${meta.hosts ? html`<div class="kc-resource-meta">${meta.hosts}</div>` : ""}
           </div>
+          <div class="kc-resource-actions">
+            ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${connected || needsReconnect ? "Reconnect" : "Connect account"}</button>` : ""}
+            ${connected || needsReconnect ? html`<button class="kc-text-action danger" type="button" data-confirm-key=${`disconnect:${id}`} ?disabled=${keychainOperations.mutationInFlight} @click=${() => void revokeConnector(id)}>Disconnect</button>` : ""}
+          </div>
         </div>
-        ${meta.desc ? html`<p class="kc-resource-description">${meta.desc}</p>` : ""}
         ${needsReconnect && p.refreshError ? html`<div class="kc-inline-warning" role="status">Refresh failed: ${p.refreshError}</div>` : ""}
         ${
           grants.length
             ? html`<div class="kc-access-block">
-                <div class="kc-access-label">${icon(ShieldCheck, 14)} Active access</div>
                 ${grants.map(
                   (grant) =>
                     html` <div class="kc-access-row">
                       <div>
-                        <strong>${scopeName(grant.audienceScopeId)}</strong> · ${grant.mode}
-                        <div>${grant.purpose}${grant.expiresAt ? ` · expires ${fmtDate(grant.expiresAt)}` : ""}</div>
+                        <span class="kc-access-label">Access</span>
+                        <bdi><strong>${scopeName(grant.audienceScopeId)}</strong></bdi>
+                        <span
+                          >· ${accessModeLabel(grant.mode)} ·
+                          ${grant.purpose}${grant.expiresAt ? ` · expires ${fmtDate(grant.expiresAt)}` : ""}</span
+                        >
                       </div>
                       <button
                         class="kc-text-action"
@@ -492,118 +485,87 @@ function drawConnectors(loading = false): void {
               </div>`
             : ""
         }
-        <div class="kc-resource-actions">
-          ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${connected || needsReconnect ? "Reconnect" : "Connect account"}</button>` : ""}
-          ${connected || needsReconnect ? html`<button class="kc-text-action danger" type="button" data-confirm-key=${`disconnect:${id}`} ?disabled=${keychainOperations.mutationInFlight} @click=${() => void revokeConnector(id)}>Disconnect</button>` : ""}
-        </div>
       </article>
     `;
   });
+  let accountsContent: TemplateResult | TemplateResult[] = connectorCards;
+  if (accountsLoading) accountsContent = loadingPlaceholder("Loading accounts\u2026");
+  else if (!connectorCards.length)
+    accountsContent = html`<div class="kc-empty">
+      ${icon(Link, 20)}
+      <div>
+        <strong>No accounts available</strong><span>Your workspace has not configured any account providers yet.</span>
+      </div>
+    </div>`;
+  let credentialsContent: TemplateResult | TemplateResult[] = keychainCredentials.map(credentialCard);
+  if (keysLoadingFresh) credentialsContent = loadingPlaceholder("Loading credentials\u2026");
+  else if (!keychainCredentials.length)
+    credentialsContent = html`<div class="kc-empty">
+      ${icon(KeyRound, 20)}
+      <div><strong>No stored credentials</strong><span>Add one without pasting a secret into chat.</span></div>
+      <button
+        class="btn"
+        type="button"
+        @click=${() => {
+          addingCredential = { service: "", envKey: "", purpose: "" };
+          secureDropUrl = null;
+          drawConnectors();
+        }}
+      >
+        Add credential
+      </button>
+    </div>`;
   if (!appState.mainEl) return;
+  const section = (
+    id: string,
+    heading: string,
+    count: number,
+    content: TemplateResult | TemplateResult[],
+    sectionLoading: boolean,
+  ) =>
+    html`<section class="kc-section" aria-labelledby=${id}>
+      <div class="kc-section-head">
+        <div class="kc-section-title">
+          <h2 id=${id}>${heading}</h2>
+          <span>${sectionLoading ? "…" : count}</span>
+        </div>
+      </div>
+      <div class="kc-resource-list">${content}</div>
+    </section>`;
+  const rows: TemplateResult[] = [];
+  const notice = [connectorNotice, loadNotice].filter(Boolean).join(" ");
+  if (notice || loading)
+    rows.push(html`<div class="status" role="status">${loading ? "Loading your keychain…" : notice}</div>`);
+  if (addingCredential) rows.push(addCredentialCard());
+  rows.push(
+    section("kc-accounts-title", "Linked accounts", entries.length, accountsContent, accountsLoading),
+    section(
+      "kc-credentials-title",
+      "Stored credentials",
+      keychainCredentials.length,
+      credentialsContent,
+      keysLoadingFresh,
+    ),
+  );
   const host = document.createElement("div");
   host.className = scopedSession.active ? "pane keychain-page scoped-view" : "pane keychain-page";
   render(
     html`
       ${scopedViewTopbar("keychain", () => drawConnectors())}
       <div class="kc-page-content" ?inert=${Boolean(confirmation)}>
-        <header class="kc-hero">
-          <div class="kc-hero-copy">
-            <h1>Keychain</h1>
-            <p>Accounts and credentials your agent may use on your behalf.</p>
-            <div class="kc-trust-note">
-              ${icon(ShieldCheck, 14)}<span>Secrets stay encrypted and every use or shared grant is audited.</span>
-            </div>
-          </div>
-          <div class="kc-hero-actions">
-            <button
-              class="pane-refresh"
-              type="button"
-              aria-label="Refresh keychain"
-              title="Refresh keychain"
-              @click=${() => {
-                connectorNotice = "";
-                void renderConnectors();
-              }}
-            >
-              ${icon(RefreshCw, 17)}
-            </button>
-            <button
-              class="btn primary"
-              type="button"
-              @click=${() => {
-                addingCredential = { service: "", envKey: "", purpose: "" };
-                secureDropUrl = null;
-                drawConnectors();
-              }}
-            >
-              ${icon(Plus, 16)} Add credential
-            </button>
-          </div>
-        </header>
-        <div class="kc-summary" aria-label="Keychain summary">
-          <div><span>${loading ? "—" : summary.connected}</span><small>Connected accounts</small></div>
-          <div><span>${loading ? "—" : keychainCredentials.length}</span><small>Stored credentials</small></div>
-          <div><span>${loading ? "—" : summary.activeGrants}</span><small>Active grants</small></div>
-          <div class=${summary.attention ? "needs-attention" : ""}>
-            <span>${loading ? "—" : summary.attention}</span><small>Need attention</small>
-          </div>
-        </div>
-        ${connectorNotice || loading ? html`<div class="kc-notice" role="status">${loading ? "Loading your keychain…" : connectorNotice}</div>` : ""}
-        ${addingCredential ? addCredentialCard() : ""}
-        <section class="kc-section" aria-labelledby="kc-accounts-title">
-          <div class="kc-section-head">
-            <div class="kc-section-title">
-              <h2 id="kc-accounts-title">Linked accounts</h2>
-              <span>${entries.length}</span>
-            </div>
-            <p>Provider APIs the agent can use as you.</p>
-          </div>
-          <div class="kc-resource-list">
-            ${
-              connectorCards.length
-                ? connectorCards
-                : html`<div class="kc-empty">
-                    ${icon(Link, 20)}
-                    <div>
-                      <strong>No accounts available</strong
-                      ><span>Your workspace has not configured any account providers yet.</span>
-                    </div>
-                  </div>`
-            }
-          </div>
-        </section>
-        <section class="kc-section" aria-labelledby="kc-credentials-title">
-          <div class="kc-section-head">
-            <div class="kc-section-title">
-              <h2 id="kc-credentials-title">Stored credentials</h2>
-              <span>${keychainCredentials.length}</span>
-            </div>
-            <p>API keys, tokens, and files you added through the one-time page.</p>
-          </div>
-          <div class="kc-resource-list">
-            ${
-              keychainCredentials.length
-                ? keychainCredentials.map(credentialCard)
-                : html`<div class="kc-empty">
-                    ${icon(KeyRound, 20)}
-                    <div>
-                      <strong>No stored credentials</strong><span>Add one without pasting a secret into chat.</span>
-                    </div>
-                    <button
-                      class="btn"
-                      type="button"
-                      @click=${() => {
-                        addingCredential = { service: "", envKey: "", purpose: "" };
-                        secureDropUrl = null;
-                        drawConnectors();
-                      }}
-                    >
-                      Add credential
-                    </button>
-                  </div>`
-            }
-          </div>
-        </section>
+        ${listPageTpl({
+          title: "Keychain",
+          action: {
+            label: "Add credential",
+            onClick: () => {
+              addingCredential = { service: "", envKey: "", purpose: "" };
+              secureDropUrl = null;
+              drawConnectors();
+            },
+          },
+          rows,
+          empty: "Nothing in your keychain yet.",
+        })}
       </div>
       ${confirmation ? confirmationCard() : ""}
     `,
@@ -617,47 +579,64 @@ export async function renderConnectors(): Promise<void> {
   if (appState.currentView !== "keychain") return;
   const seq = appState.viewRenderSeq;
   const load = keychainOperations.beginLoad();
-  drawConnectors(true);
-  const [conn, keys] = await Promise.allSettled([
-    api<{ providers?: Record<string, ConnectorProvider> }>("/api/connectors"),
-    api<{
-      credentials?: KeychainCredential[];
-      connectorCredentials?: KeychainConnectorCredential[];
-      grants?: KeychainGrant[];
-      asks?: KeychainAsk[];
-      usage?: KeychainUsage[];
-      scopeNames?: Record<string, string>;
-    }>("/api/keychain/overview"),
-  ]);
-  if (seq !== appState.viewRenderSeq || !keychainOperations.isCurrentLoad(load) || appState.currentView !== "keychain")
-    return;
+  connectorsLoading = true;
+  keysLoading = true;
+  drawConnectors();
+  const fresh = () =>
+    seq === appState.viewRenderSeq && keychainOperations.isCurrentLoad(load) && appState.currentView === "keychain";
   const notices: string[] = [];
-  if (conn.status === "fulfilled") {
-    connectorProviders = Object.fromEntries(
-      Object.entries(conn.value.providers ?? {}).filter(([, p]) => p.available || p.connected || p.needsReconnect),
-    );
-  } else {
-    connectorProviders = {};
-    notices.push(errMessage(conn.reason, "Failed to load connectors."));
-  }
-  if (keys.status === "fulfilled") {
-    keychainCredentials = (keys.value.credentials ?? []).slice().sort((a, b) => a.service.localeCompare(b.service));
-    keychainConnectorCredentials = keys.value.connectorCredentials ?? [];
-    keychainGrants = keys.value.grants ?? [];
-    keychainAsks = keys.value.asks ?? [];
-    keychainUsage = keys.value.usage ?? [];
-    keychainScopeNames = keys.value.scopeNames ?? {};
-  } else {
-    keychainCredentials = [];
-    keychainConnectorCredentials = [];
-    keychainGrants = [];
-    keychainAsks = [];
-    keychainUsage = [];
-    keychainScopeNames = {};
-    notices.push(errMessage(keys.reason, "Failed to load stored keys."));
-  }
-  if (notices.length) connectorNotice = notices.join(" ");
-  drawConnectors(false);
+  loadNotice = "";
+  const applyNotices = () => {
+    loadNotice = notices.join(" ");
+  };
+
+  const connDone = api<{ providers?: Record<string, ConnectorProvider> }>("/api/connectors").then(
+    (value) => {
+      if (!fresh()) return;
+      connectorProviders = Object.fromEntries(
+        Object.entries(value.providers ?? {}).filter(([, p]) => p.available || p.connected || p.needsReconnect),
+      );
+      connectorsEverLoaded = true;
+      connectorsLoading = false;
+      applyNotices();
+      drawConnectors();
+    },
+    (reason) => {
+      if (!fresh()) return;
+      notices.push(errMessage(reason, "Failed to load connectors."));
+      connectorsLoading = false;
+      applyNotices();
+      drawConnectors();
+    },
+  );
+  const keysDone = api<{
+    credentials?: KeychainCredential[];
+    connectorCredentials?: KeychainConnectorCredential[];
+    grants?: KeychainGrant[];
+    asks?: KeychainAsk[];
+    scopeNames?: Record<string, string>;
+  }>("/api/keychain/overview").then(
+    (value) => {
+      if (!fresh()) return;
+      keychainCredentials = (value.credentials ?? []).slice().sort((a, b) => a.service.localeCompare(b.service));
+      keychainConnectorCredentials = value.connectorCredentials ?? [];
+      keychainGrants = value.grants ?? [];
+      keychainAsks = value.asks ?? [];
+      keychainScopeNames = value.scopeNames ?? {};
+      keysEverLoaded = true;
+      keysLoading = false;
+      applyNotices();
+      drawConnectors();
+    },
+    (reason) => {
+      if (!fresh()) return;
+      notices.push(errMessage(reason, "Failed to load stored keys."));
+      keysLoading = false;
+      applyNotices();
+      drawConnectors();
+    },
+  );
+  await Promise.all([connDone, keysDone]);
 }
 
 async function deleteCredential(credential: KeychainCredential): Promise<void> {
@@ -787,7 +766,7 @@ async function startConnector(provider: string): Promise<void> {
     if (!keychainOperations.isCurrentEpoch(stateEpoch)) return;
     connectorNotice = errMessage(e, "Could not start the connector.");
   }
-  drawConnectors(false);
+  drawConnectors();
 }
 
 async function revokeConnector(provider: string): Promise<void> {

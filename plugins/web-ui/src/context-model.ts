@@ -77,6 +77,7 @@ function selectedValue(config: RuntimeConfig): string {
 }
 
 function effortLevelsFor(harnessId: string): Array<{ value: EffortLevel; label: string }> {
+  if (!harnessSupportsEffort(harnessId)) return [];
   return EFFORT_LEVELS.filter(({ value }) => {
     if (value === "ultracode") return harnessId === "pi";
     if (value === "max") return harnessId !== "codex";
@@ -115,11 +116,11 @@ async function choose(scope: string, value: string, effort?: string): Promise<vo
     const effortNote = config.scopeOverride?.effortLevel
       ? ` · ${effortLabel(config.scopeOverride.effortLevel as EffortLevel)} effort`
       : "";
-    contextModelState.notice = `Saved — new conversations here run on ${labelForRuntime(config, config.effective)}${effortNote}.`;
+    contextModelState.notice = `Saved. New conversations here run on ${labelForRuntime(config, config.effective)}${effortNote}.`;
     contextModelState.noticeKind = "saved";
   } catch (e) {
     if (seq !== loadSeq) return;
-    contextModelState.notice = errMessage(e, "Couldn't change the model — try again.");
+    contextModelState.notice = errMessage(e, "Couldn't change the model. Try again.");
     contextModelState.noticeKind = "error";
   } finally {
     if (seq === loadSeq) {
@@ -185,7 +186,7 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
           ...(stalePin
             ? [
                 html`<option value=${selected} selected>
-                  ${labelForRuntime(config, config.scopeOverride!)} — no longer offered
+                  ${labelForRuntime(config, config.scopeOverride!)} (no longer offered)
                 </option>`,
               ]
             : []),
@@ -214,7 +215,7 @@ export function contextModelSection(scopeId: string): TemplateResult | typeof no
       <p class="context-model-hint">
         ${
           selected === INHERIT
-            ? "Following the org default — it changes when the org's does."
+            ? "Following the org default. It changes when the org's does."
             : "Pinned for this project. Anyone in a chat can still pick a different model for that conversation."
         }
         ${isSlack ? " The pinned Slack header (when enabled below) names this model." : ""}

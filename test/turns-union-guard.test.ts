@@ -226,6 +226,53 @@ test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn 
   assert.equal(second.runId, first.runId, "the spawned-asserting live message still steered the live run");
 });
 
+test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack's redelivery namespace", async () => {
+  const turnBody = (threadRef: string): string =>
+    JSON.stringify({
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "channel", channelRef: "C-rd", threadRef, audience: [{ externalId: "U1" }] },
+      text: "hello",
+      async: true,
+      redeliveryKey: "slack:B1:C-rd:1.0",
+    });
+  const post = async (body: string): Promise<{ http: number; runId?: string }> => {
+    const r = await fetch(`${base}/v1/turns`, {
+      method: "POST",
+      headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+      body,
+    });
+    const json = (await r.json()) as { runId?: string };
+    return { http: r.status, ...(json.runId ? { runId: json.runId } : {}) };
+  };
+  const first = await post(turnBody("ch:C-rd:1.0"));
+  const second = await post(turnBody("ch:C-rd:2.0"));
+  assert.equal(first.http, 202);
+  assert.equal(second.http, 202);
+  assert.ok(
+    first.runId && second.runId && first.runId !== second.runId,
+    "the shared key neither collapses nor refuses",
+  );
+});
+
+test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: namespace", async () => {
+  const body = JSON.stringify({
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "web:U1:reserved" },
+    text: "hi",
+    async: true,
+    idempotencyKey: "slack:B1:C1:1.0",
+  });
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    body,
+  });
+  assert.equal(r.status, 400);
+  assert.match(JSON.stringify(await r.json()), /reserved slack: prefix/);
+});
+
 test("POST /v1/crons (raw source-auth) rejects runAs:scopeShared", async () => {
   const body = JSON.stringify({
     schedule: { everyMs: 3_600_000 },

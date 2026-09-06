@@ -83,6 +83,7 @@ export function childCodexAuthFromDerived(derived: {
     auth_mode: "chatgpt",
     tokens: {
       access_token: derived.accessToken,
+      refresh_token: "",
       id_token: derived.idToken,
       ...(derived.accountId ? { account_id: derived.accountId } : {}),
     },
@@ -96,7 +97,7 @@ export function childCodexOAuthAuth(auth: JsonObject): JsonObject {
   const tokens = asObject(sanitized.tokens);
   if (tokens) {
     const { refresh_token: _refresh, ...rest } = tokens;
-    sanitized.tokens = rest;
+    sanitized.tokens = { ...rest, refresh_token: "" };
   }
   return sanitized;
 }

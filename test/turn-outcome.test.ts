@@ -6,7 +6,6 @@ test("a plain reply: completed, nothing pending", () => {
   const o = deriveTurnOutcome({
     reply: "done!",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [],
     terminatedOnApproval: false,
   });
@@ -17,7 +16,6 @@ test("a parked command with no reply: paused AND awaiting approval", () => {
   const o = deriveTurnOutcome({
     reply: "",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [{ kind: "command" }],
     terminatedOnApproval: true,
   });
@@ -28,7 +26,6 @@ test("the split-brain case — a reply AND a terminating parked command: complet
   const o = deriveTurnOutcome({
     reply: "here's what I had before the wall",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [{ kind: "command" }],
     terminatedOnApproval: true,
   });
@@ -39,7 +36,6 @@ test("a COLLECTED approval — the agent worked around it and finished — is a 
   const o = deriveTurnOutcome({
     reply: "worked around it; done",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [{ kind: "command" }],
     terminatedOnApproval: false,
   });
@@ -50,7 +46,6 @@ test("an input pause (2FA prompt) never blocks and never marks the session await
   const o = deriveTurnOutcome({
     reply: "what's the code?",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [{ kind: "input" }],
     terminatedOnApproval: false,
   });
@@ -61,7 +56,6 @@ test("an input pause with no reply still pauses the run but is not awaiting appr
   const o = deriveTurnOutcome({
     reply: "",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [{ kind: "input" }],
     terminatedOnApproval: false,
   });
@@ -72,7 +66,6 @@ test("a mixed pause (input + command) with no output is awaiting approval", () =
   const o = deriveTurnOutcome({
     reply: "",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [{ kind: "input" }, { kind: "command" }],
     terminatedOnApproval: true,
   });
@@ -83,18 +76,6 @@ test("outbound files count as visible output", () => {
   const o = deriveTurnOutcome({
     reply: "",
     attachments: 2,
-    issues: 0,
-    pendingApprovals: [],
-    terminatedOnApproval: false,
-  });
-  assert.equal(o.completed, true);
-});
-
-test("an outbound file issue counts as visible output (a notes-only turn stays in the ok lane)", () => {
-  const o = deriveTurnOutcome({
-    reply: "",
-    attachments: 0,
-    issues: 1,
     pendingApprovals: [],
     terminatedOnApproval: false,
   });
@@ -105,7 +86,6 @@ test("a whitespace-only reply is not visible output", () => {
   const o = deriveTurnOutcome({
     reply: "  \n ",
     attachments: 0,
-    issues: 0,
     pendingApprovals: [],
     terminatedOnApproval: false,
   });
@@ -122,7 +102,7 @@ test("per-approval blocking: input never blocks; a command blocks only when the 
 test("session state after the turn: awaiting_approval wins over idle", () => {
   assert.equal(
     sessionStateAfterTurn(
-      deriveTurnOutcome({ reply: "x", attachments: 0, issues: 0, pendingApprovals: [], terminatedOnApproval: false }),
+      deriveTurnOutcome({ reply: "x", attachments: 0, pendingApprovals: [], terminatedOnApproval: false }),
     ),
     "idle",
   );
@@ -131,7 +111,6 @@ test("session state after the turn: awaiting_approval wins over idle", () => {
       deriveTurnOutcome({
         reply: "x",
         attachments: 0,
-        issues: 0,
         pendingApprovals: [{ kind: "command" }],
         terminatedOnApproval: true,
       }),
@@ -143,7 +122,6 @@ test("session state after the turn: awaiting_approval wins over idle", () => {
       deriveTurnOutcome({
         reply: "",
         attachments: 0,
-        issues: 0,
         pendingApprovals: [{ kind: "input" }],
         terminatedOnApproval: false,
       }),

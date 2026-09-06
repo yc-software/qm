@@ -7,36 +7,72 @@ export interface RunSignal {
   text?: string;
   ts?: string;
   request?: TurnRequest;
+  dedupeKey?: string;
 }
 
 export interface RunSignalStore {
-  send(runId: string, signal: RunSignal): Promise<void>;
+  send(runId: string, signal: RunSignal): Promise<boolean>;
+  hasDedupeKey(dedupeKey: string): Promise<boolean>;
   takePending(runId: string): Promise<RunSignal[]>;
+  takeLive(runId: string): Promise<RunSignal[]>;
+  steerAuthors(runId: string): Promise<string[]>;
   pendingRunIds(): Promise<string[]>;
   prune(olderThanMs: number): Promise<void>;
   onSignal(runId: string, cb: () => void): () => void;
   close?(): Promise<void>;
 }
 
+const MAX_MEMORY_DEDUPE_KEYS = 10_000;
+
 export function createMemoryRunSignalStore(): RunSignalStore {
   const pending = new Map<string, RunSignal[]>();
+  const authors = new Map<string, Array<{ at: number; author: string }>>();
   const listeners = new Map<string, Set<() => void>>();
+  const dedupeKeys = new Set<string>();
   return {
     async send(runId, signal) {
+      if (signal.dedupeKey) {
+        if (dedupeKeys.has(signal.dedupeKey)) return false;
+        dedupeKeys.add(signal.dedupeKey);
+        if (dedupeKeys.size > MAX_MEMORY_DEDUPE_KEYS) dedupeKeys.delete(dedupeKeys.values().next().value!);
+      }
       const list = pending.get(runId) ?? [];
       list.push(signal);
       pending.set(runId, list);
+      const author = signal.kind === "steer" ? signal.request?.actor?.externalId : undefined;
+      if (author) authors.set(runId, [...(authors.get(runId) ?? []), { at: Date.now(), author }]);
       for (const cb of listeners.get(runId) ?? []) cb();
+      return true;
+    },
+    async hasDedupeKey(dedupeKey) {
+      return dedupeKeys.has(dedupeKey);
+    },
+    async steerAuthors(runId) {
+      return [...new Set((authors.get(runId) ?? []).map((a) => a.author))];
     },
     async takePending(runId) {
       const list = pending.get(runId) ?? [];
       pending.delete(runId);
       return list;
     },
+    async takeLive(runId) {
+      const list = pending.get(runId) ?? [];
+      const aborts = list.filter((s) => s.kind === "abort");
+      if (aborts.length) pending.set(runId, aborts);
+      else pending.delete(runId);
+      return list;
+    },
     async pendingRunIds() {
       return [...pending.keys()];
     },
-    async prune() {},
+    async prune(olderThanMs) {
+      const cutoff = Date.now() - olderThanMs;
+      for (const [runId, list] of authors) {
+        const kept = list.filter((a) => a.at >= cutoff);
+        if (kept.length) authors.set(runId, kept);
+        else authors.delete(runId);
+      }
+    },
     onSignal(runId, cb) {
       const set = listeners.get(runId) ?? new Set();
       set.add(cb);
@@ -74,10 +110,14 @@ export function startSignalPoll(
     }
     draining = true;
     inFlight = (async () => {
-      for (const s of await signals.takePending(runId)) {
-        const kind = s.kind as string;
-        if (kind === "abort") await handlers.onAbort();
-        else if ((kind === "steer" || kind === "followUp") && s.text) await handlers.onSteer(s.text, s.ts);
+      let abortDelivered = false;
+      for (const s of await signals.takeLive(runId)) {
+        if (s.kind === "abort") {
+          if (!abortDelivered) {
+            await handlers.onAbort();
+            abortDelivered = true;
+          }
+        } else if (s.text) await handlers.onSteer(s.text, s.ts);
       }
     })()
       .catch((e: unknown) => opts?.onError?.(e))

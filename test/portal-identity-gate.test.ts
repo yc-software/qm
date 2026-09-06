@@ -32,6 +32,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
       scheduler: built.scheduler,
+      identity: built.identity,
+      sessionShares: built.sessionShares,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -83,6 +85,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       "/v1/memory/history?principalId=",
       "/v1/contexts/policy?scope=channel:C1&principalId=",
       "/v1/sessions/s1/background?viewer=",
+      "/v1/shared-sessions/token?viewer=",
+      "/v1/shared-sessions/token/files/file?viewer=",
       "/v1/sessions/s1/background/p1/output?viewer=",
     ]) {
       assert.equal((await fetch(`${base}${path}U1`)).status, 401, `${path} without an identity`);
@@ -93,6 +97,19 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       );
       const mine = await fetch(`${base}${path}U1`, { headers: { "x-portal-identity": alice } });
       assert.ok(mine.status !== 401 && mine.status !== 403, `${path} as myself should reach the handler`);
+    }
+  });
+
+  it("session sharing mutations bind the portal actor", async () => {
+    for (const method of ["POST"]) {
+      for (const headers of [{}, { "x-portal-identity": await token("U1") }]) {
+        const response = await fetch(`${base}/v1/sessions/s1/share`, {
+          method,
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify({ principalId: "U2" }),
+        });
+        assert.equal(response.status, "x-portal-identity" in headers ? 403 : 401);
+      }
     }
   });
 

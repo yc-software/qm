@@ -17,7 +17,7 @@ test("the panel offers inheriting the org default and names what is serving now"
   assert.match(panel, /Org default \(\$\{labelForRuntime\(config, config\.orgDefault\)\}\)/);
   assert.match(panel, /!options\.some\(\(o\) => o\.value === selected\)/);
   assert.match(panel, /no longer offered/);
-  assert.match(panel, /Saved — new conversations here run on/);
+  assert.match(panel, /Saved\. New conversations here run on/);
   assert.match(panel, /The pinned Slack header \(when enabled below\) names this model\./);
 });
 
@@ -66,4 +66,8 @@ test("a pinned model offers a default effort level on the panel", () => {
   assert.match(panel, /effortLevelsFor\(nextHarness\)\.some\(\(o\) => o\.value === effort\) \? effort : undefined/);
   // the effort styles exist
   assert.ok(css.includes(".context-model-effort {"));
+});
+
+test("no effort is ever sent for a harness that doesn't support it", () => {
+  assert.match(panel, /if \(!harnessSupportsEffort\(harnessId\)\) return \[\];/);
 });

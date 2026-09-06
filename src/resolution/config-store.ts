@@ -85,9 +85,18 @@ export interface PersistedWebuiModels {
   scopeId: ScopeId;
   ids: string[];
 }
+export interface PersistedInternalMemberOverrides {
+  scopeId: ScopeId;
+  members: string[];
+}
 export interface PersistedAckEmoji {
   scopeId: ScopeId;
   names: string[];
+}
+export interface PersistedSlackEmojiCatalog {
+  scopeId: ScopeId;
+  emoji: Record<string, string>;
+  updatedAt: number;
 }
 
 export interface PersistedPeopleDirectoryUrl {
@@ -97,6 +106,7 @@ export interface PersistedPeopleDirectoryUrl {
 export interface OrgBranding {
   accent?: string;
   mark?: string;
+  markUrl?: string;
   selfLabel?: string;
   orgName?: string;
 }
@@ -191,6 +201,9 @@ export interface ScopedConfigStore {
   getApprovedHarnesses(): string[] | null;
   setApprovedHarnesses(ids: string[] | null): void;
   getApprovedHarnessesDurable(): Promise<string[] | null>;
+  getInternalMemberOverrides(): string[];
+  setInternalMemberOverrides(members: string[]): void;
+  getInternalMemberOverridesDurable(): Promise<string[]>;
   getOrgAmbient(): boolean;
   setOrgAmbient(on: boolean): void;
   getOrgAmbientDurable(): Promise<boolean>;
@@ -208,6 +221,8 @@ export interface ScopedConfigStore {
   getAckEmoji(id: ScopeId): string[] | null;
   setAckEmoji(id: ScopeId, names: string[] | null): void;
   getAckEmojiDurable(id: ScopeId): Promise<string[] | null>;
+  setSlackEmojiCatalog(id: ScopeId, emoji: Record<string, string>): void;
+  getSlackEmojiCatalogDurable(id: ScopeId): Promise<PersistedSlackEmojiCatalog | null>;
   getPeopleDirectoryUrl(id: ScopeId): string | null;
   setPeopleDirectoryUrl(id: ScopeId, url: string | null): void;
   getBranding(id: ScopeId): OrgBranding | null;
@@ -246,12 +261,14 @@ export function createMemoryConfigStore(
     channelHeaderPin?: DurableMap<PersistedScopedFlag>;
     baseModels?: DurableMap<PersistedBaseModel>;
     approvedHarnesses?: DurableMap<PersistedApprovedHarnesses>;
+    internalMemberOverrides?: DurableMap<PersistedInternalMemberOverrides>;
     orgAmbient?: DurableMap<PersistedScopedFlag>;
     interactiveFastMode?: DurableMap<PersistedScopedFlag>;
     individualModelAuth?: DurableMap<PersistedScopedFlag>;
     webuiModels?: DurableMap<PersistedWebuiModels>;
     peopleDirectoryUrls?: DurableMap<PersistedPeopleDirectoryUrl>;
     ackEmoji?: DurableMap<PersistedAckEmoji>;
+    slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
     branding?: DurableMap<PersistedBranding>;
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
     browseModels?: DurableMap<PersistedBrowseModel>;
@@ -274,6 +291,7 @@ export function createMemoryConfigStore(
   const channelHeaderPin = new Map<ScopeId, boolean>();
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
   let approvedHarnesses: string[] | null = null;
+  let internalMemberOverrides: string[] = [];
   let orgAmbient = true;
   let interactiveFastMode = false;
   let individualModelAuth = false;
@@ -296,12 +314,15 @@ export function createMemoryConfigStore(
   const channelHeaderPinStore = opts.channelHeaderPin ?? createMemoryMap<PersistedScopedFlag>();
   const baseModelStore = opts.baseModels ?? createMemoryMap<PersistedBaseModel>();
   const approvedHarnessStore = opts.approvedHarnesses ?? createMemoryMap<PersistedApprovedHarnesses>();
+  const internalMemberOverridesStore =
+    opts.internalMemberOverrides ?? createMemoryMap<PersistedInternalMemberOverrides>();
   const orgAmbientStore = opts.orgAmbient ?? createMemoryMap<PersistedScopedFlag>();
   const interactiveFastModeStore = opts.interactiveFastMode ?? createMemoryMap<PersistedScopedFlag>();
   const individualModelAuthStore = opts.individualModelAuth ?? createMemoryMap<PersistedScopedFlag>();
   const webuiModelStore = opts.webuiModels ?? createMemoryMap<PersistedWebuiModels>();
   const peopleDirectoryUrlStore = opts.peopleDirectoryUrls ?? createMemoryMap<PersistedPeopleDirectoryUrl>();
   const ackEmojiStore = opts.ackEmoji ?? createMemoryMap<PersistedAckEmoji>();
+  const slackEmojiCatalogStore = opts.slackEmojiCatalog ?? createMemoryMap<PersistedSlackEmojiCatalog>();
   const brandingStore = opts.branding ?? createMemoryMap<PersistedBranding>();
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
@@ -450,6 +471,7 @@ export function createMemoryConfigStore(
           for (const r of await channelHeaderPinStore.all()) channelHeaderPin.set(r.scopeId, r.on);
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
           approvedHarnesses = (await approvedHarnessStore.get(org))?.ids ?? null;
+          internalMemberOverrides = (await internalMemberOverridesStore.get(org))?.members ?? [];
           orgAmbient = (await orgAmbientStore.get(org))?.on ?? true;
           interactiveFastMode = (await interactiveFastModeStore.get(org))?.on ?? false;
           individualModelAuth = (await individualModelAuthStore.get(org))?.on ?? false;
@@ -820,6 +842,15 @@ export function createMemoryConfigStore(
       else persist(`approvedHarnesses:${org}`, "approved harnesses", () => approvedHarnessStore.delete(org));
     },
     getApprovedHarnessesDurable: async () => (await approvedHarnessStore.get(org))?.ids ?? null,
+    getInternalMemberOverrides: () => [...internalMemberOverrides],
+    setInternalMemberOverrides(members) {
+      const next = [...new Set(members.map((m) => m.trim().toLowerCase()).filter(Boolean))];
+      internalMemberOverrides = next;
+      persist(`internalMemberOverrides:${org}`, "internal member overrides", () =>
+        internalMemberOverridesStore.put(org, { scopeId: org, members: next }),
+      );
+    },
+    getInternalMemberOverridesDurable: async () => (await internalMemberOverridesStore.get(org))?.members ?? [],
     getOrgAmbient: () => orgAmbient,
     setOrgAmbient(on) {
       orgAmbient = on;
@@ -872,6 +903,16 @@ export function createMemoryConfigStore(
       const pending = pendingWrites.get(`ackEmoji:${id}`);
       if (pending) await pending;
       return (await ackEmojiStore.get(id))?.names ?? null;
+    },
+    setSlackEmojiCatalog(id, emoji) {
+      persist(`slackEmojiCatalog:${id}`, "slack emoji catalog", () =>
+        slackEmojiCatalogStore.put(id, { scopeId: id, emoji, updatedAt: Date.now() }),
+      );
+    },
+    getSlackEmojiCatalogDurable: async (id) => {
+      const pending = pendingWrites.get(`slackEmojiCatalog:${id}`);
+      if (pending) await pending;
+      return (await slackEmojiCatalogStore.get(id)) ?? null;
     },
     getPeopleDirectoryUrl: (id) => peopleDirectoryUrls.get(id) ?? null,
     setPeopleDirectoryUrl(id, url) {
@@ -1019,6 +1060,7 @@ export function createMemoryConfigStore(
         individualModelAuthRow,
         channelHeaderPinRow,
         autoFlaggerRow,
+        internalOverridesRow,
       ] = await Promise.all([
         soulStore.get(id),
         commandPolicyStore.get(id),
@@ -1035,6 +1077,7 @@ export function createMemoryConfigStore(
         id === org ? individualModelAuthStore.get(org) : null,
         channelHeaderPinStore.get(id),
         id === org ? autoFlaggerStore.get(org) : null,
+        id === org ? internalMemberOverridesStore.get(org) : null,
       ]);
       let refreshedSoul = soul;
       const legacyHistory = legacySoulHistory.get(id) ?? [];
@@ -1071,6 +1114,7 @@ export function createMemoryConfigStore(
       if (baseModel) baseModels.set(id, baseModel);
       else baseModels.delete(id);
       if (id === org) approvedHarnesses = approved?.ids ?? null;
+      if (id === org) internalMemberOverrides = internalOverridesRow?.members ?? [];
       if (id === org) orgAmbient = orgAmbientRow?.on ?? true;
       if (id === org) interactiveFastMode = interactiveFastModeRow?.on ?? false;
       if (id === org) individualModelAuth = individualModelAuthRow?.on ?? false;

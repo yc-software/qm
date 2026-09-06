@@ -22,6 +22,7 @@ export interface DeviceFlowCutoverReset {
 }
 
 export interface DeviceFlowCutoverStore {
+  listServices(scope: ScopeId): Promise<string[]>;
   get(scope: ScopeId, service: string): Promise<DeviceFlowCutoverPolicy | null>;
   resolvePolicy(scope: ScopeId, service: string): Promise<DeviceFlowCutoverPolicy | null>;
   resolve(scope: ScopeId, service: string): Promise<DeviceFlowCutoverMode>;
@@ -85,6 +86,21 @@ export function createDeviceFlowCutoverStore(
     (await resolvePolicy(scope, service))?.mode ?? "legacy";
 
   return {
+    async listServices(scope) {
+      const services = new Set(
+        (await backing.all())
+          .filter((record) => record.scopeId === scope || record.scopeId === orgScope)
+          .map((record) => record.service),
+      );
+      const requests = resets ? await resets.entries() : [...volatileResets.entries()];
+      for (const [key] of requests) {
+        for (const target of new Set([scope, orgScope])) {
+          const prefix = `request:${encodeURIComponent(target)}:`;
+          if (key.startsWith(prefix)) services.add(decodeURIComponent(key.slice(prefix.length)));
+        }
+      }
+      return [...services].sort();
+    },
     get,
     resolvePolicy,
     resolve,

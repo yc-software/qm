@@ -242,12 +242,13 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
         .map((n) => resolveFromIndex(index, n, orderedScopes))
         .filter((r): r is SkillResolution & { skill: Skill } => r.skill !== null);
       if (granted?.length) {
+        const byId = new Map(all.map((skill) => [skill.id, skill]));
         const byName = new Map(visible.map((r) => [r.skill.manifest.name, r]));
         const seen = new Set<string>();
         for (const ref of granted) {
           if (seen.has(ref.id)) continue;
           seen.add(ref.id);
-          const s = await skills.get(ref.id);
+          const s = byId.get(ref.id);
           if (!s || s.status !== "published" || s.scopeId !== ref.ownerScopeId || !isSafeSkillName(s.manifest.name))
             continue;
           const existing = byName.get(s.manifest.name);

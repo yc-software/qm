@@ -28,11 +28,16 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!double-exec ",
   "!read ",
   "!write ",
-  "!writequiet ",
+  "!attach ",
+  "!writeattach ",
+  "!attachsilent ",
   "!reachchan ",
   "!postthread ",
   "!broadcast ",
   "!post ",
+  "!post2 ",
+  "!post-lost-result ",
+  "!post-then-boom ",
   "!postfiles ",
   "!react ",
   "!edit ",
@@ -72,6 +77,7 @@ function mockProviderMessages(
 export function createMockHarness(): Harness {
   const shedSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
+  const resumePostSessions = new Map<string, string>();
   const flakyScreens = new Set<string>();
   return defineHarness(
     {
@@ -165,6 +171,50 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!boom-always" || boomAlwaysSessions.has(turn.session.id)) {
           boomAlwaysSessions.add(turn.session.id);
           throw new Error("boom: simulated turn fault");
+        } else if (command0.startsWith("(system note:") && resumePostSessions.has(turn.session.id)) {
+          const msg = resumePostSessions.get(turn.session.id)!;
+          resumePostSessions.delete(turn.session.id);
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "slack", action: "post", bytes: msg.length },
+            scopeLabel: turn.scopeLabel,
+          });
+          const r = await turn.tools.post(msg);
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            scopeLabel: turn.scopeLabel,
+          });
+          usedTool = true;
+          reply = r.ok ? "(posted after resume)" : `[not sent] ${r.message ?? "failed"}`;
+        } else if (command0.startsWith("!post-lost-result ")) {
+          const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "slack", action: "post", bytes: msg.length },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.tools.post(msg);
+          resumePostSessions.set(turn.session.id, `${msg} (repost)`);
+          throw new Error("boom: simulated fault before the post's tool result landed");
+        } else if (command0.startsWith("!post-then-boom ")) {
+          const rest = cmd.slice(cmd.indexOf("!post-then-boom ") + "!post-then-boom ".length);
+          const bar = rest.indexOf("|");
+          const first = bar === -1 ? rest : rest.slice(0, bar);
+          const second = bar === -1 ? rest : rest.slice(bar + 1);
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "slack", action: "post", bytes: first.length },
+            scopeLabel: turn.scopeLabel,
+          });
+          const r = await turn.tools.post(first);
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            scopeLabel: turn.scopeLabel,
+          });
+          resumePostSessions.set(turn.session.id, second);
+          throw new Error("boom: simulated fault after a completed post");
         } else if (command0 === "!work-then-boom") {
           await turn.emit({
             type: "tool_call",
@@ -200,6 +250,32 @@ export function createMockHarness(): Harness {
         } else if (command0.startsWith("!shed")) {
           shedSessions.add(turn.session.id);
           reply = "worklog: did the thing but never posted";
+        } else if (command0.startsWith("!preamble-then-quiet")) {
+          const preamble =
+            cmd.slice(cmd.indexOf("!preamble-then-quiet") + "!preamble-then-quiet".length).trim() ||
+            "Still queued — silent.";
+          if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "execute", command: "check" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+          usedTool = true;
+          silent = turn.pollFire === true;
+          reply = turn.pollFire ? "" : preamble;
+        } else if (command0.startsWith("!narrate-no-update")) {
+          const narration =
+            cmd.slice(cmd.indexOf("!narrate-no-update") + "!narrate-no-update".length).trim() || "Nothing new.";
+          if (turn.onDelta) for (const chunk of streamChunks(narration)) turn.onDelta(chunk);
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "execute", command: "check" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+          usedTool = true;
+          reply = `${narration}\n\n[no-update]`;
         } else if (command0.startsWith("!preamble")) {
           const preamble = cmd.slice(cmd.indexOf("!preamble") + "!preamble".length).trim() || "On it — checking.";
           if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
@@ -287,7 +363,8 @@ export function createMockHarness(): Harness {
           let tag = "!run ";
           if (command0.startsWith("!scratch ")) tag = "!scratch ";
           else if (command0.startsWith("!owner ")) tag = "!owner ";
-          const command = cmd.slice(cmd.indexOf(tag) + tag.length);
+          const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
+          const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
           if (gateTool("execute")) {
             await turn.emit({
               type: "tool_call",
@@ -315,7 +392,7 @@ export function createMockHarness(): Harness {
           const screen = turn.screenToolResult
             ? await turn.screenToolResult("execute", output, false).catch(() => "unscreened" as const)
             : true;
-          if (screen === false) {
+          if (screen === false || screen === "quarantine_pending") {
             const stub = "[tool output quarantined by Auto security posture]";
             await turn.emit({
               type: "tool_result",
@@ -452,16 +529,36 @@ export function createMockHarness(): Harness {
             usedTool = true;
             reply = `wrote ${path}`;
           }
-        } else if (command0.startsWith("!writequiet ")) {
-          const rest = command0.slice("!writequiet ".length);
+        } else if (
+          command0.startsWith("!writeattach ") ||
+          command0.startsWith("!attachsilent ") ||
+          command0.startsWith("!attach ")
+        ) {
+          const tag = ["!writeattach ", "!attachsilent ", "!attach "].find((t) => command0.startsWith(t))!;
+          const writing = tag !== "!attach ";
+          const rest = command0.slice(tag.length);
           const sp = rest.indexOf(" ");
-          const name = (sp === -1 ? rest : rest.slice(0, sp)).replace(/^outbox\//, "");
-          const data = sp === -1 ? "" : rest.slice(sp + 1);
-          await turn.tools.execute(
-            `mkdir -p "$AGENT_OUTBOX" && printf %s ${JSON.stringify(data)} > "$AGENT_OUTBOX/"${JSON.stringify(name)}`,
-          );
+          const paths = (sp === -1 ? rest : rest.slice(0, sp)).split(",").filter(Boolean);
+          if (writing) {
+            const data = sp === -1 ? "" : rest.slice(sp + 1);
+            for (const path of paths) {
+              await turn.tools.execute(`printf %s ${JSON.stringify(data)} > ${JSON.stringify(path)}`);
+            }
+          }
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "attach", files: paths },
+            scopeLabel: turn.scopeLabel,
+          });
+          const r = await turn.tools.attach(paths);
+          await turn.emit({
+            type: "tool_result",
+            payload: r.ok ? { tool: "attach", ok: true, files: r.files } : { tool: "attach", ok: false },
+            scopeLabel: turn.scopeLabel,
+          });
           usedTool = true;
-          reply = "";
+          if (tag === "!attachsilent ") silent = turn.pollFire === true;
+          reply = r.ok ? "" : `[not attached] ${r.message}`;
         } else if (command0.startsWith("!reachchan ")) {
           const rest = cmd.slice(cmd.indexOf("!reachchan ") + "!reachchan ".length);
           const sp = rest.indexOf(" ");
@@ -513,6 +610,27 @@ export function createMockHarness(): Harness {
           });
           usedTool = true;
           reply = r.ok ? "(broadcast to channel)" : `[not sent] ${r.message ?? "failed"}`;
+        } else if (command0.startsWith("!post2 ")) {
+          const rest = cmd.slice(cmd.indexOf("!post2 ") + "!post2 ".length);
+          const bar = rest.indexOf("|");
+          const msgs = bar === -1 ? [rest] : [rest.slice(0, bar), rest.slice(bar + 1)];
+          let sent = 0;
+          for (const msg of msgs) {
+            await turn.emit({
+              type: "tool_call",
+              payload: { tool: "slack", action: "post", bytes: msg.length },
+              scopeLabel: turn.scopeLabel,
+            });
+            const r = await turn.tools.post(msg);
+            await turn.emit({
+              type: "tool_result",
+              payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+              scopeLabel: turn.scopeLabel,
+            });
+            if (r.ok) sent++;
+          }
+          usedTool = true;
+          reply = `(posted ${sent})`;
         } else if (command0.startsWith("!post ")) {
           const msg = cmd.slice(cmd.indexOf("!post ") + "!post ".length);
           await turn.emit({

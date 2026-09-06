@@ -11,12 +11,13 @@ import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
-import { createExecBackup, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
+import { execFailureDetail } from "./sandbox.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -35,6 +36,7 @@ const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const FINGERPRINT_LABEL = "qm.sandbox-fingerprint";
 const BUILD_HINT = "run `npm run sandbox:local:build`";
+const PREP_TIMEOUT_SEC = 30;
 
 export type { DockerExec };
 
@@ -370,7 +372,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const execBackup = createExecBackup({
+  const execExport = createExecExport({
     label: "local",
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
@@ -405,8 +407,15 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       };
 
       try {
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)} && ${ephemeralCredLinkScript(homeDir)}`, 30);
-        if (prep.code !== 0) throw new Error(`local sandbox provision prep failed: ${prep.stderr.slice(0, 200)}`);
+        const prep = await execRaw(
+          name,
+          `mkdir -p ${shq(workspaceDir)} && ${ephemeralCredLinkScript(homeDir)}`,
+          PREP_TIMEOUT_SEC,
+        );
+        if (prep.code !== 0)
+          throw new Error(
+            `local sandbox provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`,
+          );
 
         await materializeRoLayers(
           workspace,
@@ -464,7 +473,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       return bytes === null ? null : Buffer.from(bytes).toString("utf8");
     },
 
-    backupComputer: execBackup.backupComputer,
+    exportFiles: execExport.exportFiles,
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       return provisionQueue(teardownQueueKey(handle), async () => {

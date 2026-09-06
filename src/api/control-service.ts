@@ -3,14 +3,20 @@ import type { Cron, CronFireLogEntry, CronSchedule, Destination, Principal, Webh
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import type { Scheduler } from "../cron/scheduler.ts";
+import {
+  cronFireReadsNotes,
+  describeRunNowRefusal,
+  echoesCronContextMarkers,
+  flattenFireNote,
+  type Scheduler,
+} from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { resolveCapabilityDestination } from "./capability-destination.ts";
 import { withSlackUnfurlOption, principalDestination } from "../reach/reach.ts";
 import { consentRequiredRecipient } from "../triggers/trigger-store.ts";
 import { sendConsentNotice } from "../triggers/consent-notice.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {
@@ -101,6 +107,8 @@ export interface CronRunsResult {
 export const CRON_PATCH_NOTHING_TO_CHANGE =
   "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, runAs, or unattendedGrants";
 
+export const CRON_FIRE_NOTE_MAX_CHARS = 400;
+
 export type ControlOk<T> = { ok: true } & T;
 export type ControlErr<C extends string> = { ok: false; code: C; message: string };
 
@@ -121,6 +129,11 @@ export interface ControlService {
     req: CronPatchRequest,
     claims: CapabilityClaims,
   ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">>;
+  noteCron(
+    id: string,
+    text: string,
+    claims: CapabilityClaims,
+  ): Promise<ControlOk<{ applied: boolean }> | ControlErr<"not_found" | "forbidden" | "bad_request">>;
   deleteCron(
     id: string,
     claims: CapabilityClaims,
@@ -133,7 +146,10 @@ export interface ControlService {
   runCron(
     id: string,
     claims: CapabilityClaims,
-  ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden" | "unavailable" | "bad_request">>;
+  ): Promise<
+    | ControlOk<{ fireKey: string }>
+    | ControlErr<"not_found" | "forbidden" | "unavailable" | "bad_request" | "already_running">
+  >;
   retargetCron(
     id: string,
     destinationKey: string,
@@ -296,7 +312,13 @@ async function patchFromCronPatchRequest(
   };
 }
 
-const UNATTENDED_GRANTS = new Set(["admin.sessions.read"]);
+const UNATTENDED_GRANTS = new Set([
+  "admin.sessions.read",
+  "admin.audit.read",
+  "admin.metrics.read",
+  "admin.egress.read",
+  "admin.files.read",
+]);
 
 function validateUnattendedGrants(grants: string[]): string | null {
   if (!grants.every((grant) => UNATTENDED_GRANTS.has(grant))) return "unknown unattended grant";
@@ -564,7 +586,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
-      const { runs, total } = await app.getCronRuns(id, req.limit);
+      const { runs, total } = await app.listCronFires(id, req.limit !== undefined ? { limit: req.limit } : {});
       return { ok: true, cron, runs, total };
     },
 
@@ -618,6 +640,59 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
     },
 
+    async noteCron(id, text, capability) {
+      const flattened = flattenFireNote(text);
+      if (!flattened)
+        return { ok: false, code: "bad_request", message: "the note is empty — say what the next fire should know" };
+      const length = [...flattened].length;
+      if (length > CRON_FIRE_NOTE_MAX_CHARS) {
+        return {
+          ok: false,
+          code: "bad_request",
+          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; longer state belongs in files on the workspace disk.`,
+        };
+      }
+      if (echoesCronContextMarkers(flattened)) {
+        return {
+          ok: false,
+          code: "bad_request",
+          message: "the note can't include the cron runtime context markers — write a plain report instead",
+        };
+      }
+      const cron = await app.getCron(id);
+      if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
+      if (!(await canAdministerCron(app, cron, capability.actorId, capability.scopeId)))
+        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (cron.archived) {
+        return {
+          ok: false,
+          code: "bad_request",
+          message: `cron ${id} is archived — its fires won't run, so a note would never be read`,
+        };
+      }
+      if (!cronFireReadsNotes(cron)) {
+        return {
+          ok: false,
+          code: "bad_request",
+          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — durable handoff state belongs in files on the cron's workspace disk`,
+        };
+      }
+      const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
+      if (!ownFire && (cron.unattendedGrants?.length ?? 0) > 0) {
+        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+      }
+      const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
+      const outcome = await app.setCronFireNote(id, {
+        text: flattened,
+        at: fireEntry?.firedAt ?? Date.now(),
+        ...(ownFire ? {} : { by: capability.actorId }),
+      });
+      if (outcome === "missing") return { ok: false, code: "not_found", message: `no cron ${id}` };
+      if (outcome === "applied" && !ownFire) await notifyEdit(cron, capability, ["note"], flattened);
+      return { ok: true, applied: outcome === "applied" };
+    },
+
     async deleteCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
@@ -664,8 +739,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           code: "bad_request",
           message: `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
         };
-      void scheduler.runNow(id).catch((e: unknown) => swallow(`manual fire of cron ${id}`, e));
-      return { ok: true };
+      const result = await scheduler.runNow(id);
+      if (!result.started) {
+        const refusal = describeRunNowRefusal(id, result)!;
+        return { ok: false, code: refusal.error, message: refusal.message };
+      }
+      return { ok: true, fireKey: result.fireKey };
     },
 
     async retargetCron(id, destinationKey, capability) {

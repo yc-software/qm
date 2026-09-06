@@ -19,13 +19,13 @@ Three limits the API enforces (don't offer what it will refuse):
 - Reads that return private content — transcripts, files, notebooks, logs, another
   scope's config — only work from a **DM** with the admin. Two exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
-  session reads work from a scope whose `admin-session-reads` flag an org admin turned
-  on — a per-room delegation: any turn in that room (including autonomous wakes) may
-  read any scope's transcripts and captured prompts, acting and audited as the admin
-  who set the flag (re-checked live — revoking their admin grant closes it). Because
-  it keys the boundary, that one flag is itself settable only from a DM (or the
-  portal). Other mutations work anywhere; the room sees
-  what changed, by design.
+  a cron can carry **unattended read grants** (`unattendedGrants` on the cron:
+  `admin.sessions.read`, `admin.audit.read`, `admin.metrics.read`, `admin.egress.read`,
+  `admin.files.read`) — set only on a live turn by the cron's owner, who must be a
+  current org admin, on a personal-scope cron running as its owner. Each grant opens
+  exactly its own GET routes to that cron's autonomous fires, audited as the owner
+  (re-checked live — revoking their admin grant closes it). Other mutations work
+  anywhere; the room sees what changed, by design.
 - **Grant changes (promote/revoke) are portal-only** through you — see below.
 
 All calls share one shape — only method/path/body vary:
@@ -54,7 +54,7 @@ GET /v1/admin/scopes        → every scope with display labels (#channel names,
 ```bash
 GET /v1/admin/scopes/<scopeId>                → resolved config: commandPolicy, soul (+version), egress, flags, connectors, serviceCredentials
 PUT /v1/admin/scopes/<scopeId>/<resource>     → resource ∈ soul | command-policy | egress |
-                                                admin-session-reads | connectors | service-credentials |
+                                                connectors | service-credentials |
                                                 base-model (org-wide LLM; body { modelId } — e.g. gpt-5.5; empty string clears)
 ```
 
@@ -122,8 +122,8 @@ where the admin acts directly. If asked, point them there — don't try the API
 - `403 … require a turn the admin started themselves` — this is an autonomous run
   (cron/webhook); admin actions only ride turns the admin personally initiated. Say so.
 - `403 … returns private content — ask the agent in a DM` — you're in a shared room;
-  tell the admin to ask again in a DM with you (or, for session reads they want
-  recurring in this room, to turn on this scope's `admin-session-reads` flag — from
+  tell the admin to ask again in a DM with you (or, for reads they want recurring
+  on a schedule, to put an unattended read grant on a personal-scope cron — from
   their DM, never from here).
 - `403 … grant changes (promote/revoke) are portal-only` — point them at the dashboard.
 - `403 granting or removing org admin for an external user is portal-only …` — same

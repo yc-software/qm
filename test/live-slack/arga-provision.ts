@@ -39,11 +39,18 @@ export async function provisionTwinEnvironment(defaultTtl = 60): Promise<Record<
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (ttl > 10 && msg.includes("up to 10 minutes")) {
+      const minimum = Number(process.env.ARGA_TWIN_MIN_TTL_MINUTES) || 0;
+      if (minimum > 10) {
+        throw new Error(`Arga plan caps twin TTL at 10 minutes; this run requires at least ${minimum}`, {
+          cause: err,
+        });
+      }
       console.log("plan caps twin TTL at 10 minutes — retrying with ttl=10");
       session = await provisionSlackTwin(apiKey, 10);
     } else throw err;
   }
   console.log(`twin ready: ${session.baseUrl} (run ${session.runId})`);
+  emitEnv({ ARGA_TWIN_RUN_ID: session.runId });
 
   try {
     const admin = new TwinAdmin(session.adminUrl, session.proxyToken);
@@ -74,7 +81,13 @@ export async function provisionTwinEnvironment(defaultTtl = 60): Promise<Record<
       ARGA_TWIN_PROXY_TOKEN: session.proxyToken,
     };
   } catch (err) {
-    await teardownTwin(apiKey, session.runId).catch(() => {});
+    try {
+      await teardownTwin(apiKey, session.runId);
+    } catch (teardownErr) {
+      throw new Error(`twin ${session.runId} setup failed and cleanup could not be confirmed after ${String(err)}`, {
+        cause: teardownErr,
+      });
+    }
     throw err;
   }
 }

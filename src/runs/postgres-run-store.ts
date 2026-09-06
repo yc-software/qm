@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal } from "./run-store.ts";
+import { isTerminal, releasesDedupKey } from "./run-store.ts";
 import { errMessage } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
@@ -16,7 +17,7 @@ export interface PostgresRuntime {
 }
 
 function isUniqueViolation(err: unknown): boolean {
-  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23505";
+  return isObj(err) && err.code === "23505";
 }
 
 function rowToRun(r: Record<string, unknown>): Run {
@@ -28,6 +29,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     request: { ...request, origin: resolveTurnOrigin(request) },
     result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
     deliveryState: r.delivery_state != null ? (JSON.parse(r.delivery_state as string) as RunDeliveryState) : null,
+    turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
     dedupKey: (r.idempotency_key as string | null) ?? null,
     attempts: Number(r.attempts),
     errorAttempts: Number(r.error_attempts),
@@ -41,71 +43,99 @@ function rowToRun(r: Record<string, unknown>): Run {
   };
 }
 
+const FENCE_HOLD_MS = 600_000;
+
 export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
-  const { query: q, close: closePool } = createPgPool(connectionString, [
-    `CREATE TABLE IF NOT EXISTS runs(
+  const { query: q, close: closePool } = createPgPool(
+    connectionString,
+    [
+      {
+        id: "runs/store/0001",
+        expectedChecksum: "07a121d0fa4e8ae4049e0574939dbf938c8615dc39ce29b74805a7e8ccb4ad0f",
+        statements: [
+          `CREATE TABLE IF NOT EXISTS runs(
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL,
         request TEXT NOT NULL, result TEXT, idempotency_key TEXT UNIQUE,
         attempts INT NOT NULL DEFAULT 0, max_attempts INT NOT NULL DEFAULT 3,
         lease_token TEXT, lease_expires_at BIGINT, worker_id TEXT,
         created_at BIGINT NOT NULL, started_at BIGINT, finished_at BIGINT
       )`,
-    `ALTER TABLE runs ADD COLUMN IF NOT EXISTS delivery_state TEXT`,
-    `ALTER TABLE runs ADD COLUMN IF NOT EXISTS error_attempts INT NOT NULL DEFAULT 0`,
-    `ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL`,
-    `CREATE INDEX IF NOT EXISTS idx_runs_status_created_seq ON runs(status, created_at, seq)`,
-    `CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_runs_session_active_created
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS delivery_state TEXT`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS error_attempts INT NOT NULL DEFAULT 0`,
+          `CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at)`,
+          `CREATE INDEX IF NOT EXISTS idx_runs_session_active_created
         ON runs(session_id, created_at DESC) WHERE status IN ('pending','running')`,
-    `DROP INDEX IF EXISTS idx_runs_status_priority_created`,
-    `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL
+          `DROP INDEX IF EXISTS idx_runs_status_priority_created`,
+          `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL
       WHERE status='running' AND id IN (
         SELECT id FROM (
           SELECT id, row_number() OVER (PARTITION BY session_id ORDER BY started_at ASC NULLS LAST, id) AS rn
           FROM runs WHERE status='running'
         ) dup WHERE dup.rn > 1
       )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_running_per_session ON runs(session_id) WHERE status='running'`,
-    `CREATE TABLE IF NOT EXISTS tool_calls(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_running_per_session ON runs(session_id) WHERE status='running'`,
+          `CREATE TABLE IF NOT EXISTS tool_calls(
         run_id TEXT NOT NULL, attempt INT NOT NULL DEFAULT 1, call_index INT NOT NULL,
         output TEXT NOT NULL, created_at BIGINT NOT NULL,
         PRIMARY KEY(run_id, attempt, call_index)
       )`,
-    `ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1`,
-    // One-time migration to the (run_id, attempt, call_index) key. The whole
-    // DO block is a single transaction, so a crash mid-migration can't leave
-    // the table without a primary key the way the old unconditional
-    // DROP CONSTRAINT + ADD PRIMARY KEY pair could (each ALTER autocommitted
-    // separately). It runs only while the PK is still the legacy shape, keeps
-    // the newest duplicate row if a keyless window let any in, and is a no-op
-    // on every later boot.
-    `DO $$
+          `ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1`,
+          `ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey`,
+          `ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index)`,
+        ],
+      },
+      {
+        id: "runs/store/0002",
+        expectedChecksum: "c0fc23238fbe0ace56a28278bcb6cadfb100eb2c24ee83ce873588d466930270",
+        statements: [
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL`,
+          `CREATE INDEX IF NOT EXISTS idx_runs_status_created_seq ON runs(status, created_at, seq)`,
+        ],
+      },
+      {
+        id: "runs/store/0003",
+        expectedChecksum: "8594c46c02ee90d43292a4c083fedea6c72d93b5f414f75e9e20d2db51b1b595",
+        statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS turn_user_seq BIGINT`],
+      },
+    ],
+    [
+      {
+        id: "runs/maintenance/tool-calls-key",
+        beforeMigrations: true,
+        statements: [
+          `DO $$
       BEGIN
-        IF EXISTS (
-          SELECT 1 FROM pg_constraint c
-          WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
-            AND (SELECT array_agg(a.attname::text ORDER BY k.ord)
-                 FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
-                 JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
-                ) <> ARRAY['run_id','attempt','call_index']
-        ) OR NOT EXISTS (
-          SELECT 1 FROM pg_constraint c
-          WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
-        ) THEN
-          DELETE FROM tool_calls t USING (
-            SELECT ctid, row_number() OVER (
-              PARTITION BY run_id, attempt, call_index ORDER BY created_at DESC, ctid DESC
-            ) AS rn FROM tool_calls
-          ) dup WHERE t.ctid = dup.ctid AND dup.rn > 1;
-          ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey;
-          ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index);
+        IF to_regclass('tool_calls') IS NOT NULL THEN
+          ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint c
+            WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
+              AND (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                   FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                  ) <> ARRAY['run_id','attempt','call_index']
+          ) OR NOT EXISTS (
+            SELECT 1 FROM pg_constraint c
+            WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'
+          ) THEN
+            DELETE FROM tool_calls t USING (
+              SELECT ctid, row_number() OVER (
+                PARTITION BY run_id, attempt, call_index ORDER BY created_at DESC, ctid DESC
+              ) AS rn FROM tool_calls
+            ) dup WHERE t.ctid = dup.ctid AND dup.rn > 1;
+            ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey;
+            ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index);
+          END IF;
         END IF;
       END $$`,
-  ]);
+        ],
+      },
+    ],
+  );
 
   async function getRun(id: string): Promise<Run | null> {
     const { rows } = await q("SELECT * FROM runs WHERE id = $1", [id]);
@@ -156,15 +186,20 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
       const id = randomUUID();
-      const { rows: inserted } = await q(
+      const { rows } = await q(
         `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at)
          VALUES ($1,$2,'pending',$3,$4,0,$5,$6)
-         ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
+         ON CONFLICT (idempotency_key) DO UPDATE SET id = runs.id
+         RETURNING *`,
         [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
       );
-      if (inserted[0]) return { run: rowToRun(inserted[0]), deduped: false };
-      const { rows } = await q("SELECT * FROM runs WHERE idempotency_key = $1", [dedupKey]);
-      return { run: rowToRun(rows[0]!), deduped: true };
+      const run = rowToRun(rows[0]!);
+      return { run, deduped: run.id !== id };
+    },
+
+    async getByDedupKey(dedupKey) {
+      const { rows } = await q(`SELECT * FROM runs WHERE idempotency_key = $1`, [dedupKey]);
+      return rows[0] ? rowToRun(rows[0]) : null;
     },
 
     async claim(workerId, ttlMs): Promise<Run | null> {
@@ -227,8 +262,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async complete(runId, leaseToken, result): Promise<boolean> {
       const { rowCount } = await q(
-        "UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2 WHERE id=$3 AND lease_token=$4",
-        [JSON.stringify(result), Date.now(), runId, leaseToken],
+        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
+           idempotency_key = CASE WHEN $5 THEN NULL ELSE idempotency_key END
+         WHERE id=$3 AND lease_token=$4`,
+        [JSON.stringify(result), Date.now(), runId, leaseToken, releasesDedupKey(result)],
       );
       if (rowCount > 0) {
         settle(await getRun(runId));
@@ -241,6 +278,14 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       const run = await getRun(runId);
       if (!run || run.leaseToken !== leaseToken) return { requeued: false };
       return { requeued: (await retire(run, error, opts?.retry !== false, { countsAsError: true })).requeued };
+    },
+
+    async noteTurnUserSeq(runId: string, seq: number): Promise<boolean> {
+      const { rowCount } = await q("UPDATE runs SET turn_user_seq=$2 WHERE id=$1 AND turn_user_seq IS NULL", [
+        runId,
+        seq,
+      ]);
+      return rowCount > 0;
     },
 
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
@@ -304,15 +349,20 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       const expired = rows.map(rowToRun);
       let requeued = 0;
       let parked = 0;
-      const retiredSessionIds: string[] = [];
       for (const run of expired) {
         const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
         const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
-        const r = await retire(run, reason, !tooOld, { ifExpiredAt: now });
+        const fenceToken = randomUUID();
+        const fenced = await q(
+          "UPDATE runs SET lease_token=$1, lease_expires_at=$5 WHERE id=$2 AND lease_token=$3 AND status='running' AND lease_expires_at <= $4 RETURNING id",
+          [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS],
+        );
+        if (!fenced.rows[0]) continue;
+        if (onRetired) await onRetired([run.sessionId]);
+        const r = await retire({ ...run, leaseToken: fenceToken }, reason, !tooOld);
         if (!r.applied) continue;
         if (r.requeued) requeued++;
         else parked++;
-        retiredSessionIds.push(run.sessionId);
         opts?.onReap?.({
           runId: run.id,
           sessionId: run.sessionId,
@@ -322,7 +372,6 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           outcome: r.requeued ? "requeued" : "parked",
         });
       }
-      if (onRetired && retiredSessionIds.length) await onRetired(retiredSessionIds);
       return { requeued, parked };
     },
 

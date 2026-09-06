@@ -7,7 +7,7 @@ import { request as httpRequest, createServer as createHttpServer } from "node:h
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";
@@ -16,6 +16,8 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
+import { viewerIdentityKey } from "../src/deploy/access-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
@@ -341,5 +343,57 @@ test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)"
     assert.notEqual(r.status, 401, "a normal host must not hit the subdomain gate");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("subdomain ingress: the gateway vouches for the verified viewer with a per-deployment identity header", async () => {
+  const seen: Array<Record<string, string | string[] | undefined>> = [];
+  const upstream = createHttpServer((req, res) => {
+    seen.push({ ...req.headers });
+    res.end("UPSTREAM OK");
+  });
+  upstream.listen(0);
+  const upstreamPort = (upstream.address() as AddressInfo).port;
+
+  const app = appServingUpstream(upstreamPort);
+  const d = await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "idsite",
+  });
+  const signingSecret = "s".repeat(64);
+  const server = createServer(app, {
+    signingSecret,
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate-secret",
+    auditLog,
+    ...SESSION_DEPS,
+  });
+  server.listen(0);
+  const port = (server.address() as AddressInfo).port;
+  const host = "idsite.apps.example.com";
+
+  try {
+    const res = await httpGet(port, "/", {
+      Host: host,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      [PORTAL_IDENTITY_HEADER]: "forged-by-client",
+    });
+    assert.equal(res.status, 200);
+    const tok = seen[0]![PORTAL_IDENTITY_HEADER];
+    assert.equal(typeof tok, "string", "the viewer identity header reaches the app");
+    assert.notEqual(tok, "forged-by-client", "a client-supplied copy never transits the gateway");
+    const claims = await verifyPortalIdentity(String(tok), viewerIdentityKey(signingSecret, d.id), Date.now());
+    assert.equal(claims?.p, "U1", "the token verifies with the app's own per-deployment key and names the viewer");
+    assert.equal(
+      await verifyPortalIdentity(String(tok), viewerIdentityKey(signingSecret, "other-deployment"), Date.now()),
+      null,
+      "another deployment's key rejects it — no cross-app reuse",
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });

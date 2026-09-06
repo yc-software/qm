@@ -67,7 +67,7 @@ test("reading an asset inside a skill dir does NOT trigger materialization (only
   const tc = ctx((d) => seen.push(d));
   await tc.read("skills/popular-web-designs/scripts/render.py");
   await tc.read("skills/foo/references/notes.md");
-  await tc.read("outbox/report.md");
+  await tc.read("reports/report.md");
   assert.deepEqual(seen, [], "no lazy trigger for non-SKILL.md reads");
 });
 

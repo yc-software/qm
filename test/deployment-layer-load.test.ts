@@ -33,7 +33,6 @@ const ACMECLI_SHAPED = {
     check: "acmecli me",
     reauth: "acmecli login --use-device-code",
     credentialPaths: [credentialDirectory(".acmecli"), credentialDirectory(".aws")],
-    splitEnv: { ACMECLI_ACTING_SLACK_USER_ID: "{actingSlackUserId}", ACMECLI_PLATFORM: "slack" },
   },
 };
 
@@ -56,61 +55,29 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
     { pattern: "\\bacmecli\\b[^;|&]*\\blogin\\b", decision: "deny", reason: "ambient authentication" },
   ]);
   assert.deepEqual(layer.credentialPaths, [credentialDirectory(".acmecli"), credentialDirectory(".aws")]);
-  assert.deepEqual(layer.splitEnvTemplates, [
-    { ACMECLI_ACTING_SLACK_USER_ID: "{actingSlackUserId}", ACMECLI_PLATFORM: "slack" },
-  ]);
 });
 
-test("brokered tools resolve to service, binary, and quarantine roots", () => {
+test("credential tools resolve to service and quarantine roots", () => {
   const layer = loadDeploymentLayer(
     layerDir({
       acmecli: {
         ...ACMECLI_SHAPED,
         auth: {
           ...ACMECLI_SHAPED.auth,
-          broker: {
-            kind: "aws-role",
-            roleArnEnv: "ACMECLI_BROKER_ROLE_ARN",
-            regionEnv: "ACMECLI_BROKER_REGION",
-            region: "us-west-2",
-            sessionActions: ["execute-api:Invoke"],
-          },
         },
       },
       jq: { id: "jq" },
     }),
   );
   assert.deepEqual(
-    layer.brokeredTools,
+    layer.credentialTools,
     [
       {
         service: "acmecli",
-        binary: "acmecli",
         roots: [".acmecli"],
-        broker: {
-          kind: "aws-role",
-          roleArnEnv: "ACMECLI_BROKER_ROLE_ARN",
-          regionEnv: "ACMECLI_BROKER_REGION",
-          region: "us-west-2",
-          sessionActions: ["execute-api:Invoke"],
-        },
       },
     ],
     "the quarantine roots are only the paths mapping to the tool's own service — .aws stays",
-  );
-});
-
-test("a layer declaring brokers on two tools is rejected at load", () => {
-  const broker = { kind: "aws-role", roleArnEnv: "R_ARN", region: "us-west-2", sessionActions: ["execute-api:Invoke"] };
-  assert.throws(
-    () =>
-      loadDeploymentLayer(
-        layerDir({
-          alpha: { id: "alpha", auth: { check: "c", reauth: "r", broker } },
-          beta: { id: "beta", auth: { check: "c", reauth: "r", broker } },
-        }),
-      ),
-    /brokers on multiple tools \(alpha, beta\)/,
   );
 });
 
@@ -118,7 +85,6 @@ test("loadDeploymentLayer: an authless tool contributes no connector or paths", 
   const layer = loadDeploymentLayer(layerDir({ helper: { id: "helper", advertise: "helper tool" } }));
   assert.deepEqual(layer.connectors, []);
   assert.deepEqual(layer.credentialPaths, []);
-  assert.deepEqual(layer.splitEnvTemplates, []);
   assert.deepEqual(layer.advertisedTools, ["helper tool"]);
 });
 
@@ -261,34 +227,28 @@ const BROKERED_ACME = {
   auth: {
     check: "acmectl me",
     reauth: "acmectl login",
-    broker: {
-      kind: "aws-role",
-      roleArnEnv: "ACME_ROLE_ARN",
-      region: "us-west-2",
-      sessionActions: ["execute-api:Invoke"],
-    },
   },
 };
 
 test("a layer installed after boot reaches the app that booted without one", () => {
   const built = buildApp(testConfig({ orgId: "acme" }));
   assert.equal(
-    built.brokeredTools.length,
+    built.credentialTools.length,
     0,
     "a deployment with no DEPLOYMENT_LAYER boots empty; the layer arrives over the API afterwards",
   );
   replaceDeploymentLayer(built.deploymentLayer, loadDeploymentLayer(layerDir({ acme: BROKERED_ACME })));
   assert.equal(
-    built.brokeredTools.length,
+    built.credentialTools.length,
     1,
     "credential vending reads this array; a copy taken at boot would stay empty forever",
   );
-  assert.equal(built.brokeredTools[0]?.service, "acme");
+  assert.equal(built.credentialTools[0]?.service, "acme");
 });
 
 test("replaceDeploymentLayer reaches every holder of the runtime arrays", () => {
   const runtime = emptyDeploymentLayer();
-  const brokeredTools = runtime.brokeredTools;
+  const credentialTools = runtime.credentialTools;
   const commandRules = runtime.commandRules;
   replaceDeploymentLayer(
     runtime,
@@ -298,7 +258,67 @@ test("replaceDeploymentLayer reaches every holder of the runtime arrays", () => 
       }),
     ),
   );
-  assert.equal(brokeredTools.length, 1, "credential vending reads this array");
-  assert.equal(brokeredTools[0]?.service, "acme");
+  assert.equal(credentialTools.length, 1, "credential vending reads this array");
+  assert.equal(credentialTools[0]?.service, "acme");
   assert.equal(commandRules.length, 1, "the command policy reads this array, and already sees post-boot layers");
+});
+
+test("install.files ride the runtime from disk as text, sorted by destination, with defaulted modes", () => {
+  const dir = layerDir({
+    acmecli: {
+      id: "acmecli",
+      install: {
+        binary: "acmecli",
+        files: [
+          { from: "lib.mjs", to: "/usr/local/lib/acmecli/lib.mjs" },
+          { from: "acmecli", to: "/usr/local/bin/acmecli" },
+        ],
+      },
+    },
+  });
+  writeFileSync(
+    join(dir, "tools", "acmecli", "acmecli"),
+    "#!/usr/bin/env node\nimport '/usr/local/lib/acmecli/lib.mjs';\n",
+  );
+  writeFileSync(join(dir, "tools", "acmecli", "lib.mjs"), "export const v = 1;\n");
+  const layer = loadDeploymentLayer(dir);
+  assert.deepEqual(layer.installFiles, [
+    {
+      to: "/usr/local/bin/acmecli",
+      mode: "0755",
+      content: "#!/usr/bin/env node\nimport '/usr/local/lib/acmecli/lib.mjs';\n",
+    },
+    { to: "/usr/local/lib/acmecli/lib.mjs", mode: "0644", content: "export const v = 1;\n" },
+  ]);
+});
+
+test("install.files: a declared file that is missing, binary, or claimed by two tools fails the load", () => {
+  const missing = layerDir({ a: { id: "a", install: { files: [{ from: "a", to: "/usr/local/bin/a" }] } } });
+  assert.throws(() => loadDeploymentLayer(missing), /declared under install\.files but does not exist/);
+  const binary = layerDir({ a: { id: "a", install: { files: [{ from: "a", to: "/usr/local/bin/a" }] } } });
+  writeFileSync(join(binary, "tools", "a", "a"), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00]));
+  assert.throws(() => loadDeploymentLayer(binary), /must be UTF-8 text/);
+  const foreign = layerDir({ a: { id: "a", install: { files: [{ from: "a", to: "/usr/local/bin/node" }] } } });
+  writeFileSync(join(foreign, "tools", "a", "a"), "a\n");
+  assert.throws(
+    () => loadDeploymentLayer(foreign),
+    /must be \/usr\/local\/bin\/a or a path under \/usr\/local\/lib\/a\//,
+  );
+  const shared = layerDir({
+    a: { id: "a", install: { binary: "shared", files: [{ from: "a", to: "/usr/local/bin/shared" }] } },
+    b: { id: "b", install: { binary: "shared", files: [{ from: "b", to: "/usr/local/bin/shared" }] } },
+  });
+  writeFileSync(join(shared, "tools", "a", "a"), "a\n");
+  writeFileSync(join(shared, "tools", "b", "b"), "b\n");
+  assert.throws(() => loadDeploymentLayer(shared), /both install "\/usr\/local\/bin\/shared"/);
+});
+
+test("replaceDeploymentLayer swaps installFiles so a durable layer update ships new tool bytes", () => {
+  const target = emptyDeploymentLayer();
+  const dir = layerDir({ a: { id: "a", install: { files: [{ from: "a", to: "/usr/local/bin/a" }] } } });
+  writeFileSync(join(dir, "tools", "a", "a"), "v1\n");
+  replaceDeploymentLayer(target, loadDeploymentLayer(dir));
+  assert.equal(target.installFiles[0]!.content, "v1\n");
+  replaceDeploymentLayer(target, emptyDeploymentLayer());
+  assert.deepEqual(target.installFiles, []);
 });

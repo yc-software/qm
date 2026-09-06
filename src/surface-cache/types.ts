@@ -11,6 +11,7 @@ export interface CachedMessage {
   mentionsSelf?: boolean;
   editedAt?: number;
   deleted?: boolean;
+  deletedAt?: number;
   handled?: boolean;
   createdAt: number;
 }
@@ -76,6 +77,10 @@ export interface ReadMessagesOpts {
   noFallback?: boolean;
 }
 
+interface RevisedSinceOpts {
+  thread?: string;
+}
+
 export interface SearchOpts {
   container?: string;
   limit?: number;
@@ -87,6 +92,7 @@ export interface SurfaceCache {
   ingest(events: IngestEvent[]): Promise<{ upserted: number }>;
   markHandled(container: string, ts: string): Promise<void>;
   readMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
+  revisedSince(container: string, since: number, opts?: RevisedSinceOpts): Promise<CachedMessage[]>;
   search(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;
   activeThreads(opts?: { container?: string; limit?: number }): Promise<ActiveThread[]>;
   members(container: string): Promise<string[]>;

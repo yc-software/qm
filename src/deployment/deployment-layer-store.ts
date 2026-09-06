@@ -21,7 +21,13 @@ import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
-import { replaceDeploymentLayer, resolvedDeploymentLayer, type DeploymentLayerRuntime } from "./load-layer.ts";
+import {
+  declaredInstallFiles,
+  replaceDeploymentLayer,
+  resolvedDeploymentLayer,
+  type DeploymentLayerRuntime,
+  type LayerInstallFile,
+} from "./load-layer.ts";
 
 interface DeploymentLayerFile {
   path: string;
@@ -132,19 +138,45 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
   return { contract: 1, tools: normalize("tools", input.tools), skills: normalize("skills", input.skills) };
 }
 
-function toolDescriptors(files: DeploymentLayerFile[]): ToolDescriptor[] {
-  const tools = files.map((file) => {
-    if (!/^tools\/[^/]+\/tool\.json$/.test(file.path)) {
-      throw new Error(`deployment layer tool path must be tools/<id>/tool.json: ${file.path}`);
-    }
-    return parseToolDescriptor(file.content, file.path);
-  });
+function toolDescriptors(files: DeploymentLayerFile[]): { tools: ToolDescriptor[]; installFiles: LayerInstallFile[] } {
+  const byDir = new Map<string, DeploymentLayerFile[]>();
+  for (const file of files) {
+    const match = file.path.match(/^tools\/([^/]+)\/([^/]+)$/);
+    if (!match) throw new Error(`deployment layer tool path must be tools/<id>/tool.json: ${file.path}`);
+    const list = byDir.get(match[1]!) ?? [];
+    list.push(file);
+    byDir.set(match[1]!, list);
+  }
+  const tools: ToolDescriptor[] = [];
+  const contents = new Map<string, Map<string, string>>();
   const ids = new Set<string>();
-  for (const tool of tools) {
+  for (const [dir, entries] of byDir) {
+    const descriptor = entries.find((file) => file.path === `tools/${dir}/tool.json`);
+    if (!descriptor) throw new Error(`deployment layer tool path must be tools/<id>/tool.json: ${entries[0]!.path}`);
+    const tool = parseToolDescriptor(descriptor.content, descriptor.path);
     if (ids.has(tool.id)) throw new Error(`duplicate deployment tool id: ${tool.id}`);
     ids.add(tool.id);
+    const declared = new Map((tool.install?.files ?? []).map((file) => [file.from, file]));
+    const present = new Map<string, string>();
+    for (const file of entries) {
+      if (file === descriptor) continue;
+      const name = file.path.slice(`tools/${dir}/`.length);
+      if (!declared.has(name)) {
+        throw new Error(`deployment layer tool path must be tools/<id>/tool.json: ${file.path}`);
+      }
+      present.set(name, file.content);
+    }
+    for (const name of declared.keys()) {
+      if (!present.has(name))
+        throw new Error(
+          `deployment layer tool ${tool.id} declares install file ${name} but the bundle does not carry tools/${dir}/${name}`,
+        );
+    }
+    tools.push(tool);
+    contents.set(tool.id, present);
   }
-  return tools;
+  const installFiles = declaredInstallFiles(tools, (tool, file) => contents.get(tool.id)!.get(file.from)!);
+  return { tools, installFiles };
 }
 
 function skillManifests(files: DeploymentLayerFile[]): SkillManifest[] {
@@ -224,9 +256,9 @@ function validateBundle(
   runtime: DeploymentLayerRuntime;
 } {
   const bundle = normalizedBundle(input);
-  const tools = toolDescriptors(bundle.tools);
+  const { tools, installFiles } = toolDescriptors(bundle.tools);
   const manifests = skillManifests(bundle.skills);
-  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools) };
+  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles) };
 }
 
 export function createDeploymentLayerStore(opts: {

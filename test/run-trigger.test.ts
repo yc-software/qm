@@ -6,6 +6,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { SESSION_BUSY_FIRE_TEXT } from "../src/core/failure-copy.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -234,6 +235,46 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     assert.equal(requests[2]?.unattendedGrants, undefined);
   });
 
+  it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {
+    const d = deps(async () => ({ status: "failed", reason: "TypeError: fetch failed at sandbox.ts:42" }));
+    const out = await runTrigger(d, {
+      owner: "U1",
+      ownerScopeId: scopeId("channel", "C1"),
+      input: "report back",
+      fireKey: "monitor:m9:exit",
+      surface: "monitor",
+      threadRef: "C1:169.7",
+      destination: toChannel,
+      errorNotice: (s) => `⚠️ could not run: ${s}`,
+    });
+    assert.equal(out.note, "failed: TypeError: fetch failed at sandbox.ts:42", "the operator record keeps the detail");
+    const pending = await d.deliveries.pending("slack");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.text, "⚠️ could not run: something went wrong on my end");
+  });
+
+  it("a busy-session fire's error notice says the conversation was busy, never the raw status", async () => {
+    const d = deps(async () => ({
+      status: "refused",
+      refusalKind: "session_busy",
+      reason: SESSION_BUSY_FIRE_TEXT,
+    }));
+    await runTrigger(d, {
+      owner: "U1",
+      ownerScopeId: scopeId("channel", "C1"),
+      input: "report back",
+      fireKey: "monitor:m10:exit",
+      surface: "monitor",
+      threadRef: "C1:169.7",
+      destination: toChannel,
+      errorNotice: (s) => `⚠️ could not run: ${s}`,
+    });
+    const pending = await d.deliveries.pending("slack");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.text, "⚠️ could not run: the conversation was busy with another task");
+    assert.doesNotMatch(pending[0]!.text, /session busy|refused|try again/);
+  });
+
   it("a destination-bearing cron keeps the compose-then-enqueue path: no surface tools, one delivery", async () => {
     let req: TurnRequest | undefined;
     const d = deps(async (r) => {
@@ -251,5 +292,54 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     });
     assert.equal(req?.surfaceTools, undefined, "a cron never gets addressed/shed semantics — it may stay silent");
     assert.equal((await d.deliveries.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
+  });
+});
+
+describe("runTrigger: a busy session defers a fire instead of consuming it", () => {
+  const busy = async (): Promise<TurnResult> => ({
+    status: "refused",
+    refusalKind: "session_busy",
+    reason: SESSION_BUSY_FIRE_TEXT,
+  });
+  const spec = {
+    owner: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    input: "report back",
+    fireKey: "cron:c7:1000",
+    surface: "cron",
+    threadRef: "cron:c7:1000",
+    destination: toChannel,
+    errorNotice: (s: string) => `⚠️ could not run: ${s}`,
+    deferWhenBusy: true,
+  };
+
+  it("reports deferred, leaves the fire key unspent, and tells nobody", async () => {
+    let attempts = 0;
+    const d = deps(async () => {
+      attempts++;
+      return attempts === 1 ? busy() : { status: "ok", reply: "done" };
+    });
+    const first = await runTrigger(d, spec);
+    assert.equal(first.deferred, true);
+    assert.equal(first.ran, false);
+    assert.equal(first.status, undefined);
+    assert.equal((await d.deliveries.pending("slack")).length, 0, "a deferral is not a failure — no notice");
+    assert.equal(await d.idempotency.committed(spec.fireKey), false, "the fire key is still available");
+
+    const second = await runTrigger(d, spec);
+    assert.equal(second.ran, true, "the same fire key runs again once the session is free");
+    assert.equal(second.status, "ok");
+    assert.equal(attempts, 2);
+  });
+
+  it("without deferWhenBusy a busy refusal is consumed and noticed as before", async () => {
+    const d = deps(busy);
+    const { deferWhenBusy: _omitted, ...consuming } = spec;
+    const out = await runTrigger(d, consuming);
+    assert.equal(out.deferred, undefined);
+    assert.equal(out.ran, true);
+    assert.equal(out.status, "refused");
+    assert.equal(await d.idempotency.committed(spec.fireKey), true);
+    assert.equal((await d.deliveries.pending("slack")).length, 1);
   });
 });

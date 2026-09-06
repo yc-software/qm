@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTurnStream } from "../src/runs/turn-stream.ts";
+import { createTurnStream, goalViewFromEntry } from "../src/runs/turn-stream.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -93,26 +93,6 @@ test("a late delta after end() cancels eviction and keeps streaming", async () =
   s.publish("r1", "b");
   await sleep(40);
   assert.equal(s.snapshot("r1"), "ab", "eviction was cancelled by the late delta");
-});
-
-test("alive() spans begin()..end() — true through a silent stretch, false once the turn ends", async () => {
-  const s = createTurnStream({ graceMs: 20 });
-  assert.equal(s.alive("r1"), false, "unknown run is not alive");
-  s.begin("r1");
-  assert.equal(s.alive("r1"), true, "alive from begin(), before any token");
-  assert.equal(s.alive("r1"), true, "still alive while awaiting a long tool call with no new output");
-  s.end("r1");
-  assert.equal(s.alive("r1"), false, "not alive after end(), even inside the grace window");
-  await sleep(40);
-  assert.equal(s.alive("r1"), false, "still not alive after eviction");
-});
-
-test("a late delta after end() resurrects liveness along with the buffer", () => {
-  const s = createTurnStream({ graceMs: 20 });
-  s.begin("r1");
-  s.end("r1");
-  s.publish("r1", "b");
-  assert.equal(s.alive("r1"), true, "a streaming delta means the turn is executing again");
 });
 
 test("markReplyDone flags the reply as final independently of the run lifecycle", () => {
@@ -412,17 +392,13 @@ test("a non-slack surface never strips the first block from the reply", async ()
   }
 });
 
-test("subscribe never fabricates liveness: alive stays false and nothing leaks for a run this instance is not executing", () => {
+test("subscribe leaks nothing for a run this instance is not executing", () => {
   const stream = createTurnStream();
   let posted = false;
   const unsubscribe = stream.subscribe("other-instance-run", { onSurfacePosted: () => (posted = true) });
-  assert.equal(
-    stream.alive("other-instance-run"),
-    false,
-    "only begin() may assert liveness (blue-green staleness check)",
-  );
+  assert.equal(stream.replying("other-instance-run"), false, "only begin() may assert that a turn is under way here");
   unsubscribe();
-  assert.equal(stream.alive("other-instance-run"), false);
+  assert.equal(stream.replying("other-instance-run"), false);
   stream.subscribe("local-run", { onSurfacePosted: () => (posted = true) });
   stream.begin("local-run");
   stream.markSurfacePosted("local-run");
@@ -439,4 +415,40 @@ test("a stale double-unsubscribe cannot evict a newer subscriber's listener set"
   stream.begin("r1");
   stream.markSurfacePosted("r1");
   assert.equal(posted, true, "the newer subscriber must still hear events after a stale unsubscribe fires twice");
+});
+
+test("turn-stream: noteGoal/goal snapshots", () => {
+  const stream = createTurnStream();
+  stream.begin("r1");
+  assert.equal(stream.goal("r1"), null);
+  const goal = { objective: "ship it", status: "active" as const, createdAt: 1, updatedAt: 1 };
+  stream.noteGoal("r1", goal);
+  assert.deepEqual(stream.goal("r1"), goal);
+  stream.noteGoal("r1", { ...goal, status: "complete" });
+  assert.equal(stream.goal("r1")?.status, "complete");
+});
+
+test("goalViewFromEntry extracts goal snapshots from tool results and system entries", () => {
+  const record = {
+    objective: "work for a while",
+    status: "active",
+    floor: { minMs: 1_800_000, minTurns: 3 },
+    createdAt: 10,
+    updatedAt: 20,
+  };
+  const fromTool = goalViewFromEntry("tool_result", { tool: "create_goal", goal: record });
+  assert.equal(fromTool?.objective, "work for a while");
+  assert.equal(fromTool?.status, "active");
+  assert.equal(fromTool?.floor, "30m, 3 turns");
+  const fromSystem = goalViewFromEntry("system", { kind: "goal", goal: { ...record, status: "complete" } });
+  assert.equal(fromSystem?.status, "complete");
+  const paused = goalViewFromEntry("system", { kind: "goal", goal: { ...record, status: "paused" } });
+  assert.equal(paused?.status, "paused");
+  assert.equal(goalViewFromEntry("tool_result", { tool: "execute", goal: record }), null);
+  assert.equal(goalViewFromEntry("tool_result", { tool: "get_goal", goal: null }), null);
+  assert.equal(goalViewFromEntry("system", { kind: "compaction" }), null);
+  assert.equal(
+    goalViewFromEntry("tool_result", { tool: "update_goal", goal: { objective: "", status: "active" } }),
+    null,
+  );
 });

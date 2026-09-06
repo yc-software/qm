@@ -112,7 +112,7 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
 }
 
 export function createPostgresProcessRegistry(connectionString: string): ProcessRegistry {
-  const { q } = createPgPool(connectionString, [
+  const { q } = createPgPool(connectionString, "processes/registry/0001", [
     `CREATE TABLE IF NOT EXISTS process_sessions(
         process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
         command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,

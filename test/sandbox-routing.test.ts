@@ -130,20 +130,20 @@ test("reapDeepIdle is exposed when a backend implements it, and sums across back
 test("a capability held by SOME backends stays exposed and dispatches per handle", async () => {
   const routes = createMemoryMap<SandboxRoute>();
   const aws = fakeBackend("aws");
-  (aws as unknown as { backupComputer: unknown }).backupComputer = async () => [];
+  (aws as unknown as { exportFiles: unknown }).exportFiles = async () => [];
   const sprites = fakeBackend("sprites");
-  delete (sprites as Partial<Sandbox>).backupComputer;
+  delete (sprites as Partial<Sandbox>).exportFiles;
   await routes.put("personal:s", { backend: "sprites" });
   const router = createSandboxRouter({ backends: { aws, sprites }, routes, defaultBackend: "aws" });
-  assert.equal(typeof router.backupComputer, "function");
+  assert.equal(typeof router.exportFiles, "function");
   const onAws = await router.provision(layersFor("personal:f"));
-  assert.deepEqual(await router.backupComputer!(onAws), []);
+  assert.deepEqual(await router.exportFiles!(onAws), []);
   const onSprites = await router.provision(layersFor("personal:s"));
   await assert.rejects(
-    async () => router.backupComputer!(onSprites),
+    async () => router.exportFiles!(onSprites),
     (e: unknown) => {
       assert.ok(e instanceof CapabilityUnsupportedError);
-      assert.match((e as Error).message, /does not support backupComputer/);
+      assert.match((e as Error).message, /does not support exportFiles/);
       return true;
     },
   );
@@ -152,9 +152,9 @@ test("a capability held by SOME backends stays exposed and dispatches per handle
 test("a capability refusal reaches the operator error stream, scope-labelled and de-duped", async () => {
   const routes = createMemoryMap<SandboxRoute>();
   const aws = fakeBackend("aws");
-  (aws as unknown as { backupComputer: unknown }).backupComputer = async () => [];
+  (aws as unknown as { exportFiles: unknown }).exportFiles = async () => [];
   const sprites = fakeBackend("sprites");
-  delete (sprites as Partial<Sandbox>).backupComputer;
+  delete (sprites as Partial<Sandbox>).exportFiles;
   await routes.put("personal:s", { backend: "sprites" });
   const errors: Array<{ code: string; message: string; scopeLabel?: string }> = [];
   const router = createSandboxRouter({
@@ -164,13 +164,13 @@ test("a capability refusal reaches the operator error stream, scope-labelled and
     onError: (e) => errors.push(e),
   });
   const handle = await router.provision(layersFor("personal:s"));
-  await assert.rejects(async () => router.backupComputer!(handle));
+  await assert.rejects(async () => router.exportFiles!(handle));
   assert.equal(errors.length, 1);
   assert.equal(errors[0]!.code, "capability_unsupported");
   assert.equal(errors[0]!.scopeLabel, "personal:s");
-  assert.match(errors[0]!.message, /sprites.*backupComputer/);
-  await assert.rejects(async () => router.backupComputer!(handle));
-  await assert.rejects(async () => router.backupComputer!(handle));
+  assert.match(errors[0]!.message, /sprites.*exportFiles/);
+  await assert.rejects(async () => router.exportFiles!(handle));
+  await assert.rejects(async () => router.exportFiles!(handle));
   assert.equal(errors.length, 1, "a repeated refusal must not re-report");
 });
 
@@ -178,8 +178,8 @@ test("a handle-keyed refusal names the scope its box belongs to", async () => {
   const routes = createMemoryMap<SandboxRoute>();
   const aws = fakeBackend("aws");
   const thin = fakeBackend("sprites");
-  delete (thin as Partial<Sandbox>).backupComputer;
-  (aws as unknown as { backupComputer: unknown }).backupComputer = async () => [];
+  delete (thin as Partial<Sandbox>).exportFiles;
+  (aws as unknown as { exportFiles: unknown }).exportFiles = async () => [];
   await routes.put("personal:s", { backend: "sprites" });
   const errors: Array<{ scopeLabel?: string; message: string }> = [];
   const router = createSandboxRouter({
@@ -189,16 +189,16 @@ test("a handle-keyed refusal names the scope its box belongs to", async () => {
     onError: (e) => errors.push(e),
   });
   const handle = await router.provision(layersFor("personal:s"));
-  await assert.rejects(async () => router.backupComputer!(handle));
+  await assert.rejects(async () => router.exportFiles!(handle));
   assert.equal(errors[0]!.scopeLabel, "personal:s", "publish's silent fallback must still name the scope");
 });
 
 test("a throwing error sink cannot replace the typed refusal callers catch", async () => {
   const routes = createMemoryMap<SandboxRoute>();
   const aws = fakeBackend("aws");
-  (aws as unknown as { backupComputer: unknown }).backupComputer = async () => [];
+  (aws as unknown as { exportFiles: unknown }).exportFiles = async () => [];
   const sprites = fakeBackend("sprites");
-  delete (sprites as Partial<Sandbox>).backupComputer;
+  delete (sprites as Partial<Sandbox>).exportFiles;
   await routes.put("personal:s", { backend: "sprites" });
   const router = createSandboxRouter({
     backends: { aws, sprites },
@@ -210,7 +210,7 @@ test("a throwing error sink cannot replace the typed refusal callers catch", asy
   });
   const handle = await router.provision(layersFor("personal:s"));
   await assert.rejects(
-    async () => router.backupComputer!(handle),
+    async () => router.exportFiles!(handle),
     (e: unknown) => {
       assert.ok(e instanceof CapabilityUnsupportedError);
       return true;
@@ -237,4 +237,53 @@ test("provision routes by routeScopeId when the layers don't name the acting sco
   const h = await router.provision(layersFor("org:global"), { routeScopeId: "personal:m" });
   assert.equal(h.backend, "sprites");
   assert.ok(sprites.calls.includes("provision:org:global"));
+});
+
+test("computer status/restart are absent when no backend implements them", async () => {
+  const { router } = build();
+  assert.equal(router.computerStatus, undefined);
+  assert.equal(router.restartComputer, undefined);
+});
+
+test("computer status/restart forward to the scope's routed backend", async () => {
+  const routes = createMemoryMap<SandboxRoute>();
+  const aws = fakeBackend("aws");
+  const sprites = fakeBackend("sprites");
+  (sprites as unknown as { computerStatus: unknown }).computerStatus = async (scopeId: string) => {
+    sprites.calls.push(`computerStatus:${scopeId}`);
+    return { machine: "started", guestResponsive: true };
+  };
+  (sprites as unknown as { restartComputer: unknown }).restartComputer = async (scopeId: string) => {
+    sprites.calls.push(`restartComputer:${scopeId}`);
+  };
+  await routes.put("personal:s", { backend: "sprites" });
+  const router = createSandboxRouter({ backends: { aws, sprites }, routes, defaultBackend: "aws" });
+  assert.equal(typeof router.computerStatus, "function");
+  assert.deepEqual(await router.computerStatus!("personal:s"), { machine: "started", guestResponsive: true });
+  await router.restartComputer!("personal:s");
+  assert.deepEqual(
+    sprites.calls.filter((c) => c.startsWith("computerStatus") || c.startsWith("restartComputer")),
+    ["computerStatus:personal:s", "restartComputer:personal:s"],
+  );
+});
+
+test("computer status/restart on a scope routed to a backend without them is a typed refusal", async () => {
+  const routes = createMemoryMap<SandboxRoute>();
+  const aws = fakeBackend("aws");
+  (aws as unknown as { computerStatus: unknown }).computerStatus = async () => ({
+    machine: "started",
+    guestResponsive: true,
+  });
+  (aws as unknown as { restartComputer: unknown }).restartComputer = async () => {};
+  const sprites = fakeBackend("sprites");
+  await routes.put("personal:s", { backend: "sprites" });
+  const router = createSandboxRouter({ backends: { aws, sprites }, routes, defaultBackend: "aws" });
+  await assert.rejects(
+    async () => router.computerStatus!("personal:s"),
+    (e: unknown) => e instanceof CapabilityUnsupportedError,
+  );
+  await assert.rejects(
+    async () => router.restartComputer!("personal:s"),
+    (e: unknown) => e instanceof CapabilityUnsupportedError,
+  );
 });

@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks } from "../src/commands/check.ts";
+import { runChecks, runCheckCommand } from "../src/commands/check.ts";
 import type { QmConfig } from "../src/config.ts";
 import { computedSecrets, renderEnvExample } from "../src/secrets.ts";
-
-const PINNED_SANDBOX_IMAGE = `registry.fly.io/acme-sandboxes@sha256:${"b".repeat(64)}`;
 
 const CONFIG: QmConfig = {
   contract: 1,
@@ -19,7 +17,7 @@ const CONFIG: QmConfig = {
   skills: [],
   env: {},
   imageOverrides: {},
-  sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE },
+  sandbox: { app: "acme-sandboxes" },
 };
 
 function deployment(setup: (dir: string) => void, config: Partial<QmConfig> = {}): { dir: string; config: QmConfig } {
@@ -268,20 +266,18 @@ test("secret-looking literals in plugin and sandbox env fail config.no-secret-va
     plugins: [{ name: "linear", image: "ghcr.io/x:1", env: { LINEAR_API_KEY: "lin_x" } }],
   });
   const viaSandbox = deployment(() => {}, {
-    sandbox: { app: "acme-sandboxes", image: PINNED_SANDBOX_IMAGE, env: { GH_TOKEN: "ghp_x" } },
+    sandbox: { app: "acme-sandboxes", env: { GH_TOKEN: "ghp_x" } },
   });
   const viaKey = deployment(() => {}, { env: { core: { AWS_SECRET_ACCESS_KEY: "aws_x" } } });
   const viaCred = deployment(() => {}, {
     sandbox: {
       app: "acme-sandboxes",
-      image: PINNED_SANDBOX_IMAGE,
       env: { PGPASSWORD: "pg_x", GOOGLE_CREDENTIALS: "{}" },
     },
   });
   const benign = deployment(() => {}, {
     sandbox: {
       app: "acme-sandboxes",
-      image: PINNED_SANDBOX_IMAGE,
       env: { JWT_PUBLIC_KEY: "MFkw...", GOOGLE_APPLICATION_CREDENTIALS: "/run/secrets/gcp.json" },
     },
   });
@@ -475,5 +471,21 @@ test("a delivered secret name shadowing renderer-derived env fails config.secret
     rmSync(overridden.dir, { recursive: true, force: true });
     rmSync(benign.dir, { recursive: true, force: true });
     rmSync(dockerTarget.dir, { recursive: true, force: true });
+  }
+});
+
+test("quiet checks reject invalid supplied sandbox credentials just like human checks", async (t) => {
+  const { dir, config } = deployment(() => {});
+  writeFileSync(join(dir, ".env"), "FLY_SANDBOX_API_TOKEN=fm2_invalid\n");
+  t.mock.method(globalThis, "fetch", async () => new Response("", { status: 403 }));
+  try {
+    for (const report of [false, true]) {
+      await assert.rejects(
+        runCheckCommand(config, dir, join(dir, "sandbox"), undefined, report),
+        /cannot access the Fly app/,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

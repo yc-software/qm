@@ -26,35 +26,35 @@ function provider(name: string, calls: string[]): MemoryService {
 test("routes recall and capture independently by scope and policy", async () => {
   const calls: string[] = [];
   const memory = createRoutedMemoryService({
-    providers: { notebook: provider("notebook", calls), brain: provider("brain", calls) },
+    providers: { notebook: provider("notebook", calls), knowledge: provider("knowledge", calls) },
     routes: [
       { provider: "notebook", scopes: ["personal", "channel", "group"], capture: "automatic" },
-      { provider: "brain", scopes: ["org"], capture: "explicit", manage: false },
+      { provider: "knowledge", scopes: ["org"], capture: "explicit", manage: false },
     ],
   });
   assert.equal(await memory.recall("personal:u1", { query: "launch" }), "notebook memory");
-  assert.equal(await memory.recall("org:acme", { query: "launch" }), "brain memory");
+  assert.equal(await memory.recall("org:acme", { query: "launch" }), "knowledge memory");
   assert.equal(await memory.capture("personal:u1", ["prefers terse replies"], 1, "u1", { mode: "automatic" }), 1);
   assert.equal(await memory.capture("org:acme", ["runbook"], 1, "u1", { mode: "automatic" }), 0);
   assert.equal(await memory.capture("org:acme", ["runbook"], 1, "u1", { mode: "explicit" }), 1);
   assert.deepEqual(calls, [
     "notebook:recall:personal:u1:launch",
-    "brain:recall:org:acme:launch",
+    "knowledge:recall:org:acme:launch",
     "notebook:capture:personal:u1:automatic:prefers terse replies",
-    "brain:capture:org:acme:explicit:runbook",
+    "knowledge:capture:org:acme:explicit:runbook",
   ]);
 });
 
 test("multiple recall providers compose without duplicating query hits", async () => {
   const calls: string[] = [];
   const memory = createRoutedMemoryService({
-    providers: { notebook: provider("notebook", calls), brain: provider("brain", calls) },
+    providers: { notebook: provider("notebook", calls), knowledge: provider("knowledge", calls) },
     routes: [
       { provider: "notebook", scopes: ["org"], capture: "off", label: "Notebook" },
-      { provider: "brain", scopes: ["org"], capture: "off", label: "Org brain", manage: false },
+      { provider: "knowledge", scopes: ["org"], capture: "off", label: "Org knowledge", manage: false },
     ],
   });
-  assert.equal(await memory.recall("org:acme"), "### Notebook\nnotebook memory\n\n### Org brain\nbrain memory");
+  assert.equal(await memory.recall("org:acme"), "### Notebook\nnotebook memory\n\n### Org knowledge\nknowledge memory");
 });
 
 test("external recall failures degrade to the remaining provider", async () => {

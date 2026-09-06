@@ -2,7 +2,7 @@ import type { Destination, Webhook } from "../types.ts";
 import type { WebhookStore } from "./webhook-store.ts";
 import { getVerifier, type VerifierInput } from "./verifiers.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
-import { buildWebhookWakeEnvelope } from "../core/wake-envelope.ts";
+import { buildWebhookWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
 import { errMessage } from "../util/errors.ts";
 
 export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
@@ -53,7 +53,8 @@ function renderEvent(
   rawBody: string,
 ): { input: string; securityScreenData: string } {
   const pretty = isObj(parsed) || Array.isArray(parsed) ? JSON.stringify(parsed, null, 2) : rawBody;
-  const capped = pretty.length > MAX_EVENT_CHARS ? `${pretty.slice(0, MAX_EVENT_CHARS)}\n…[truncated]` : pretty;
+  const kept = capForEscaping(pretty, MAX_EVENT_CHARS, "head");
+  const capped = kept.length < pretty.length ? `${kept}\n…[truncated]` : kept;
   return {
     input: buildWebhookWakeEnvelope({
       webhookId: wh.id,

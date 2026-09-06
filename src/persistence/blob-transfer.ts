@@ -22,6 +22,7 @@ import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, isNoSuchLifecycleConfiguration, s3Client, type S3Send } from "./s3.ts";
 
 export const MAX_BLOB_BYTES = 1_000_000_000;
+export const MAX_STAGE_BLOB_BYTES = 12_000_000_000;
 
 export const S3_PART_BYTES = 16 * 1024 * 1024;
 
@@ -49,6 +50,7 @@ export interface BlobTransferStore {
   delete(blobId: string): Promise<void>;
   sweep(maxAgeMs: number): Promise<number>;
   ensureExpiry?(maxAgeDays: number): Promise<boolean>;
+  s3Ref?(blobId: string): { bucket: string; key: string } | null;
 }
 
 export class BlobTooLargeError extends Error {
@@ -173,6 +175,7 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
   const client = options._client ?? s3Client(options.region);
 
   return {
+    s3Ref: (blobId) => (/^[0-9a-f]{32}$/.test(blobId) ? { bucket, key: keyFor(blobId) } : null),
     async put(source, opts) {
       const blobId = newBlobId();
       const Key = keyFor(blobId);

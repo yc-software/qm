@@ -146,7 +146,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     await t.test("running continuation allows queueing and steering", async () => {
       await until(() => host.querySelector<HTMLTextAreaElement>("textarea")?.disabled === false);
       assert.equal(chat.state.resolvingApprovals.size, 0);
-      assert.equal(host.querySelector<HTMLButtonElement>('[title="Attach files"]')?.disabled, false);
+      assert.equal(host.querySelector<HTMLButtonElement>('[aria-label="Attach files"]')?.disabled, false);
       const input = host.querySelector<HTMLTextAreaElement>("textarea")!;
       input.value = "use the smaller change";
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -157,6 +157,8 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       assert.deepEqual(requests.find((r) => r.path === "/api/runs/r1/signal")?.body, {
         kind: "steer",
         text: "use the smaller change",
+        threadRef: row.threadRef,
+        scopeId: row.scopeId,
       });
       assert.equal(chat.state.agent!.state.isStreaming, true);
     });

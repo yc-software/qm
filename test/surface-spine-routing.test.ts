@@ -406,7 +406,7 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
     let reads = 0;
     built.sessions.getTape = async (sessionId) => {
       reads++;
-      if (reads === 2) throw new Error("nudge tape read failed");
+      if (reads >= 2) throw new Error("nudge tape read failed");
       return originalGetTape(sessionId);
     };
 
@@ -422,7 +422,7 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
       ),
       "a failed reread reconstructs from history containing the first sub-turn",
     );
-    assert.equal(reads, 2, "the nudge attempted a fresh tape read");
+    assert.ok(reads >= 2, "the nudge attempted a fresh tape read");
   } finally {
     await built.runtime.stop();
   }

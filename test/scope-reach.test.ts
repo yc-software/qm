@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
-import { createPiTools, type ToolContextRef } from "../src/harness/pi-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import {
   createToolContext,
   type ToolContext,
@@ -219,18 +219,18 @@ function sinkToolContext() {
 }
 
 const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
-const call = (tool: ReturnType<typeof createPiTools>[number] | undefined, params: unknown) => {
+const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
 };
-const schemaProps = (tool: ReturnType<typeof createPiTools>[number]): string[] =>
+const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[] =>
   Object.keys((tool as unknown as { parameters: { properties: Record<string, unknown> } }).parameters.properties);
 
 test("reachExec OFF: the execute scope never accepts a room", () => {
   const ref: ToolContextRef = { current: null };
-  const [legacy] = createPiTools(ref);
+  const [legacy] = createAgentTools(ref);
   assert.ok(!schemaProps(legacy!).includes("scope"), "legacy surface has no scope param");
-  const [scratchOnly] = createPiTools(ref, { scratchExec: true });
+  const [scratchOnly] = createAgentTools(ref, { scratchExec: true });
   const scopeSchema = (scratchOnly as unknown as { parameters: { properties: { scope?: { anyOf?: unknown[] } } } })
     .parameters.properties.scope;
   assert.ok(
@@ -241,7 +241,7 @@ test("reachExec OFF: the execute scope never accepts a room", () => {
 
 test("reachExec ON (no scratch): scope is a free string; a room routes to reachTarget; default is scoped", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createPiTools({ current: tc }, { reachExec: true });
+  const [execute] = createAgentTools({ current: tc }, { reachExec: true });
   assert.deepEqual(schemaProps(execute!), ["command", "computer", "purpose", "timeout_seconds", "scope"]);
   await call(execute, { command: "cat x", scope: "#project-alpha" });
   assert.deepEqual(seen.at(-1)!.opts, { reachTarget: "#project-alpha" });
@@ -255,7 +255,7 @@ test("reachExec ON (no scratch): scope is a free string; a room routes to reachT
 
 test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createPiTools({ current: tc }, { reachExec: true, scratchExec: true });
+  const [execute] = createAgentTools({ current: tc }, { reachExec: true, scratchExec: true });
   assert.deepEqual(schemaProps(execute!), ["command", "computer", "purpose", "timeout_seconds", "scope", "durable"]);
   await call(execute, { command: "x", scope: "scratch" });
   assert.deepEqual(seen.at(-1)!.opts, { scratch: true });
@@ -269,7 +269,7 @@ test("reachExec ON + scratchExec ON: scope accepts scoped, scratch, AND a room",
 
 test("reachExec ON: the scoped/scratch keywords match case-insensitively, never routed as a room", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createPiTools({ current: tc }, { reachExec: true, scratchExec: true });
+  const [execute] = createAgentTools({ current: tc }, { reachExec: true, scratchExec: true });
   await call(execute, { command: "x", scope: "Scoped" });
   assert.deepEqual(seen.at(-1)!.opts, undefined, '"Scoped" is the scoped box, not a reach target');
   await call(execute, { command: "x", scope: "SCRATCH" });
@@ -284,7 +284,7 @@ test("reachExec ON: the scoped/scratch keywords match case-insensitively, never 
 
 test("reachExec ON: the description advertises rooms and the 'other computers' pointer", () => {
   const { tc } = sinkToolContext();
-  const [execute] = createPiTools({ current: tc }, { reachExec: true });
+  const [execute] = createAgentTools({ current: tc }, { reachExec: true });
   const desc = (execute as unknown as { description: string }).description;
   assert.match(desc, /a room like "#project-alpha"/);
   assert.match(desc, /Other computers you can reach/);
@@ -300,7 +300,7 @@ test("Trap 1: a reach result prefixes provenance and keeps the SESSION scope lab
     scopeLabel: scopeId("personal", "U1"),
     orgScopeId: scopeId("org", "default-org"),
   };
-  const [execute] = createPiTools(ref, { reachExec: true });
+  const [execute] = createAgentTools(ref, { reachExec: true });
   const r = await call(execute, { command: "cat x", scope: "#project-alpha" });
   assert.match(textOf(r), /\[ran on #project-alpha's computer\]/);
   const toolResult = emitted.find((e) => e.type === "tool_result")!;

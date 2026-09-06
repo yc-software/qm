@@ -1,12 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { CliError, bold, die, errMessage, header, note, ok, warn } from "../log.ts";
-import { updateConfigSandbox, type QmConfig } from "../config.ts";
+import { join, resolve } from "node:path";
+import { CliError, bold, die, header, note, ok, warn } from "../log.ts";
+import { type QmConfig } from "../config.ts";
 import { sandboxBaseRef } from "../manifest.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
-import { deploymentSecretValue, flyBin, readEnvFile } from "../util.ts";
 
 const SANDBOX_RUNTIME_PLATFORM = "linux/amd64";
 
@@ -16,13 +15,6 @@ export interface SandboxBuildOpts {
   from?: string;
   tag?: string;
   dryRun?: boolean;
-  app?: string;
-}
-
-export interface SandboxPublishOpts extends SandboxBuildOpts {
-  configPath: string;
-  app?: string;
-  envFile?: string;
 }
 
 interface PreparedBuild {
@@ -222,31 +214,6 @@ function replaceDockerfileBase(body: string, from: string, to: string): string {
   return out;
 }
 
-function finalStagePlatform(body: string): string | undefined {
-  const stages = new Map<string, string | undefined>();
-  let final: string | undefined;
-  for (const { ref, alias, platform } of dockerfileFroms(body)) {
-    final = platform ?? stages.get(ref.toLowerCase());
-    if (alias) stages.set(alias.toLowerCase(), final);
-  }
-  return final;
-}
-
-function assertPublishPlatform(body: string): void {
-  const platform = finalStagePlatform(body);
-  if (
-    platform === undefined ||
-    platform.toLowerCase() === SANDBOX_RUNTIME_PLATFORM ||
-    platform === "$TARGETPLATFORM" ||
-    platform === "${TARGETPLATFORM}"
-  )
-    return;
-  throw new CliError(
-    `sandbox/Dockerfile final stage forces ${platform}, but contract v1 sandbox machines require ${SANDBOX_RUNTIME_PLATFORM}; ` +
-      `remove the final FROM --platform override or use --platform=$TARGETPLATFORM`,
-  );
-}
-
 function prepare(opts: SandboxBuildOpts): PreparedBuild {
   const sandboxDir = resolve(opts.sandboxDir);
   const layer = validateSandboxLayer(sandboxDir);
@@ -337,163 +304,4 @@ export function runSandboxBuild(opts: SandboxBuildOpts): void {
   }
   runDocker(args, "sandbox build failed — a declared tool binary may be missing from PATH.");
   ok(`built local image ${tag}`);
-}
-
-export function imageRepository(ref: string): string {
-  const withoutDigest = ref.split("@")[0]!;
-  const slash = withoutDigest.lastIndexOf("/");
-  const colon = withoutDigest.lastIndexOf(":");
-  return colon > slash ? withoutDigest.slice(0, colon) : withoutDigest;
-}
-
-export const flySandboxRepository = (app: string): string => `registry.fly.io/${app}`;
-
-function publishedRepository(opts: SandboxPublishOpts): string {
-  if (opts.app) return opts.app.includes("/") ? imageRepository(opts.app) : flySandboxRepository(opts.app);
-  const app = opts.config.sandbox?.app;
-  if (app) return flySandboxRepository(app);
-  if (opts.config.sandbox?.image) return imageRepository(opts.config.sandbox.image);
-  die("sandbox publish needs sandbox.app in the QM deployment config or --app <registry/repository>.");
-}
-
-function authenticateFlyRegistry(opts: SandboxPublishOpts, references: string[]): void {
-  const needsAuth = references
-    .map(imageRepository)
-    .some((repository) => repository === "registry.fly.io" || repository.startsWith("registry.fly.io/"));
-  if (!needsAuth) return;
-  const envPath = resolve(opts.envFile ?? join(dirname(opts.configPath), ".env"));
-  if (opts.envFile && !existsSync(envPath)) throw new CliError(`--env-file not found: ${opts.envFile}`);
-  const fileToken = existsSync(envPath) ? readEnvFile(envPath).get("FLY_SANDBOX_API_TOKEN") : undefined;
-  const token = deploymentSecretValue("FLY_SANDBOX_API_TOKEN", fileToken);
-  if (!token)
-    throw new CliError(
-      "Fly registry authentication requires FLY_SANDBOX_API_TOKEN in the deployment .env or process environment",
-    );
-  try {
-    execFileSync(flyBin(), ["auth", "docker"], {
-      stdio: "inherit",
-      env: { ...process.env, FLY_API_TOKEN: token },
-    });
-  } catch {
-    throw new CliError("Fly registry authentication failed — verify the app-scoped FLY_SANDBOX_API_TOKEN");
-  }
-}
-
-function readDigest(metadataPath: string): string {
-  const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
-  const digest = metadata["containerimage.digest"];
-  if (typeof digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
-    throw new CliError("sandbox publish completed without an immutable image digest in Buildx metadata");
-  }
-  return digest;
-}
-
-export function pinnedByDigest(ref: string): string {
-  let output: string;
-  try {
-    output = execFileSync("docker", ["buildx", "imagetools", "inspect", ref], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    const stderr = (error as { stderr?: Buffer | string }).stderr;
-    const detail = stderr ? String(stderr).trim() : errMessage(error);
-    if (/@sha256:[a-f0-9]{64}$/.test(ref)) {
-      warn(
-        `could not verify ${ref} against the registry${detail ? ` (${detail})` : ""}; proceeding with the digest-pinned ref — machines pull it with their own registry token`,
-      );
-      return ref;
-    }
-    throw new CliError(
-      `could not resolve an immutable digest for ${ref} — the image may not exist, or the registry rejects reads with this token (Fly app-scoped deploy tokens cannot read the registry); pass ${imageRepository(ref)}@sha256:<digest> to skip the registry lookup${detail ? ` (${detail})` : ""}`,
-    );
-  }
-  if (ref.includes("@sha256:")) return ref;
-  const digest = output.match(/^Digest:\s*(sha256:[a-f0-9]{64})\s*$/m)?.[1];
-  if (!digest) throw new CliError(`registry did not return an immutable digest for ${ref}`);
-  return `${ref}@${digest}`;
-}
-
-function pinnedByPull(ref: string): string {
-  runDocker(
-    ["pull", "--platform", SANDBOX_RUNTIME_PLATFORM, ref],
-    `could not pull ${ref} to resolve its immutable digest — pin the base by digest (${imageRepository(ref)}@sha256:<digest>, via --from or the sandbox/Dockerfile FROM) to skip resolution`,
-  );
-  let output: string;
-  try {
-    output = execFileSync("docker", ["image", "inspect", "--format", "{{json .RepoDigests}}", ref], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    throw new CliError(`could not read the pulled image ${ref}: ${errMessage(error)}`);
-  }
-  const repository = imageRepository(ref);
-  const digest = (JSON.parse(output) as string[]).find((entry) => entry.split("@")[0] === repository)?.split("@")[1];
-  if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest))
-    throw new CliError(`docker did not record an immutable digest for ${ref}`);
-  return `${ref}@${digest}`;
-}
-
-export function recordSandboxPin(configPath: string, image: string | undefined, base?: string): void {
-  const updates: Record<string, string> = {};
-  if (image) updates["image"] = image;
-  if (base?.includes("@sha256:")) updates["baseImage"] = base;
-  if (!Object.keys(updates).length) return;
-  writeFileSync(configPath, updateConfigSandbox(readFileSync(configPath, "utf8"), updates));
-}
-
-export function runSandboxPublish(opts: SandboxPublishOpts): { image: string } | undefined {
-  let prepared = prepare(opts);
-  assertPublishPlatform(prepared.dockerfileBody);
-  const repository = publishedRepository(opts);
-  if (!opts.dryRun) authenticateFlyRegistry(opts, [repository, prepared.base]);
-  if (!opts.dryRun && prepared.base !== "scratch" && !prepared.base.includes("@sha256:")) {
-    const base = pinnedByPull(prepared.base);
-    if (prepared.hasCustom) {
-      const dockerfileBody = replaceDockerfileBase(prepared.dockerfileBody, prepared.base, base);
-      const dockerfilePath = join(mkdtempSync(join(tmpdir(), "qm-sandbox-")), "Dockerfile");
-      writeFileSync(dockerfilePath, dockerfileBody);
-      prepared = { ...prepared, base, dockerfileBody, dockerfilePath };
-    } else {
-      prepared = prepare({ ...opts, from: base });
-    }
-  }
-  const tag = opts.tag ?? "latest";
-  const tagged = `${repository}:${tag}`;
-  const metadataPath = join(mkdtempSync(join(tmpdir(), "qm-sandbox-meta-")), "metadata.json");
-  const args = [
-    "buildx",
-    "build",
-    "--platform",
-    SANDBOX_RUNTIME_PLATFORM,
-    "--provenance=false",
-    "--push",
-    "-t",
-    tagged,
-    "--metadata-file",
-    metadataPath,
-    "--file",
-    prepared.dockerfilePath,
-    prepared.sandboxDir,
-  ];
-  header(`qm sandbox publish → ${tagged}`);
-  printBuild(prepared);
-  if (opts.dryRun) {
-    note(bold("\nDRY RUN — nothing built, pushed, or recorded."));
-    note(`\nDockerfile:\n${prepared.dockerfileBody}`);
-    note(`docker ${args.join(" ")}`);
-    return undefined;
-  }
-  runDocker(args, "sandbox publish failed — verify registry authentication and the layer build.");
-  const digest = readDigest(metadataPath);
-  const image = `${repository}@${digest}`;
-  if (opts.config.target === "aws") {
-    recordSandboxPin(opts.configPath, undefined, prepared.base);
-    ok(`published ${image}`);
-  } else {
-    recordSandboxPin(opts.configPath, image, prepared.base);
-    ok(`published and recorded ${image}`);
-  }
-  return { image };
 }

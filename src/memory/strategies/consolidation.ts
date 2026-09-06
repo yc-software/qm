@@ -44,6 +44,11 @@ export const MEMORY_CONSOLIDATION_PROMPT = [
   "  user-stated conventions about them, and keep one existence-level fact for a standing",
   "  system the user relies on (a cron, a watcher, an integration).",
   "- NEVER delete or weaken a fact the user explicitly asked to remember.",
+  "- A fact recording the user's own words instructing the assistant — a standing rule,",
+  "  preference, or directive about how future work should be done — must survive VERBATIM:",
+  "  never DELETE it and never reword it in an UPDATE. One exception: when two such facts",
+  "  duplicate each other, keep one verbatim and DELETE the redundant copy — unless they carry",
+  "  different `(said in …)` sources, in which case keep both.",
   "- Preserve any `(said in …)` suffix verbatim — it records where a fact was stated and",
   "  scopes it. Keep it through an UPDATE, and never merge two facts that carry different",
   "  `(said in …)` sources.",
@@ -144,7 +149,7 @@ export function createConsolidator(deps: {
     try {
       out = await deps.harness.oneShot(MEMORY_CONSOLIDATION_PROMPT, numbered);
     } catch {
-      return;
+      out = "";
     }
     const at = now();
     const next = applyConsolidationActions(body, parseConsolidationActions(out ?? ""), at);

@@ -1,11 +1,12 @@
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpritesSandbox, spriteScopeName } from "../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
+import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -108,8 +109,8 @@ test("background processes inherit the force-through proxy env", async () => {
 });
 
 test("scope name is stable and slugged", () => {
-  const a = spriteScopeName("qmt", "person:tester");
-  assert.equal(a, spriteScopeName("qmt", "person:tester"));
+  const a = sandboxScopeName("qmt", "person:tester");
+  assert.equal(a, sandboxScopeName("qmt", "person:tester"));
   assert.match(a, /^qmt-person-tester-[0-9a-f]{6}$/);
 });
 
@@ -168,6 +169,56 @@ test("force-through fails closed if the policy readback doesn't bind", async () 
   await assert.rejects(s.provision(layers, { egressToken: token }), /readback mismatch/);
 });
 
+test("a recreated sprite gets the egress policy re-pinned, never served from a stale cache", async () => {
+  const s = make({ egressProxyUrl: "https://proxy.example.com" });
+  const token = await mintCapabilityToken(
+    { actorId: "tester", scopeId: scope, aud: EGRESS_PROXY_AUD, exp: Date.now() + 600_000 },
+    "secret",
+  );
+  const a = await s.provision(layers, { scratch: { key: "job-pol" }, egressToken: token });
+  assert.deepEqual(fake.policy(a.id), [{ domain: "proxy.example.com", action: "allow" }]);
+  await s.teardown(a);
+  assert.equal(fake.policy(a.id), null, "the sprite and its platform policy are gone after release");
+  const b = await s.provision(layers, { scratch: { key: "job-pol" }, egressToken: token });
+  assert.equal(b.id, a.id);
+  assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
+});
+
+test("a failed egress setup releases the scratch lease instead of wedging the key", async () => {
+  const brokenFetch: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    if (url.pathname.endsWith("/policy/network") && (init?.method ?? "GET") === "GET") {
+      return Response.json({ rules: [] });
+    }
+    return fake.fetchImpl(input, init);
+  };
+  const s = make({ egressProxyUrl: "https://proxy.example.com", fetchImpl: brokenFetch });
+  const token = await mintCapabilityToken(
+    { actorId: "tester", scopeId: scope, aud: EGRESS_PROXY_AUD, exp: Date.now() + 600_000 },
+    "secret",
+  );
+  await assert.rejects(
+    s.provision(layers, { scratch: { key: "job-egress" }, egressToken: token }),
+    /readback mismatch/,
+  );
+  const retry = await s.provision(layers, { scratch: { key: "job-egress" } });
+  assert.equal(retry.scratch, true);
+  assert.equal(retry.coldStart, true, "the failed provision released its lease and the box was recreated");
+});
+
+test("scratch sprites are ephemeral and shared leases survive until the last release", async () => {
+  const a = await sandbox.provision(layers, { scratch: { key: "job-1" } });
+  const b = await sandbox.provision(layers, { scratch: { key: "job-1" } });
+  assert.equal(a.scratch, true);
+  assert.equal(a.id, b.id);
+  assert.equal(a.coldStart, true);
+  assert.equal(b.coldStart, false);
+  await sandbox.teardown(a);
+  assert.ok(fake.names().includes(a.id));
+  await sandbox.teardown(b);
+  assert.ok(!fake.names().includes(b.id));
+});
+
 test("teardown is a no-op park; destroy deletes the sprite", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
@@ -176,7 +227,7 @@ test("teardown is a no-op park; destroy deletes the sprite", async () => {
   assert.ok(!fake.names().includes(h.id));
 });
 
-test("backupComputer tars workspace + home over the exec channel (the publish fast path)", async () => {
+test("exportFiles tars workspace + home over the exec channel (the publish fast path)", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.run(
     h,
@@ -188,7 +239,7 @@ test("backupComputer tars workspace + home over the exec channel (the publish fa
     ].join(" && "),
   );
 
-  const got = await sandbox.backupComputer!(h);
+  const got = await sandbox.exportFiles!(h);
   const paths = got.map((e) => `${e.area}:${e.path}`).sort();
   assert.ok(paths.includes("workspace:app/index.html"), `workspace file packed (got ${paths.join(", ")})`);
   assert.ok(paths.includes("home:.profile-note"), "home file packed");
@@ -197,10 +248,10 @@ test("backupComputer tars workspace + home over the exec channel (the publish fa
   assert.equal(Buffer.from(got.find((e) => e.path === "app/index.html")!.data).toString("utf8"), "hi");
 });
 
-test("backupComputer keepContentCaches ships cache-named build output (publish parity)", async () => {
+test("exportFiles keepContentCaches ships cache-named build output (publish parity)", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.run(h, "mkdir -p site/.cache && printf real > site/.cache/bundle.js");
-  const got = await sandbox.backupComputer!(h, {
+  const got = await sandbox.exportFiles!(h, {
     include: ["workspace"],
     keepContentCaches: true,
     exclude: () => false,
@@ -232,7 +283,7 @@ test("stageOut posts to core's blob endpoint by streaming, never by buffering in
     apiBaseUrl: "http://core.internal:8080",
   });
   const h = await sb.provision(layers);
-  await assert.rejects(() => sb.stageOut!(h, "outbox/big.bin"), /sprites stageOut/);
+  await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /sprites stageOut/);
 
   const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs"))!;
   assert.ok(script, "the stageOut curl reached the guest");
@@ -257,6 +308,17 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
   assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
+test("a prep failure that writes nothing still names its cause", () => {
+  assert.equal(
+    execFailureDetail({ stdout: "", stderr: "", code: 124, timedOut: true }, 60),
+    "timed out after 60s with no output",
+    "a wedged guest filesystem kills the script before it can explain itself",
+  );
+  assert.equal(execFailureDetail({ stdout: "", stderr: "", code: 1, timedOut: false }, 60), "exit 1 with no output");
+  assert.equal(execFailureDetail({ stdout: "out", stderr: " boom\n", code: 1, timedOut: false }, 60), "boom");
+  assert.equal(execFailureDetail({ stdout: " out\n", stderr: "", code: 1, timedOut: false }, 60), "out");
+});
+
 test("restartComputer reboots the scope's sprite and heals a wedged exec channel", async () => {
   const h = await sandbox.provision(layers);
   fake.fail502(h.id);
@@ -272,17 +334,20 @@ test("restartComputer reboots the scope's sprite and heals a wedged exec channel
 
 test("computerStatus reports a healthy machine whose shell has stopped answering", async () => {
   const h = await sandbox.provision(layers);
-  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "healthy", guestResponsive: true });
+  assert.deepEqual(await sandbox.computerStatus!(scope), {
+    machine: "healthy",
+    listed: "warm",
+    provisioned: true,
+    guestResponsive: true,
+  });
 
   fake.fail502(h.id);
-  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "healthy", guestResponsive: false });
-});
-
-test("restartComputer surfaces a refused restart instead of swallowing it", async () => {
-  const h = await sandbox.provision(layers);
-  fake.refuseRestart(h.id);
-  await assert.rejects(sandbox.restartComputer!(scope), /sprites restart .*: http 502/);
-  assert.deepEqual(fake.restarts(), []);
+  assert.deepEqual(await sandbox.computerStatus!(scope), {
+    machine: "healthy",
+    listed: "warm",
+    provisioned: true,
+    guestResponsive: false,
+  });
 });
 
 test("a command that ran before the response was lost is never re-executed", async () => {
@@ -305,4 +370,157 @@ test("an inline write lands atomically, so a reboot mid-write cannot truncate th
   assert.ok(write, "expected an inline write script");
   assert.match(write!, /\.part\./, "the payload must land on a temp path");
   assert.match(write!, /mv -f/, "and be renamed over the target, never streamed into it");
+});
+
+test("a refused plain restart falls back to a forced one", async () => {
+  const h = await sandbox.provision(layers);
+  fake.refuseRestart(h.id);
+  await sandbox.restartComputer!(scope);
+  assert.deepEqual(fake.restarts(), [`${h.id}?force=true`]);
+});
+
+test("a restart refused even with force surfaces both failures", async () => {
+  const h = await sandbox.provision(layers);
+  fake.refuseRestart(h.id);
+  fake.refuseForcedRestart(h.id);
+  await assert.rejects(sandbox.restartComputer!(scope), /http 502 .*forced retry: http 502/s);
+  assert.deepEqual(fake.restarts(), []);
+});
+
+test("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
+  const h = await sandbox.provision(layers);
+  const bare = await sandbox.run(h, "echo ok");
+  assert.equal(bare.pressure, undefined);
+
+  fake.setPressure(h.id, { full10: 85.17, full60: 86.14, load1: 30.78 });
+  const r = await sandbox.run(h, "echo ok");
+  assert.equal(r.code, 0);
+  assert.deepEqual(r.pressure, { ioFull10: 85.17, ioFull60: 86.14, load1: 30.78 });
+});
+
+test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
+  const events: Array<{ code: string }> = [];
+  const s = make({ onError: (e: { code: string }) => events.push(e) });
+  const h = await s.provision(layers);
+
+  fake.setPressure(h.id, { full10: 90, full60: 88, load1: 25 });
+  await s.run(h, "echo a");
+  await s.run(h, "echo b");
+  assert.deepEqual(
+    events.filter((e) => e.code === "io_pressure_high").length,
+    1,
+    "a continuing episode records exactly one event",
+  );
+
+  fake.setPressure(h.id, { full10: 5, full60: 5, load1: 1 });
+  await s.run(h, "echo c");
+  fake.setPressure(h.id, { full10: 90, full60: 88, load1: 25 });
+  await s.run(h, "echo d");
+  assert.equal(events.filter((e) => e.code === "io_pressure_high").length, 2, "a new episode records again");
+});
+
+test("computerStatus carries the list-view status and guest pressure alongside the health check", async () => {
+  const h = await sandbox.provision(layers);
+  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
+  const s = await sandbox.computerStatus!(scope);
+  assert.equal(s.machine, "healthy");
+  assert.equal(s.listed, "warm");
+  assert.equal(s.guestResponsive, true);
+  assert.deepEqual(s.pressure, { ioFull10: 60, ioFull60: 55, load1: 8 });
+});
+
+test("a garbled pressure read never costs the caller a completed command's result", async () => {
+  const h = await sandbox.provision(layers);
+  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
+  writeFileSync(join(fake.homeDir(h.id), ".proc-loadavg"), "");
+  const r = await sandbox.run(h, "echo survived");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "survived");
+  assert.equal(r.pressure, undefined, "partial telemetry is dropped, not surfaced or fatal");
+});
+
+test("concurrent restart calls for one sprite collapse into sequential requests", async () => {
+  const h = await sandbox.provision(layers);
+  await Promise.all([sandbox.restartComputer!(scope), sandbox.restartComputer!(scope)]);
+  assert.deepEqual(fake.restarts(), [h.id, h.id], "serialized, one request per call, never interleaved forcing");
+});
+
+test("exec fetches carry a dispatcher with undici's 5-minute header/body caps disabled", async () => {
+  let seen: unknown;
+  const spyFetch: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    if (url.pathname.endsWith("/exec")) seen = (init as { dispatcher?: unknown } | undefined)?.dispatcher;
+    return fake.fetchImpl(input, init);
+  };
+  const s = make({ fetchImpl: spyFetch });
+  const h = await s.provision(layers);
+  await s.run(h, "echo ok");
+  assert.ok(seen, "exec requests must not ride the default dispatcher, whose ~300s caps kill long execs");
+});
+
+test("the script travels in the request body, so command size never reaches the URL", async () => {
+  const seen: Array<{ pathLength: number; bodyBytes: number }> = [];
+  const spyFetch: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    if (url.pathname.endsWith("/exec")) {
+      const body = init?.body as Buffer | undefined;
+      seen.push({ pathLength: url.pathname.length + url.search.length, bodyBytes: body ? body.byteLength : 0 });
+    }
+    return fake.fetchImpl(input, init);
+  };
+  const s = make({ fetchImpl: spyFetch });
+  const h = await s.provision(layers);
+  const huge = `echo start; : ${"x".repeat(1024 * 1024)}; echo end`;
+  const r = await s.run(h, huge);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /start\s+end/);
+  const largest = Math.max(...seen.map((x) => x.pathLength));
+  assert.ok(largest < 2048, `every exec URL must stay small, saw ${largest} chars`);
+  assert.ok(
+    seen.some((x) => x.bodyBytes > 1024 * 1024),
+    "the megabyte script must ride in the body",
+  );
+});
+
+test("commands cannot swallow the script from stdin", async () => {
+  const h = await sandbox.provision(layers);
+  const r = await sandbox.run(h, "cat; echo after-cat");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "after-cat");
+});
+
+test("every sprites fetch rides one HTTP/1.1 dispatcher, so a bad request fails alone", async () => {
+  const dispatchers = new Map<string, unknown>();
+  const spyFetch: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    dispatchers.set(
+      url.pathname.split("/").slice(4).join("/") || "root",
+      (init as { dispatcher?: unknown })?.dispatcher,
+    );
+    return fake.fetchImpl(input, init);
+  };
+  const s = make({ fetchImpl: spyFetch, egressProxyUrl: "https://egress.example" });
+  const token = await mintCapabilityToken(
+    {
+      actorId: "tester",
+      scopeId: scope,
+      aud: EGRESS_PROXY_AUD,
+      egress: { allowedHosts: ["api.anthropic.com"], deniedHosts: [] },
+      exp: Date.now() + 600_000,
+    },
+    "secret",
+  );
+  const h = await s.provision(layers, { egressToken: token });
+  await s.run(h, "echo ok");
+  await s.computerStatus!(scope);
+  const distinct = new Set(dispatchers.values());
+  assert.equal(
+    distinct.size,
+    1,
+    `expected one shared dispatcher, saw ${distinct.size} across ${[...dispatchers.keys()]}`,
+  );
+  const dispatcher = [...distinct][0] as Record<symbol, { allowH2?: boolean }>;
+  const optionsKey = Object.getOwnPropertySymbols(dispatcher).find((k) => String(k).includes("options"));
+  assert.ok(optionsKey, "undici Agent must expose its options");
+  assert.equal(dispatcher[optionsKey]?.allowH2, false);
 });

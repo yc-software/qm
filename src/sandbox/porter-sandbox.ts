@@ -18,29 +18,16 @@ import {
   type PorterSandboxLike,
 } from "./porter-client.ts";
 import { shq } from "../util/shell.ts";
-import {
-  nonInteractiveShellPrefix,
-  DROPPED_PROXY_ENV,
-  forceThroughProxyEnv,
-  proxyExportPrefix,
-} from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
-import {
-  BLOB_TRANSFER_TTL_MS,
-  createExecBackup,
-  createExecBlobStaging,
-  createExecFileOps,
-  posixJoin,
-} from "./exec-file-ops.ts";
+import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
-import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { CAPABILITY_HEADER } from "../api/contract.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import type {
@@ -277,30 +264,9 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const blobSigningSecret = opts.capabilitySecret ?? opts.signingSecret;
-  const blobStaging =
-    opts.blobTransfer && blobSigningSecret && opts.apiBaseUrl
-      ? createExecBlobStaging({
-          label: "porter",
-          exec: (id, script, t) => execRaw(id, script, t),
-          proxyPrefix: proxyExportPrefix,
-          apiBaseUrl: opts.apiBaseUrl,
-          capabilityHeader: CAPABILITY_HEADER,
-          mintToken: (grant) =>
-            mintCapabilityToken(
-              {
-                actorId: "porter-sandbox",
-                aud: BLOB_TRANSFER_AUD,
-                scopeId: "personal:porter-sandbox",
-                blob: grant,
-                exp: Date.now() + BLOB_TRANSFER_TTL_MS,
-              },
-              blobSigningSecret,
-            ),
-        })
-      : null;
+  const blobStaging = createBackendBlobStaging("porter", (id, script, t) => execRaw(id, script, t), opts);
 
-  const execBackup = createExecBackup({
+  const execExport = createExecExport({
     label: "porter",
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
@@ -316,16 +282,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...(blobStaging
-      ? {
-          async stageIn(handle: SandboxHandle, destRelPath: string, blobId: string): Promise<void> {
-            await blobStaging.stageInAbs(handle, posixJoin(handle.rootDir, destRelPath), blobId);
-          },
-          async stageOut(handle: SandboxHandle, srcRelPath: string): Promise<string> {
-            return blobStaging.stageOutAbs(handle, posixJoin(handle.rootDir, srcRelPath));
-          },
-        }
-      : {}),
+    ...blobStaging,
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
@@ -417,7 +374,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       return bytes === null ? null : Buffer.from(bytes).toString("utf8");
     },
 
-    backupComputer: execBackup.backupComputer,
+    exportFiles: execExport.exportFiles,
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const slug = porterScopeSlug(prefix, scopeId);

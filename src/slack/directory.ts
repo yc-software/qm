@@ -60,18 +60,32 @@ type RosterKind = { plural: string; authz: string; item: string; limit?: number 
 
 const MEMBERS_PAGE_LIMIT = 200;
 const ROSTER_FETCH_CONCURRENCY = 4;
+const NO_INTERNAL_OVERRIDES: ReadonlySet<string> = new Set();
+
+function withInternalOverride(
+  actor: ActorAssertion,
+  email: string | undefined,
+  overrides: ReadonlySet<string>,
+): ActorAssertion {
+  if (!actor.isExternalGuest || overrides.size === 0) return actor;
+  const mail = (email ?? "").trim().toLowerCase();
+  if (overrides.has(actor.externalId.toLowerCase()) || (mail && overrides.has(mail))) {
+    return { ...actor, isExternalGuest: false };
+  }
+  return actor;
+}
 
 export interface Directory {
   getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
   forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
-  classifyUserCached(client: any, userId: string): Promise<CachedUser & { ok: boolean }>;
+  classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }>;
   classifyActor(client: any, userId: string): Promise<ActorAssertion>;
   getChannelInfo(client: any, channel: string): Promise<ChannelMeta | undefined>;
   channelMembership(
     client: any,
     channel: string,
     actor: ActorAssertion,
-    actorSlackId: string,
+    actorSlackId: string | undefined,
     info: ChannelMeta | undefined,
   ): Promise<{
     audience: ActorAssertion[];
@@ -92,12 +106,19 @@ export function createDirectory(deps: {
   ids: BotIdentity;
   userSnapshotTtlMs?: number;
   channelMembersTtlMs?: number;
+  syncRetryMs?: number;
   maxPrivateChannels?: number;
   userCacheTtlMs?: number;
+  internalOverrides?: () => Promise<ReadonlySet<string>>;
+  coreSingleton?: boolean;
 }): Directory {
   const { core, ids } = deps;
+  const CORE_SINGLETON = deps.coreSingleton !== false;
+  const internalOverrides = async (): Promise<ReadonlySet<string>> =>
+    deps.internalOverrides ? await deps.internalOverrides() : NO_INTERNAL_OVERRIDES;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
   const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
+  const SYNC_RETRY_MS = deps.syncRetryMs ?? 30_000;
   const MAX_PRIVATE_CHANNELS = deps.maxPrivateChannels ?? Infinity;
   const userCache = createUserCache(deps.userCacheTtlMs ? { ttlMs: deps.userCacheTtlMs } : {});
 
@@ -121,10 +142,15 @@ export function createDirectory(deps: {
       mentionIndex.set(key, id);
     };
     let missingEmails = 0;
+    const overrides = await internalOverrides();
     for await (const res of client.paginate("users.list", { limit: 1000 }) as AsyncIterable<any>) {
       for (const u of (res.members ?? []) as SlackUser[]) {
         if (!u?.id || u.id === ids.botUserId) continue;
-        const actor = classifyUser(u, ids.ownTeamId, ids.identityMode);
+        const actor = withInternalOverride(
+          classifyUser(u, ids.ownTeamId, ids.identityMode),
+          u.profile?.email,
+          overrides,
+        );
         if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
           missingEmails++;
         const timezone = slackUserTimezone(u);
@@ -136,7 +162,7 @@ export function createDirectory(deps: {
         }
       }
     }
-    setMentionIndex(mentionIndex);
+    if (CORE_SINGLETON) setMentionIndex(mentionIndex);
     if (missingEmails > 0) {
       console.warn(
         `[slack] email identity mode: ${missingEmails} own-team member(s) have no visible email (missing users:read.email scope?) — they fail closed to guest`,
@@ -458,6 +484,34 @@ export function createDirectory(deps: {
     invalidations: ChannelInvalidations = new Map(),
     targetChannelIds?: ReadonlySet<string>,
   ): Promise<boolean> {
+    if (!CORE_SINGLETON) return true;
+    let pushed: boolean | null;
+    try {
+      pushed = await core.holdDirectorySync(async (lost) => {
+        let lostFlag = false;
+        void lost.then(() => {
+          lostFlag = true;
+        });
+        return crawlAndPush(snap, client, invalidations, () => lostFlag, targetChannelIds);
+      });
+    } catch (err) {
+      console.error("[slack-plugin] directory sync lease failed:", errMessage(err));
+      return false;
+    }
+    if (pushed === null) {
+      console.log("[slack-plugin] directory sync skipped: the sync lease is held elsewhere");
+      return false;
+    }
+    return pushed;
+  }
+
+  async function crawlAndPush(
+    snap: UserSnapshot,
+    client: any,
+    invalidations: ChannelInvalidations,
+    leaseLost: () => boolean,
+    targetChannelIds?: ReadonlySet<string>,
+  ): Promise<boolean> {
     const members = [...snap.byId.entries()]
       .filter(([, u]) => !u.actor.isExternalGuest)
       .map(([slackId, u]) => {
@@ -470,9 +524,13 @@ export function createDirectory(deps: {
         };
       });
     const fetched = await fetchChannels(client, invalidations, targetChannelIds);
+    if (leaseLost()) {
+      console.error("[slack-plugin] directory sync lease lost mid-crawl — discarding the crawl");
+      return false;
+    }
     if (!members.length && !(fetched && fetched.channels.length)) return false;
     try {
-      await core.pushDirectory({
+      const applied = await core.pushDirectory({
         members,
         membersSyncedAt: snap.fetchedAt,
         ...(fetched
@@ -494,7 +552,8 @@ export function createDirectory(deps: {
           : {}),
         ...(ids.ownWorkspaceUrl ? { workspaceUrl: ids.ownWorkspaceUrl } : {}),
       });
-      return fetched !== null;
+      if (!applied) console.warn("[slack-plugin] directory push refused by the store (stale stamp) — will retry");
+      return fetched !== null && applied;
     } catch (err) {
       console.error("[slack-plugin] directory push failed:", (err as Error).message);
       return false;
@@ -529,6 +588,15 @@ export function createDirectory(deps: {
   const invalidatedChannelMembers = new Map<string, Set<string>>();
   const targetedChannelIds = new Set<string>();
   let fullDirectorySyncRequested = false;
+  let syncRetryTimer: NodeJS.Timeout | undefined;
+  function scheduleSyncRetry(): void {
+    if (syncRetryTimer) return;
+    syncRetryTimer = setTimeout(() => {
+      syncRetryTimer = undefined;
+      void coalescedDirectorySync().catch(swallowAs("slack: directory sync retry", undefined));
+    }, SYNC_RETRY_MS);
+    syncRetryTimer.unref?.();
+  }
   const coalescedDirectorySync = createRefreshCoalescer(async () => {
     const fullSync = fullDirectorySyncRequested;
     fullDirectorySyncRequested = false;
@@ -547,8 +615,9 @@ export function createDirectory(deps: {
         for (const principalId of principalIds) current?.delete(principalId);
         if (!current?.size) invalidatedChannelMembers.delete(channelId);
       }
-    } else if (fullSync) {
-      fullDirectorySyncRequested = true;
+    } else {
+      if (fullSync) fullDirectorySyncRequested = true;
+      if (fullDirectorySyncRequested || targetedChannelIds.size || invalidatedChannelMembers.size) scheduleSyncRetry();
     }
   });
 
@@ -574,21 +643,25 @@ export function createDirectory(deps: {
     void forceDirectorySync(client).catch(swallowAs("slack: unseen group-DM directory sync", undefined));
   }
 
-  async function classifyUserCached(client: any, userId: string): Promise<CachedUser & { ok: boolean }> {
-    const cached = userCache.get(userId);
+  async function classifyUserCached(client: any, userId: string | undefined): Promise<CachedUser & { ok: boolean }> {
+    const cached = userId === undefined ? undefined : userCache.get(userId);
     if (cached) return { ...cached, ok: true };
     const snapshot = await getUserSnapshot(client);
-    const fromSnapshot = snapshot?.byId.get(userId);
+    const fromSnapshot = userId === undefined ? undefined : snapshot?.byId.get(userId);
     if (fromSnapshot) return { ...fromSnapshot, ok: true };
     try {
       const user = (await client.users.info({ user: userId })).user as SlackUser | undefined;
-      const actor = classifyUser(user, ids.ownTeamId, ids.identityMode);
+      const actor = withInternalOverride(
+        classifyUser(user, ids.ownTeamId, ids.identityMode),
+        user?.profile?.email,
+        await internalOverrides(),
+      );
       const timezone = slackUserTimezone(user);
       const classified = { actor, ...(timezone ? { timezone } : {}) };
-      if (ids.ownTeamId) userCache.set(userId, classified);
+      if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);
       return { ...classified, ok: true };
     } catch {
-      return { actor: { externalId: userId, isExternalGuest: true }, ok: false };
+      return { actor: { externalId: userId ?? "", isExternalGuest: true }, ok: false };
     }
   }
 
@@ -608,7 +681,7 @@ export function createDirectory(deps: {
     client: any,
     channel: string,
     actor: ActorAssertion,
-    actorSlackId: string,
+    actorSlackId: string | undefined,
     info: ChannelMeta | undefined,
   ): Promise<{
     audience: ActorAssertion[];

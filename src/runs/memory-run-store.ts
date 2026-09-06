@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal, leaseLapsed } from "./run-store.ts";
+import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface MemoryRuntime {
   runs: RunStore;
   ledger: ToolLedger;
 }
+
+const FENCE_HOLD_MS = 600_000;
 
 export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRuntime {
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
@@ -49,6 +51,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         request,
         result: null,
         deliveryState: null,
+        turnUserSeq: null,
         dedupKey: dedupKey ?? null,
         attempts: 0,
         errorAttempts: 0,
@@ -105,6 +108,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       run.leaseToken = null;
       run.leaseExpiresAt = null;
       run.finishedAt = Date.now();
+      if (releasesDedupKey(result) && run.dedupKey) {
+        byKey.delete(run.dedupKey);
+        run.dedupKey = null;
+      }
       settle(run);
       return true;
     },
@@ -113,6 +120,13 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const run = runs.get(runId);
       if (!run || run.leaseToken !== leaseToken) return { requeued: false };
       return { requeued: retire(run, error, opts?.retry !== false, { countsAsError: true }).requeued };
+    },
+
+    async noteTurnUserSeq(runId: string, seq: number) {
+      const run = runs.get(runId);
+      if (!run || run.turnUserSeq !== null) return false;
+      run.turnUserSeq = seq;
+      return true;
     },
 
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState) {
@@ -129,6 +143,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async get(runId) {
       return runs.get(runId) ?? null;
+    },
+    async getByDedupKey(dedupKey) {
+      const id = byKey.get(dedupKey);
+      return id ? (runs.get(id) ?? null) : null;
     },
 
     async activeForThread(sessionId) {
@@ -171,16 +189,18 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const expired = [...runs.values()].filter((run) => leaseLapsed(run, now));
       let requeued = 0;
       let parked = 0;
-      const retiredSessionIds: string[] = [];
       for (const run of expired) {
         const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
         const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
         const workerId = run.workerId;
-        const r = retire(run, reason, !tooOld, { ifExpiredAt: now });
+        if (run.status !== "running" || run.leaseExpiresAt === null || run.leaseExpiresAt > now) continue;
+        run.leaseToken = randomUUID();
+        run.leaseExpiresAt = now + FENCE_HOLD_MS;
+        if (onRetired) await onRetired([run.sessionId]);
+        const r = retire(run, reason, !tooOld);
         if (!r.applied) continue;
         if (r.requeued) requeued++;
         else parked++;
-        retiredSessionIds.push(run.sessionId);
         opts?.onReap?.({
           runId: run.id,
           sessionId: run.sessionId,
@@ -190,7 +210,6 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
           outcome: r.requeued ? "requeued" : "parked",
         });
       }
-      if (onRetired && retiredSessionIds.length) await onRetired(retiredSessionIds);
       return { requeued, parked };
     },
 

@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
-import { spriteScopeName } from "../src/sandbox/sprites-sandbox.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
@@ -130,12 +130,41 @@ test("exec on a stopped machine restarts it and retries", async () => {
   assert.equal(fake.machine(h.id)?.state.toLowerCase(), "running");
 });
 
+test("a fresh core adopts a machine the API reports as Running without restarting it", async () => {
+  const h = await sandbox.provision(layers);
+  assert.equal(fake.machine(h.id)?.state, "Running");
+  const s2 = make();
+  const startsBefore = fake.calls.filter((c) => c.path.endsWith("/start")).length;
+  const h2 = await s2.provision(layers);
+  assert.equal(h2.id, h.id);
+  assert.equal(h2.coldStart, false);
+  const startsAfter = fake.calls.filter((c) => c.path.endsWith("/start")).length;
+  assert.equal(startsAfter, startsBefore, "a running machine is adopted as-is, never restarted");
+});
+
+test("an egress proxy url without a hostname is rejected at creation, never fail-open", () => {
+  assert.throws(() => make({ egressProxyUrl: "unix:///tmp/proxy.sock" }), /hostname/);
+});
+
 test("scratch machines are ephemeral and deleted at release", async () => {
   const h = await sandbox.provision(layers, { scratch: { key: "job-1" } });
   assert.equal(h.scratch, true);
   assert.equal(fake.machine(h.id)?.ephemeral, true);
   await sandbox.teardown(h);
   assert.equal(fake.machine(h.id), null);
+});
+
+test("overlapping scratch leases on one key share a machine until the last release", async () => {
+  const a = await sandbox.provision(layers, { scratch: { key: "job-1" } });
+  const b = await sandbox.provision(layers, { scratch: { key: "job-1" } });
+  assert.equal(a.id, b.id);
+  assert.equal(a.coldStart, true);
+  assert.equal(b.coldStart, false);
+  assert.equal(fake.names().filter((n) => n === a.id).length, 1);
+  await sandbox.teardown(a);
+  assert.ok(fake.machine(a.id));
+  await sandbox.teardown(b);
+  assert.equal(fake.machine(b.id), null);
 });
 
 test("teardown without destroy keeps the machine; destroy deletes it", async () => {
@@ -157,7 +186,7 @@ test("large command output survives the API's truncation cap exactly", async () 
 test("a name conflict on create adopts the existing machine instead of failing", async () => {
   await fake.fetchImpl("https://api.smolmachines.com/v1/machines", {
     method: "POST",
-    body: JSON.stringify({ name: spriteScopeName("qmt", scope), ephemeral: false }),
+    body: JSON.stringify({ name: sandboxScopeName("qmt", scope), ephemeral: false }),
   });
   const h = await sandbox.provision(layers);
   assert.equal(h.coldStart, false);

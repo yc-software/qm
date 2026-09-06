@@ -8,6 +8,7 @@ export interface ToolPayload {
   name?: string;
   url?: string;
   query?: string;
+  seq?: number;
   count?: number;
   found?: boolean;
   blocked?: string;
@@ -67,7 +68,15 @@ function callIdOf(a: ToolActivity): string | undefined {
 function orphanCallSignature(row: ToolRowModel): string | null {
   if (!row.call || row.result || row.approval) return null;
   const p = (row.call.payload ?? {}) as ToolPayload;
-  return [p.tool ?? "unknown", p.command ?? "", p.path ?? "", p.name ?? "", p.url ?? "", p.query ?? ""].join("");
+  return [
+    p.tool ?? "unknown",
+    p.command ?? "",
+    p.path ?? "",
+    p.name ?? "",
+    p.url ?? "",
+    p.query ?? "",
+    p.seq !== undefined ? String(p.seq) : "",
+  ].join("");
 }
 
 const timelineMemo = new WeakMap<

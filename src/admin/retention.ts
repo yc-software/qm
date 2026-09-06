@@ -1,13 +1,9 @@
-import type { ScopeId, SessionType } from "../types.ts";
-import type { AttributedTurn, ParticipantWindow } from "../sessions/session-store.ts";
-import { forEachAttributedTurn } from "./attribution.ts";
+import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
 
 const DAY = 86_400_000;
 
-export interface RetentionInput {
-  sessions: { id: string; type: SessionType; scopeId: ScopeId; createdAt: number }[];
-  participants: ParticipantWindow[];
-  turns: AttributedTurn[];
+export interface RetentionInput extends AttributionInput {
+  sessionCount: number;
   nowMs: number;
 }
 
@@ -35,14 +31,14 @@ function percentile(sorted: number[], p: number): number {
 }
 
 export function computeRetention(input: RetentionInput): RetentionReport {
-  const { sessions, participants, turns, nowMs } = input;
+  const { sessionCount, participants, turns, nowMs } = input;
 
   const activeDays = new Map<string, Set<number>>();
   const turnsByUser = new Map<string, number>();
   const sessionsByUser = new Map<string, Set<string>>();
 
   forEachAttributedTurn(
-    { participants, turns, sessionIds: sessions.map((s) => s.id) },
+    { participants, turns },
     {
       onWindow(sessionId, w) {
         const set = sessionsByUser.get(w.principalId);
@@ -118,7 +114,7 @@ export function computeRetention(input: RetentionInput): RetentionReport {
       sessions: { p50: percentile(sessionCounts, 50), p95: percentile(sessionCounts, 95) },
       turns: { p50: percentile(turnCounts, 50), p95: percentile(turnCounts, 95) },
     },
-    totals: { users: users.length, sessions: sessions.length },
+    totals: { users: users.length, sessions: sessionCount },
     attribution: "DM/personal exact; channel approximate (entries carry no author principal).",
     note: "Derived per-request over all sessions × entries; move to a materialized daily rollup if volume grows.",
   };

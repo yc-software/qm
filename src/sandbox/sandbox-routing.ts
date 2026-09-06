@@ -11,10 +11,11 @@ import {
   type ProvisionOptions,
   type Sandbox,
   type SandboxHandle,
+  type StageOptions,
   type TeardownOptions,
 } from "./sandbox.ts";
 
-export type SandboxBackendName = "sprites" | "aws" | "local" | "smolmachines" | "porter" | "agent37";
+export type SandboxBackendName = "sprites" | "aws" | "local" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
 
 export interface SandboxRoute {
   backend: SandboxBackendName;
@@ -67,6 +68,18 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
 
   const forHandle = (handle: SandboxHandle): Sandbox =>
     (handle.backend && backends[handle.backend as SandboxBackendName]) || fallback;
+
+  async function pickStrict(scopeId: string): Promise<Sandbox> {
+    const route = await routeFor(scopeId);
+    const name = route?.backend ?? defaultBackend;
+    const sandbox = backends[name];
+    if (!sandbox) {
+      throw new Error(
+        `scope ${scopeId} is routed to ${name}, which is not constructed here — refusing to act on a substitute computer`,
+      );
+    }
+    return sandbox;
+  }
 
   const reportedGaps = new Set<string>();
   const requireCap = <K extends keyof Sandbox>(
@@ -149,20 +162,32 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
             requireCap(forHandle(handle), "listProcesses", handle.scopeId).listProcesses(handle),
         }
       : {}),
-    ...(some((s) => typeof s.backupComputer === "function")
+    ...(some((s) => typeof s.exportFiles === "function")
       ? {
-          backupComputer: (handle: SandboxHandle, o?) =>
-            requireCap(forHandle(handle), "backupComputer", handle.scopeId).backupComputer(handle, o),
+          exportFiles: (handle: SandboxHandle, o?) =>
+            requireCap(forHandle(handle), "exportFiles", handle.scopeId).exportFiles(handle, o),
+        }
+      : {}),
+    ...(some((s) => typeof s.computerStatus === "function")
+      ? {
+          computerStatus: async (scopeId: string) =>
+            requireCap(await pickStrict(scopeId), "computerStatus", scopeId).computerStatus(scopeId),
+        }
+      : {}),
+    ...(some((s) => typeof s.restartComputer === "function")
+      ? {
+          restartComputer: async (scopeId: string) =>
+            requireCap(await pickStrict(scopeId), "restartComputer", scopeId).restartComputer(scopeId),
         }
       : {}),
     ...(some(supportsBlobStaging)
       ? {
-          stageIn: (handle: SandboxHandle, dest: string, blobId: string) =>
-            requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId),
-          stageOut: (handle: SandboxHandle, src: string) =>
-            requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src),
-          extractFiles: (handle: SandboxHandle, entries) =>
-            requireCap(forHandle(handle), "extractFiles", handle.scopeId).extractFiles(handle, entries),
+          stageIn: (handle: SandboxHandle, dest: string, blobId: string, opts?: StageOptions) =>
+            requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
+          stageOut: (handle: SandboxHandle, src: string, opts?: StageOptions) =>
+            requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src, opts),
+          importFiles: (handle: SandboxHandle, entries) =>
+            requireCap(forHandle(handle), "importFiles", handle.scopeId).importFiles(handle, entries),
         }
       : {}),
 

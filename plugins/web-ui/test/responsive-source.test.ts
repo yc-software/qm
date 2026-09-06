@@ -18,12 +18,13 @@ test("mobile shell follows the visual viewport and device safe areas", () => {
 });
 
 test("mobile sidebar is modal, dismissible, and sized for touch", () => {
-  assert.match(shell, /class="new-chat[\s\S]{0,200}closeSidebarOnNarrowView\(\);/);
+  assert.match(shell, /actionRow\(ICON\.newChat[\s\S]{0,200}startNewChatInLastScope\(\);/);
+  assert.match(sessions, /export function startNewChat\([\s\S]{0,120}closeSidebarOnNarrowView\(\);/);
   assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
   assert.match(
     css,
-    /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;/,
+    /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\):not\(#sidebar-footer\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;/,
   );
   assert.match(shell, /sidebar\.setAttribute\("role", modal \? "dialog" : "navigation"\)/);
   assert.match(
@@ -36,7 +37,7 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(sessions, /data-menu-id=\$\{s\.id\}/);
   assert.match(sessions, /focusSessionMenuButton\(menuKey\)/);
   assert.match(shell, /trapDialogFocus\(event, \(\) => setSidebarOpen\(false\)\)/);
-  assert.match(css, /\.layout\.sidebar-closed \.sidebar \{\s*position: static;\s*box-shadow: none;/);
+  assert.match(css, /\.layout\.sidebar-closed \.sidebar \{\s*position: static;/);
   assert.match(
     shell,
     /setSidebarOpen\(false, false\);\s*requestAnimationFrame\(\(\) => appState\.mainEl\?\.focus\(\{ preventScroll: true \}\)\)/,
@@ -45,7 +46,7 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(compactCss, /\.layout\.sidebar-closed \.sidebar-scrim \{\s*display: none;/);
   assert.match(
     compactCss,
-    /\.new-chat,[\s\S]*\.navrow,[\s\S]*\.nav-section-toggle,[\s\S]*\.web-only-toggle,[\s\S]*\.session-menu-option,[\s\S]*\.archived-toggle \{\s*min-height: 44px;/,
+    /\.navrow,[\s\S]*\.browse-tile,[\s\S]*\.settings-choice-option,[\s\S]*\.session-menu-option,[\s\S]*\.archived-toggle \{\s*min-height: 44px;/,
   );
   assert.match(compactCss, /\.session-menu-btn,[\s\S]*\.recent-project-new-chat \{\s*width: 44px;\s*height: 44px;/);
   assert.match(compactCss, /\.session-menu\s*\{\s*right:\s*0;\s*margin-top:\s*-22px;\s*\}/);
@@ -56,22 +57,39 @@ test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(compactCss, /\.recent-project-head \.recent-project-count \{ opacity: 0; \}/);
 });
 
-test("the sidebar's new-session action keeps the shared outline treatment", () => {
-  assert.match(shell, /class="new-chat"/);
+test("the sidebar's quick actions share the navrow treatment", () => {
+  assert.match(shell, /const actionRow = \([\s\S]{0,160}class="navrow"\s+type="button"/);
+  assert.doesNotMatch(shell, /class="new-chat"/);
   assert.doesNotMatch(shell, /split-new-session/);
-  assert.match(
-    css,
-    /\.new-chat \{[^}]*border: 1px solid var\(--border\);[^}]*background: transparent;[^}]*color: var\(--foreground\);/,
-  );
-  assert.match(css, /\.new-chat:hover \{[^}]*background: var\(--secondary\);/);
+  assert.doesNotMatch(css, /(^|\n)\.new-chat[ ,:{]/);
   assert.doesNotMatch(css, /split-new-session/);
 });
 
-test("a top banner keeps its critical action below the top safe area", () => {
+test("the quick nav is home, search, browse; create sits under the divider with the sessions it starts", () => {
+  assert.match(
+    shell,
+    /<nav class="nav quick-nav"[\s\S]*?navRow\("chats", ICON\.home, "Home"\)[\s\S]*?actionRow\(Search, "Search"[\s\S]*?actionRow\(ICON\.browse, "Browse"[\s\S]*?<\/nav>/,
+  );
+  assert.doesNotMatch(
+    shell,
+    /<nav class="nav quick-nav"[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/nav>/,
+    "create belongs below the quick-nav divider, not inside it",
+  );
+  assert.match(
+    shell,
+    /<div class="nav new-chat-nav">[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/div>[\s\S]*?section-label recents-label/,
+    "create sits between the divider and the Sessions header",
+  );
+  assert.doesNotMatch(shell, /navRow\("chats", ICON\.chats/);
+  assert.doesNotMatch(shell, /nav-section-toggle|nav-group|navWorkspaceOpen/);
+  assert.doesNotMatch(css, /\.nav-section-toggle|\.nav-group/);
+});
+
+test("impersonation mode keeps its critical exit control below the top safe area", () => {
   assert.match(compactCss, /height: calc\(38px \+ env\(safe-area-inset-top\)\)/);
   assert.match(compactCss, /padding: env\(safe-area-inset-top\)/);
   assert.match(compactCss, /margin-top: calc\(38px \+ env\(safe-area-inset-top\)\)/);
-  assert.match(compactCss, /\.layout\.bannered \{\s*--surface-safe-top: 0px;/);
+  assert.match(compactCss, /\.layout\.impersonating \{\s*--surface-safe-top: 0px;/);
   assert.match(compactCss, /padding-top: calc\(10px \+ var\(--surface-safe-top\)\)/);
 });
 
@@ -95,7 +113,6 @@ test("touch layouts expose row actions and preserve readable composer choices", 
     /\.composer-toolbar \.runtime-default-btn,[\s\S]*\.composer-toolbar \.send-btn \{\s*min-height: 44px;/,
   );
   assert.match(compactCss, /\.composer-right \.model-control \{\s*flex: 1 1 96px;/);
-  assert.match(compactCss, /\.pane-refresh \{\s*width: 44px;\s*height: 44px;\s*flex-basis: 44px;/);
   assert.match(compactCss, /\.project-create-button \{\s*width: 44px;\s*height: 44px;/);
   assert.match(contexts, /project-create-button"\s+type="button"\s+aria-label="New project"/);
   assert.match(

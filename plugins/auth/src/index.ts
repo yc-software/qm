@@ -60,7 +60,7 @@ export async function startServer(): Promise<void> {
     );
     if (!CFG.coreSigningSecret)
       console.warn(
-        "[auth] CORE_SIGNING_SECRET unset — core will reject the single-use claims that make links and codes one-shot",
+        "[auth] CORE_SIGNING_SECRET unset, so core will reject the single-use claims that make links and codes one-shot",
       );
   });
 }

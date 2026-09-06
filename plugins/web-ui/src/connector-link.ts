@@ -19,7 +19,7 @@ export interface ConnectorLink {
 export function connectorLinksIn(text: string, trustedOrigin?: string): ConnectorLink[] {
   const out: ConnectorLink[] = [];
   for (const m of text.matchAll(CONNECTOR_REDEEM_RE)) {
-    const url = m[0].replace(/(?:\*\*|\*|__|_)+$/, "");
+    const url = m[0].replace(/[*_]+$/, "");
     let parsed: URL;
     try {
       parsed = new URL(url);

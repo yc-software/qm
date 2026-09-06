@@ -184,11 +184,15 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
       "the read is audited",
     );
 
-    assert.equal(
-      (await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=channel:C9`, { headers: ALICE_ADMIN })).status,
-      403,
-      "a narrower scope can't read another scope's skill",
+    const mismatched = await json(
+      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=channel:C9`, { headers: ALICE_ADMIN }),
     );
+    assert.equal(
+      mismatched.id,
+      made.id,
+      "a skill deep link resolves by id even when the scope filter doesn't match (grants are org-wide)",
+    );
+    assert.equal(mismatched.ownerScopeId, "personal:U1", "the response reports the skill's own scope");
     const orgGot = await json(
       await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=org:default-org`, { headers: ALICE_ADMIN }),
     );

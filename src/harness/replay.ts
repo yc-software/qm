@@ -1,6 +1,11 @@
 import type { ConversationTurn, OverheardMessage, ScopeId, SessionEntry } from "../types.ts";
-import { contextSummaryPayload, forModelContext, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { deliveryNote } from "../core/attachments.ts";
+import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
+import { CONTEXT_SUMMARY_HEADER, forModelContext, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
+import { TAPE_IMPORT_MAX_ENTRIES } from "../sessions/session-store.ts";
+import type { Lease, SessionStore, TapeRecord } from "../sessions/session-store.ts";
 
 export { INTERRUPTED_TOOL_RESULT };
 
@@ -149,7 +154,7 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
   for (const e of history) {
     const summary = contextSummaryPayload(e);
     if (summary) {
-      raw.push(userMsg(`[Earlier conversation summary]\n${summary.text}`, e.createdAt));
+      raw.push(userMsg(`${CONTEXT_SUMMARY_HEADER}\n${summary.text}`, e.createdAt));
       continue;
     }
     if (e.type === "user") {
@@ -165,7 +170,10 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       if (t) raw.push(asstText(t, e.createdAt));
     } else if (e.type === "delivery") {
       const t = entryText(e);
-      if (t) raw.push(asstText(`(delivered file(s) to the conversation: ${t})`, e.createdAt));
+      if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
+    } else if (e.type === "system") {
+      const revision = messageRevision(e);
+      if (revision) raw.push(userMsg(renderMessageRevision(revision), e.createdAt));
     } else if (e.type === "tool_call") {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       const cid = typeof p.callId === "string" ? p.callId : "";
@@ -224,16 +232,35 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       prev.content.push(...m.content);
       continue;
     }
-    if (prev && prev.role === "toolResult" && m.role === "user") {
-      out.push(asstText("(continuing after the tool result above)", m.timestamp));
-    }
     out.push(m);
   }
   while (out.length && out[0]!.role !== "user") out.shift();
   return out;
 }
 
-export function coverageImportEvent(entries: readonly SessionEntry[]): {
+export function coverageImportViable(entries: readonly SessionEntry[]): boolean {
+  if (!entries.length || entries.length > TAPE_IMPORT_MAX_ENTRIES) return false;
+  if (entries.some((e) => (e.payload as { securityTainted?: unknown } | null)?.securityTainted === true)) return false;
+  return coverageImportEvent(entries).messages.length > 0;
+}
+
+export async function appendCoverageImport(
+  sessions: Pick<SessionStore, "appendTape">,
+  lease: Lease,
+  entries: readonly SessionEntry[],
+  scopeLabel: ScopeId,
+): Promise<TapeRecord | null> {
+  const last = entries[entries.length - 1];
+  if (!last || !coverageImportViable(entries)) return null;
+  return sessions.appendTape(lease, {
+    kind: "context_event",
+    payload: coverageImportEvent(entries),
+    scopeLabel,
+    coversEntrySeq: last.seq,
+  });
+}
+
+function coverageImportEvent(entries: readonly SessionEntry[]): {
   event: "legacy_import";
   messages: PiReplayMessage[];
   scopes: ScopeId[];
@@ -306,8 +333,7 @@ export function replayPreamble(history: SessionEntry[]): string {
       }
     } else if (e.type === "user" && textOf(e)) lines.push(`User: ${textOf(e)}`);
     else if (e.type === "assistant" && textOf(e)) lines.push(`Assistant: ${textOf(e)}`);
-    else if (e.type === "delivery" && textOf(e))
-      lines.push(`Assistant delivered file(s) to the conversation: ${textOf(e)}`);
+    else if (e.type === "delivery" && textOf(e)) lines.push(deliveryNote(textOf(e)));
   }
   if (!lines.length) return "";
   return [

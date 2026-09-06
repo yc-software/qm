@@ -12,7 +12,7 @@ import { providerKeysPresent, harnessCarriedModelAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { getRequiredModel } from "../src/model/pi-models.ts";
+import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -59,6 +59,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { provider: "openrouter", configured: false, source: "absent" },
       ],
       models: [
+        { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
         { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
         { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
@@ -111,6 +112,91 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
   } finally {
     await srv.close();
   }
+});
+
+test("model gateway credentials stay separate and advertise only routed models", async () => {
+  const partial = buildApp(
+    testConfig({
+      modelGateway: {
+        url: "http://gateway.internal:8080",
+        apiKey: "gateway-secret",
+        apiKeyHeader: "api-key",
+        models: { "claude-opus-5": "router/opus" },
+      },
+    }),
+  );
+  assert.equal(await partial.modelCredentials.resolve("anthropic"), null);
+  const partialAvailability = await partial.modelCredentials.availability();
+  assert.equal(partialAvailability.anthropic, false);
+  assert.equal(modelServiceable("claude-opus-5", partialAvailability), true);
+  assert.equal(modelServiceable("claude-sonnet-4-5", partialAvailability), false);
+  await partial.modelCredentials.set("anthropic", "admin-anthropic-key", "admin-alice");
+  assert.equal(modelServiceable("claude-sonnet-4-5", await partial.modelCredentials.availability()), true);
+
+  const openrouter = buildApp(
+    testConfig({
+      modelGateway: {
+        url: "http://gateway.internal:8080",
+        apiKey: "gateway-secret",
+        apiKeyHeader: "api-key",
+        models: { "openrouter/auto": "router/auto" },
+      },
+    }),
+  );
+  const openrouterAvailability = await openrouter.modelCredentials.availability();
+  assert.equal(openrouterAvailability.openrouter, false);
+  assert.equal(modelServiceable("openrouter/auto", openrouterAvailability), true);
+  assert.equal(modelServiceable("openai/gpt-4o", openrouterAvailability), false);
+
+  const anthropicModels = Object.fromEntries(
+    MODEL_REGISTRY.filter(({ id }) => resolveModel(id)?.provider === "anthropic").map(({ id }) => [id, `router/${id}`]),
+  );
+  const complete = buildApp(
+    testConfig({
+      modelGateway: {
+        url: "http://gateway.internal:8080",
+        apiKey: "gateway-secret",
+        apiKeyHeader: "api-key",
+        models: anthropicModels,
+      },
+    }),
+  );
+  assert.equal(await complete.modelCredentials.resolve("anthropic"), null);
+  const completeAvailability = await complete.modelCredentials.availability();
+  assert.equal(completeAvailability.anthropic, false);
+  assert.ok(Object.keys(anthropicModels).every((id) => modelServiceable(id, completeAvailability)));
+
+  const srv = start({
+    modelGateway: {
+      url: "http://gateway.internal:8080",
+      apiKey: "gateway-secret",
+      apiKeyHeader: "api-key",
+      models: anthropicModels,
+    },
+  });
+  try {
+    const selected = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/runtime`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ harnessId: "pi", modelId: "claude-opus-5" }),
+    });
+    assert.equal(selected.status, 200);
+  } finally {
+    await srv.close();
+  }
+
+  const direct = buildApp(
+    testConfig({
+      anthropicApiKey: "direct-provider-key",
+      modelGateway: {
+        url: "http://gateway.internal:8080",
+        apiKey: "gateway-secret",
+        apiKeyHeader: "api-key",
+        models: { "claude-opus-5": "router/opus" },
+      },
+    }),
+  );
+  assert.equal(await direct.modelCredentials.resolve("anthropic"), "direct-provider-key");
 });
 
 test("OpenRouter validation uses an authenticated endpoint", async () => {
@@ -312,6 +398,25 @@ test("an oversized OpenRouter catalog falls back to the built-in models", async 
   }
 });
 
+test("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
+  const srv = start({ harness: "mock" });
+  try {
+    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-5" });
+    const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    assert.equal(response.status, 200);
+    const data = (await response.json()) as {
+      runtime: { harnessId: string; modelId: string };
+      harnessOptions: string[];
+      modelsByHarness: Record<string, Array<{ id: string }>>;
+    };
+    assert.deepEqual(data.runtime, { harnessId: "pi", modelId: "claude-opus-5", orgRevision: 1, revision: 1 });
+    assert.deepEqual(data.harnessOptions, ["pi"]);
+    assert.deepEqual(data.modelsByHarness.pi, [{ id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" }]);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("managed Pi keys do not advertise unsupported OpenCode or browser credentials", async () => {
   const srv = start({ harness: "opencode" });
   try {
@@ -498,7 +603,7 @@ test("admin model credentials survive a second app instance on the same durable 
   assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
 });
 
-test("a stored scope override outside the configured picker refuses web turns; the org default stays exempt", async () => {
+test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
     srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
@@ -519,8 +624,7 @@ test("a stored scope override outside the configured picker refuses web turns; t
       });
 
     const stale = await turn("web:alice:stale-override");
-    assert.equal(stale.status, "refused");
-    assert.match(stale.reason ?? "", /not enabled for the web UI/);
+    assert.equal(stale.status, "queued");
 
     const explicitOrgDefault = await turn("web:alice:org-default", "claude-opus-4-8");
     assert.equal(explicitOrgDefault.status, "queued");

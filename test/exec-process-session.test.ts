@@ -162,6 +162,25 @@ test("redactCommand hides a token piped into --with-token", () => {
   }
 });
 
+test("redactCommand redacts up to the last pipe whose consumer takes --with-token", () => {
+  assert.equal(redactCommand("echo -a| x --with-token | echo b | y --with-token"), "echo <redacted> | y --with-token");
+  assert.equal(redactCommand("echo --with-token|bar"), "echo --with-token|bar");
+  assert.equal(redactCommand("echo   | gh --with-token"), "echo   | gh --with-token");
+});
+
+test("redactCommand stays fast on flag-flooded and echo-flooded commands", () => {
+  const flags = "-a ".repeat(80);
+  const echoes = "echo ".repeat(20000) + "x".repeat(100000);
+  const started = performance.now();
+  assert.equal(redactCommand(`echo ${flags}&& true`), `echo ${flags}&& true`);
+  assert.equal(
+    redactCommand(`echo ${flags}| gh auth login --with-token`),
+    "echo <redacted> | gh auth login --with-token",
+  );
+  assert.equal(redactCommand(echoes), echoes.slice(0, 500));
+  assert.ok(performance.now() - started < 100);
+});
+
 test("redactCommand masks known injected env values the pattern layer misses", () => {
   const env = { GITHUB_TOKEN: "ghp_secretvalue12345" };
   for (const cmd of [

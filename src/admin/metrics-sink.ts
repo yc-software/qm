@@ -30,6 +30,7 @@ export interface TurnMetricSample {
   compileMs?: number;
   recallMs?: number;
   leaseMs?: number;
+  leaseWaitMs?: number;
   captureMs?: number;
   streamMs?: number;
   execMs?: number;

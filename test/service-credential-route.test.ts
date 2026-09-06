@@ -95,13 +95,14 @@ const getCfg = async (base: string) =>
       slug: string;
       name: string;
       host: string;
+      deployments?: boolean;
       hasSecret: boolean;
       enabled: boolean;
       grantees: string[];
       usageCount: number;
       usageTruncated: boolean;
       updatedAt: number;
-      injection?: { header?: string; scheme?: string };
+      injection?: { header?: string; scheme?: string; actor?: boolean };
       allowedMethods?: string[];
       allowedPathPrefixes?: string[];
     }>;
@@ -290,7 +291,7 @@ test("partial credential updates preserve capability lists while explicit empty 
       name: "K",
       secret: "s",
       host: "h.example",
-      injection: { header: "X-Key", scheme: "Token" },
+      injection: { header: "X-Key", scheme: "Token", actor: true },
       allowedMethods: ["POST"],
       allowedPathPrefixes: ["/v1/"],
       enabled: true,
@@ -304,7 +305,7 @@ test("partial credential updates preserve capability lists while explicit empty 
     loaded = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.deepEqual(loaded.allowedMethods, ["POST"]);
     assert.deepEqual(loaded.allowedPathPrefixes, ["/v1/"]);
-    assert.deepEqual(loaded.injection, { header: "X-Key", scheme: "Token" });
+    assert.deepEqual(loaded.injection, { header: "X-Key", scheme: "Token", actor: true });
     assert.equal(loaded.enabled, true);
 
     assert.equal(
@@ -720,7 +721,7 @@ test("re-sharing reconciles the ACL allow-list (org-wide → specific people →
   }
 });
 
-test("a non-org/personal/team grantee is rejected", async () => {
+test("a channel grantee is accepted and saved", async () => {
   const srv = start();
   try {
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
@@ -729,7 +730,26 @@ test("a non-org/personal/team grantee is rejected", async () => {
       slug: "k",
       name: "K",
       host: "h.example",
-      grantees: ["channel:C1"],
+      grantees: ["channel:C1", "personal:bob"],
+      expectedUpdatedAt: version,
+    });
+    assert.equal(r.status, 200);
+    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(), ["channel:C1", "personal:bob"]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a non-org/personal/team/channel grantee is rejected", async () => {
+  const srv = start();
+  try {
+    await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
+    const version = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
+    const r = await putCred(srv.base, {
+      slug: "k",
+      name: "K",
+      host: "h.example",
+      grantees: ["group:G1"],
       expectedUpdatedAt: version,
     });
     assert.equal(r.status, 400);
@@ -744,6 +764,16 @@ test("a non-org/personal/team grantee is rejected", async () => {
     });
     assert.equal(disguised.status, 400);
     assert.match(await disguised.text(), /personal:channel:C1/);
+
+    const emptyRef = await putCred(srv.base, {
+      slug: "k",
+      name: "K",
+      host: "h.example",
+      grantees: ["channel:"],
+      expectedUpdatedAt: version,
+    });
+    assert.equal(emptyRef.status, 400);
+    assert.match(await emptyRef.text(), /grantee must be/);
   } finally {
     await srv.close();
   }
@@ -754,6 +784,8 @@ test("credential capability grammar rejects malformed headers, methods, and path
   try {
     const base = { slug: "k", name: "K", secret: "s", host: "h.example" };
     assert.equal((await putCred(srv.base, { ...base, injection: { header: "Bad Header" } })).status, 400);
+    assert.equal((await putCred(srv.base, { ...base, injection: { header: "X-QM-Actor" } })).status, 400);
+    assert.equal((await putCred(srv.base, { ...base, injection: { actor: "true" } })).status, 400);
     assert.equal((await putCred(srv.base, { ...base, allowedMethods: ["GET /oops"] })).status, 400);
     assert.equal((await putCred(srv.base, { ...base, allowedPathPrefixes: ["relative/path"] })).status, 400);
     assert.equal((await getCfg(srv.base)).serviceCredentials.length, 0);
@@ -1053,6 +1085,51 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "an unentitled session must get no credential token");
 });
 
+test("a channel grantee stamps the credential in that channel's conversations and nowhere else", async () => {
+  const { built, env } = buildWithCapture();
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "x-firehose",
+    name: "X",
+    secret: "s",
+    host: "api.x.com",
+  });
+  await built.acl.grant({
+    ownerScopeId: "org:default-org",
+    ref: "service-cred:x-firehose",
+    granteeScopeId: "channel:C1",
+    permission: "read",
+    grantedBy: "admin",
+  });
+
+  const channelTurn = (channelRef: string): TurnRequest => ({
+    surface: "slack",
+    actor: internalActor,
+    conversation: {
+      kind: "channel",
+      threadRef: `ch:${channelRef}:t1`,
+      channelRef,
+      audience: [internalActor, { externalId: "U2" }],
+      publishMembers: [internalActor, { externalId: "U2" }],
+    },
+    text: "!run echo hi",
+  });
+
+  let res = await built.app.turn(channelTurn("C1"));
+  assert.equal(res.status, "ok", res.reason);
+  const token = env()?.AGENT_CREDENTIAL_TOKEN;
+  assert.ok(token, "the granted channel's conversation should get a credential token");
+  const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
+  assert.deepEqual(claims?.credentials, ["x-firehose"]);
+
+  res = await built.app.turn(channelTurn("C2"));
+  assert.equal(res.status, "ok", res.reason);
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
+
+  res = await built.app.turn(dm("!run echo hi"));
+  assert.equal(res.status, "ok", res.reason);
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "a member's DM must not get a channel-granted credential");
+});
+
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
   const { built, env } = buildWithCapture();
   const res = await built.app.turn(dm("!run echo hi"));
@@ -1103,4 +1180,50 @@ test("the system prompt does NOT advertise a credential the session isn't entitl
   });
   const res = await built.app.turn(dm("!sysprompt"));
   assert.doesNotMatch(res.reply ?? "", /Shared org credentials available to you/);
+});
+
+test("the published-apps switch defaults on, round-trips, survives a partial update, and rejects non-booleans", async () => {
+  const srv = start();
+  try {
+    await putCred(srv.base, { slug: "yc-data", name: "YC data", secret: "s", host: "relay.example" });
+    let loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "yc-data")!;
+    assert.equal(loaded.deployments, true);
+    assert.equal(
+      (
+        await putCred(srv.base, {
+          slug: "yc-data",
+          name: "YC data",
+          host: "relay.example",
+          deployments: false,
+          expectedUpdatedAt: loaded.updatedAt,
+        })
+      ).status,
+      200,
+    );
+    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "yc-data")!;
+    assert.equal(loaded.deployments, false);
+    assert.equal(
+      (
+        await putCred(srv.base, {
+          slug: "yc-data",
+          name: "YC data renamed",
+          host: "relay.example",
+          expectedUpdatedAt: loaded.updatedAt,
+        })
+      ).status,
+      200,
+    );
+    loaded = (await getCfg(srv.base)).serviceCredentials.find((c) => c.slug === "yc-data")!;
+    assert.equal(loaded.deployments, false, "a partial update keeps the switch as it was");
+    const bad = await putCred(srv.base, {
+      slug: "yc-data",
+      name: "YC data",
+      host: "relay.example",
+      deployments: "no",
+      expectedUpdatedAt: loaded.updatedAt,
+    });
+    assert.equal(bad.status, 400);
+  } finally {
+    await srv.close();
+  }
 });

@@ -200,7 +200,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "S3_REGION",
         "PUBLIC_WEB_URL",
         "FLY_ORG",
-        "FLY_DEPLOY_BASE_IMAGE",
         "PI_DETECT_MODEL",
       ],
       deployFlags: ["--ha=false"],

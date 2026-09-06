@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -95,7 +96,7 @@ test("child auth material never includes the refresh token", () => {
   const auth = authJson("acct", FRESH_EXP);
   const child = childCodexOAuthAuth(auth);
   const tokens = child.tokens as Record<string, unknown>;
-  assert.equal(tokens.refresh_token, undefined);
+  assert.equal(tokens.refresh_token, "");
   assert.equal(tokens.access_token, (auth.tokens as Record<string, unknown>).access_token);
   assert.equal(tokens.id_token, (auth.tokens as Record<string, unknown>).id_token);
   assert.equal(child.auth_mode, "chatgpt");
@@ -229,4 +230,22 @@ test("file store keeps serving current auth when the refresh endpoint fails", as
   const auth = await store.load();
   assert.ok(auth);
   assert.equal((auth!.tokens as Record<string, unknown>).refresh_token, "refresh-1");
+});
+
+test("installed Codex accepts child auth without a usable refresh token", () => {
+  const dir = mkdtempSync(join(tmpdir(), "codex-child-login-"));
+  try {
+    const auth = childCodexOAuthAuth(authJson("account-test", Math.floor(Date.now() / 1000) + 3600, "secret-refresh"));
+    writeFileSync(join(dir, "auth.json"), JSON.stringify(auth), { mode: 0o600 });
+    const result = spawnSync(new URL("../node_modules/.bin/codex", import.meta.url).pathname, ["login", "status"], {
+      env: { PATH: process.env.PATH, HOME: dir, CODEX_HOME: dir },
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /Logged in using ChatGPT/);
+    assert.equal((auth.tokens as Record<string, unknown>).refresh_token, "");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

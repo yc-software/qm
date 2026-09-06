@@ -52,19 +52,41 @@ test("cold start: the FIRST shell render already carries the org branding", asyn
 
 test("the shell's badge and product name are branding-driven, not hardcoded", () => {
   const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-  assert.match(shell, /content:\s*var\(--brand-mark,\s*"A"\)/, "badge glyph reads --brand-mark");
-  assert.match(shell, /id="brand-product"/, "header product name is script-addressable");
+  assert.match(shell, /content:\s*var\(--brand-mark\)/, "badge glyph reads --brand-mark");
+  assert.match(shell, /--brand-mark:\s*none;/, "and falls back to the shipped mark when the org sets none");
+  assert.match(shell, /\[data-brand-product\]/, "every product name is script-addressable");
 });
 
 test("a branding save acks only after the shell reflects it — the post-save reload can't be stale", async () => {
   const put = await fetch(`${base}/api/scopes/${encodeURIComponent("org:acme")}/branding`, {
     method: "PUT",
     headers: { cookie: "admin=U-admin", "content-type": "application/json" },
-    body: JSON.stringify({ accent: "#0055ff", mark: "Z", selfLabel: "Zed" }),
+    body: JSON.stringify({
+      accent: "#0055ff",
+      mark: "Z",
+      markUrl: "https://cdn.example.com/icon.png",
+      selfLabel: "Zed",
+    }),
   });
   assert.equal(put.status, 200);
   const html = await (await fetch(`${base}/`)).text();
   assert.match(html, /--brand-accent:#0055ff/);
+  assert.match(
+    html,
+    /--brand-mark-image:url\("https:\/\/cdn\.example\.com\/icon\.png"\)/,
+    "the cache key follows the icon, so a re-brand is not served a stale shell",
+  );
   assert.match(html, /<meta name="brand-self-label" content="Zed"\s*\/?>/);
   assert.match(html, /<title>Zed Admin<\/title>/, "tab title follows the saved label");
+});
+
+test("the brand icon is a CSS variable the org can point at its own image", () => {
+  const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  assert.match(
+    shell,
+    /var\(--brand-mark-image, url\("\.\/brand-mark\.svg"\)\)/,
+    "the badge paints from the variable and falls back to the shipped mark",
+  );
+  assert.match(shell, /id="branding-mark-url"/, "the admin form can set it");
+  assert.match(shell, /markUrl: \$\("branding-mark-url"\)\.value\.trim\(\)/, "and saves it with the rest of branding");
 });

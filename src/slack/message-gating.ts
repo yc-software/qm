@@ -100,8 +100,37 @@ export function createThreadTracker(opts: { negativeTtlMs?: number } = {}): Thre
   };
 }
 
+export type SlackConversationKind = "dm" | "channel" | "group";
+
 export function dmThreadRef(channel: string, threadTs?: string): string {
   return threadTs ? `dm:${channel}:${threadTs}` : `dm:${channel}`;
+}
+
+export function channelThreadRef(conversationKind: SlackConversationKind, channel: string, root: string): string {
+  return `${conversationKind === "group" ? "grp" : "ch"}:${channel}:${root}`;
+}
+
+export function slackThreadRefCandidates(channel: string, ts: string, threadTs?: string): string[] {
+  const root = threadTs || ts;
+  return [
+    ...new Set([
+      dmThreadRef(channel),
+      dmThreadRef(channel, root),
+      channelThreadRef("channel", channel, root),
+      channelThreadRef("group", channel, root),
+    ]),
+  ];
+}
+
+export interface SlackThreadRef {
+  container: string;
+  root?: string;
+}
+
+export function parseSlackThreadRef(threadRef: string): SlackThreadRef | null {
+  const m = /^(?:dm|ch|grp):([^:]+)(?::(.+))?$/.exec(threadRef);
+  if (!m) return null;
+  return { container: m[1]!, ...(m[2] ? { root: m[2] } : {}) };
 }
 
 export function dedupeKey(e: { event_id?: string; client_msg_id?: string; channel?: string; ts?: string }): string {
@@ -128,14 +157,15 @@ export async function dedupedRun(
   key: string,
   run: () => Promise<void>,
   onError: (err: unknown) => void,
-): Promise<void> {
-  if (deduper.seen(key)) return;
+): Promise<boolean> {
+  if (deduper.seen(key)) return false;
   try {
     await run();
   } catch (err) {
     deduper.forget(key);
     onError(err);
   }
+  return true;
 }
 
 export function isBareStop(text: string): boolean {

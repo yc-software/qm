@@ -200,6 +200,12 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
         })
       ).stdout;
     } catch (e) {
+      if (e instanceof Error) {
+        const failure = e as Error & { stdout?: unknown; stderr?: unknown };
+        failure.message = scrub(failure.message, auth);
+        if (typeof failure.stdout === "string") failure.stdout = scrub(failure.stdout, auth);
+        if (typeof failure.stderr === "string") failure.stderr = scrub(failure.stderr, auth);
+      }
       if ((e as { killed?: boolean }).killed)
         throw new Error(`git ${args[0]} timed out after ${timeoutMs}ms`, { cause: e });
       throw new Error(scrub(errMessage(e), auth), { cause: e });

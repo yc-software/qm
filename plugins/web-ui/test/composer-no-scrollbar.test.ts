@@ -10,6 +10,18 @@ test("composer input rests overflow-hidden below the height cap", () => {
   assert.match(block, /overflow-y: hidden;/, "base CSS must suppress the scrollbar below the cap");
 });
 
+test("no chat composer leaves the horizontal axis on the textarea UA default of auto", () => {
+  for (const selector of [".composer-input", ".inbox-chat-input"]) {
+    const block = css.match(new RegExp(`\\${selector} \\{[^}]*\\}`))?.[0] ?? "";
+    assert.notEqual(block, "", `${selector} is styled`);
+    assert.match(
+      block,
+      /overflow-x: hidden;/,
+      `${selector} soft-wraps, so an auto x-axis only ever paints a phantom bar`,
+    );
+  }
+});
+
 test("resizeComposer opens scrolling only past the cap and pins scrollTop under it", () => {
   const fn = composer.match(/function resizeComposer\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.match(

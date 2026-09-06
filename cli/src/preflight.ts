@@ -72,6 +72,7 @@ export async function flySandboxTokenPreflight(
   config: QmConfig,
   secrets: ReadonlyMap<string, string>,
   fetchImpl: typeof fetch = fetch,
+  report = true,
 ): Promise<void> {
   const app = config.sandbox?.app?.trim();
   if (!app) return;
@@ -100,7 +101,7 @@ export async function flySandboxTokenPreflight(
     warn(`the Fly API returned HTTP ${response.status} while verifying FLY_SANDBOX_API_TOKEN — continuing`);
     return;
   }
-  step(`Fly sandbox app ${app}: FLY_SANDBOX_API_TOKEN ok`);
+  if (report) step(`Fly sandbox app ${app}: FLY_SANDBOX_API_TOKEN ok`);
 }
 
 type SmtpTlsMode = "starttls" | "implicit" | "none";
@@ -269,7 +270,11 @@ export function emailTransportConfigured(config: QmConfig, secrets: ReadonlyMap<
   return names.length > 0 && names.every((name) => Boolean(serviceSecretValue(config, "auth", name, secrets)?.trim()));
 }
 
-export async function emailTransportPreflight(config: QmConfig, secrets: ReadonlyMap<string, string>): Promise<void> {
+export async function emailTransportPreflight(
+  config: QmConfig,
+  secrets: ReadonlyMap<string, string>,
+  report = true,
+): Promise<void> {
   if (!config.services.includes("auth")) return;
   const configured = emailTransportConfigured(config, secrets);
   if (!configured) step("sign-in email: disabled; use qm admin-login for administrator access");
@@ -312,5 +317,5 @@ export async function emailTransportPreflight(config: QmConfig, secrets: Readonl
     warn(`could not verify the SMTP credentials against ${host}:${port}: ${errMessage(e)} — continuing`);
     return;
   }
-  step(`SMTP relay ${host}:${port}: credentials accepted`);
+  if (report) step(`SMTP relay ${host}:${port}: credentials accepted`);
 }

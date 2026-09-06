@@ -10,7 +10,7 @@ export interface AdminUserRow {
   admin: AdminStatus;
 }
 
-export interface UsersInput extends Omit<AttributionInput, "sessionIds"> {
+export interface UsersInput extends AttributionInput {
   grants: readonly AdminGrant[];
 }
 

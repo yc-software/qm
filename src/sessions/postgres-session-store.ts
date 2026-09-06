@@ -1,17 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify } from "../util/text.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type {
+  NewSessionPin,
+  SessionPin,
   AttributedTurn,
   EntrySearchHit,
   CronGroupSummary,
+  ScopeSessionRollup,
   DistinctScope,
   GetEntriesOptions,
   GetTapeOptions,
   Lease,
   LeaseAttempt,
   LeaseHolder,
+  LeasePeek,
   LlmRequestRecord,
   NewEntry,
   NewLlmRequest,
@@ -30,20 +34,30 @@ import type {
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
 import {
-  LEGACY_CRON_ID_PATTERN,
+  cronIdOf,
   legacyOriginPattern,
   ORIGIN_ALTERNATION,
   promptEnvelopeBody,
   sessionOrigin,
-  STABLE_CRON_ID_PATTERN,
   stableOriginPattern,
+  threadRefCronIdExpr,
   userMessagePreview,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
-export const SESSION_ENTRIES_SEARCH_INDEX_SQL = `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_search_tsv
-  ON session_entries USING GIN (search_tsv)
-  WHERE type IN ('user', 'assistant', 'text')`;
+const threadRefOriginExpr = (threadRef: string): string =>
+  `COALESCE(substring(${threadRef} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
+
+export async function backfillSessionOriginBatch(q: PgPool["q"], limit: number): Promise<number> {
+  const updated = await q(
+    `UPDATE sessions
+        SET origin = ${threadRefOriginExpr("thread_ref")}, origin_id = ${threadRefCronIdExpr("thread_ref")}
+      WHERE id IN (SELECT id FROM sessions WHERE origin IS NULL LIMIT $1)
+      RETURNING 1`,
+    [limit],
+  );
+  return updated.length;
+}
 
 export function rowToSession(r: Record<string, unknown>): Session {
   return {
@@ -111,6 +125,10 @@ function rowToTape(r: Record<string, unknown>): TapeRecord {
     ...(r.hidden != null ? { hidden: Boolean(r.hidden) } : {}),
     ...(r.overheard != null ? { overheard: Boolean(r.overheard) } : {}),
     ...(r.author != null ? { author: r.author as string } : {}),
+    ...(r.attachments != null ? { attachments: JSON.parse(r.attachments as string) as unknown[] } : {}),
+    ...(r.display != null ? { display: r.display as string } : {}),
+    ...(r.security_tainted != null ? { securityTainted: Boolean(r.security_tainted) } : {}),
+    ...(r.entry_created_at != null ? { entryCreatedAt: Number(r.entry_created_at) } : {}),
   };
   return {
     sessionId: r.session_id as string,
@@ -126,6 +144,17 @@ function rowToTape(r: Record<string, unknown>): TapeRecord {
   };
 }
 
+function rowToParticipantWindow(r: Record<string, unknown>): ParticipantWindow {
+  return {
+    sessionId: r.session_id as string,
+    principalId: r.principal_id as string,
+    validFrom: Number(r.valid_from),
+    validTo: r.valid_to == null ? null : Number(r.valid_to),
+    validFromSeq: r.valid_from_seq == null ? null : Number(r.valid_from_seq),
+    validToSeq: r.valid_to_seq == null ? null : Number(r.valid_to_seq),
+  };
+}
+
 function rowToEntry(r: Record<string, unknown>): SessionEntry {
   return {
     sessionId: r.session_id as string,
@@ -137,6 +166,9 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
     createdAt: Number(r.created_at),
   };
 }
+
+const LAST_ACTIVITY_DEBOUNCE_MS = 60_000;
+const SEARCH_TIMEOUT_MS = 10_000;
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
@@ -151,123 +183,172 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
        OR (${participant}.valid_from_seq IS NULL AND ${entry}.created_at >= ${participant}.valid_from))
       AND ((${participant}.valid_to_seq IS NOT NULL AND ${entry}.seq < ${participant}.valid_to_seq)
        OR (${participant}.valid_to_seq IS NULL AND (${participant}.valid_to IS NULL OR ${entry}.created_at < ${participant}.valid_to))))`;
-  const backgroundThreadRef = (col: string): string =>
-    `(${col} ~ '${stableOriginPattern(ORIGIN_ALTERNATION)}' OR ${col} ~ '${legacyOriginPattern(ORIGIN_ALTERNATION)}')`;
-  const originThreadRef = (col: string, origin: SessionOrigin): string =>
-    `(${col} ~ '${stableOriginPattern(origin)}' OR ${col} ~ '${legacyOriginPattern(origin)}')`;
-  const originFilterClause = (col: string, origin: SessionOriginFilter): string =>
-    origin === "other_background"
-      ? `(${backgroundThreadRef(col)} AND NOT ${originThreadRef(col, "cron")})`
-      : originThreadRef(col, origin);
-  const cronIdExpr = (col: string): string =>
-    `COALESCE(substring(${col} FROM '${STABLE_CRON_ID_PATTERN}'), substring(${col} FROM '${LEGACY_CRON_ID_PATTERN}'))`;
-  const originExpr = (col: string): string =>
-    `COALESCE(substring(${col} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${col} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
+  const participantSessionsSql = (extraWhere: string): string =>
+    `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
+            COALESCE(MAX(e.created_at), s.created_at) AS user_last_activity,
+            EXISTS (SELECT 1 FROM session_entries x WHERE x.session_id = s.id
+                      AND ${withinParticipantWindow("x", "p")}) AS has_entries
+       FROM sessions s
+       JOIN participants p ON p.session_id = s.id
+       LEFT JOIN session_entries e ON e.session_id = s.id AND e.type = 'user'
+      WHERE p.principal_id = $1${extraWhere}
+      GROUP BY s.id, p.title, p.archived, p.pinned, p.color, p.valid_from, p.valid_to, p.valid_from_seq, p.valid_to_seq`;
+  const participantSessions = async (principalId: string): Promise<Session[]> => {
+    const rows = await q(participantSessionsSql(""), [principalId]);
+    return rows.map(rowToParticipantSession);
+  };
+  const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
+    const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
+    return rows[0] ? rowToParticipantSession(rows[0]) : null;
+  };
+  const originExpr = (alias: string): string =>
+    `COALESCE(${alias}.origin, ${threadRefOriginExpr(`${alias}.thread_ref`)})`;
+  const cronIdExpr = (alias: string): string =>
+    `COALESCE(${alias}.origin_id, ${threadRefCronIdExpr(`${alias}.thread_ref`)})`;
+  const isBackground = (alias: string): string => `${originExpr(alias)} <> 'conversation'`;
+  const hasOrigin = (alias: string, origin: SessionOrigin): string => `${originExpr(alias)} = '${origin}'`;
+  const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
+    origin === "other_background" ? `${originExpr(alias)} NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
   const previewExpr = (col: string): string =>
     `(SELECT CASE WHEN json_typeof(j -> 'text') = 'string' THEN j ->> 'text'
                   WHEN json_typeof(j) = 'string' THEN j #>> '{}'
                   ELSE NULL END
         FROM (SELECT safe_json(replace(${col}, '\\u0000', '')) AS j) _)`;
 
-  const { pool, q } = createPgPool(connectionString, [
-    `CREATE OR REPLACE FUNCTION safe_json(t text) RETURNS json
+  const recountRecentSessions = `UPDATE sessions s
+        SET messages = c.messages, turns = c.turns, last_activity = c.last_activity
+       FROM (SELECT r.id,
+                    (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = r.id)::int AS messages,
+                    (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = r.id AND ${userTurn("t")})::int AS turns,
+                    GREATEST(COALESCE(r.last_activity, 0), r.created_at, COALESCE((SELECT MAX(t.created_at) FROM session_entries t WHERE t.session_id = r.id), 0)) AS last_activity
+               FROM sessions r
+              WHERE r.messages IS NULL
+                 OR ${lastActivityExpr("r")} > (EXTRACT(EPOCH FROM now()) * 1000)::bigint - 172800000) c
+      WHERE s.id = c.id
+        AND (s.messages IS DISTINCT FROM c.messages
+          OR s.turns IS DISTINCT FROM c.turns
+          OR s.last_activity IS DISTINCT FROM c.last_activity)`;
+
+  const { pool, q } = createPgPool(
+    connectionString,
+    [
+      {
+        id: "sessions/store/0001",
+        expectedChecksum: "cf56c9f6488806677a229698193ef6dd7cb74300c343bdb1930c17702c5ccf2f",
+        statements: [
+          `CREATE OR REPLACE FUNCTION safe_json(t text) RETURNS json
         LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $safe_json$
         BEGIN RETURN t::json; EXCEPTION WHEN others THEN RETURN NULL; END $safe_json$`,
-    `DO $safe_jsonb_parallel$
+          `DO $safe_jsonb_parallel$
         BEGIN
           IF to_regprocedure('safe_jsonb(text)') IS NOT NULL THEN
             ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;
           END IF;
         END $safe_jsonb_parallel$`,
-    `CREATE TABLE IF NOT EXISTS sessions(
+          `CREATE TABLE IF NOT EXISTS sessions(
         id TEXT PRIMARY KEY, type TEXT NOT NULL, scope_id TEXT NOT NULL,
         thread_ref TEXT UNIQUE NOT NULL, created_at BIGINT NOT NULL, title TEXT, channel_name TEXT
       )`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title TEXT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS channel_name TEXT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS surface TEXT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_activity BIGINT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS messages INT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS turns INT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS forked_from_session_id TEXT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS forked_from_title TEXT`,
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS fork_boundary_seq INT`,
-    `DO $$ BEGIN
-       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sessions_fork_provenance_pair') THEN
-         ALTER TABLE sessions ADD CONSTRAINT sessions_fork_provenance_pair
-         CHECK ((forked_from_session_id IS NULL) = (fork_boundary_seq IS NULL)) NOT VALID;
-       END IF;
-     END $$`,
-    `CREATE TABLE IF NOT EXISTS session_entries(
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title TEXT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS channel_name TEXT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS surface TEXT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_activity BIGINT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS messages INT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS turns INT`,
+          `CREATE TABLE IF NOT EXISTS session_entries(
         session_id TEXT NOT NULL, seq INT NOT NULL, parent_seq INT,
         type TEXT NOT NULL, payload TEXT, scope_label TEXT NOT NULL, created_at BIGINT NOT NULL,
         PRIMARY KEY(session_id, seq)
       )`,
-    `CREATE TABLE IF NOT EXISTS participants(
+          `CREATE TABLE IF NOT EXISTS participants(
         session_id TEXT NOT NULL, principal_id TEXT NOT NULL,
         valid_from BIGINT NOT NULL, valid_to BIGINT,
         valid_from_seq INT, valid_to_seq INT,
         title TEXT, archived BOOLEAN NOT NULL DEFAULT FALSE,
         PRIMARY KEY(session_id, principal_id)
       )`,
-    `CREATE TABLE IF NOT EXISTS session_leases(
+          `CREATE TABLE IF NOT EXISTS session_leases(
         session_id TEXT PRIMARY KEY, token TEXT NOT NULL, expires_at BIGINT NOT NULL
       )`,
-    `ALTER TABLE session_leases ADD COLUMN IF NOT EXISTS holder TEXT`,
-    `ALTER TABLE session_leases ADD COLUMN IF NOT EXISTS acquired_at BIGINT`,
-    `CREATE TABLE IF NOT EXISTS session_tape(
+          `ALTER TABLE session_leases ADD COLUMN IF NOT EXISTS holder TEXT`,
+          `ALTER TABLE session_leases ADD COLUMN IF NOT EXISTS acquired_at BIGINT`,
+          `CREATE TABLE IF NOT EXISTS session_tape(
         session_id TEXT NOT NULL, seq INT NOT NULL,
         kind TEXT NOT NULL, harness TEXT, payload TEXT NOT NULL, scope_label TEXT NOT NULL,
         bare_text TEXT, ts TEXT, change_time TEXT, hidden BOOLEAN, overheard BOOLEAN, author TEXT,
         entry_seq INT, covers_entry_seq INT, created_at BIGINT NOT NULL,
         PRIMARY KEY(session_id, seq)
       )`,
-    `ALTER TABLE participants ADD COLUMN IF NOT EXISTS title TEXT`,
-    `ALTER TABLE participants ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`,
-    `ALTER TABLE participants ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE`,
-    `ALTER TABLE participants ADD COLUMN IF NOT EXISTS color TEXT`,
-    `ALTER TABLE participants ADD COLUMN IF NOT EXISTS valid_from_seq INT`,
-    `ALTER TABLE participants ADD COLUMN IF NOT EXISTS valid_to_seq INT`,
-    `UPDATE participants p SET valid_from = 0, valid_from_seq = 0
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS title TEXT`,
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`,
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE`,
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS color TEXT`,
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS valid_from_seq INT`,
+          `ALTER TABLE participants ADD COLUMN IF NOT EXISTS valid_to_seq INT`,
+          `UPDATE participants p SET valid_from = 0, valid_from_seq = 0
         FROM sessions s
        WHERE s.id = p.session_id
          AND s.scope_id LIKE 'group:web-project-%'
          AND p.valid_to IS NULL
          AND (p.valid_from_seq IS DISTINCT FROM 0 OR p.valid_from <> 0)`,
-    `UPDATE participants p SET title = NULL
+          `UPDATE participants p SET title = NULL
         FROM sessions s
        WHERE s.id = p.session_id
          AND s.scope_id LIKE 'group:web-project-%'
          AND p.valid_to IS NULL
          AND p.title = ''`,
-    `CREATE TABLE IF NOT EXISTS session_llm_requests(
+          `CREATE TABLE IF NOT EXISTS session_llm_requests(
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_seq INT,
         step INT NOT NULL, model TEXT NOT NULL, scope_label TEXT NOT NULL,
         request TEXT NOT NULL, truncated BOOLEAN NOT NULL DEFAULT FALSE, created_at BIGINT NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS session_llm_requests_by_session
+          `CREATE INDEX IF NOT EXISTS session_llm_requests_by_session
         ON session_llm_requests(session_id, created_at, step)`,
-    `CREATE INDEX IF NOT EXISTS session_llm_requests_screens
-        ON session_llm_requests(created_at DESC) WHERE step = -1`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS ttft_ms INT`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS duration_ms INT`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS step_gap_ms INT`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS tool_wall_json TEXT`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS usage_json TEXT`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS transport_json TEXT`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS gap_phases_json TEXT`,
-    `ALTER TABLE session_llm_requests ALTER COLUMN request DROP NOT NULL`,
-    `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS prompt_hash TEXT`,
-    `CREATE TABLE IF NOT EXISTS llm_prompt_envelopes(
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS ttft_ms INT`,
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS duration_ms INT`,
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS step_gap_ms INT`,
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS tool_wall_json TEXT`,
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS usage_json TEXT`,
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS transport_json TEXT`,
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS gap_phases_json TEXT`,
+          `CREATE INDEX IF NOT EXISTS sessions_by_scope ON sessions(scope_id, created_at DESC)`,
+          `CREATE INDEX IF NOT EXISTS sessions_by_activity ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)`,
+          `CREATE INDEX IF NOT EXISTS sessions_by_scope_activity
+        ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC)`,
+          `CREATE INDEX IF NOT EXISTS session_entries_user_ts ON session_entries(created_at) WHERE type = 'user'`,
+          `CREATE INDEX IF NOT EXISTS session_entries_session_created ON session_entries(session_id, created_at DESC)`,
+          `DELETE FROM session_entries WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
+          `DELETE FROM participants WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
+          `DELETE FROM session_leases WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
+          `DELETE FROM session_llm_requests WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
+          `DELETE FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$'`,
+        ],
+      },
+      {
+        id: "sessions/store/0002",
+        expectedChecksum: "ca9877865861adf81cfb433750327462aedcfa1e60d4e87a7845d1a77f64c2ec",
+        statements: [
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS forked_from_session_id TEXT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS forked_from_title TEXT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS fork_boundary_seq INT`,
+          `DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sessions_fork_provenance_pair') THEN
+          ALTER TABLE sessions ADD CONSTRAINT sessions_fork_provenance_pair
+          CHECK ((forked_from_session_id IS NULL) = (fork_boundary_seq IS NULL)) NOT VALID;
+        END IF;
+      END $$`,
+          `ALTER TABLE session_llm_requests ALTER COLUMN request DROP NOT NULL`,
+          `ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS prompt_hash TEXT`,
+          `CREATE TABLE IF NOT EXISTS llm_prompt_envelopes(
         hash TEXT PRIMARY KEY, body TEXT NOT NULL, created_at BIGINT NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS sessions_by_scope ON sessions(scope_id, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS sessions_by_activity ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS sessions_by_scope_activity
-        ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS session_entries_user_ts ON session_entries(created_at) WHERE type = 'user'`,
-    `CREATE INDEX IF NOT EXISTS session_entries_session_created ON session_entries(session_id, created_at DESC)`,
-    `CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text
+        ],
+      },
+      {
+        id: "sessions/store/0003",
+        expectedChecksum: "fd77efdccf169dee81da809a54313be30a0aaf92cdea4f6c33e34555bb2396c8",
+        statements: [
+          `CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text
         LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $entry_search_text$
         DECLARE j json;
         BEGIN
@@ -277,22 +358,138 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                       ELSE NULL END;
         EXCEPTION WHEN others THEN RETURN NULL;
         END $entry_search_text$`,
-    `ALTER TABLE session_entries ADD COLUMN IF NOT EXISTS search_tsv tsvector
+          `CREATE INDEX IF NOT EXISTS session_entries_search_fts
+        ON session_entries USING GIN (to_tsvector('simple', COALESCE(entry_search_text(payload), '')))
+        WHERE type IN ('user', 'assistant', 'text')`,
+        ],
+      },
+      {
+        id: "sessions/store/0004",
+        expectedChecksum: "856cc6940c934b59e37d511271630f77d72b235c92ab0e2e2085207d15750a75",
+        statements: [
+          `CREATE TABLE IF NOT EXISTS session_pins(
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, text TEXT, entry_seq INT,
+        added_by TEXT NOT NULL, created_at BIGINT NOT NULL
+      )`,
+          `CREATE INDEX IF NOT EXISTS session_pins_by_session ON session_pins(session_id, created_at)`,
+        ],
+      },
+      {
+        id: "sessions/store/0005",
+        expectedChecksum: "4b0824aa4311df8c66b57b16f331e9dcf3dfc8d11c112a000d83f46b1fba1bd0",
+        statements: [
+          `CREATE INDEX IF NOT EXISTS session_entries_user_attributed
+        ON session_entries(session_id, created_at, seq)
+        WHERE type = 'user' AND (payload IS NULL OR payload NOT LIKE '%"overheard":true%')`,
+        ],
+      },
+      {
+        id: "sessions/store/0006",
+        expectedChecksum: "57037691db0c87e9eeb28927758ae35e426eb8a8b7f7b5b8440bb08817f39203",
+        statements: [
+          `ALTER FUNCTION entry_search_text(text) PARALLEL SAFE`,
+          `ALTER TABLE session_entries ADD COLUMN IF NOT EXISTS search_tsv tsvector
         GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(entry_search_text(payload), ''))) STORED`,
-    SESSION_ENTRIES_SEARCH_INDEX_SQL,
-    `DROP INDEX IF EXISTS session_entries_search_fts`,
-    `DELETE FROM session_entries WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
-    `DELETE FROM participants WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
-    `DELETE FROM session_leases WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
-    `DELETE FROM session_llm_requests WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')`,
-    `DELETE FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$'`,
-    `UPDATE sessions s
-        SET messages = (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = s.id),
-            turns = (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = s.id AND ${userTurn("t")}),
-            last_activity = GREATEST(COALESCE(s.last_activity, 0), s.created_at, COALESCE((SELECT MAX(t.created_at) FROM session_entries t WHERE t.session_id = s.id), 0))
-      WHERE s.messages IS NULL
-         OR ${lastActivityExpr("s")} > (EXTRACT(EPOCH FROM now()) * 1000)::bigint - 172800000`,
-  ]);
+          `CREATE INDEX IF NOT EXISTS session_entries_search_tsv
+        ON session_entries USING GIN (search_tsv)
+        WHERE type IN ('user', 'assistant', 'text')`,
+          `DROP INDEX IF EXISTS session_entries_search_fts`,
+        ],
+      },
+      {
+        id: "sessions/store/0007",
+        expectedChecksum: "8322f0c560da60399baf59f0364e8125e836384cd8b4d9795bd1c114d4d7d514",
+        statements: [`ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS attachments TEXT`],
+      },
+      {
+        id: "sessions/store/0008",
+        expectedChecksum: "4b32bec77fa021de97736856a70a45bf1e51e59e574987e0d044fe748ec4cf58",
+        statements: [
+          `ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS display TEXT`,
+          `ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS security_tainted BOOLEAN`,
+          `ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS entry_created_at BIGINT`,
+        ],
+      },
+      {
+        id: "sessions/store/0009",
+        expectedChecksum: "40558264e0589a236a8a5a688a42eb49acf8a774371b9e1c6a3e5e0a84065c7d",
+        statements: [
+          `CREATE TABLE IF NOT EXISTS session_entry_search(
+        session_id TEXT NOT NULL, seq INT NOT NULL, type TEXT NOT NULL,
+        author TEXT, text TEXT NOT NULL, created_at BIGINT NOT NULL,
+        search_tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', text)) STORED,
+        PRIMARY KEY(session_id, seq)
+      )`,
+          `CREATE INDEX IF NOT EXISTS session_entry_search_tsv
+        ON session_entry_search USING GIN (search_tsv)`,
+        ],
+      },
+      {
+        id: "sessions/store/0010",
+        expectedChecksum: "29832445f9d3bfaf0d97f11b2748a1ca533ff57c6f4bd96c594e83a6ab4f7c9a",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `DROP INDEX IF EXISTS sessions_by_activity`,
+          `ALTER TABLE sessions SET (fillfactor = 70)`,
+        ],
+      },
+      {
+        id: "sessions/store/0011",
+        expectedChecksum: "be590472124ab471453cfbbd7d3c1a0c57f792c97704707fba3682f4183f870d",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS origin TEXT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS origin_id TEXT`,
+        ],
+      },
+      {
+        id: "sessions/store/0012",
+        expectedChecksum: "6f52591c733daffdda7aca112ad5a21cfec5c0c36f97838d74b107a79b7100bf",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `CREATE INDEX IF NOT EXISTS session_llm_requests_screens
+        ON session_llm_requests(created_at DESC) WHERE step = -1`,
+        ],
+      },
+      {
+        id: "sessions/store/0013",
+        expectedChecksum: "86c8d0eff24f8f2deab4f33eccff6d0206b3a9a64943a812eec0965203dd5262",
+        statements: [
+          `CREATE EXTENSION IF NOT EXISTS btree_gin`,
+          `CREATE INDEX IF NOT EXISTS session_entries_session_search_tsv
+        ON session_entries USING GIN (session_id, search_tsv)
+        WHERE type IN ('user', 'assistant', 'text')`,
+          `CREATE INDEX IF NOT EXISTS session_entry_search_session_tsv
+        ON session_entry_search USING GIN (session_id, search_tsv)`,
+        ],
+      },
+    ],
+    [
+      {
+        id: "sessions/maintenance/safe-jsonb-parallel",
+        statements: [
+          `DO $safe_jsonb_parallel$
+        BEGIN
+          IF to_regprocedure('safe_jsonb(text)') IS NOT NULL THEN
+            ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;
+          END IF;
+        END $safe_jsonb_parallel$`,
+        ],
+      },
+      {
+        id: "sessions/maintenance/entry-search-text-parallel",
+        statements: [
+          `DO $entry_search_text_parallel$
+        BEGIN
+          IF to_regprocedure('entry_search_text(text)') IS NOT NULL THEN
+            ALTER FUNCTION entry_search_text(text) PARALLEL UNSAFE;
+          END IF;
+        END $entry_search_text_parallel$`,
+        ],
+      },
+      { id: "sessions/maintenance/recount-recent", statements: [recountRecentSessions] },
+    ],
+  );
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -300,10 +497,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pool(), async (client) => {
       await lockSession(client, lease.sessionId);
-      const held = await client.query("SELECT token FROM session_leases WHERE session_id = $1 FOR UPDATE", [
+      const held = await client.query("SELECT token, expires_at FROM session_leases WHERE session_id = $1 FOR UPDATE", [
         lease.sessionId,
       ]);
-      if (held.rows[0]?.token !== lease.token) throw new Error(invalidMsg);
+      if (held.rows[0]?.token !== lease.token || Number(held.rows[0]!.expires_at) <= now()) throw new Error(invalidMsg);
       await client.query("UPDATE session_leases SET expires_at = $2 WHERE session_id = $1", [
         lease.sessionId,
         now() + leaseTtlMs,
@@ -319,8 +516,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const stored = jsonbSafeStringify(rec.payload ?? null);
     const createdAt = now();
     await client.query(
-      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, entry_seq, covers_entry_seq, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, attachments, display, security_tainted, entry_created_at, entry_seq, covers_entry_seq, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [
         sessionId,
         seq,
@@ -334,6 +531,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         rec.meta?.hidden ?? null,
         rec.meta?.overheard ?? null,
         rec.meta?.author ?? null,
+        rec.meta?.attachments !== undefined ? jsonbSafeStringify(rec.meta.attachments) : null,
+        rec.meta?.display ?? null,
+        rec.meta?.securityTainted ?? null,
+        rec.meta?.entryCreatedAt ?? null,
         rec.entrySeq ?? null,
         rec.coversEntrySeq ?? null,
         createdAt,
@@ -343,6 +544,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
 
   return {
+    leaseTtlMs,
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
@@ -368,7 +570,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0) ON CONFLICT (thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9) ON CONFLICT (thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -377,6 +579,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           session.createdAt,
           channelName ?? null,
           surface ?? null,
+          sessionOrigin(threadRef),
+          cronIdOf(threadRef),
         ],
       );
       const rows = await q("SELECT * FROM sessions WHERE thread_ref = $1", [threadRef]);
@@ -409,29 +613,53 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const t = now();
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
-        const granted = await client.query(
-          `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
-             SELECT $1, $2, $3, $5, $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
-           ON CONFLICT (session_id) DO UPDATE
-             SET token = $2, expires_at = $3, holder = $5, acquired_at = $4
-             WHERE session_leases.expires_at <= $4
-           RETURNING token`,
-          [sessionId, token, t + leaseTtlMs, t, holder ?? null],
-        );
-        if (granted.rows[0]) return { lease: { sessionId, token } };
-        const held = await client.query(
-          "SELECT expires_at, holder, acquired_at FROM session_leases WHERE session_id = $1",
-          [sessionId],
-        );
-        const row = held.rows[0];
-        if (!row) return { lease: null };
-        return {
-          lease: null,
-          ...(row.holder != null ? { heldBy: row.holder as LeaseHolder } : {}),
-          ...(row.acquired_at != null ? { heldSince: Number(row.acquired_at) } : {}),
-          heldUntil: Number(row.expires_at),
-        };
+        for (;;) {
+          const granted = await client.query(
+            `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
+               SELECT $1, $2, $3, $5, $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
+             ON CONFLICT (session_id) DO UPDATE
+               SET token = $2, expires_at = $3, holder = $5, acquired_at = $4
+               WHERE session_leases.expires_at <= $4
+             RETURNING token`,
+            [sessionId, token, t + leaseTtlMs, t, holder ?? null],
+          );
+          if (granted.rows[0]) return { lease: { sessionId, token } };
+          const held = await client.query(
+            "SELECT expires_at, holder, acquired_at FROM session_leases WHERE session_id = $1",
+            [sessionId],
+          );
+          const row = held.rows[0];
+          if (row) {
+            return {
+              lease: null,
+              ...(row.holder != null ? { heldBy: row.holder as LeaseHolder } : {}),
+              ...(row.acquired_at != null ? { heldSince: Number(row.acquired_at) } : {}),
+              heldUntil: Number(row.expires_at),
+            };
+          }
+          const exists = await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId]);
+          if (!exists.rows[0]) return { lease: null };
+        }
       });
+    },
+
+    async peekLease(sessionId): Promise<LeasePeek | null> {
+      const rows = await q("SELECT holder, expires_at FROM session_leases WHERE session_id = $1", [sessionId]);
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        ...(row.holder != null ? { holder: row.holder as LeaseHolder } : {}),
+        heldUntil: Number(row.expires_at),
+      };
+    },
+
+    async renewLease(lease): Promise<boolean> {
+      const t = now();
+      const rows = await q(
+        "UPDATE session_leases SET expires_at = $3 WHERE session_id = $1 AND token = $2 AND expires_at > $4 RETURNING token",
+        [lease.sessionId, lease.token, t + leaseTtlMs, t],
+      );
+      return rows.length > 0;
     },
 
     async releaseLease(lease): Promise<void> {
@@ -465,7 +693,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         );
         await client.query(
           `UPDATE sessions
-              SET last_activity = GREATEST(COALESCE(last_activity, 0), $2),
+              SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
+                                       THEN last_activity
+                                       ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
                   messages = $3,
                   turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
                                THEN (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = $1 AND ${userTurn("t")})
@@ -532,6 +762,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Number(rows[0]?.n ?? -1);
     },
 
+    async latestEntrySeq(sessionId): Promise<number> {
+      const rows = await q("SELECT COALESCE(MAX(seq), -1) AS n FROM session_entries WHERE session_id = $1", [
+        sessionId,
+      ]);
+      return Number(rows[0]?.n ?? -1);
+    },
+
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
       const since = opts?.sinceSeq ?? 0;
       if (opts?.limit !== undefined) {
@@ -546,6 +783,43 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         since,
       ]);
       return rows.map(rowToEntry);
+    },
+
+    async getContextWindow(sessionId) {
+      const [meta, summary] = await Promise.all([
+        q(
+          `SELECT count(*)::int AS total,
+                  bool_or((payload::jsonb -> 'securityTainted') = 'true'::jsonb) AS taint
+             FROM session_entries WHERE session_id = $1`,
+          [sessionId],
+        ),
+        q(
+          `SELECT (payload::jsonb ->> 'throughSeq')::int AS through
+             FROM session_entries
+            WHERE session_id = $1 AND type = 'system'
+              AND payload::jsonb ->> 'kind' = 'context_summary'
+              AND jsonb_typeof(payload::jsonb -> 'throughSeq') = 'number'
+              AND jsonb_typeof(payload::jsonb -> 'text') = 'string'
+            ORDER BY seq DESC LIMIT 1`,
+          [sessionId],
+        ),
+      ]);
+      const through = summary[0]?.through;
+      const sinceSeq = typeof through === "number" ? through + 1 : 0;
+      const rows = await q("SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq ASC", [
+        sessionId,
+        sinceSeq,
+      ]);
+      return {
+        entries: rows.map(rowToEntry),
+        totalEntries: Number(meta[0]?.total ?? 0),
+        hasSecurityTaint: meta[0]?.taint === true,
+      };
+    },
+
+    async getEntry(sessionId, seq): Promise<SessionEntry | undefined> {
+      const rows = await q("SELECT * FROM session_entries WHERE session_id = $1 AND seq = $2", [sessionId, seq]);
+      return rows[0] ? rowToEntry(rows[0]) : undefined;
     },
 
     async recordLlmRequest(sessionId, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord> {
@@ -698,6 +972,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_entries WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_tape WHERE session_id = $1", [sessionId]);
+        await client.query("DELETE FROM session_entry_search WHERE session_id = $1", [sessionId]);
+        await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM sessions WHERE id = $1", [sessionId]);
       });
     },
@@ -717,24 +993,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_tape WHERE session_id = $1", [sessionId]);
+        await client.query("DELETE FROM session_entry_search WHERE session_id = $1", [sessionId]);
+        await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
         return true;
       });
     },
 
     async listByParticipant(principalId): Promise<Session[]> {
-      const rows = await q(
-        `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
-                COALESCE(MAX(e.created_at), s.created_at) AS user_last_activity,
-                EXISTS (SELECT 1 FROM session_entries x WHERE x.session_id = s.id
-                          AND ${withinParticipantWindow("x", "p")}) AS has_entries
-           FROM sessions s
-           JOIN participants p ON p.session_id = s.id
-           LEFT JOIN session_entries e ON e.session_id = s.id AND e.type = 'user'
-          WHERE p.principal_id = $1
-          GROUP BY s.id, p.title, p.archived, p.pinned, p.color, p.valid_from, p.valid_to, p.valid_from_seq, p.valid_to_seq`,
-        [principalId],
-      );
-      return rows.map(rowToParticipantSession);
+      return participantSessions(principalId);
+    },
+
+    async getForParticipant(sessionId, principalId): Promise<Session | null> {
+      return participantSession(sessionId, principalId);
     },
 
     async updateParticipantView(sessionId, principalId, patch): Promise<void> {
@@ -768,6 +1038,45 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }
     },
 
+    async addPin(sessionId, pin: NewSessionPin, maxPins?: number): Promise<SessionPin | null> {
+      const rec: SessionPin = { ...pin, id: randomUUID(), sessionId, createdAt: now() };
+      return withPgTransaction(await pool(), async (client) => {
+        await lockSession(client, sessionId);
+        const inserted = await client.query(
+          `INSERT INTO session_pins(id, session_id, text, entry_seq, added_by, created_at)
+           SELECT $1, $2, $3, $4, $5, $6
+            WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $2)
+              AND ($7::int IS NULL OR (SELECT COUNT(*) FROM session_pins WHERE session_id = $2) < $7)
+           RETURNING id`,
+          [rec.id, sessionId, rec.text ?? null, rec.entrySeq ?? null, rec.addedBy, rec.createdAt, maxPins ?? null],
+        );
+        return inserted.rowCount ? rec : null;
+      });
+    },
+
+    async listPins(sessionId): Promise<SessionPin[]> {
+      const rows = await q(
+        "SELECT id, session_id, text, entry_seq, added_by, created_at FROM session_pins WHERE session_id = $1 ORDER BY created_at ASC, id ASC",
+        [sessionId],
+      );
+      return rows.map((r) => ({
+        id: r.id as string,
+        sessionId: r.session_id as string,
+        ...(r.text != null ? { text: r.text as string } : {}),
+        ...(r.entry_seq != null ? { entrySeq: Number(r.entry_seq) } : {}),
+        addedBy: r.added_by as string,
+        createdAt: Number(r.created_at),
+      }));
+    },
+
+    async removePin(sessionId, pinId): Promise<boolean> {
+      const res = await q("DELETE FROM session_pins WHERE session_id = $1 AND id = $2 RETURNING id", [
+        sessionId,
+        pinId,
+      ]);
+      return res.length > 0;
+    },
+
     async visibleEntries(sessionId, principalId): Promise<SessionEntry[]> {
       const rows = await q(
         `SELECT e.* FROM session_entries e
@@ -784,18 +1093,36 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
-        `SELECT e.session_id, e.seq, e.type, e.created_at,
-                entry_search_text(e.payload) AS text,
-                (SELECT CASE WHEN e.type = 'user' AND json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
-                   FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) AS author
-           FROM session_entries e
-           JOIN participants p ON p.session_id = e.session_id AND p.principal_id = $1
-          WHERE e.type IN ('user', 'assistant', 'text')
-            AND ${withinParticipantWindow("e", "p")}
-            AND e.search_tsv @@ to_tsquery('simple', $2)
-          ORDER BY e.created_at DESC, e.session_id, e.seq DESC
+        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at
+           FROM participants p
+           CROSS JOIN LATERAL
+                ((SELECT s.session_id, s.seq, s.type, s.author, s.text, s.created_at
+                    FROM session_entry_search s
+                   WHERE s.session_id = p.session_id
+                     AND s.search_tsv @@ to_tsquery('simple', $2)
+                     AND ${withinParticipantWindow("s", "p")}
+                   ORDER BY s.created_at DESC, s.seq DESC
+                   LIMIT $3)
+                  UNION ALL
+                 (SELECT e.session_id, e.seq, e.type,
+                         (SELECT CASE WHEN e.type = 'user' AND json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
+                            FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) AS author,
+                         entry_search_text(e.payload) AS text,
+                         e.created_at
+                    FROM session_entries e
+                   WHERE e.session_id = p.session_id
+                     AND e.type IN ('user', 'assistant', 'text')
+                     AND e.search_tsv @@ to_tsquery('simple', $2)
+                     AND ${withinParticipantWindow("e", "p")}
+                     AND NOT EXISTS (SELECT 1 FROM session_entry_search x
+                                      WHERE x.session_id = e.session_id AND x.seq = e.seq)
+                   ORDER BY e.created_at DESC, e.seq DESC
+                   LIMIT $3)) h
+          WHERE p.principal_id = $1
+          ORDER BY h.created_at DESC, h.session_id, h.seq DESC
           LIMIT $3`,
         [principalId, ts, Math.max(1, Math.min(limit, 200))],
+        { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.flatMap((r) => {
         const text = (r.text as string | null) ?? "";
@@ -813,9 +1140,61 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
-    async listAll(): Promise<Session[]> {
+    async appendSearchEntries(lease, rows): Promise<void> {
+      if (!rows.length) return;
+      await withLease(lease, "search index append without a valid session lease", async (client) => {
+        for (const row of rows) {
+          await client.query(
+            `INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (session_id, seq) DO NOTHING`,
+            [
+              lease.sessionId,
+              row.seq,
+              row.type,
+              row.author?.replaceAll("\u0000", "") ?? null,
+              row.text.replaceAll("\u0000", ""),
+              row.createdAt,
+            ],
+          );
+        }
+      });
+    },
+
+    async searchIndexCoverage(sessionId): Promise<number> {
+      const rows = await q("SELECT COALESCE(MAX(seq), -1) AS n FROM session_entry_search WHERE session_id = $1", [
+        sessionId,
+      ]);
+      return Number(rows[0]?.n ?? -1);
+    },
+
+    async lastSearchableEntrySeq(sessionId): Promise<number> {
+      const rows = await q(
+        `SELECT COALESCE(MAX(seq), -1) AS n FROM session_entries
+          WHERE session_id = $1 AND type IN ('user', 'assistant', 'text')
+            AND COALESCE(btrim(entry_search_text(payload)), '') <> ''`,
+        [sessionId],
+      );
+      return Number(rows[0]?.n ?? -1);
+    },
+
+    async scanAll(): Promise<Session[]> {
       const rows = await q("SELECT * FROM sessions");
       return rows.map(rowToSession);
+    },
+
+    async countSessions(): Promise<number> {
+      const rows = await q("SELECT COUNT(*) AS n FROM sessions");
+      return Number(rows[0]?.n ?? 0);
+    },
+
+    async listByScope(scope): Promise<Session[]> {
+      const rows = await q("SELECT * FROM sessions WHERE scope_id = $1 ORDER BY created_at DESC, id DESC", [scope]);
+      return rows.map(rowToSession);
+    },
+
+    async scopeHasSessions(scope): Promise<boolean> {
+      const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1) AS present", [scope]);
+      return Boolean(rows[0]?.present);
     },
 
     async sessionsByThreadRefs(threadRefs): Promise<SessionRef[]> {
@@ -840,18 +1219,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }));
     },
 
-    async scopeSessionSummaries(
-      scope,
-      orgWide,
-      page?: SessionPage,
-      includePreviews = true,
-      sessionIds?: string[],
-    ): Promise<SessionSummary[]> {
+    async scopeSessionSummaries(scope, orgWide, page?: SessionPage, sessionIds?: string[]): Promise<SessionSummary[]> {
       const params: unknown[] = [orgWide, scope];
       let categoryClause = "";
-      if (page?.category === "background") categoryClause = ` AND ${backgroundThreadRef("s.thread_ref")}`;
-      else if (page?.category) categoryClause = ` AND NOT ${backgroundThreadRef("s.thread_ref")}`;
-      const originClause = page?.origin ? ` AND ${originFilterClause("s.thread_ref", page.origin)}` : "";
+      if (page?.category === "background") categoryClause = ` AND ${isBackground("s")}`;
+      else if (page?.category) categoryClause = ` AND NOT ${isBackground("s")}`;
+      const originClause = page?.origin ? ` AND ${originFilterClause("s", page.origin)}` : "";
       let idsClause = "";
       if (sessionIds) {
         params.push(sessionIds);
@@ -860,7 +1233,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       let cronClause = "";
       if (page?.cronId) {
         params.push(page.cronId);
-        cronClause = ` AND ${cronIdExpr("s.thread_ref")} = $${params.length}`;
+        cronClause = ` AND ${cronIdExpr("s")} = $${params.length}`;
       }
       let keysetClause = "";
       if (page?.before) {
@@ -876,20 +1249,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           pageClause += ` OFFSET $${params.length}`;
         }
       }
-      const previewCols = includePreviews
-        ? `(SELECT ${previewExpr("fe.payload")} FROM session_entries fe
-                  WHERE fe.session_id = s.id AND ${userTurn("fe")}
-                  ORDER BY fe.seq ASC LIMIT 1) AS first_user,
-                (SELECT ${previewExpr("le.payload")} FROM session_entries le
-                  WHERE le.session_id = s.id AND ${userTurn("le")}
-                  ORDER BY le.seq DESC LIMIT 1) AS last_user`
-        : `NULL AS first_user, NULL AS last_user`;
       const rows = await q(
         `SELECT s.id, s.type, s.scope_id, s.thread_ref, s.created_at,
                 COALESCE(s.messages, 0) AS messages,
                 COALESCE(s.turns, 0) AS turns,
                 ${lastActivityExpr("s")} AS last_activity,
-                ${previewCols}
+                (SELECT ${previewExpr("fe.payload")} FROM session_entries fe
+                  WHERE fe.session_id = s.id AND ${userTurn("fe")}
+                  ORDER BY fe.seq ASC LIMIT 1) AS first_user,
+                (SELECT ${previewExpr("le.payload")} FROM session_entries le
+                  WHERE le.session_id = s.id AND ${userTurn("le")}
+                  ORDER BY le.seq DESC LIMIT 1) AS last_user
            FROM sessions s
           WHERE ($1::boolean OR s.scope_id = $2)${categoryClause}${originClause}${idsClause}${cronClause}${keysetClause}
           ORDER BY last_activity DESC, s.id DESC${pageClause}`,
@@ -927,17 +1297,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async scopeCronGroups(scope, orgWide): Promise<CronGroupSummary[]> {
       const rows = await q(
-        `SELECT ${cronIdExpr("s.thread_ref")} AS cron_id,
-                MIN(s.scope_id) AS scope_id,
+        `SELECT t.cron_id,
+                MIN(t.scope_id) AS scope_id,
                 COUNT(*) AS sessions,
-                COALESCE(SUM(s.messages), 0) AS messages,
-                COALESCE(SUM(s.turns), 0) AS turns,
-                MAX(${lastActivityExpr("s")}) AS last_activity,
-                MIN(s.created_at) AS created_at
-           FROM sessions s
-          WHERE ($1::boolean OR s.scope_id = $2) AND ${cronIdExpr("s.thread_ref")} IS NOT NULL
-          GROUP BY cron_id
-          ORDER BY last_activity DESC, cron_id DESC`,
+                COALESCE(SUM(t.messages), 0) AS messages,
+                COALESCE(SUM(t.turns), 0) AS turns,
+                MAX(t.activity) AS last_activity,
+                MIN(t.created_at) AS created_at
+           FROM (SELECT ${cronIdExpr("s")} AS cron_id, s.scope_id, s.messages, s.turns, s.created_at,
+                        ${lastActivityExpr("s")} AS activity
+                   FROM sessions s
+                  WHERE ($1::boolean OR s.scope_id = $2)) t
+          WHERE t.cron_id IS NOT NULL
+          GROUP BY t.cron_id
+          ORDER BY last_activity DESC, t.cron_id DESC`,
         [orgWide, scope],
       );
       return rows.map((r) => ({
@@ -951,27 +1324,50 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }));
     },
 
+    async scopeSessionRollups(scope, orgWide): Promise<ScopeSessionRollup[]> {
+      const rows = await q(
+        `SELECT scope_id,
+                COUNT(*) FILTER (WHERE NOT background) AS sessions,
+                COUNT(*) FILTER (WHERE background) AS background_sessions,
+                MAX(last_activity) AS last_activity,
+                COALESCE(MAX(last_activity) FILTER (WHERE NOT background), 0) AS last_conversation_activity,
+                (array_agg(id ORDER BY last_activity DESC, id DESC) FILTER (WHERE NOT background AND turns > 0))[1]
+                  AS preview_session_id
+           FROM (SELECT s.scope_id, s.id, COALESCE(s.turns, 0) AS turns,
+                        ${lastActivityExpr("s")} AS last_activity,
+                        ${isBackground("s")} AS background
+                   FROM sessions s
+                  WHERE ($1::boolean OR s.scope_id = $2)) t
+          GROUP BY scope_id`,
+        [orgWide, scope],
+      );
+      return rows.map((r) => ({
+        scopeId: r.scope_id as ScopeId,
+        sessions: Number(r.sessions),
+        backgroundSessions: Number(r.background_sessions),
+        lastActivity: Number(r.last_activity),
+        lastConversationActivity: Number(r.last_conversation_activity),
+        previewSessionId: (r.preview_session_id as string | null) ?? null,
+      }));
+    },
+
     async scopeSessionStats(scope, orgWide, category, originFilter, cronId): Promise<ScopeSessionStats> {
       const params: unknown[] = [orgWide, scope];
       const matchedClauses: string[] = [];
       if (category) {
-        matchedClauses.push(
-          category === "background"
-            ? backgroundThreadRef("s.thread_ref")
-            : `NOT ${backgroundThreadRef("s.thread_ref")}`,
-        );
+        matchedClauses.push(category === "background" ? isBackground("s") : `NOT ${isBackground("s")}`);
       }
-      if (originFilter) matchedClauses.push(originFilterClause("s.thread_ref", originFilter));
+      if (originFilter) matchedClauses.push(originFilterClause("s", originFilter));
       if (cronId) {
         params.push(cronId);
-        matchedClauses.push(`${cronIdExpr("s.thread_ref")} = $${params.length}`);
+        matchedClauses.push(`${cronIdExpr("s")} = $${params.length}`);
       }
       const rows = await q(
         `SELECT origin, CASE WHEN origin = 'conversation' THEN type ELSE origin END AS bucket,
                 matched, COUNT(*) AS sessions, COALESCE(SUM(turns), 0) AS turns,
                 COUNT(DISTINCT cron_id) AS crons
-           FROM (SELECT s.type, ${originExpr("s.thread_ref")} AS origin,
-                        ${cronIdExpr("s.thread_ref")} AS cron_id,
+           FROM (SELECT s.type, ${originExpr("s")} AS origin,
+                        ${cronIdExpr("s")} AS cron_id,
                         (${matchedClauses.join(" AND ") || "TRUE"}) AS matched,
                         COALESCE(s.turns, 0) AS turns
                    FROM sessions s
@@ -1021,13 +1417,23 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async listParticipants(): Promise<ParticipantWindow[]> {
-      const rows = await q("SELECT session_id, principal_id, valid_from, valid_to FROM participants");
-      return rows.map((r) => ({
-        sessionId: r.session_id as string,
-        principalId: r.principal_id as string,
-        validFrom: Number(r.valid_from),
-        validTo: r.valid_to == null ? null : Number(r.valid_to),
-      }));
+      const rows = await q(
+        "SELECT session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq FROM participants",
+      );
+      return rows.map(rowToParticipantWindow);
+    },
+
+    async distinctParticipants(): Promise<string[]> {
+      const rows = await q("SELECT DISTINCT principal_id FROM participants");
+      return rows.map((r) => r.principal_id as string);
+    },
+
+    async participantWindowsOf(sessionId): Promise<ParticipantWindow[]> {
+      const rows = await q(
+        "SELECT session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq FROM participants WHERE session_id = $1",
+        [sessionId],
+      );
+      return rows.map(rowToParticipantWindow);
     },
 
     async participantsOf(sessionId): Promise<string[]> {

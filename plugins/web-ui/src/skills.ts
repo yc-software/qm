@@ -1,9 +1,8 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Box } from "lucide";
 import { api, type CoreContext } from "./core-bridge";
 import type { SkillItem } from "./composer";
 import { errMessage } from "../../chassis/src/errors";
-import { fieldSelect, icon } from "./ui";
+import { fieldSelect } from "./ui";
 import { appState } from "./shell";
 import { skillActions } from "./skill-actions";
 import {
@@ -28,6 +27,8 @@ import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { SkillsRefreshSequence } from "./skills-refresh";
 import { SkillsMutationSequence } from "./skills-mutation";
+import { tip } from "./tooltip";
+import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 
 let skillRows: SkillItem[] = [];
 let skillsNotice = "";
@@ -69,6 +70,31 @@ const skillsRefreshes = new SkillsRefreshSequence();
 const skillMutations = new SkillsMutationSequence();
 let flowFocusTarget: HTMLElement | null = null;
 let archiveFocusTarget: HTMLElement | null = null;
+let activeSkillId: string | null = null;
+let pendingSkillId: string | null = null;
+
+export function resetActiveSkill(): void {
+  activeSkillId = null;
+}
+
+export function openSkillById(id: string): void {
+  pendingSkillId = id;
+}
+
+function syncSkillUrl(skillId: string | null, push = false): void {
+  if (appState.currentView !== "skills") return;
+  const next = deepLinkPath(UI_BASE, "skills", null, null, skillId);
+  if (`${location.pathname}${location.search}` === next) return;
+  if (push) history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
+}
+
+export function routeSkillsHistory(skillId: string | null): void {
+  if (appState.currentView !== "skills") return;
+  const skill = skillId ? skillRows.find((candidate) => candidate.id === skillId) : undefined;
+  if (skill) openSkill(skill);
+  else drawSkills();
+}
 
 function scopeLabel(scope: string): string {
   return scope ? scope.charAt(0).toUpperCase() + scope.slice(1) : "";
@@ -167,45 +193,37 @@ function startCreate(): void {
   queueMicrotask(() => document.querySelector<HTMLInputElement>("#skill-create-name")?.focus());
 }
 
-function skillMeta(s: SkillItem): string {
-  const source = s.source === "pack" ? `Pack ${s.pack?.upstreamName ?? "source"}` : "Created here";
-  return `${scopeLabel(s.scope)} · v${s.version ?? 1} · ${source}`;
+function skillScopeTitle(s: SkillItem): string {
+  if (s.scopeId && (s.scope === "personal" || s.scope === "channel" || s.scope === "group")) {
+    return scopeTitle(s.scopeId);
+  }
+  return scopeLabel(s.scope);
 }
 
 function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
   const actions = skillActions(s);
   const archived = isArchivedSkill(s);
-  let state = "Active";
-  if (archived) state = "Archived";
-  else if (hasScopeVariants) state = "Scope variant";
   let archiveLabel = "Archive";
   if (deleting === s.id) archiveLabel = "Working…";
   else if (archived) archiveLabel = "Restore";
   return html`
     <div class="skill-variant ${archived ? "archived" : ""}">
-      <span class="skill-variant-icon">${icon(Box, 16)}</span>
-      <div class="skill-variant-copy">
-        <div class="skill-variant-description" title=${s.description}>${s.description}</div>
-        <div class="skill-variant-meta">
-          ${skillMeta(s)}${s.assetCount ? ` · ${s.assetCount} asset${s.assetCount === 1 ? "" : "s"}` : ""}
-        </div>
-        <details class="skill-variant-details">
-          <summary>Details</summary>
-          <p>${s.description}</p>
-          <dl>
-            <div>
-              <dt>Scope</dt>
-              <dd>${s.scopeId ? scopeTitle(s.scopeId) : scopeLabel(s.scope)}</dd>
-            </div>
-            <div>
-              <dt>Capabilities</dt>
-              <dd>${s.requiredCapabilities?.length ? s.requiredCapabilities.join(", ") : "None required"}</dd>
-            </div>
-          </dl>
-        </details>
-      </div>
+      <a
+        class="skill-variant-main"
+        href=${deepLinkPath(UI_BASE, "skills", null, null, s.id ?? null)}
+        aria-label=${`Open /${s.name}`}
+        @click=${(event: MouseEvent) => {
+          if (!isPlainLeftClick(event)) return;
+          event.preventDefault();
+          openSkill(s, { push: true });
+        }}
+      >
+        <code class="skill-variant-name" dir="auto">/${s.name}</code>
+        <span class="skill-variant-description" ${tip(s.description)}>${s.description}</span>
+      </a>
       <div class="skill-variant-state">
-        <span class="badge ${archived ? "" : "skill-active"}">${state}</span>
+        ${archived ? html`<span class="badge">Archived</span>` : nothing}
+        ${!archived && hasScopeVariants ? html`<span class="badge">Scope variant</span>` : nothing}
         ${actions.edit && !archived ? html`<button class="btn skill-edit-trigger" data-skill-id=${s.id ?? ""} type="button" ?disabled=${deleting === s.id} @click=${() => void startEdit(s)}>Edit</button>` : nothing}
         ${
           actions.delete
@@ -225,16 +243,54 @@ function skillVariant(s: SkillItem, hasScopeVariants: boolean): TemplateResult {
   `;
 }
 
-function skillGroup(name: string, skills: SkillItem[]): TemplateResult {
+function openSkill(s: SkillItem, opts: { push?: boolean } = {}): void {
+  if (!appState.mainEl) return;
+  activeSkillId = s.id ?? null;
+  syncSkillUrl(activeSkillId, opts.push);
+  const archived = isArchivedSkill(s);
+  const host = document.createElement("div");
+  host.className = "resource-pane skill-pane";
+  render(
+    html`<div class="resource-detail">
+      ${listBackLink("Skills", () => drawSkills())}
+      <div class="resource-heading">
+        <h2 dir="auto">/${s.name}</h2>
+        ${archived ? html`<span class="badge">Archived</span>` : nothing}
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <div class="value" dir="auto">${s.description}</div>
+      </div>
+      <div class="field">
+        <label>Scope</label>
+        <div class="value">${skillScopeTitle(s)}</div>
+      </div>
+      <div class="field">
+        <label>Version</label>
+        <div class="value">${s.version ?? 1}</div>
+      </div>
+      <div class="field">
+        <label>Source</label>
+        <div class="value">${s.source === "pack" ? `Pack ${s.pack?.upstreamName ?? "source"}` : "Local"}</div>
+      </div>
+      <div class="field">
+        <label>Capabilities</label>
+        <div class="value">${s.requiredCapabilities?.length ? s.requiredCapabilities.join(", ") : "None required"}</div>
+      </div>
+      <div class="field">
+        <label>Assets</label>
+        <div class="value">${s.assetCount ?? 0}</div>
+      </div>
+    </div>`,
+    host,
+  );
+  appState.mainEl.replaceChildren(host);
+}
+
+function skillGroup(skills: SkillItem[]): TemplateResult {
   const activeVariants = skills.filter((skill) => !isArchivedSkill(skill)).length;
   const hasScopeVariants = activeVariants > 1;
-  return html`<section class="skill-group">
-    <div class="skill-group-head">
-      <h2 class="skill-group-name">
-        <code>/${name}</code>${skills.length > 1 ? html`<span>${skills.length} variants</span>` : nothing}
-      </h2>
-      ${hasScopeVariants ? html`<span class="skill-precedence">Narrower scope takes precedence where both apply</span>` : nothing}
-    </div>
+  return html`<section class="skill-group" aria-label=${`/${skills[0]?.name ?? "skill"}`}>
     ${skills.map((skill) => skillVariant(skill, hasScopeVariants))}
   </section>`;
 }
@@ -246,7 +302,7 @@ function editorPane() {
       ${listBackLink("Back to skills", closeFocusedFlow)}
       <div class="skill-form-heading">
         <div>
-          <h1 class="pane-title">Edit /${editingTarget?.name ?? "skill"}</h1>
+          <h1 class="pane-title">Edit <bdi>/${editingTarget?.name ?? "skill"}</bdi></h1>
           <p>${editError ? "Instructions unavailable." : "Loading instructions…"}</p>
         </div>
       </div>
@@ -268,7 +324,7 @@ function editorPane() {
       ${listBackLink("Back to skills", closeFocusedFlow)}
       <div class="skill-form-heading">
         <div>
-          <h1 class="pane-title">Edit /${e.name}</h1>
+          <h1 class="pane-title">Edit <bdi>/${e.name}</bdi></h1>
           <p>Available to ${editAudience(e.scopeId)}</p>
         </div>
         <span class="badge">Editing</span>
@@ -306,7 +362,7 @@ function editorPane() {
       ${
         reviewed
           ? html`<div class="skill-impact" role="alert">
-              <strong>Publish this change to ${scopeTitle(e.scopeId ?? null)}?</strong>
+              <strong>Publish this change to <bdi>${scopeTitle(e.scopeId ?? null)}</bdi>?</strong>
               <div class="card-meta">
                 Everyone in this context can invoke the updated instructions. Description
                 ${e.description === e.originalDescription ? "unchanged" : "changed"}; instructions
@@ -421,7 +477,7 @@ function creatorPane() {
         <textarea
           class="skill-body-input"
           spellcheck="false"
-          placeholder="The SKILL.md contents — the steps to follow when this skill is used."
+          placeholder="The SKILL.md contents: the steps to follow when this skill is used."
           data-focus-key="skill-create-body"
           ?disabled=${creatingSaving}
           @input=${(ev: Event) => {
@@ -435,7 +491,7 @@ function creatorPane() {
       ${
         reviewed
           ? html`<div class="skill-impact" role="alert">
-              <strong>Publish /${c.name.trim()} to ${scopeTitle(c.scopeId)}?</strong>
+              <strong>Publish <bdi>/${c.name.trim()}</bdi> to <bdi>${scopeTitle(c.scopeId)}</bdi>?</strong>
               <div class="card-meta">Everyone in this context can invoke and edit these instructions.</div>
             </div>`
           : nothing
@@ -474,6 +530,8 @@ function creatorPane() {
 
 function drawSkills(loading = false): void {
   if (appState.currentView !== "skills" || !appState.mainEl) return;
+  activeSkillId = null;
+  syncSkillUrl(null);
   if (!skillsPageHost || skillsPageHost.parentElement !== appState.mainEl) {
     skillsPageHost = document.createElement("div");
     skillsPageHost.className = "pane skills-page";
@@ -496,7 +554,7 @@ function drawSkills(loading = false): void {
       .filter((group) => group.skills.length > 0);
   const filtered = groups.flatMap((group) => group.skills);
   const counts = statusCounts(skillRows);
-  const rows: TemplateResult[] = groups.map((group) => skillGroup(group.name, group.skills));
+  const rows: TemplateResult[] = groups.map((group) => skillGroup(group.skills));
   const clearFilters = () => {
     skillSearch = "";
     scopeFilter = "all";
@@ -517,7 +575,6 @@ function drawSkills(loading = false): void {
   render(
     html`${scopedViewTopbar("skills", () => drawSkills())}${listPageTpl({
       title: "Skills",
-      onRefresh: () => void renderSkills(),
       action: { label: "New skill", onClick: startCreate },
       search: {
         value: skillSearch,
@@ -581,7 +638,7 @@ function drawSkills(loading = false): void {
                 },
                 options: [
                   html`<option value="all">All sources</option>`,
-                  html`<option value="native">Created here</option>`,
+                  html`<option value="native">Local</option>`,
                   html`<option value="pack">Skill packs</option>`,
                   html`<option value="overrides">Overrides</option>`,
                 ],
@@ -642,11 +699,13 @@ function archiveDialog(skill: SkillItem): TemplateResult {
       @keydown=${(event: KeyboardEvent) => trapDialogFocus(event, closeArchiveDialog)}
     >
       <div class="project-dialog-head">
-        <div><h2 id="skill-archive-title">Archive /${skill.name}?</h2></div>
+        <div>
+          <h2 id="skill-archive-title">Archive <bdi>/${skill.name}</bdi>?</h2>
+        </div>
       </div>
       <p id="skill-archive-impact">
-        This version will stop being available to ${audience}. If it overrides a broader /${skill.name}, that version
-        becomes effective. Its history and assets are kept, and you can restore it later.
+        This version will stop being available to ${audience}. If it overrides a broader <bdi>/${skill.name}</bdi>, that
+        version becomes effective. Its history and assets are kept, and you can restore it later.
       </p>
       <div class="project-dialog-actions actions">
         <button
@@ -820,6 +879,8 @@ export async function renderSkills(): Promise<void> {
   }
   const seq = appState.viewRenderSeq;
   const request = skillsRefreshes.begin();
+  const wanted = pendingSkillId;
+  pendingSkillId = null;
   skillsNotice = "";
   drawSkills(true);
   try {
@@ -832,7 +893,7 @@ export async function renderSkills(): Promise<void> {
     skillRows = (r.skills ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
     const personal = appState.me ? `personal:${appState.me.user}` : "";
     createScopes = [
-      { scopeId: personal, name: "Personal — only you" },
+      { scopeId: personal, name: "Personal (only you)" },
       ...(contexts.contexts ?? [])
         .filter(
           (context) =>
@@ -846,5 +907,9 @@ export async function renderSkills(): Promise<void> {
       return;
     skillsNotice = errMessage(e, "Failed to load skills.");
   }
-  if (skillsRefreshes.isCurrent(request)) drawSkills(false);
+  if (!skillsRefreshes.isCurrent(request)) return;
+  const skill = wanted ? skillRows.find((candidate) => candidate.id === wanted) : undefined;
+  if (wanted && !skill) skillsNotice = "That skill wasn't found, or you don't have access to it.";
+  if (skill) openSkill(skill);
+  else drawSkills(false);
 }

@@ -23,8 +23,8 @@ test(
   "pg mutex: the SAME key serializes — the two fns never overlap (one finishes before the other starts)",
   { skip },
   async () => {
-    const pgA = createPgPool(URL!, []);
-    const pgB = createPgPool(URL!, []);
+    const pgA = createPgPool(URL!);
+    const pgB = createPgPool(URL!);
     try {
       const lockA = createPostgresAdvisoryLock(pgA, { pollMs: 20 });
       const lockB = createPostgresAdvisoryLock(pgB, { pollMs: 20 });
@@ -52,8 +52,8 @@ test(
 );
 
 test("pg mutex: DIFFERENT keys run concurrently (independent locks)", { skip }, async () => {
-  const pgA = createPgPool(URL!, []);
-  const pgB = createPgPool(URL!, []);
+  const pgA = createPgPool(URL!);
+  const pgB = createPgPool(URL!);
   try {
     const lockA = createPostgresAdvisoryLock(pgA, { pollMs: 20 });
     const lockB = createPostgresAdvisoryLock(pgB, { pollMs: 20 });
@@ -74,7 +74,7 @@ test("pg mutex: DIFFERENT keys run concurrently (independent locks)", { skip }, 
 });
 
 test("pg mutex: the lock is released after fn THROWS (the next acquire succeeds)", { skip }, async () => {
-  const pg = createPgPool(URL!, []);
+  const pg = createPgPool(URL!);
   try {
     const lock = createPostgresAdvisoryLock(pg, { pollMs: 20 });
     await assert.rejects(
@@ -96,8 +96,8 @@ test("pg mutex: the lock is released after fn THROWS (the next acquire succeeds)
 });
 
 test("pg mutex: waiting beyond timeoutMs throws a clear error", { skip }, async () => {
-  const pgHolder = createPgPool(URL!, []);
-  const pgWaiter = createPgPool(URL!, []);
+  const pgHolder = createPgPool(URL!);
+  const pgWaiter = createPgPool(URL!);
   try {
     const holder = createPostgresAdvisoryLock(pgHolder, { pollMs: 20 });
     const waiter = createPostgresAdvisoryLock(pgWaiter, { pollMs: 20, timeoutMs: 100 });

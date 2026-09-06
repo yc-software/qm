@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
+import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 
 function makeSandbox(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
@@ -163,4 +164,41 @@ test("concurrent provisions for one scope launch a single body", async () => {
   const [a, b] = await Promise.all([sb.provision(layers), sb.provision(layers)]);
   assert.equal(a.id, b.id);
   assert.equal(fake.runCount, 1);
+});
+
+test("blob staging is advertised only when the channel is actually wired", async () => {
+  assert.equal(
+    supportsBlobStaging(makeSandbox(installFakeMicrovm())),
+    false,
+    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
+  );
+  const wired = makeSandbox(installFakeMicrovm(), {
+    blobTransfer: createMemoryBlobTransferStore(),
+    capabilitySecret: "blob-secret",
+    apiBaseUrl: "http://core.internal:8080",
+  });
+  assert.equal(supportsBlobStaging(wired), true, "wired up, aws can move bytes by reference");
+});
+
+test("a hydrate failure terminates the fresh body instead of cold-starting over the stored snapshot", async () => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
+  const layers = rw(scopeId("personal", "U7"));
+  const h1 = await sb.provision(layers);
+  await sb.writeFile(h1, "notes/todo.txt", "buy milk");
+  await sb.teardown(h1);
+  fake.killBody(h1.id);
+
+  fake.failS3Reads = true;
+  await assert.rejects(() => sb.provision(layers), /hydration failed/);
+  assert.equal(
+    [...fake.bodies.values()].filter((b) => b.state === "RUNNING").length,
+    0,
+    "the half-provisioned body was terminated, not left orphaned",
+  );
+  assert.equal(fake.s3store.size, 1, "the stored snapshot is untouched");
+
+  fake.failS3Reads = false;
+  const h2 = await sb.provision(layers);
+  assert.equal(await sb.readFile(h2, "notes/todo.txt"), "buy milk");
 });

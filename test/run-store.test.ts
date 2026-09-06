@@ -111,6 +111,27 @@ for (const backend of backends) {
     assert.notEqual(again.run.id, first.id);
   });
 
+  test(`[${backend.name}] a run refused as session_busy frees its dedup key; other outcomes keep it`, async () => {
+    const { runs } = backend.make();
+    const busy = (await runs.enqueue({ sessionId: "sE", request: turn("later"), dedupKey: "kb" })).run;
+    const claimed = await runs.claim("w", 5_000);
+    assert.equal(claimed?.id, busy.id);
+    await runs.complete(busy.id, claimed!.leaseToken!, {
+      status: "refused",
+      refusalKind: "session_busy",
+      reason: "busy",
+    });
+    assert.equal((await runs.get(busy.id))?.dedupKey, null);
+    const retry = await runs.enqueue({ sessionId: "sE", request: turn("later"), dedupKey: "kb" });
+    assert.equal(retry.deduped, false, "a busy refusal never handled the request, so the key is free to run again");
+    assert.notEqual(retry.run.id, busy.id);
+
+    const done = await runs.claim("w", 5_000);
+    await runs.complete(done!.id, done!.leaseToken!, { status: "refused", reason: "policy" });
+    const dup = await runs.enqueue({ sessionId: "sE", request: turn("later"), dedupKey: "kb" });
+    assert.equal(dup.deduped, true, "an ordinary refusal was handled and stays deduped");
+  });
+
   test(`[${backend.name}] activeSessionIds lists distinct in-flight sessions, drops terminal ones`, async () => {
     const { runs } = backend.make();
     assert.deepEqual(await runs.activeSessionIds(), [], "nothing in flight");
@@ -360,5 +381,15 @@ for (const backend of backends) {
     assert.deepEqual(JSON.parse(replay.output ?? "null"), { cmd: "attempt-2" });
     const a1 = await ledger.begin("run1", 1, 0);
     assert.deepEqual(JSON.parse(a1.output ?? "null"), { cmd: "attempt-1" });
+  });
+  test(`[${backend.name}] noteTurnUserSeq records the turn boundary once and never overwrites it`, async () => {
+    const { runs } = backend.make();
+    const run = (await runs.enqueue({ sessionId: "sSeq", request: turn("go") })).run;
+    assert.equal(run.turnUserSeq, null);
+    assert.equal(await runs.noteTurnUserSeq(run.id, 7), true);
+    assert.equal((await runs.get(run.id))?.turnUserSeq, 7);
+    assert.equal(await runs.noteTurnUserSeq(run.id, 99), false, "a later attempt must not move the boundary");
+    assert.equal((await runs.get(run.id))?.turnUserSeq, 7);
+    assert.equal(await runs.noteTurnUserSeq("missing-run", 1), false);
   });
 }

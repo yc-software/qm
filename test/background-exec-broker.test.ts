@@ -141,9 +141,9 @@ test("start registers a REDACTED background row and returns an id + initial outp
   assert.equal(rows[0]!.command, redactCommand("bg: npm run build"));
 });
 
-test("start does not expose the foreground turn's outbox to a durable background job", async () => {
+test("start does not leak the foreground turn's env to a durable background job", async () => {
   const { broker, starts } = build();
-  await broker.start({ ...handle, env: { AGENT_OUTBOX: "/workspace/.agent-turn/turn-1/outbox" } }, "long-job");
+  await broker.start({ ...handle, env: { AGENT_API_TOKEN: "turn-token" } }, "long-job");
   assert.deepEqual(starts[0]!.opts?.env, { PYTHONUNBUFFERED: "1" });
 });
 

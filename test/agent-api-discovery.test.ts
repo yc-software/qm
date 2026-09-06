@@ -81,6 +81,10 @@ test("discovery for a regular user: base surface + whoami, no admin rows, no mem
       body.endpoints.find((endpoint: any) => endpoint.path === "/v1/connectors/oauth/consent/mint")?.summary ?? "",
       /stays private.*explicit credential grant/i,
     );
+    assert.match(
+      body.endpoints.find((endpoint: any) => endpoint.path === "/v1/loops")?.summary ?? "",
+      /governor.*staleFireMs/,
+    );
   } finally {
     await s.close();
   }
@@ -197,6 +201,8 @@ test("the catalog IS the gate: discovery rows with real paths are admitted, unli
   assert.equal(agentApiMatches("GET", "/v1/skills/abc"), true);
   assert.equal(agentApiMatches("POST", "/v1/skills/abc/restore"), true);
   assert.equal(agentApiMatches("GET", "/v1/crons/abc"), true);
+  assert.equal(agentApiMatches("POST", "/v1/crons/abc/note"), true);
+  assert.equal(agentApiMatches("GET", "/v1/crons/abc/note"), false, "note is POST-only");
   assert.equal(agentApiMatches("POST", "/v1/webhooks/abc/enable"), true);
   assert.equal(agentApiMatches("PUT", "/v1/memory/self"), true);
   assert.equal(agentApiMatches("PUT", "/v1/admin/memory"), true);

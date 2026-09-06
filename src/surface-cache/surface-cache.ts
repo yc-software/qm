@@ -30,15 +30,28 @@ function clampLimit(limit: number | undefined, fallback: number): number {
   return Math.max(1, Math.min(MAX_READ_LIMIT, Math.floor(limit ?? fallback)));
 }
 
-const REFRESH_ACTIVE_THREADS = "REFRESH MATERIALIZED VIEW surface_active_threads";
+const REVISION_SCAN_LIMIT = 500;
+
+function revisedAt(m: { editedAt?: number; deletedAt?: number }): number {
+  return Math.max(m.editedAt ?? 0, m.deletedAt ?? 0);
+}
+
+function compareTs(a: { ts: string }, b: { ts: string }): number {
+  if (a.ts < b.ts) return -1;
+  if (a.ts > b.ts) return 1;
+  return 0;
+}
 
 export function createPostgresSurfaceCache(
   connectionString: string,
   opts: { liveFallback?: LiveFallback } = {},
 ): SurfaceCache {
   const orgId = configOrgId();
-  const { q, query, pool, close } = createPgPool(connectionString, [
-    `CREATE TABLE IF NOT EXISTS channel_messages(
+  const { q, pool, close } = createPgPool(connectionString, [
+    {
+      id: "surface-cache/store/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS channel_messages(
         org_id TEXT NOT NULL, container TEXT NOT NULL, ts TEXT NOT NULL,
         sub TEXT, author_id TEXT, author_name TEXT, text TEXT NOT NULL DEFAULT '', mentions JSONB,
         self BOOLEAN NOT NULL DEFAULT FALSE, bot BOOLEAN NOT NULL DEFAULT FALSE,
@@ -47,38 +60,54 @@ export function createPostgresSurfaceCache(
         created_at BIGINT NOT NULL,
         PRIMARY KEY(org_id, container, ts)
       )`,
-    `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS mentions JSONB`,
-    `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS bot BOOLEAN NOT NULL DEFAULT FALSE`,
-    `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS mentions_self BOOLEAN NOT NULL DEFAULT FALSE`,
-    `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS handled BOOLEAN NOT NULL DEFAULT FALSE`,
-    `CREATE INDEX IF NOT EXISTS channel_messages_by_container
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS mentions JSONB`,
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS bot BOOLEAN NOT NULL DEFAULT FALSE`,
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS mentions_self BOOLEAN NOT NULL DEFAULT FALSE`,
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS handled BOOLEAN NOT NULL DEFAULT FALSE`,
+        `CREATE INDEX IF NOT EXISTS channel_messages_by_container
         ON channel_messages(org_id, container, ts)`,
-    `CREATE INDEX IF NOT EXISTS channel_messages_live_by_container
+        `CREATE INDEX IF NOT EXISTS channel_messages_live_by_container
         ON channel_messages(org_id, container) WHERE deleted = FALSE`,
-    `CREATE INDEX IF NOT EXISTS channel_messages_by_sub
+        `CREATE INDEX IF NOT EXISTS channel_messages_by_sub
         ON channel_messages(org_id, container, sub, ts)`,
-    `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS tsv tsvector
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS tsv tsvector
         GENERATED ALWAYS AS (to_tsvector('english', coalesce(text, ''))) STORED`,
-    `CREATE INDEX IF NOT EXISTS channel_messages_tsv ON channel_messages USING GIN(tsv)`,
-    `CREATE TABLE IF NOT EXISTS channel_state(
+        `CREATE INDEX IF NOT EXISTS channel_messages_tsv ON channel_messages USING GIN(tsv)`,
+        `CREATE TABLE IF NOT EXISTS channel_state(
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         last_ts TEXT, oldest_ts TEXT, name TEXT, kind TEXT, members JSONB NOT NULL DEFAULT '[]'::jsonb,
         updated_at BIGINT NOT NULL,
         PRIMARY KEY(org_id, container)
       )`,
-    `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS oldest_ts TEXT`,
-    `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS kind TEXT`,
-    `CREATE TABLE IF NOT EXISTS channel_files(
+        `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS oldest_ts TEXT`,
+        `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS kind TEXT`,
+        `CREATE TABLE IF NOT EXISTS channel_files(
         org_id TEXT NOT NULL, container TEXT NOT NULL, ts TEXT NOT NULL, file_id TEXT NOT NULL,
         name TEXT, mimetype TEXT, created_at BIGINT NOT NULL,
         PRIMARY KEY(org_id, container, ts, file_id)
       )`,
-    `CREATE MATERIALIZED VIEW IF NOT EXISTS surface_active_threads AS
+        `CREATE MATERIALIZED VIEW IF NOT EXISTS surface_active_threads AS
         SELECT org_id, container, sub,
                MAX(ts) AS last_ts, COUNT(*) AS message_count, MAX(created_at) AS last_activity_at
           FROM channel_messages
          WHERE sub IS NOT NULL AND deleted = FALSE
          GROUP BY org_id, container, sub`,
+      ],
+    },
+    {
+      id: "surface-cache/store/0002",
+      statements: [`DROP MATERIALIZED VIEW IF EXISTS surface_active_threads`],
+    },
+    {
+      id: "surface-cache/store/0003",
+      statements: [
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS deleted_at BIGINT`,
+        `CREATE INDEX IF NOT EXISTS channel_messages_edited_by_container
+            ON channel_messages(org_id, container, edited_at) WHERE edited_at > 0`,
+        `CREATE INDEX IF NOT EXISTS channel_messages_deleted_by_container
+            ON channel_messages(org_id, container, deleted_at) WHERE deleted_at > 0`,
+      ],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -97,6 +126,7 @@ export function createPostgresSurfaceCache(
       ...(r.mentions_self ? { mentionsSelf: true } : {}),
       ...(r.edited_at != null ? { editedAt: Number(r.edited_at) } : {}),
       ...(r.deleted ? { deleted: true } : {}),
+      ...(r.deleted_at != null ? { deletedAt: Number(r.deleted_at) } : {}),
       ...(r.handled ? { handled: true } : {}),
       createdAt: Number(r.created_at),
     };
@@ -113,8 +143,8 @@ export function createPostgresSurfaceCache(
         for (const e of events) {
           if (!e.container || !e.ts) continue;
           const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15)
+            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16)
              ON CONFLICT (org_id, container, ts) DO UPDATE SET
                sub = COALESCE(EXCLUDED.sub, channel_messages.sub),
                author_id = COALESCE(EXCLUDED.author_id, channel_messages.author_id),
@@ -126,6 +156,7 @@ export function createPostgresSurfaceCache(
                mentions_self = channel_messages.mentions_self OR EXCLUDED.mentions_self,
                edited_at = GREATEST(COALESCE(EXCLUDED.edited_at, 0), COALESCE(channel_messages.edited_at, 0)),
                deleted = channel_messages.deleted OR EXCLUDED.deleted,
+               deleted_at = COALESCE(channel_messages.deleted_at, EXCLUDED.deleted_at),
                handled = channel_messages.handled OR EXCLUDED.handled
              WHERE EXCLUDED.deleted
                 OR COALESCE(EXCLUDED.edited_at, 0) >= COALESCE(channel_messages.edited_at, 0)
@@ -146,6 +177,7 @@ export function createPostgresSurfaceCache(
               e.deleted ?? false,
               e.handled ?? false,
               e.createdAt ?? now,
+              e.deleted ? now : null,
             ],
           );
           upserted += res.rowCount ?? 0;
@@ -180,7 +212,6 @@ export function createPostgresSurfaceCache(
       } finally {
         client.release();
       }
-      await query(REFRESH_ACTIVE_THREADS).catch(() => undefined);
       return { upserted };
     },
 
@@ -223,6 +254,27 @@ export function createPostgresSurfaceCache(
       return hit;
     },
 
+    async revisedSince(container, since, opts = {}) {
+      const conds = [
+        "org_id = $1",
+        "container = $2",
+        "self = FALSE",
+        "((edited_at > 0 AND edited_at >= $3) OR (deleted_at > 0 AND deleted_at >= $3))",
+      ];
+      const args: unknown[] = [orgId, container, since];
+      if (opts.thread) {
+        args.push(opts.thread);
+        conds.push(`(sub = $${args.length} OR ts = $${args.length})`);
+      }
+      args.push(REVISION_SCAN_LIMIT);
+      const rows = await q(
+        `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")}
+          ORDER BY GREATEST(COALESCE(edited_at, 0), COALESCE(deleted_at, 0)) DESC, ts DESC LIMIT $${args.length}`,
+        args,
+      );
+      return rows.map(rowToMessage);
+    },
+
     async search(queryText, opts = {}) {
       const term = queryText.trim();
       if (!term) return [];
@@ -244,7 +296,7 @@ export function createPostgresSurfaceCache(
 
     async activeThreads(o = {}) {
       const limit = clampLimit(o.limit, DEFAULT_THREADS_LIMIT);
-      const conds = ["org_id = $1"];
+      const conds = ["org_id = $1", "sub IS NOT NULL", "deleted = FALSE"];
       const args: unknown[] = [orgId];
       if (o.container) {
         args.push(o.container);
@@ -252,7 +304,10 @@ export function createPostgresSurfaceCache(
       }
       args.push(limit);
       const rows = await q(
-        `SELECT * FROM surface_active_threads WHERE ${conds.join(" AND ")} ORDER BY last_activity_at DESC LIMIT $${args.length}`,
+        `SELECT container, sub, MAX(ts) AS last_ts, COUNT(*) AS message_count, MAX(created_at) AS last_activity_at
+           FROM channel_messages WHERE ${conds.join(" AND ")}
+          GROUP BY container, sub
+          ORDER BY last_activity_at DESC LIMIT $${args.length}`,
         args,
       );
       return rows.map((r) => ({
@@ -374,7 +429,7 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
             ...(Math.max(e.editedAt ?? 0, existing?.editedAt ?? 0) > 0
               ? { editedAt: Math.max(e.editedAt ?? 0, existing?.editedAt ?? 0) }
               : {}),
-            ...(deleted ? { deleted: true } : {}),
+            ...(deleted ? { deleted: true, deletedAt: existing?.deletedAt ?? now } : {}),
             ...((e.handled ?? false) || existing?.handled ? { handled: true } : {}),
             createdAt: existing?.createdAt ?? e.createdAt ?? now,
           });
@@ -425,17 +480,21 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
       if (o.after) all = all.filter((x) => x.ts > o.after!);
       if (o.before) all = all.filter((x) => x.ts < o.before!);
       if (!o.includeDeleted) all = all.filter((x) => !x.deleted);
-      all.sort((a, b) => {
-        if (a.ts < b.ts) return -1;
-        if (a.ts > b.ts) return 1;
-        return 0;
-      });
+      all.sort(compareTs);
       const hit = all.slice(-limit);
       if (hit.length === 0 && liveFallback && !o.noFallback && !o.before) {
         const live = await liveFallback(container, o);
         if (live) return live;
       }
       return hit;
+    },
+
+    async revisedSince(container, since, o = {}) {
+      return [...containerMsgs(container).values()]
+        .filter((m) => !m.self && revisedAt(m) > 0 && revisedAt(m) >= since)
+        .filter((m) => !o.thread || m.sub === o.thread || m.ts === o.thread)
+        .sort((a, b) => revisedAt(b) - revisedAt(a) || compareTs(b, a))
+        .slice(0, REVISION_SCAN_LIMIT);
     },
 
     async search(queryText, o = {}) {

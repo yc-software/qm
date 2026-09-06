@@ -1,0 +1,365 @@
+import { test, after, beforeEach } from "node:test";
+import { Readable } from "node:stream";
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createE2bSandbox, type StoredE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
+import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
+import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
+import { scopeId } from "../src/types.ts";
+import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
+import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
+import type { Sandbox } from "../src/sandbox/sandbox.ts";
+
+let fake: FakeE2b;
+let sandbox: Sandbox;
+const scope = scopeId("personal", "tester");
+const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
+const scopeName = (): string => sandboxScopeName("qmt", scope);
+
+function make(extra: Record<string, unknown> = {}): Sandbox {
+  return createE2bSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "e2b-ws-"))), {
+    client: fake.client,
+    namePrefix: "qmt",
+    ...extra,
+  });
+}
+
+beforeEach(() => {
+  fake = installFakeE2b();
+  sandbox = make();
+});
+after(() => fake?.cleanup());
+
+test("provision runs commands with env and cwd", async () => {
+  const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
+  assert.equal(h.coldStart, true);
+  const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /workspace/);
+  assert.match(r.stdout, /VAR=v1/);
+});
+
+test("an already-aborted signal never executes a command", async () => {
+  const handle = await sandbox.provision(layers);
+  const before = fake.execScripts().length;
+  const signal = AbortSignal.abort();
+  await assert.rejects(sandbox.run(handle, "echo must-not-run", { signal }), /aborted/i);
+  assert.equal(fake.execScripts().length, before);
+});
+
+test("streams and exit codes are exact", async () => {
+  const h = await sandbox.provision(layers);
+  const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
+  assert.equal(r.code, 3);
+  assert.equal(r.stdout.trim(), "out");
+  assert.equal(r.stderr.trim(), "err");
+});
+
+test("file roundtrip incl. large binary and missing file", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.writeFile(h, "a/b.txt", "hello\n");
+  assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
+  assert.equal(await sandbox.readFile(h, "nope.txt"), null);
+  const big = Buffer.alloc(1300 * 1024);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 13) % 256;
+  await sandbox.writeFileBytes(h, "big.bin", big);
+  const back = await sandbox.readFileBytes(h, "big.bin");
+  assert.ok(back && Buffer.from(back).equals(big));
+});
+
+test("empty file roundtrip", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.writeFileBytes(h, "empty.bin", Buffer.alloc(0));
+  const back = await sandbox.readFileBytes(h, "empty.bin");
+  assert.ok(back);
+  assert.equal(back.length, 0);
+});
+
+test("listDir and removeDir", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.writeFile(h, "d/one.txt", "1");
+  await sandbox.writeFile(h, "d/e/two.txt", "2");
+  const listed = await sandbox.listDir(h, "d");
+  assert.deepEqual(listed.sort(), ["d/e/two.txt", "d/one.txt"]);
+  await sandbox.removeDir(h, "d");
+  assert.equal(await sandbox.readFile(h, "d/one.txt"), null);
+});
+
+test("process sessions capability works end to end", async () => {
+  assert.ok(supportsProcessSessions(sandbox));
+  if (!supportsProcessSessions(sandbox)) return;
+  const h = await sandbox.provision(layers);
+  const { processId } = await sandbox.startProcess(h, "echo one; echo two");
+  let cursor = 0,
+    chunks = "",
+    state = "running";
+  for (let i = 0; i < 10 && state === "running"; i++) {
+    const r = await sandbox.readProcess(h, processId, { sinceCursor: cursor });
+    chunks += r.chunks;
+    cursor = r.cursor;
+    state = r.status.state;
+  }
+  assert.match(chunks, /one/);
+  assert.match(chunks, /two/);
+});
+
+test("force-through proxy env is set when a proxy url and token are present", async () => {
+  const s = make({ egressProxyUrl: "https://proxy.example.com" });
+  const token = await mintCapabilityToken(
+    { actorId: "tester", scopeId: scope, aud: EGRESS_PROXY_AUD, exp: Date.now() + 600_000 },
+    "secret",
+  );
+  const h = await s.provision(layers, { egressToken: token });
+  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY");
+  assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
+});
+
+test("large command output survives intact", async () => {
+  const h = await sandbox.provision(layers);
+  const r = await sandbox.run(h, "python3 -c \"print('x' * (900 * 1024), end='')\"");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, "x".repeat(900 * 1024));
+});
+
+test("sandbox is reused across provisions and warm start is reported", async () => {
+  const a = await sandbox.provision(layers);
+  const b = await sandbox.provision(layers);
+  assert.equal(a.id, b.id);
+  assert.equal(b.coldStart, false);
+  assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+test("an existing live sandbox tagged with the scope name is adopted after a restart", async () => {
+  await fake.client.create({ metadata: { name: scopeName() }, autoPause: true });
+  const h = await sandbox.provision(layers);
+  assert.equal(h.coldStart, false);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  const r = await sandbox.run(h, "echo alive");
+  assert.equal(r.stdout.trim(), "alive");
+});
+
+test("the durable store reconnects the same sandbox across backend instances", async () => {
+  const store: DurableMap<StoredE2bSandbox> = createMemoryMap();
+  const s1 = make({ store });
+  const a = await s1.provision(layers);
+  await s1.writeFile(a, "keep.txt", "resident\n");
+  const first = fake.current(a.id)?.sandboxId;
+  const s2 = make({ store });
+  const b = await s2.provision(layers);
+  assert.equal(fake.current(b.id)?.sandboxId, first);
+  assert.equal(await s2.readFile(b, "keep.txt"), "resident\n");
+  assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+test("exec on a paused sandbox auto-resumes", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.writeFile(h, "keep.txt", "still here\n");
+  fake.pause(h.id);
+  const r = await sandbox.run(h, "cat keep.txt");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, "still here\n");
+  assert.equal(fake.current(h.id)?.state, "running");
+});
+
+test("scratch sandboxes are ephemeral and killed at release", async () => {
+  const h = await sandbox.provision(layers, { scratch: { key: "job-1" } });
+  assert.equal(h.scratch, true);
+  assert.equal(fake.current(h.id)?.metadata.scratch, "true");
+  await sandbox.teardown(h);
+  assert.equal(fake.current(h.id), null);
+});
+
+test("teardown pauses the sandbox; destroy kills it", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  assert.equal(fake.current(h.id)?.state, "paused");
+  await sandbox.teardown(h, { destroy: true });
+  assert.equal(fake.current(h.id), null);
+});
+
+test("keepWarm teardown pauses; next provision resumes the same sandbox", async () => {
+  const a = await sandbox.provision(layers);
+  await sandbox.writeFile(a, "keep.txt", "resident\n");
+  await sandbox.teardown(a, { keepWarm: true });
+  assert.equal(fake.current(a.id)?.state, "paused");
+  const b = await sandbox.provision(layers);
+  assert.equal(b.coldStart, false);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  assert.equal(await sandbox.readFile(b, "keep.txt"), "resident\n");
+});
+
+test("expired pause falls back to a fresh sandbox with home hydrated from the snapshot", async () => {
+  const a = await sandbox.provision(layers);
+  await sandbox.writeFile(a, "keep.txt", "survives expiry\n");
+  await sandbox.teardown(a);
+  fake.expirePaused();
+  const b = await sandbox.provision(layers);
+  assert.equal(fake.createdCount(scopeName()), 2);
+  assert.equal(await sandbox.readFile(b, "keep.txt"), "survives expiry\n");
+  const r = await sandbox.run(b, "echo revived");
+  assert.equal(r.stdout.trim(), "revived");
+});
+
+test("a sandbox that dies mid-turn is revived transparently for the next command", async () => {
+  const h = await sandbox.provision(layers);
+  fake.pause(h.id);
+  fake.expirePaused();
+  const r = await sandbox.run(h, "echo back");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "back");
+  assert.equal(fake.createdCount(scopeName()), 2);
+});
+
+test("teardown snapshots are throttled by snapshotIntervalMs", async () => {
+  const counting = instrumentedSnapshotStore();
+  const s = make({ snapshots: counting.store, snapshotIntervalMs: 60 * 60_000 });
+  const a = await s.provision(layers);
+  await s.teardown(a);
+  const b = await s.provision(layers);
+  await s.teardown(b);
+  assert.equal(counting.puts(), 1, "second teardown inside the interval skips the snapshot");
+});
+
+test("computerStatus probes the guest", async () => {
+  await sandbox.provision(layers);
+  assert.ok(sandbox.computerStatus);
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.guestResponsive, true);
+  assert.equal(status.provisioned, true);
+  assert.match(status.machine, /e2b sandbox sbx-/);
+});
+
+test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.teardown(h);
+  fake.expirePaused();
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.guestResponsive, false);
+  assert.equal(status.provisioned, false, "a sandbox the platform says is gone needs a re-provision, not a restart");
+});
+
+test("profile advertises snapshot persistence and process sessions", () => {
+  assert.equal(sandbox.profile.backend, "e2b");
+  assert.equal(sandbox.profile.writablePersistence, "snapshot_to_workspace");
+  assert.equal(sandbox.profile.processSessions, true);
+  assert.equal(sandbox.profile.egressEnforcement, "none");
+});
+
+test("file reads and writes revive a sandbox that died mid-turn", async () => {
+  const h = await sandbox.provision(layers);
+  await sandbox.writeFile(h, "pre.txt", "before death\n");
+  await sandbox.teardown(h);
+  fake.expirePaused();
+
+  const h2 = await sandbox.provision(layers);
+  fake.pause(h2.id);
+  fake.expirePaused();
+  await sandbox.writeFile(h2, "post.txt", "after revival\n");
+  assert.equal(await sandbox.readFile(h2, "post.txt"), "after revival\n");
+  assert.equal(await sandbox.readFile(h2, "pre.txt"), "before death\n");
+
+  assert.equal(await sandbox.readFile(h2, "never-existed.txt"), null);
+});
+
+test("computerStatus never provisions a sandbox", async () => {
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.guestResponsive, false);
+  assert.equal(status.provisioned, false);
+  assert.match(status.machine, /no sandbox provisioned yet/);
+  assert.equal(fake.createdCount(scopeName()), 0, "a status probe must not create a sandbox");
+});
+
+test("a scratch sandbox that dies mid-turn is revived as scratch, not as a durable scope sandbox", async () => {
+  const h = await sandbox.provision(layers, { scratch: { key: "job-revive" } });
+  fake.pause(h.id);
+  fake.expirePaused();
+  const r = await sandbox.run(h, "echo scratch-back");
+  assert.equal(r.stdout.trim(), "scratch-back");
+  const cur = fake.current(h.id);
+  assert.equal(cur?.metadata.scratch, "true", "revived sandbox must still be tagged scratch");
+});
+
+test("a failing snapshot store fails the fallback provision instead of cold-starting empty", async () => {
+  const flaky = instrumentedSnapshotStore();
+  const s = make({ snapshots: flaky.store });
+  const a = await s.provision(layers);
+  await s.writeFile(a, "precious.txt", "irreplaceable\n");
+  await s.teardown(a);
+  fake.expirePaused();
+  flaky.failReads(true);
+  await assert.rejects(() => s.provision(layers), /hydration failed/);
+  flaky.failReads(false);
+  const b = await s.provision(layers);
+  assert.equal(await s.readFile(b, "precious.txt"), "irreplaceable\n", "snapshot survives the outage");
+});
+
+test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets the scope's sandbox", async () => {
+  const { makeTar } = await import("../src/sandbox/tar.ts");
+  const blobs = createMemoryBlobTransferStore();
+  const s = make({ blobTransfer: blobs, capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" });
+
+  const a = await s.provision(layers);
+  await s.writeFile(a, "old.txt", "stale sprite-era sandbox\n");
+  await s.teardown(a, { keepWarm: true });
+
+  const tar = await makeTar([{ path: "migrated.txt", data: Buffer.from("came from sprites\n") }]);
+  const { blobId } = await blobs.put(Readable.from([Buffer.from(tar)]));
+  assert.ok(s.adoptHomeSnapshot);
+  await s.adoptHomeSnapshot!(scope, blobId);
+
+  const b = await s.provision(layers);
+  assert.equal(await s.readFile(b, "../migrated.txt"), "came from sprites\n", "hydrates from the adopted snapshot");
+  assert.equal(await s.readFile(b, "../old.txt"), null, "the pre-adopt sandbox was discarded, not reused");
+});
+
+test("blob staging is advertised only when the channel is actually wired", async () => {
+  assert.equal(
+    supportsBlobStaging(make()),
+    false,
+    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
+  );
+  const wired = make({
+    blobTransfer: createMemoryBlobTransferStore(),
+    capabilitySecret: "blob-secret",
+    apiBaseUrl: "http://core.internal:8080",
+  });
+  assert.equal(supportsBlobStaging(wired), true, "wired up, e2b can move bytes by reference");
+});
+
+test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
+  const sb = make({
+    blobTransfer: createMemoryBlobTransferStore(),
+    capabilitySecret: "blob-secret",
+    apiBaseUrl: "http://core.internal:8080",
+  });
+  const h = await sb.provision(layers);
+  await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /e2b stageOut/);
+
+  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs"))!;
+  assert.ok(script, "the stageOut curl reached the guest");
+  assert.match(script, /--upload-file/, "streams from disk rather than buffering in the guest");
+  assert.doesNotMatch(script, /--data-binary/, "the OOM shape must never come back");
+  assert.match(script, /-X POST/, "--upload-file alone would send PUT");
+  assert.match(script, /x-content-sha256/, "core verifies the upload end-to-end");
+});
+
+test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
+  const sb = make({
+    blobTransfer: createMemoryBlobTransferStore(),
+    capabilitySecret: "blob-secret",
+    apiBaseUrl: "http://core.internal:8080",
+  });
+  const h = await sb.provision(layers);
+  await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /e2b stageIn/);
+
+  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs/"))!;
+  assert.match(script, /-o .*\.part/, "downloads to a temp file");
+  assert.match(script, /mv -f /, "and only then moves it into place");
+  assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
+});

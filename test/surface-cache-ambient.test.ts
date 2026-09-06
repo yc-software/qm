@@ -378,11 +378,8 @@ test("dev debug footer: a surfaceTools reply carries an admin session deep-link 
     assert.equal(pending.length, 1);
     const footer = pending[0].destination.debugFooter as string;
     assert.ok(footer, "the reply carries a debug footer when the flag is on");
-    assert.match(footer, /<https:\/\/portal\.test\/admin\/history\?scope=org%3Adefault-org&session=[^|]+\|session>/);
-    assert.match(
-      footer,
-      /<https:\/\/portal\.test\/admin\/history\?scope=org%3Adefault-org&session=[^|]+&turn=\d+\|context>/,
-    );
+    assert.match(footer, /<https:\/\/portal\.test\/admin\/history\/s\/[^|?]+\|session>/);
+    assert.match(footer, /<https:\/\/portal\.test\/admin\/history\/s\/[^|?]+\?turn=\d+\|context>/);
   } finally {
     await built.runtime.stop();
   }

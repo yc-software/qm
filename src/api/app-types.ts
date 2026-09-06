@@ -1,4 +1,5 @@
 import type {
+  DeliveryProvenance,
   Grant,
   PendingApproval,
   PendingApprovalRecord,
@@ -24,6 +25,8 @@ import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
+import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
+import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
@@ -44,7 +47,7 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
-import type { CronFirePage } from "../cron/cron-fire-store.ts";
+import type { CronFireRecord } from "../cron/fire-store.ts";
 import type { WebhookStore, CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type {
@@ -59,6 +62,8 @@ import type {
 } from "../directory/directory-store.ts";
 import type {
   Cron,
+  CronFireLogEntry,
+  CronFireNote,
   Delivery,
   Destination,
   RecipientConsent,
@@ -95,7 +100,7 @@ import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
-import type { RuntimeChoice } from "../harness/harness-router.ts";
+import type { RuntimeChoice } from "../harness/harness.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
 import type { SearchHit } from "../search/core-search.ts";
@@ -117,6 +122,7 @@ export interface DeploymentView {
   currentVersion: number;
   appliedVersion?: number;
   status: Deployment["status"];
+  alwaysOn?: boolean;
   lastAccessAt?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -144,6 +150,7 @@ export function deploymentView(d: Deployment): DeploymentView {
     currentVersion: d.currentVersion,
     ...(d.appliedVersion !== undefined ? { appliedVersion: d.appliedVersion } : {}),
     status: d.status,
+    ...(d.alwaysOn ? { alwaysOn: true } : {}),
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(versions[0] ? { createdAt: versions[0].createdAt } : {}),
     ...(versions.at(-1) ? { updatedAt: versions.at(-1)!.createdAt } : {}),
@@ -224,6 +231,17 @@ interface TranscriptWindow {
   beforeSeq?: number;
 }
 
+export interface SessionPinView {
+  id: string;
+  text?: string;
+  entrySeq?: number;
+  preview?: string;
+  addedBy: string;
+  createdAt: number;
+}
+
+type PinItemResult = { pin: SessionPinView } | { error: "not_found" | "bad_entry" | "limit" };
+
 export interface SessionSearchHit {
   sessionId: string;
   title: string | null;
@@ -241,7 +259,8 @@ export interface SessionSearchHit {
 export interface App {
   turn(req: TurnRequest): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
-  subscribeSessionStates(cb: (event: SessionStateEvent) => void): () => void;
+  subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
+  subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   getRun(
@@ -266,7 +285,7 @@ export interface App {
   activeRunForThread(
     threadRef: string,
     viewer?: string,
-  ): Promise<{ runId: string; queued?: Array<{ runId: string; text: string }> } | null>;
+  ): Promise<{ runId: string; queued?: Array<{ runId: string; text: string; hasAttachments?: boolean }> } | null>;
   withdrawRun(runId: string, viewer?: string): Promise<{ withdrawn: boolean; reason?: string }>;
   signalRun(
     runId: string,
@@ -277,17 +296,29 @@ export interface App {
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number } | null>;
+  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number } | null>;
+  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  canViewSessionSnapshot(
+    sessionId: string,
+    principalId: string,
+    visibility: { minSeq: number; maxSeq: number; minCreatedAt: number; maxCreatedAt: number },
+  ): Promise<boolean>;
   getSessionEntryForViewer(
     sessionId: string,
     principalId: string,
     seq: number,
   ): Promise<{ entry: SessionEntry } | null>;
+  pinConversationItem(
+    threadRef: string,
+    addedBy: string,
+    pin: { text?: string; entrySeq?: number },
+  ): Promise<PinItemResult>;
+  listConversationPins(threadRef: string, reader: string): Promise<SessionPinView[] | null>;
+  unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
   listSessions(principalId: string): Promise<Session[]>;
   searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
   search(
@@ -358,12 +389,15 @@ export interface App {
   ): Promise<number>;
   createCron(input: CreateCronInput): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
-  getCronRuns(id: string, limit?: number): Promise<CronFirePage>;
   listCrons(): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
   updateCron(id: string, patch: CronPatch): Promise<Cron | null>;
   deleteCron(id: string): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
+  setCronFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
+  listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
+  cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
+  latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setCronDestination(id: string, destination: Destination | undefined): Promise<Cron | null>;
   setCronRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
@@ -372,7 +406,12 @@ export interface App {
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   setWebhookRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
-  enqueueDelivery(input: { destination: Destination; text: string; idempotencyKey: string }): Promise<void>;
+  enqueueDelivery(input: {
+    destination: Destination;
+    text: string;
+    idempotencyKey: string;
+    provenance?: DeliveryProvenance;
+  }): Promise<void>;
   createContextRequest(source: string, query: SurfaceContextQuery): Promise<SurfaceContextRequest>;
   getContextRequest(id: string): Promise<SurfaceContextRequest | null>;
   deleteContextRequest(id: string): Promise<void>;
@@ -405,20 +444,20 @@ export interface App {
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
-  upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<void>;
+  upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
   upsertChannels(
     channels: DirectoryChannel[],
     channelMembers?: ChannelMembership[],
     syncedAt?: number,
     channelRosterIds?: string[],
     revocations?: ChannelMembership[],
-  ): Promise<void>;
+  ): Promise<boolean>;
   upsertGroups(
     groupMembers: GroupMembership[],
     syncedAt?: number,
     groupIds?: string[],
     groupRosterIds?: string[],
-  ): Promise<void>;
+  ): Promise<boolean>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
@@ -485,6 +524,8 @@ export interface App {
   canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
+  setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
+  keepAlwaysOnWarm(): Promise<number>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
     id: string,
@@ -555,6 +596,7 @@ export interface AppDeps {
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
   sessionStateBus?: SessionStateBus;
+  ledgerEventBus?: LedgerEventBus;
   contextRequests?: DurableMap<SurfaceContextRequest>;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;

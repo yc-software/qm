@@ -229,7 +229,10 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: false }],
-      [{ channelId: "C1", principalId: "U_A" }],
+      [
+        { channelId: "C1", principalId: "U_A" },
+        { channelId: "C1", principalId: "U_SPEAKER" },
+      ],
     );
     server = createServer(built.app, {
       signingSecret: SECRET,
@@ -238,6 +241,9 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       deliveries: built.deliveries,
       workspace: built.workspace,
       auditLog: built.auditLog,
+      runs: built.runs,
+      signals: built.signals,
+      identity: built.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -253,6 +259,48 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       await capFor("U_A", scopeId("channel", "C1"), { triggered: true }),
     );
     assert.equal(res.status, 403);
+  });
+
+  it("mints onBehalfOf a teammate who steered this live turn, binding the link to them", async () => {
+    const THREAD = "ch:C1:1700000000.000200";
+    const { run } = await built.runs.enqueue({
+      sessionId: THREAD,
+      request: {
+        surface: "slack",
+        actor: { id: "U_A", type: "internal" },
+        conversation: { kind: "channel", threadRef: THREAD, audience: [] },
+        origin: { kind: "human" },
+        text: "@bot connect linear",
+      } as any,
+    });
+    await built.signals.send(run.id, {
+      kind: "steer",
+      text: "U_SPEAKER: I can provide my linear key",
+      request: { actor: { externalId: "U_SPEAKER" } } as any,
+    });
+    const cap = await capFor("U_A", scopeId("channel", "C1"), { threadRef: THREAD });
+
+    const silent = await post(
+      "/v1/keychain/drops",
+      { service: "linear", purpose: "p", onBehalfOf: "U_NEVER_SPOKE" },
+      cap,
+    );
+    assert.equal(silent.status, 403, "onBehalfOf must have spoken in this turn");
+
+    const minted = await post("/v1/keychain/drops", { service: "linear", purpose: "p", onBehalfOf: "U_SPEAKER" }, cap);
+    assert.equal(minted.status, 200);
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const t = linkToken(formPath)!;
+    const claims = JSON.parse(Buffer.from(t.split(".")[1]!, "base64url").toString("utf8")) as { actorId: string };
+    assert.equal(claims.actorId, "U_SPEAKER", "the link token is bound to the speaker, not the turn's actor");
+
+    assert.equal((await getForm(dropId, "U_A", t)).status, 403, "the minting turn's actor cannot open it");
+    assert.equal((await getForm(dropId, "U_SPEAKER", t)).status, 200, "the speaker it was minted for can");
+
+    const redeemRes = await redeem(dropId, { secret: "lin_from_speaker" }, "U_SPEAKER", t);
+    assert.equal(redeemRes.status, 200);
+    const { credential } = (await redeemRes.json()) as { credential: { ownerId: string } };
+    assert.equal(credential.ownerId, "U_SPEAKER");
   });
 
   it("channel mint → redeem saves the credential AND grants it to the asking conversation", async () => {

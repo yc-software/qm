@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryEnvironmentStore, resolveEnvironmentId } from "../src/environments/environment-store.ts";
-import { spriteScopeName } from "../src/sandbox/sprites-sandbox.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { scopeId } from "../src/types.ts";
 
 describe("environments (the computer a conversation points at)", () => {
@@ -23,7 +23,7 @@ describe("environments (the computer a conversation points at)", () => {
   it("the default environment's machine/volume names are exactly today's scope-keyed names", async () => {
     const scope = scopeId("channel", "C-eng");
     const envId = await resolveEnvironmentId(store(), scope);
-    assert.equal(spriteScopeName("qm", envId), spriteScopeName("qm", scope));
+    assert.equal(sandboxScopeName("qm", envId), sandboxScopeName("qm", scope));
   });
 
   it("an attachment redirects the machine + backup key to the environment id", async () => {
@@ -35,8 +35,8 @@ describe("environments (the computer a conversation points at)", () => {
 
     const resolved = await resolveEnvironmentId(s, scope);
     assert.equal(resolved, owner, "the attached scope provisions through the environment id");
-    assert.equal(spriteScopeName("qm", resolved), spriteScopeName("qm", owner));
-    assert.notEqual(spriteScopeName("qm", resolved), spriteScopeName("qm", scope));
+    assert.equal(sandboxScopeName("qm", resolved), sandboxScopeName("qm", owner));
+    assert.notEqual(sandboxScopeName("qm", resolved), sandboxScopeName("qm", scope));
   });
 
   it("two scopes attached to one environment resolve to the SAME id (advisory lock keys on it)", async () => {
@@ -51,7 +51,7 @@ describe("environments (the computer a conversation points at)", () => {
     const ra = await resolveEnvironmentId(s, a);
     const rb = await resolveEnvironmentId(s, b);
     assert.equal(ra, rb);
-    assert.equal(spriteScopeName("qm", ra), spriteScopeName("qm", rb));
+    assert.equal(sandboxScopeName("qm", ra), sandboxScopeName("qm", rb));
   });
 
   it("create is idempotent on id (re-naming the same default env returns the first record)", async () => {

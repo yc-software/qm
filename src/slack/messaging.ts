@@ -5,6 +5,7 @@ import {
   AGENT_REQUEST_INSTRUCTION,
   MAX_REACTIONS_PER_TURN,
   REACTION_INSTRUCTION,
+  SLACK_TEXT_LIMIT,
   applyReactions,
   botIdentityArgs,
   extractAgentRequests,
@@ -13,9 +14,8 @@ import {
   stripReactionDirectives,
 } from "./lib.ts";
 
-export type SlackConversationKind = "dm" | "channel" | "group";
-
-const SLACK_TEXT_LIMIT = 40000;
+import type { SlackConversationKind } from "./message-gating.ts";
+export type { SlackConversationKind } from "./message-gating.ts";
 
 export async function updateSlackMessage(
   client: any,

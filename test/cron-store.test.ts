@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createCronStore } from "../src/cron/cron-store.ts";
+import {
+  createCronStore,
+  DEFAULT_FIRE_RUNNING_STALE_MS,
+  FIRE_RETENTION_KEEP_PER_CRON,
+  FIRE_RETENTION_MS,
+  STRANDED_FIRE_NOTE,
+} from "../src/cron/cron-store.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createMemoryCronFireStore } from "../src/cron/fire-store.ts";
 import { scopeId, type Cron } from "../src/types.ts";
 
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
@@ -224,51 +231,14 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
     reply: "second updated",
   });
 
-  const after = await store.getRuns(cron.id);
+  const { runs } = await store.listFires(cron.id);
   assert.deepEqual(
-    after.runs.map((entry) => entry.fireKey),
+    runs.map((entry) => entry.fireKey),
     ["f1", "f2"],
   );
-  assert.equal(after.runs[1]?.threadRef, "cron:c:fire:2b");
-  assert.equal(after.runs[1]?.reply, "second updated");
-});
-
-test("due scheduler scans do not load persisted fire history", async () => {
-  const backing = createMemoryMap<Cron>();
-  await backing.put("old", {
-    ...base,
-    id: "old",
-    schedule: { firstFireAt: 1 },
-    enabled: true,
-    createdAt: 0,
-    fireLog: Array.from({ length: 100 }, (_, i) => ({
-      fireKey: `fire-${i}`,
-      threadRef: `cron:old:fire-${i}`,
-      firedAt: i,
-      reply: "x".repeat(10_000),
-    })),
-  });
-
-  const store = createCronStore(backing);
-  const [due] = await store.due(1);
-  assert.equal(due?.fireLog, undefined);
-  assert.equal((await backing.get("old"))?.fireLog, undefined);
-  assert.equal((await store.getRuns("old")).total, 100);
-});
-
-test("fire history remains complete while reads can page the newest entries", async () => {
-  const store = createCronStore();
-  const cron = await store.create({ ...base, schedule: { everyMs: 1000 } });
-  for (let i = 1; i <= 3; i++) {
-    await store.recordFire(cron.id, { fireKey: `f${i}`, threadRef: `cron:f${i}`, firedAt: i });
-  }
-  assert.deepEqual(await store.getRuns(cron.id, 2), {
-    runs: [
-      { fireKey: "f2", threadRef: "cron:f2", firedAt: 2 },
-      { fireKey: "f3", threadRef: "cron:f3", firedAt: 3 },
-    ],
-    total: 3,
-  });
+  assert.equal(runs[1]?.threadRef, "cron:c:fire:2b");
+  assert.equal(runs[1]?.reply, "second updated");
+  assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is never written");
 });
 
 test("create stores runAs + member snapshot for a scopeFloor cron", async () => {
@@ -471,4 +441,456 @@ test("unclaimSlot: restores a failed claim so the slot retries, and only that ex
   assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_001_000), true);
   await store.unclaimSlot(cron.id, 1_000_000, 999, prior);
   assert.equal((await store.get(cron.id))!.lastFiredAt, 1_001_000, "an unclaim for a different claim is a no-op");
+});
+
+test("beginFire journals a running entry; recordFire closes the same row with the outcome", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  const entry = { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" as const };
+  assert.deepEqual(await store.beginFire(cron.id, entry), { begun: true });
+  assert.deepEqual(await store.beginFire(cron.id, entry), { begun: true });
+  let { runs: log } = await store.listFires(cron.id);
+  assert.equal(log.length, 1);
+  assert.equal(log[0]!.status, "running");
+  await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 5_000, status: "ok" });
+  ({ runs: log } = await store.listFires(cron.id));
+  assert.equal(log.length, 1);
+  assert.equal(log[0]!.status, "ok");
+  assert.equal(log[0]!.endedAt, 5_000);
+});
+
+test("a retried fireKey re-journals over its terminal row so the retry is visible in flight", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
+  await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" });
+  assert.deepEqual(
+    await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 3_000, status: "running" }),
+    {
+      begun: true,
+    },
+  );
+  const { runs: log } = await store.listFires(cron.id);
+  assert.equal(log.length, 1);
+  assert.equal(log[0]!.status, "running");
+  assert.equal(log[0]!.firedAt, 3_000);
+  assert.equal(log[0]!.endedAt, undefined, "the retry sheds the failed attempt's endedAt");
+});
+
+test("an exclusive beginFire is refused while a live fire runs, allowed after it ends or goes stale", async () => {
+  const store = createCronStore(undefined, { staleRunningMs: 10_000 });
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
+  const refused = await store.beginFire(
+    cron.id,
+    { fireKey: "k2", threadRef: "t2", firedAt: 2_000, status: "running" },
+    { exclusive: true },
+  );
+  assert.equal(refused.begun, false);
+  assert.equal(refused.begun ? "" : refused.running?.fireKey, "k1");
+  assert.equal((await store.listFires(cron.id)).total, 1, "a refused fire journals nothing");
+  await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 3_000, status: "ok" });
+  const afterEnd = await store.beginFire(
+    cron.id,
+    { fireKey: "k3", threadRef: "t3", firedAt: 4_000, status: "running" },
+    { exclusive: true },
+  );
+  assert.equal(afterEnd.begun, true);
+  const afterStale = await store.beginFire(
+    cron.id,
+    { fireKey: "k4", threadRef: "t4", firedAt: 14_001, status: "running" },
+    { exclusive: true },
+  );
+  assert.equal(afterStale.begun, true, "a crashed running row stops blocking once stale");
+});
+
+test("beginFire on a missing cron reports begun:false", async () => {
+  const store = createCronStore();
+  const result = await store.beginFire("nope", { fireKey: "k", threadRef: "t", firedAt: 1, status: "running" });
+  assert.equal(result.begun, false);
+});
+
+test("sweepStrandedFires closes only over-age running rows, as failed with a note", async () => {
+  const store = createCronStore(undefined, { staleRunningMs: 10_000 });
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.beginFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, status: "running" });
+  await store.beginFire(cron.id, { fireKey: "live", threadRef: "t", firedAt: 8_000, status: "running" });
+  await store.recordFire(cron.id, { fireKey: "done", threadRef: "t", firedAt: 2_000, endedAt: 2_500, status: "ok" });
+  assert.equal(await store.sweepStrandedFires(12_000), 1);
+  const { runs: log } = await store.listFires(cron.id);
+  const old = log.find((e) => e.fireKey === "old")!;
+  assert.equal(old.status, "failed");
+  assert.equal(old.endedAt, 12_000);
+  assert.equal(old.note, STRANDED_FIRE_NOTE);
+  assert.equal(log.find((e) => e.fireKey === "live")!.status, "running");
+  assert.equal(log.find((e) => e.fireKey === "done")!.status, "ok");
+  assert.equal(await store.sweepStrandedFires(12_000), 0, "a second sweep finds nothing");
+});
+
+test("the default staleness bound tracks the run reaper's default max age", () => {
+  assert.equal(DEFAULT_FIRE_RUNNING_STALE_MS, 24 * 60 * 60 * 1000);
+});
+
+test("a completion after a stranded sweep replaces the row outright — no stranded note survives success", async () => {
+  const store = createCronStore(undefined, { staleRunningMs: 10_000 });
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
+  assert.equal(await store.sweepStrandedFires(20_000), 1);
+  await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 21_000, status: "ok" });
+  const { runs: log } = await store.listFires(cron.id);
+  assert.equal(log.length, 1);
+  assert.equal(log[0]!.status, "ok");
+  assert.equal(log[0]!.note, undefined);
+  assert.equal(log[0]!.endedAt, 21_000);
+});
+
+test("setFireNote stores the shift-change note, overwrites on the next write, and misses cleanly", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  assert.equal(await store.setFireNote(cron.id, { text: "Quiet. Updated data. No issues.", at: 1_000 }), "applied");
+  assert.deepEqual((await store.get(cron.id))!.lastFireNote, { text: "Quiet. Updated data. No issues.", at: 1_000 });
+  await store.setFireNote(cron.id, { text: "Blocked by 429s for the last 6 hours.", at: 2_000 });
+  assert.deepEqual((await store.get(cron.id))!.lastFireNote, {
+    text: "Blocked by 429s for the last 6 hours.",
+    at: 2_000,
+  });
+  assert.equal(await store.setFireNote("nope", { text: "x", at: 3_000 }), "missing");
+});
+
+test("a slow older fire cannot clobber a newer fire's note — setFireNote keeps the newest at", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.setFireNote(cron.id, { text: "incident resolved", at: 8_000 });
+  assert.equal(await store.setFireNote(cron.id, { text: "still investigating outage", at: 7_000 }), "superseded");
+  assert.deepEqual((await store.get(cron.id))!.lastFireNote, { text: "incident resolved", at: 8_000 });
+  await store.setFireNote(cron.id, { text: "same shift, revised", at: 8_000 });
+  assert.equal((await store.get(cron.id))!.lastFireNote?.text, "same shift, revised");
+});
+
+test("listFires reads the normalized fire table through the running→ended lifecycle", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
+  let { runs, total } = await store.listFires(cron.id);
+  assert.equal(total, 1);
+  assert.equal(runs[0]!.status, "running");
+  assert.equal(runs[0]!.endedAt, undefined);
+  await store.recordFire(cron.id, {
+    fireKey: "k1",
+    threadRef: "t1",
+    firedAt: 1_000,
+    endedAt: 5_000,
+    status: "ok",
+    reply: "done",
+  });
+  ({ runs, total } = await store.listFires(cron.id));
+  assert.equal(total, 1);
+  assert.equal(runs[0]!.status, "ok");
+  assert.equal(runs[0]!.endedAt, 5_000);
+  assert.equal(runs[0]!.reply, "done");
+});
+
+test("listFires with a limit returns the latest entries in firedAt order with the full total", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  for (const [key, at] of [
+    ["k1", 1_000],
+    ["k3", 3_000],
+    ["k2", 2_000],
+  ] as const) {
+    await store.recordFire(cron.id, {
+      fireKey: key,
+      threadRef: `t-${key}`,
+      firedAt: at,
+      endedAt: at + 1,
+      status: "ok",
+    });
+  }
+  const { runs, total } = await store.listFires(cron.id, { limit: 2 });
+  assert.equal(total, 3);
+  assert.deepEqual(
+    runs.map((r) => r.fireKey),
+    ["k2", "k3"],
+  );
+});
+
+test("fires outlive their cron — deleting the cron keeps the fire rows readable", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });
+  await store.delete(cron.id);
+  assert.equal(await store.get(cron.id), null);
+  const { runs, total } = await store.listFires(cron.id);
+  assert.equal(total, 1);
+  assert.equal(runs[0]!.fireKey, "k1");
+});
+
+test("firesByThreadRefs looks up digests across crons by thread ref", async () => {
+  const store = createCronStore();
+  const a = await store.create({ ...base, schedule: { everyMs: 60_000 }, action: "a" });
+  const b = await store.create({ ...base, schedule: { everyMs: 60_000 }, action: "b" });
+  await store.recordFire(a.id, {
+    fireKey: "ka",
+    threadRef: "ta",
+    firedAt: 1_000,
+    endedAt: 2_000,
+    status: "ok",
+    reply: "ra",
+  });
+  await store.recordFire(b.id, {
+    fireKey: "kb",
+    threadRef: "tb",
+    firedAt: 3_000,
+    endedAt: 4_000,
+    status: "ok",
+    note: "nb",
+  });
+  const records = await store.firesByThreadRefs(["ta", "tb", "missing"]);
+  assert.deepEqual(
+    records.map((r) => [r.cronId, r.threadRef]),
+    [
+      [a.id, "ta"],
+      [b.id, "tb"],
+    ],
+  );
+});
+
+test("latestFireForThread returns the newest fire journaled under that thread", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" });
+  await store.recordFire(cron.id, { fireKey: "k2", threadRef: "t1", firedAt: 3_000, endedAt: 4_000, status: "ok" });
+  await store.recordFire(cron.id, { fireKey: "k3", threadRef: "other", firedAt: 5_000, endedAt: 6_000, status: "ok" });
+  const latest = await store.latestFireForThread(cron.id, "t1");
+  assert.equal(latest?.fireKey, "k2");
+  assert.equal(await store.latestFireForThread(cron.id, "nope"), undefined);
+});
+
+test("a stranded-fire sweep is mirrored into the fire table", async () => {
+  const store = createCronStore(undefined, { staleRunningMs: 10_000 });
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.beginFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, status: "running" });
+  assert.equal(await store.sweepStrandedFires(20_000), 1);
+  const { runs } = await store.listFires(cron.id);
+  assert.equal(runs[0]!.status, "failed");
+  assert.equal(runs[0]!.endedAt, 20_000);
+  assert.equal(runs[0]!.note, STRANDED_FIRE_NOTE);
+});
+
+test("backfillFires copies legacy json fireLog entries into the fire table, idempotently", async () => {
+  const backing = createMemoryMap<Cron>();
+  await backing.put("legacy", {
+    ...base,
+    id: "legacy",
+    schedule: { everyMs: 1000 },
+    enabled: true,
+    createdAt: 1,
+    fireLog: [
+      { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok", reply: "one" },
+      { fireKey: "k2", threadRef: "t2", firedAt: 3_000, status: "running" },
+    ],
+  });
+  const store = createCronStore(backing);
+  assert.deepEqual(await store.listFires("legacy"), { runs: [], total: 0 });
+  assert.equal(await store.backfillFires(), 2);
+  const { runs, total } = await store.listFires("legacy");
+  assert.equal(total, 2);
+  assert.equal(runs[0]!.reply, "one");
+  assert.equal(runs[1]!.status, "running");
+  assert.equal((await backing.get("legacy"))!.fireLog, undefined, "the legacy key is stripped once copied");
+  assert.equal(await store.backfillFires(), 0, "a re-run finds nothing left to copy");
+  assert.equal((await store.listFires("legacy")).total, 2);
+});
+
+test("backfillFires strips an empty legacy fireLog key too", async () => {
+  const backing = createMemoryMap<Cron>();
+  await backing.put("empty", {
+    ...base,
+    id: "empty",
+    schedule: { everyMs: 1000 },
+    enabled: true,
+    createdAt: 1,
+    fireLog: [],
+  });
+  const store = createCronStore(backing);
+  assert.equal(await store.backfillFires(), 0);
+  const after = (await backing.get("empty"))!;
+  assert.equal(after.fireLog, undefined);
+  assert.equal(after.enabled, true, "stripping touches only the legacy key");
+});
+
+test("backfill never regresses an ended fire row back to running", async () => {
+  const backing = createMemoryMap<Cron>();
+  await backing.put("legacy", {
+    ...base,
+    id: "legacy",
+    schedule: { everyMs: 1000 },
+    enabled: true,
+    createdAt: 1,
+    fireLog: [{ fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" }],
+  });
+  const store = createCronStore(backing);
+  await store.recordFire("legacy", { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });
+  await store.backfillFires();
+  const { runs } = await store.listFires("legacy");
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]!.status, "ok", "the stale running snapshot must not clobber the ended row");
+  assert.equal(runs[0]!.endedAt, 2_000);
+});
+
+test("the stranded sweep works the fire table: an unbackfilled legacy json row is invisible to it", async () => {
+  const backing = createMemoryMap<Cron>();
+  const store = createCronStore(backing, { staleRunningMs: 10_000 });
+  const kept = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await store.beginFire(kept.id, { fireKey: "kept-k", threadRef: "t1", firedAt: 1_000, status: "running" });
+  await backing.put("gone", {
+    ...base,
+    id: "gone",
+    schedule: { everyMs: 1000 },
+    enabled: true,
+    createdAt: 1,
+    fireLog: [{ fireKey: "gone-k", threadRef: "t2", firedAt: 1_000, status: "running" }],
+  });
+  assert.equal(await store.sweepStrandedFires(20_000), 1, "only the table row is swept");
+  assert.equal((await store.listFires("gone")).total, 0);
+  assert.equal((await store.listFires(kept.id)).runs[0]!.status, "failed");
+  assert.equal(await store.backfillFires(), 1, "the legacy row reaches the table via backfill");
+  assert.equal(await store.sweepStrandedFires(20_000), 1, "and only then can the sweep close it");
+});
+
+test("backfill cannot clobber a newer retry of the same fireKey with a stale snapshot", async () => {
+  const fires = createMemoryCronFireStore();
+  await fires.record("legacy", { fireKey: "slot-1", threadRef: "t1", firedAt: 3_000, status: "running" });
+  await fires.backfill("legacy", [
+    { fireKey: "slot-1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" },
+  ]);
+  const { runs } = await fires.listByCron("legacy");
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]!.firedAt, 3_000, "the older snapshot must not clobber the live retry");
+  assert.equal(runs[0]!.status, "running");
+});
+
+test("the fire table is the journal of record — a write failure surfaces instead of being swallowed", async () => {
+  const store = createCronStore(undefined, {
+    fires: {
+      record: async () => {
+        throw new Error("table down");
+      },
+      beginExclusive: async () => {
+        throw new Error("table down");
+      },
+      sweepStranded: async () => {
+        throw new Error("table down");
+      },
+      pruneEnded: async () => {
+        throw new Error("table down");
+      },
+      backfill: async () => {
+        throw new Error("table down");
+      },
+      listByCron: async () => ({ runs: [], total: 0 }),
+      listByThreadRefs: async () => [],
+      latestForThread: async () => undefined,
+    },
+  });
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  await assert.rejects(
+    store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" }),
+    /table down/,
+  );
+  await assert.rejects(
+    store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" }),
+    /table down/,
+  );
+  assert.equal((await store.get(cron.id))!.fireLog, undefined, "and nothing falls back to the json key");
+});
+
+test("a deferred cron is not due until its deferral passes, and firing clears the deferral", async () => {
+  const store = createCronStore();
+  const cron = await store.create({
+    schedule: { everyMs: 1000 },
+    action: "x",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const slot = cron.nextFireAt!;
+  await store.defer(cron.id, slot + 30_000);
+  assert.deepEqual(ids(await store.due(slot + 29_999)), [], "deferred crons are held back even when their slot is due");
+  assert.deepEqual(ids(await store.due(slot + 30_000)), [cron.id]);
+
+  await store.markFired(cron.id, slot + 30_000, slot);
+  assert.equal((await store.get(cron.id))?.deferUntil, undefined, "markFired clears the deferral");
+
+  await store.defer(cron.id, slot + 90_000);
+  const next = await store.get(cron.id);
+  assert.equal(await store.claimSlot(cron.id, next!.nextFireAt!, slot + 90_000), true);
+  assert.equal((await store.get(cron.id))?.deferUntil, undefined, "claimSlot clears the deferral");
+});
+
+test("pruneEnded deletes old ended rows beyond the keep window; running and recent rows survive", async () => {
+  const fires = createMemoryCronFireStore();
+  await fires.record("c1", { fireKey: "k1", threadRef: "t1", firedAt: 1, endedAt: 10, status: "ok" });
+  await fires.record("c1", { fireKey: "k2", threadRef: "t2", firedAt: 2, endedAt: 20, status: "failed" });
+  await fires.record("c1", { fireKey: "k3", threadRef: "t3", firedAt: 3, endedAt: 30, status: "ok" });
+  await fires.record("c1", { fireKey: "k4", threadRef: "t4", firedAt: 4, status: "running" });
+  await fires.record("c1", { fireKey: "k5", threadRef: "t5", firedAt: 5, endedAt: 24, status: "ok" });
+  await fires.record("c2", { fireKey: "other", threadRef: "t6", firedAt: 1, endedAt: 2, status: "ok" });
+  const pruned = await fires.pruneEnded({ endedBefore: 25, keepPerCron: 2 });
+  assert.equal(pruned, 2, "k1 and k2: beyond the keep window AND ended before the cutoff");
+  assert.deepEqual(
+    (await fires.listByCron("c1")).runs.map((r) => r.fireKey),
+    ["k3", "k4", "k5"],
+    "k3 ended after the cutoff, k4 still runs, k5 sits inside the keep window",
+  );
+  assert.equal((await fires.listByCron("c2")).total, 1, "a cron inside its keep window is untouched");
+});
+
+test("pruneFires applies the retention constants: nothing prunes inside the keep window", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  for (let i = 0; i <= FIRE_RETENTION_KEEP_PER_CRON; i++) {
+    await store.recordFire(cron.id, { fireKey: `k${i}`, threadRef: `t${i}`, firedAt: i, endedAt: i + 1, status: "ok" });
+  }
+  const now = FIRE_RETENTION_MS + 1_000_000;
+  assert.equal(await store.pruneFires(now), 1, "only the row beyond the keep window goes");
+  const { runs, total } = await store.listFires(cron.id);
+  assert.equal(total, FIRE_RETENTION_KEEP_PER_CRON);
+  assert.equal(runs[0]!.fireKey, "k1", "the oldest row is the one pruned");
+});
+
+test("beginExclusive re-begins the SAME fireKey without refusing itself", async () => {
+  const store = createCronStore(undefined, { staleRunningMs: 10_000 });
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
+  const entry = { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" as const };
+  assert.deepEqual(await store.beginFire(cron.id, entry, { exclusive: true }), { begun: true });
+  assert.deepEqual(
+    await store.beginFire(cron.id, { ...entry, firedAt: 2_000 }, { exclusive: true }),
+    { begun: true },
+    "a retry of the same fireKey is not blocked by its own running row",
+  );
+  assert.equal((await store.listFires(cron.id)).total, 1);
+});
+
+test("backfillFires survives a cron deleted mid-loop: entries still reach the table, others still strip", async () => {
+  const backing = createMemoryMap<Cron>();
+  const vanishing: DurableMap<Cron> = {
+    ...backing,
+    update: async (id, fn) => (id === "gone" ? null : backing.update!(id, fn)),
+  };
+  const legacyRow = (id: string): Cron => ({
+    ...base,
+    id,
+    schedule: { everyMs: 1000 },
+    enabled: true,
+    createdAt: 1,
+    fireLog: [{ fireKey: `${id}-k`, threadRef: `t-${id}`, firedAt: 1_000, endedAt: 2_000, status: "ok" }],
+  });
+  await backing.put("gone", legacyRow("gone"));
+  await backing.put("stays", legacyRow("stays"));
+  const store = createCronStore(vanishing);
+  assert.equal(await store.backfillFires(), 2, "a mid-loop deletion never aborts the backfill");
+  assert.equal((await store.listFires("gone")).total, 1, "the deleted cron's history still reaches the table");
+  assert.equal((await store.listFires("stays")).total, 1);
+  assert.equal((await backing.get("stays"))!.fireLog, undefined, "the surviving cron is still stripped");
 });

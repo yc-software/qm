@@ -10,6 +10,9 @@ export interface BackendUpOptions {
   imageFrom?: string;
   imageRepoPrefix?: string;
   buildOnly?: boolean;
+  candidate?: string;
+  candidateOut?: string;
+  inactive?: boolean;
 }
 
 export interface Backend {
@@ -21,5 +24,5 @@ export interface Backend {
   doctor(): Promise<void> | void;
   secretsPush(envFile?: string): Promise<void> | void;
   checkLive?(opts?: { report?: boolean }): Promise<void> | void;
-  pinSandbox(image: string): Promise<void> | void;
+  migrateCandidate?(candidate: string): Promise<void> | void;
 }

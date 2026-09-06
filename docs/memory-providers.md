@@ -6,19 +6,19 @@ QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a 
 {
   "providers": [
     {
-      "id": "org-brain",
+      "id": "org-knowledge",
       "type": "mcp",
-      "url": "http://brain-relay.internal:8080",
+      "url": "http://memory-provider.internal:8080",
       "timeoutMs": 3000,
       "read": {
-        "tool": "read_brain",
-        "clientIdEnv": "BRAIN_RO_CLIENT_ID",
-        "clientSecretEnv": "BRAIN_RO_CLIENT_SECRET"
+        "tool": "search_knowledge",
+        "clientIdEnv": "KNOWLEDGE_RO_CLIENT_ID",
+        "clientSecretEnv": "KNOWLEDGE_RO_CLIENT_SECRET"
       },
       "write": {
-        "tool": "write_brain",
-        "clientIdEnv": "BRAIN_RW_CLIENT_ID",
-        "clientSecretEnv": "BRAIN_RW_CLIENT_SECRET"
+        "tool": "write_knowledge",
+        "clientIdEnv": "KNOWLEDGE_RW_CLIENT_ID",
+        "clientSecretEnv": "KNOWLEDGE_RW_CLIENT_SECRET"
       }
     }
   ],
@@ -29,7 +29,7 @@ QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a 
       "capture": "automatic"
     },
     {
-      "provider": "org-brain",
+      "provider": "org-knowledge",
       "scopes": ["org"],
       "capture": "explicit",
       "manage": false,
@@ -50,6 +50,10 @@ Capture policies are:
 MCP reads receive `query` and `acting_user` by default. Writes receive `content` and `acting_user`. Operation entries can map optional fields with `queryArg`, `contentArg`, `actorArg`, `scopeArg`, `maxCharsArg`, `inputArg`, `replyArg`, `capturedAtArg`, `sourceArg`, and `idempotencyArg`. Only configured optional fields are sent, so providers can match strict MCP schemas.
 
 Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. External routes fail open by default so an outage does not block recall; set `failOpen: false` on a route to make it strict. Provider calls time out after `timeoutMs` (3 seconds by default). Explicit writes always fail visibly. QM continues to decide readable/writable scopes and passes the acting user to the provider.
+
+## Migrating from the retired `BRAIN_*` variables
+
+Earlier releases wired an external knowledge server through `BRAIN=mcp`, `BRAIN_MCP_URL`, `BRAIN_QUERY_TOOL`, and the `BRAIN_RO_*`/`BRAIN_RW_*` OAuth client pairs, exposing `read_brain` and `write_brain` tools. Those variables are ignored now; startup logs a `[config]` warning while any of them is still set. Express the same server as an `mcp` provider above: `url` takes the old `BRAIN_MCP_URL`, `read.tool` the old `BRAIN_QUERY_TOOL`, and `read`/`write` name the env variables holding each OAuth client pair. Static bearer tokens (`BRAIN_AUTH=bearer`) have no equivalent; the provider framework authenticates with client credentials only.
 
 ## Procedural memory (Memorable)
 

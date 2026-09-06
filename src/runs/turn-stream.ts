@@ -1,10 +1,20 @@
+export interface GoalView {
+  objective: string;
+  status: "active" | "paused" | "complete" | "blocked";
+
+  floor?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface TurnStream {
   begin(runId: string): void;
-  alive(runId: string): boolean;
   replying(runId: string): boolean;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
   noteToolCall(runId: string): void;
+  noteGoal(runId: string, goal: GoalView): void;
+  goal(runId: string): GoalView | null;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
   markSurfacePosted(runId: string): void;
   surfacePosted(runId: string): boolean;
@@ -22,11 +32,11 @@ interface TurnStreamListener {
 
 interface Entry {
   text: string;
+  goal: GoalView | null;
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
   surfacePosted: boolean;
-  live: boolean;
   replying: boolean;
   replyDone: boolean;
   timer: ReturnType<typeof setTimeout> | null;
@@ -45,11 +55,11 @@ const BLOCK_JOIN = "\n\n";
 function makeEntry(partial: Partial<Entry> = {}): Entry {
   return {
     text: "",
+    goal: null,
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
     surfacePosted: false,
-    live: true,
     replying: true,
     replyDone: false,
     timer: null,
@@ -75,14 +85,8 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   return {
     begin(runId) {
       const entry = runs.get(runId);
-      if (entry) {
-        entry.replying = true;
-        entry.live = true;
-      } else runs.set(runId, makeEntry());
-    },
-
-    alive(runId) {
-      return runs.get(runId)?.live ?? false;
+      if (entry) entry.replying = true;
+      else runs.set(runId, makeEntry());
     },
 
     replying(runId) {
@@ -93,7 +97,6 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (!delta) return;
       const entry = ensure(runId);
       entry.replying = true;
-      entry.live = true;
       if (entry.timer) {
         clearTimeout(entry.timer);
         entry.timer = null;
@@ -119,6 +122,14 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (entry.firstBlockClosed) {
         for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
       }
+    },
+
+    noteGoal(runId, goal) {
+      ensure(runId).goal = goal;
+    },
+
+    goal(runId) {
+      return runs.get(runId)?.goal ?? null;
     },
 
     firstBlock(runId) {
@@ -156,7 +167,6 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     end(runId) {
       const entry = runs.get(runId);
       if (!entry) return;
-      entry.live = false;
       if (entry.timer) return;
       const timer = setTimeout(() => runs.delete(runId), graceMs);
       timer.unref?.();
@@ -176,4 +186,56 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       };
     },
   };
+}
+
+export function goalViewFromEntry(type: string, payload: unknown): GoalView | null {
+  if (type !== "tool_result" && type !== "system") return null;
+  const p = payload as { tool?: unknown; kind?: unknown; goal?: unknown } | null;
+  if (!p || typeof p !== "object") return null;
+  const carrier =
+    type === "system"
+      ? p.kind === "goal"
+      : p.tool === "create_goal" || p.tool === "update_goal" || p.tool === "get_goal";
+  if (!carrier) return null;
+  const goal = p.goal as
+    | {
+        objective?: unknown;
+        status?: unknown;
+        floor?: Record<string, unknown> | null;
+        createdAt?: unknown;
+        updatedAt?: unknown;
+      }
+    | null
+    | undefined;
+  if (!goal || typeof goal !== "object") return null;
+  if (typeof goal.objective !== "string" || !goal.objective.trim()) return null;
+  const status = goal.status;
+  if (status !== "active" && status !== "paused" && status !== "complete" && status !== "blocked") return null;
+  const floor = formatFloor(goal.floor ?? null);
+  return {
+    objective: goal.objective,
+    status,
+    ...(floor ? { floor } : {}),
+    createdAt: typeof goal.createdAt === "number" ? goal.createdAt : Date.now(),
+    updatedAt: typeof goal.updatedAt === "number" ? goal.updatedAt : Date.now(),
+  };
+}
+
+function formatFloor(floor: Record<string, unknown> | null): string | undefined {
+  if (!floor || typeof floor !== "object") return undefined;
+  const parts: string[] = [];
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
+  const ms = num(floor.minMs);
+  if (ms !== null) {
+    if (ms >= 3_600_000) parts.push(`${+(ms / 3_600_000).toFixed(1)}h`);
+    else if (ms >= 60_000) parts.push(`${+(ms / 60_000).toFixed(1)}m`);
+    else parts.push(`${Math.round(ms / 1000)}s`);
+  }
+  const turns = num(floor.minTurns);
+  if (turns !== null) parts.push(`${turns} turns`);
+  const tokens = num(floor.minTokens);
+  if (tokens !== null) parts.push(`${tokens} tokens`);
+  const usd = num(floor.minUsd);
+  if (usd !== null) parts.push(`$${usd}`);
+  return parts.length ? parts.join(", ") : undefined;
 }

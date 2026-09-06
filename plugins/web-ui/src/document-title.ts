@@ -15,14 +15,17 @@ export const PRODUCT_TITLE = "QM · Web";
 
 const VIEW_TITLES: Record<View, string> = {
   chats: "Chats",
+  inbox: "Inbox",
   contexts: "Projects",
-  webhooks: "Webhooks",
   crons: "Crons",
+  loops: "Loops",
+  webhooks: "Webhooks",
   files: "Files",
   keychain: "Keychain",
   deploys: "Apps",
   memory: "Memory",
   skills: "Skills",
+  settings: "Settings",
 };
 
 export function documentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): string {

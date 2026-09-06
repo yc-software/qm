@@ -22,8 +22,9 @@ test("a tab offers an archive button beside close, for real sessions only", () =
     /@pointerdown=\$\{\(e: Event\) => e\.stopPropagation\(\)\}/,
     "pointerdown must not activate an inactive tab before the archive click lands",
   );
+  const archiveAt = split.indexOf("split-tab-archive");
   assert.ok(
-    split.indexOf("split-tab-archive") < split.indexOf('title="Close pane"'),
+    archiveAt !== -1 && split.indexOf('tip("Close pane")', archiveAt) !== -1,
     "archive sits before (next to) the close button",
   );
 });

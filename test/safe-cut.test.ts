@@ -66,3 +66,39 @@ test("slackSectionBlocks uses safe cuts", () => {
 test("safeCutIndex returns full length for short text", () => {
   assert.equal(safeCutIndex("abc", 10), 3);
 });
+
+const fenceBalanced = (s: string) => (s.match(/```/g) ?? []).length % 2 === 0;
+
+test("a fenced block cut at the boundary is closed and reopened, never left dangling", () => {
+  const code = Array.from({ length: 60 }, (_, i) => `row ${i} | value ${String(i).padStart(4, "0")}`).join("\n");
+  const text = "intro prose\n```\n" + code + "\n```\ntail prose";
+  const chunks = safeChunks(text, 200);
+  assert.ok(chunks.length > 2, "the fence spans several chunks");
+  for (const c of chunks) {
+    assert.ok(c.length <= 200, `chunk over budget: ${c.length}`);
+    assert.ok(fenceBalanced(c), `dangling fence in ${JSON.stringify(c)}`);
+  }
+  assert.equal(chunks.join("").replaceAll("\n``````\n", "\n"), text, "close/reopen pairs are the only insertions");
+});
+
+test("a continuation chunk reopens the fence at its top", () => {
+  const text = "```\n" + "line\n".repeat(200) + "```";
+  const chunks = safeChunks(text, 150);
+  for (const c of chunks.slice(1))
+    assert.ok(c.startsWith("```\n"), `continuation not reopened: ${JSON.stringify(c.slice(0, 12))}`);
+  for (const c of chunks.slice(0, -1)) assert.ok(c.endsWith("\n```"), "every non-final chunk closes its fence");
+});
+
+test("prose around a fence still reassembles verbatim when no cut lands inside it", () => {
+  const text = "before ".repeat(40) + "\n```\ntiny\n```\n" + "after ".repeat(40);
+  const chunks = safeChunks(text, 500);
+  assert.equal(chunks.join(""), text, "a fence that fits one chunk is left untouched");
+  for (const c of chunks) assert.ok(fenceBalanced(c));
+});
+
+test("prose without fences keeps the plain cut behavior", () => {
+  const text = "word ".repeat(1000);
+  const chunks = safeChunks(text, 300);
+  assert.equal(chunks.join(""), text);
+  for (const c of chunks) assert.ok(c.length <= 300);
+});

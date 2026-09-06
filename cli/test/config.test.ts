@@ -1,3 +1,5 @@
+import { serviceEnvironment } from "../src/backends/aws.ts";
+import { computedSecrets } from "../src/secrets.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -9,10 +11,7 @@ import {
   loadConfigInDir,
   mockHarnessWarning,
   sandboxCoreEnv,
-  sandboxImagePinErrors,
-  sandboxPinPending,
   updateConfigImageOverrides,
-  updateConfigSandbox,
 } from "../src/config.ts";
 
 const BASE = { contract: 1, orgId: "acme", publicUrl: "http://localhost:8080", target: "docker", services: ["core"] };
@@ -149,6 +148,20 @@ test("plugins: image is OPTIONAL (source plugins); env attaches to either; bad i
   withConfig({ plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }] }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.plugins[0]!.image, "ghcr.io/acme/linear:1");
   });
+  withConfig({ plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }] }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.plugins[0]!.coreAccess, false);
+  });
+  withConfig({ plugins: [{ name: "signer", coreAccess: "no" }] }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /coreAccess must be a boolean/),
+  );
+  for (const name of ["CORE_API_URL", "CORE_SIGNING_SECRET"]) {
+    withConfig({ plugins: [{ name: "signer", coreAccess: false, env: { [name]: "forbidden" } }] }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), new RegExp(`cannot declare ${name} when coreAccess is false`)),
+    );
+    withConfig({ plugins: [{ name: "signer", coreAccess: false, secrets: [{ name }] }] }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), new RegExp(`cannot declare ${name} when coreAccess is false`)),
+    );
+  }
   withConfig({ plugins: [{ name: "x", image: "" }] }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /image must be a non-empty string/),
   );
@@ -243,6 +256,31 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
     assert.equal(loadConfigAt(path).config.aws!.services.core!.architecture, "amd64");
   });
   withConfig(
+    {
+      target: "aws",
+      aws: { ...aws, services: { core: { ...aws.services.core, assumeRoleArns: [] } } },
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /assumeRoleArns.*must contain at least one IAM role ARN/),
+  );
+  withConfig(
+    {
+      target: "aws",
+      services: ["core", "web-ui"],
+      aws: {
+        ...aws,
+        services: {
+          core: {
+            ...aws.services.core,
+            taskRoleArn: "arn:aws:iam::123456789012:role/acme-task",
+            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+          },
+          "web-ui": { ecrRepository: "web-ui", ecsService: "acme-web-ui", cpu: 512, memory: 1024 },
+        },
+      },
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by web-ui/),
+  );
+  withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...aws.services.core, architecture: "ppc64" } } } },
     ({ path }) => {
       assert.throws(() => loadConfigAt(path), /architecture.*must be "arm64" or "amd64"/);
@@ -268,6 +306,70 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
     ({ path }) => {
       assert.throws(() => loadConfigAt(path), /linear\.architecture is required/);
     },
+  );
+});
+
+test("AWS workloads accept scoped commercial IAM assume-role targets", () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    imageLabel: "release",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: {
+      core: {
+        ecrRepository: "core",
+        ecsService: "acme-core",
+        cpu: 512,
+        memory: 1024,
+        assumeRoleArns: [
+          "arn:aws:iam::111122223333:role/model-gateway",
+          "arn:aws:iam::111122223333:role/model-gateway",
+        ],
+      },
+    },
+  };
+  withConfig({ target: "aws", aws }, ({ path }) => {
+    assert.deepEqual(loadConfigAt(path).config.aws!.services.core!.assumeRoleArns, [
+      "arn:aws:iam::111122223333:role/model-gateway",
+    ]);
+  });
+  withConfig(
+    {
+      target: "aws",
+      aws: {
+        ...aws,
+        services: {
+          core: {
+            ...aws.services.core,
+            assumeRoleArns: ["arn:aws-us-gov:iam::111122223333:role/model-gateway"],
+          },
+        },
+      },
+    },
+    ({ path }) => assert.throws(() => loadConfigAt(path), /commercial AWS IAM role ARNs/),
+  );
+  withConfig(
+    {
+      target: "aws",
+      aws: {
+        ...aws,
+        cluster: "a".repeat(49),
+        services: {
+          "gateway-auth": {
+            ...aws.services.core,
+            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+          },
+        },
+      },
+    },
+    ({ path }) =>
+      assert.throws(
+        () => loadConfigAt(path),
+        /requires an explicit taskRoleArn because the derived IAM role name exceeds 64 characters/,
+      ),
   );
 });
 
@@ -720,108 +822,11 @@ test("AWS rejects coordinates that its Terraform-derived resources cannot accept
   );
 });
 
-test("sandbox.app drives FLY_SANDBOX_APP_NAME and the digest-pinned FLY_BASE_IMAGE", () => {
-  withConfig(
-    {
-      sandbox: {
-        app: "acme-sandboxes",
-        image: "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-      },
-    },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.deepEqual(config.sandbox, {
-        app: "acme-sandboxes",
-        image: "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-      });
-      assert.deepEqual(sandboxCoreEnv(config), {
-        env: {
-          FLY_SANDBOX_APP_NAME: "acme-sandboxes",
-          FLY_BASE_IMAGE:
-            "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-        },
-        missingSecrets: [],
-      });
-    },
-  );
-});
-
-test("a sandbox.app with no pinned image fails closed instead of fabricating a mutable tag", () => {
-  withConfig({ sandbox: { app: "acme-sandboxes" } }, ({ path }) => {
-    const { config } = loadConfigAt(path);
-    assert.throws(() => sandboxCoreEnv(config), /no sandbox layer image is pinned.*qm sandbox publish/s);
-  });
-});
-
-test("a tag-pinned sandbox.image is refused: staleness compares image references", () => {
-  withConfig({ sandbox: { app: "acme-sandboxes", image: "registry.fly.io/shared-sandboxes:latest" } }, ({ path }) => {
-    const { config } = loadConfigAt(path);
-    assert.throws(() => sandboxCoreEnv(config), /must be pinned by digest/);
-  });
-});
-
-test("a mutable sandbox tag fails check, while an unpublished deployment is only pending", () => {
-  withConfig({ target: "fly", region: "sjc", flyOrg: "acme", sandbox: { app: "acme-sandboxes" } }, ({ path }) => {
-    const { config } = loadConfigAt(path);
-    assert.deepEqual(sandboxImagePinErrors(config), [], "check cannot demand a pin only `sandbox publish` can write");
-    assert.equal(sandboxPinPending(config), true);
-    assert.throws(
-      () => sandboxCoreEnv(config),
-      /no sandbox layer image is pinned/,
-      "rendering core still fails closed",
-    );
-  });
-  withConfig(
-    {
-      target: "fly",
-      region: "sjc",
-      flyOrg: "acme",
-      sandbox: { app: "acme-sandboxes", image: "registry.fly.io/acme-sandboxes:latest" },
-    },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      const errors = sandboxImagePinErrors(config);
-      assert.equal(errors.length, 1);
-      assert.equal(errors[0]!.clause, "config.v1");
-      assert.match(errors[0]!.message, /must be pinned by digest/);
-    },
-  );
-  withConfig(
-    {
-      target: "fly",
-      region: "sjc",
-      flyOrg: "acme",
-      sandbox: { app: "acme-sandboxes", image: `registry.fly.io/acme-sandboxes@sha256:${"1a".repeat(32)}` },
-    },
-    ({ path }) => {
-      assert.deepEqual(sandboxImagePinErrors(loadConfigAt(path).config), []);
-    },
-  );
-});
-
-test("sandbox.image requires sandbox.app and must be non-empty", () => {
-  withConfig(
-    {
-      sandbox: {
-        image:
-          "registry.fly.io/shared-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-      },
-    },
-    ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /"sandbox\.image" requires "sandbox\.app"/);
-    },
-  );
-  withConfig({ sandbox: { app: "acme-sandboxes", image: "" } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox\.image" must be a non-empty string/);
-  });
-});
-
 test("sandbox.env (literals) + sandbox.secretEnv (resolved) become FLY_RESIDENT_ENV_<KEY>", () => {
   withConfig(
     {
       sandbox: {
         app: "acme-sandboxes",
-        image: "registry.fly.io/acme-sandboxes@sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
         env: { TZ: "America/Los_Angeles" },
         secretEnv: ["COMPANY_API_TOKEN"],
       },
@@ -866,7 +871,6 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
       sandbox: { backend: "fly", app: "acme-sandboxes" },
       rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*or "agent37"/,
     },
-    { sandbox: { backend: "sprites" }, rx: /"sandbox.backend": "sprites" requires "sandbox.app"/ },
     {
       sandbox: { backend: "aws", app: "acme-sandboxes" },
       rx: /"sandbox.backend": "aws" \(Lambda MicroVM sandboxes\) requires target "aws"/,
@@ -886,8 +890,6 @@ test("docker accepts an explicit local sandbox image without Fly coordinates", (
       env: { SANDBOX_BACKEND: "local", LOCAL_SANDBOX_IMAGE: "qm-sandbox-local:latest" },
       missingSecrets: [],
     });
-    assert.equal(sandboxPinPending(config), false);
-    assert.deepEqual(sandboxImagePinErrors(config), []);
   });
 });
 
@@ -915,7 +917,7 @@ test("agent37 is a deployment backend on every target and rejects unused Fly set
   });
 });
 
-test("aws target makes the sandbox substrate explicit: backend required with a sandbox block, sprites needs app, aws forbids fly-image settings", () => {
+test("aws target makes the sandbox substrate explicit: backend required with a sandbox block, aws forbids fly sandbox settings", () => {
   const aws = {
     accountId: "123456789012",
     region: "us-west-2",
@@ -953,12 +955,12 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
     {
       target: "aws",
       aws,
-      sandbox: { backend: "aws", image: `registry.fly.io/acme-sandboxes@sha256:${"a".repeat(64)}` },
+      sandbox: { backend: "aws", app: "acme-sandboxes" },
     },
     ({ path }) => {
       assert.throws(
         () => loadConfigAt(path),
-        /"sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore "sandbox.image"/,
+        /"sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore "sandbox.app"/,
       );
     },
   );
@@ -998,58 +1000,6 @@ test("config JSONC accepts comments and trailing commas like tsconfig.json", () 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
-
-test("updateConfigSandbox splices pins into a commented JSONC config without touching anything else", () => {
-  const raw = `{
-  // The deployment contract major this directory conforms to.
-  "contract": 1,
-  "orgId": "acme", // inline comment with a "quote
-  "publicUrl": "http://localhost:8080",
-  "target": "docker",
-  "services": ["core"],
-  /* block comment
-     spanning lines */
-  "sandbox": { "app": "acme-sandboxes" }
-}
-`;
-  const image = "registry.fly.io/acme-sandboxes@sha256:" + "e".repeat(64);
-  const base = "ghcr.io/base@sha256:" + "d".repeat(64);
-  const updated = updateConfigSandbox(raw, { image, baseImage: base });
-  assert.match(updated, /\/\/ The deployment contract major/, "line comments survive");
-  assert.match(updated, /\/\* block comment/, "block comments survive");
-  assert.match(updated, /inline comment with a "quote/, "comments after values survive");
-  const dir = mkdtempSync(join(tmpdir(), "qm-cfg-"));
-  const path = join(dir, CONFIG_FILENAME);
-  try {
-    writeFileSync(path, updated);
-    const { config } = loadConfigAt(path);
-    assert.equal(config.sandbox?.app, "acme-sandboxes");
-    assert.equal(config.sandbox?.image, image);
-    assert.equal(config.sandbox?.baseImage, base);
-
-    const image2 = "registry.fly.io/acme-sandboxes@sha256:" + "f".repeat(64);
-    writeFileSync(path, updateConfigSandbox(updated, { image: image2 }));
-    const again = loadConfigAt(path).config;
-    assert.equal(again.sandbox?.image, image2);
-    assert.equal(again.sandbox?.baseImage, base);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("updateConfigSandbox adds a sandbox block when the config has none", () => {
-  const image = "registry.fly.io/acme-sandboxes@sha256:" + "e".repeat(64);
-  const updated = updateConfigSandbox(`{\n  "contract": 1,\n  "orgId": "acme"\n}\n`, { image });
-  const parsed = JSON.parse(updated) as { orgId: string; sandbox: { image: string } };
-  assert.equal(parsed.orgId, "acme");
-  assert.equal(parsed.sandbox.image, image);
-});
-
-test("updateConfigSandbox fills an empty sandbox object", () => {
-  const image = "registry.fly.io/a@sha256:" + "e".repeat(64);
-  const parsed = JSON.parse(updateConfigSandbox(`{ "sandbox": {} }`, { image })) as { sandbox: { image: string } };
-  assert.equal(parsed.sandbox.image, image);
 });
 
 test("updateConfigImageOverrides preserves JSONC while recording immutable service pins", () => {
@@ -1288,4 +1238,31 @@ test("a mock deployment is named as one, and a real harness draws no warning", (
   withConfig({ target: "fly", appPrefix: "acme", env: { core: {} } }, ({ path }) => {
     assert.equal(mockHarnessWarning(loadConfigAt(path).config), undefined, "the fly template renders HARNESS=pi");
   });
+});
+
+test("blank model provider overrides preserve the declared provider in runtime and secrets", () => {
+  withConfig(
+    {
+      target: "aws",
+      publicUrl: "https://acme.example",
+      aws: {
+        accountId: "123456789012",
+        region: "us-west-2",
+        cluster: "acme",
+        deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+        secretsPrefix: "acme/",
+        imageLabel: "release",
+        networking: { cloudMapNamespace: "acme.internal" },
+        services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
+      },
+      modelProvider: "openrouter",
+      env: { core: { HARNESS: "pi", MODEL_PROVIDER: "  " } },
+    },
+    ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.equal(config.env.core?.MODEL_PROVIDER, undefined);
+      assert.equal(serviceEnvironment(config, "core").MODEL_PROVIDER, "openrouter");
+      assert.equal(computedSecrets(config).find((secret) => secret.name === "OPENROUTER_API_KEY")?.required, true);
+    },
+  );
 });

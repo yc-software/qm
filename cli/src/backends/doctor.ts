@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   MODEL_PROVIDER_KEYS,
+  effectiveModelProvider,
   localSandboxActive,
   mockHarnessWarning,
   validatePortalTrust,
@@ -85,8 +86,20 @@ async function slackApi(
   }
 }
 
-async function slackCheck(botToken: string, appToken: string, configDir?: string): Promise<void> {
-  const auth = await slackApi("https://slack.com/api/auth.test", { headers: { authorization: `Bearer ${botToken}` } });
+function slackMethodUrl(method: string, apiUrl?: string): string {
+  const base = (apiUrl || "https://slack.com").replace(/\/+$/, "");
+  return `${base.endsWith("/api") ? base : `${base}/api`}/${method}`;
+}
+
+async function slackCheck(
+  botToken: string,
+  appToken: string | undefined,
+  configDir?: string,
+  botApiUrl?: string,
+): Promise<void> {
+  const auth = await slackApi(slackMethodUrl("auth.test", botApiUrl), {
+    headers: { authorization: `Bearer ${botToken}` },
+  });
   if (!auth.res.ok || !auth.body.ok)
     throw new CliError(`Slack bot token rejected (${auth.body.error ?? auth.res.status})`);
   const granted = new Set(
@@ -100,6 +113,7 @@ async function slackCheck(botToken: string, appToken: string, configDir?: string
     throw new CliError(
       `Slack app is missing scopes: ${missing.join(", ")}; update from slack-app-manifest.yml and reinstall`,
     );
+  if (!appToken) return;
   const socket = await slackApi("https://slack.com/api/apps.connections.open", {
     method: "POST",
     headers: { authorization: `Bearer ${appToken}`, "content-type": "application/x-www-form-urlencoded" },
@@ -149,16 +163,8 @@ export async function doctorCommon(
     step("local Docker sandbox: configured");
   } else if (config.target === "aws") {
     step("AWS Lambda MicroVM sandbox: configured");
-  } else if (config.sandbox?.app) {
-    requireFlyAuth();
-    try {
-      capture(flyBin(), ["status", "-a", config.sandbox.app]);
-    } catch (e) {
-      throw new CliError(
-        `fly status -a ${config.sandbox.app} failed: ${errMessage(e)} — does the sandbox app exist and can this account see it?`,
-      );
-    }
-    step(`Fly sandbox ${config.sandbox.app}: ok`);
+  } else if (config.sandbox) {
+    step("sandbox: sprites boot the platform's stock image");
   } else {
     step("sandbox: not configured — agents cannot execute commands (HARNESS=mock turns only)");
   }
@@ -166,13 +172,18 @@ export async function doctorCommon(
   if (config.services.includes("slack")) {
     const bot = deploymentSecretValue("SLACK_BOT_TOKEN", secrets.get("SLACK_BOT_TOKEN"));
     const app = deploymentSecretValue("SLACK_APP_TOKEN", secrets.get("SLACK_APP_TOKEN"));
-    if (Boolean(bot) !== Boolean(app)) {
+    const httpEvents = config.env?.slack?.SLACK_EVENTS_MODE?.trim() === "http";
+    if (!httpEvents && Boolean(bot) !== Boolean(app)) {
       throw new CliError(
         "Slack setup needs both SLACK_BOT_TOKEN and SLACK_APP_TOKEN, or neither when setup is deferred",
       );
     }
-    if (bot && app) {
-      await slackCheck(bot, app, opts.configDir);
+    if (httpEvents && app && !bot) {
+      throw new CliError("Slack HTTP events setup needs SLACK_BOT_TOKEN, or no Slack tokens when setup is deferred");
+    }
+    if (bot && (httpEvents || app)) {
+      const botApiUrl = deploymentSecretValue("SLACK_API_URL", secrets.get("SLACK_API_URL"));
+      await slackCheck(bot, httpEvents ? undefined : app, opts.configDir, botApiUrl);
       if (opts.requiredSecretValues) {
         step("Slack tokens and manifest scopes: ok");
       } else if (config.target === "aws") {
@@ -207,7 +218,7 @@ export async function doctorCommon(
 async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): Promise<void> {
   const mockHarness = mockHarnessWarning(config);
   if (mockHarness) warn(mockHarness);
-  const provider = config.modelProvider;
+  const provider = effectiveModelProvider(config);
   if (!provider) {
     step("base model: no modelProvider set — an administrator supplies the key from the Admin page");
     return;

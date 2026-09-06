@@ -14,6 +14,7 @@ import {
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
+import { type SlackHistoryMessage, parseMessageList } from "./payloads.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
@@ -36,7 +37,7 @@ export function reactionTallies(raw: unknown): ReactionTally[] {
 export interface ConversationSerializer {
   shapeRecentMessages(
     client: any,
-    raw: any[],
+    raw: SlackHistoryMessage[],
     triggerTs: string,
     nameById: Map<string, string>,
   ): Promise<RecentMessage[]>;
@@ -65,15 +66,19 @@ export function createConversationSerializer(deps: {
     ? Math.min(RECENT_THREAD_LIMIT, Math.floor(deps.recentMessages))
     : MAX_RECENT_MESSAGES;
 
-  function isConversationMessage(m: any): boolean {
+  function isConversationMessage(m: SlackHistoryMessage): m is SlackHistoryMessage & { ts: string } {
     return Boolean(m.ts && !(m.subtype && !RECENT_KEEP_SUBTYPES.has(m.subtype)));
   }
 
-  function isSelfMessage(m: any): boolean {
+  function isSelfMessage(m: SlackHistoryMessage): boolean {
     return Boolean((m.user && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId));
   }
 
-  function messageAuthorName(m: any, nameById: Map<string, string>, botNameById: Map<string, string>): string {
+  function messageAuthorName(
+    m: SlackHistoryMessage,
+    nameById: Map<string, string>,
+    botNameById: Map<string, string>,
+  ): string {
     if (m.bot_profile?.name) return String(m.bot_profile.name);
     if (m.username) return String(m.username);
     if (m.user) return nameById.get(m.user) ?? m.user;
@@ -83,7 +88,7 @@ export function createConversationSerializer(deps: {
 
   async function resolveMissingAuthorNames(
     client: any,
-    messages: any[],
+    messages: SlackHistoryMessage[],
     nameById: Map<string, string>,
     botNameById: Map<string, string>,
   ): Promise<void> {
@@ -110,30 +115,33 @@ export function createConversationSerializer(deps: {
     ]);
   }
 
-  async function fetchRawConversation(client: any, channel: string, threadTs: string | undefined): Promise<any[]> {
+  async function fetchRawConversation(
+    client: any,
+    channel: string,
+    threadTs: string | undefined,
+  ): Promise<SlackHistoryMessage[]> {
     try {
       if (threadTs) {
-        return (
-          (await client.conversations.replies({ channel, ts: threadTs, limit: RECENT_THREAD_LIMIT })).messages ?? []
-        );
+        return parseMessageList(
+          await client.conversations.replies({ channel, ts: threadTs, limit: RECENT_THREAD_LIMIT }),
+        ).messages;
       }
-      const history = ((await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT })).messages ?? [])
-        .slice()
+      const history = parseMessageList(await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT }))
+        .messages.slice()
         .reverse();
-      const threadParents = history.filter((m: any) => m.ts && Number(m.reply_count) > 0).slice(-MAX_EXPANDED_THREADS);
+      const threadParents = history.filter((m) => m.ts && Number(m.reply_count) > 0).slice(-MAX_EXPANDED_THREADS);
       const expanded = await Promise.all(
-        threadParents.map(async (p: any) => {
+        threadParents.map(async (p) => {
           try {
-            return (
-              (await client.conversations.replies({ channel, ts: p.ts, limit: EXPANDED_THREAD_REPLY_LIMIT }))
-                .messages ?? []
-            );
+            return parseMessageList(
+              await client.conversations.replies({ channel, ts: p.ts, limit: EXPANDED_THREAD_REPLY_LIMIT }),
+            ).messages;
           } catch {
             return [];
           }
         }),
       );
-      const byTs = new Map<string, any>();
+      const byTs = new Map<string, SlackHistoryMessage>();
       for (const m of [...history, ...expanded.flat()]) if (m?.ts) byTs.set(m.ts, m);
       return [...byTs.values()];
     } catch {
@@ -143,7 +151,7 @@ export function createConversationSerializer(deps: {
 
   async function shapeRecentMessages(
     client: any,
-    raw: any[],
+    raw: SlackHistoryMessage[],
     triggerTs: string,
     nameById: Map<string, string>,
   ): Promise<RecentMessage[]> {
@@ -157,7 +165,7 @@ export function createConversationSerializer(deps: {
     return kept.map((m) => {
       const content = messageWithForwardedContent(m);
       return {
-        ts: m.ts as string,
+        ts: m.ts,
         name: messageAuthorName(m, nameById, botNameById),
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
         text: decodeSlackEntities(content.text.trim()),

@@ -228,6 +228,7 @@ test("per-user codex child auth is derived material: valid chatgpt auth without 
   };
   assert.equal(child.auth_mode, "chatgpt");
   assert.equal(child.tokens?.access_token, "acc-token");
-  assert.equal(child.tokens?.refresh_token, undefined);
+  assert.equal(child.tokens?.refresh_token, "");
+  assert.ok(!JSON.stringify(child).includes("ref-token"));
   assert.ok(child.tokens?.id_token);
 });

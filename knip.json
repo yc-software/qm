@@ -1,8 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
-  "ignoreBinaries": ["flyctl", "tail", "cloudflared"],
-  "ignoreDependencies": ["@openai/codex", "opencode-ai"],
+  "ignore": ["deploy/layers/**"],
+  "ignoreBinaries": ["tail", "cloudflared"],
+  "ignoreDependencies": ["opencode-ai"],
   "ignoreIssues": {
     "scripts/migrate-principals-to-email.d.mts": ["files"],
     "plugins/chassis/src/source-auth-sign.ts": ["exports"],
@@ -11,14 +12,23 @@
   "workspaces": {
     ".": {
       "entry": [
+        "src/migrate-main.ts",
         "src/sandbox/local-sandbox.ts",
+        ".scenarios/coworker-comms/bash/_status.mjs",
         "scripts/aws-deploy-smoke.ts",
         "scripts/aws-litestream-smoke.ts",
+        "scripts/backfill-search-index.ts",
+        "scripts/backfill-session-origin.ts",
         "scripts/backfill-session-tape.ts",
+        "scripts/backfill-tape-render-import.ts",
+        "scripts/tape-parity-check.ts",
+        "scripts/e2b-live-smoke.mjs",
+        "scripts/modal-live-smoke.mjs",
         "scripts/dev/cli.ts",
         "scripts/dev/supervisor/main.ts",
         "scripts/dev/test-helpers/fake-child.mjs",
         "scripts/dev/twin-instance.ts",
+        "scripts/dev/twin-multiws-check.ts",
         "scripts/dev/twin-pump.ts",
         "scripts/migrate-principals-to-email.mjs",
         "scripts/mine-slack-scenarios.ts",
@@ -26,10 +36,16 @@
         "scripts/slack-user-token.ts"
       ]
     },
-    "cli": { "entry": ["bin/qm.ts"] },
+    "cli": {},
     "plugins/*": {},
     "plugins/web-ui": {
-      "entry": ["src/lazy-katex.ts", "src/lazy-hljs.ts", "src/hljs-lang-stub.ts", "test/**/*.test.ts"],
+      "entry": [
+        "src/shared-session.ts",
+        "src/lazy-katex.ts",
+        "src/lazy-hljs.ts",
+        "src/hljs-lang-stub.ts",
+        "test/**/*.test.ts"
+      ],
       "ignoreDependencies": [
         "katex-real",
         "hljs-real",

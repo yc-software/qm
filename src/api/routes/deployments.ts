@@ -13,13 +13,18 @@ import { deploymentView, type App, type DeployInput } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { canonicalPayload, escapeHtml, sendJson, verifyOrReject } from "../http.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
+import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
-import { mintDeployOwnerToken, verifyDeployGitAccess, verifyDeployOwnerToken } from "../../deploy/access-token.ts";
+import {
+  mintDeployOwnerToken,
+  verifyDeployGitAccess,
+  verifyDeployOwnerToken,
+  viewerIdentityKey,
+} from "../../deploy/access-token.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { portalSessionSub } from "../../deploy/viewer-session.ts";
@@ -87,7 +92,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     }
   }
   const reach = await app.reachDeployment(id, principal);
-  return proxyReach(ctx, reach, subPath, { sandbox: true });
+  return proxyReach(ctx, reach, subPath, principal, { sandbox: true });
 }
 
 function adminDeploymentProxyParts(pathname: string): { id: string; subPath: string } | null {
@@ -134,7 +139,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
     scopeLabel: deployment.ownerScopeId,
   });
   const reach = await app.reachDeployment(parts.id, "", { bypassAcl: true });
-  return proxyReach(ctx, reach, parts.subPath, { sandbox: true });
+  return proxyReach(ctx, reach, parts.subPath, undefined, { sandbox: true });
 }
 
 const GATEWAY_AUTH_HEADERS = [
@@ -475,6 +480,7 @@ async function proxyReach(
   ctx: BaseCtx,
   reach: Awaited<ReturnType<App["reachDeployment"]>>,
   subPath: string,
+  viewer?: string,
   opts?: { sandbox?: boolean },
 ): Promise<void> {
   const { req, res, deps, url, method } = ctx;
@@ -502,6 +508,13 @@ async function proxyReach(
     host: hostHeader,
     ...reach.endpoint.proxyHeaders,
   };
+
+  if (viewer && ctx.secret) {
+    headers[PORTAL_IDENTITY_HEADER] = await mintPortalIdentity(
+      { p: viewer, exp: Date.now() + 60_000 },
+      viewerIdentityKey(ctx.secret, reach.id),
+    );
+  }
   if (/(?:^|,)\s*chunked\s*$/i.test(String(req.headers["transfer-encoding"] ?? ""))) {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -817,7 +830,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       return true;
     }
     const reach = await app.reachDeployment(slug, "", { bypassAcl: true });
-    await proxyReach(ctx, reach, pathname);
+    const sub = deps.deployAppsSessionSecret
+      ? portalSessionSub(req.headers.cookie, deps.deployAppsSessionSecret)
+      : null;
+    await proxyReach(ctx, reach, pathname, sub ?? undefined);
     return true;
   }
   const sessionSecret = deps.deployAppsSessionSecret;
@@ -901,7 +917,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     cleanUrlRedirect();
     return true;
   }
-  await proxyReach(ctx, reach, pathname);
+  await proxyReach(ctx, reach, pathname, sub);
   return true;
 }
 
@@ -1415,6 +1431,22 @@ export async function setDeploymentDisplayName(ctx: ApiCtx): Promise<void> {
   }
 }
 
+async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, body } = ctx;
+  const id = await deploymentId(app, params.id!);
+  if (!id) return sendJson(res, 404, { error: "not_found" });
+  if (!(await callerMayManageDeployment(ctx, id)))
+    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can change this" });
+  const b = body as { alwaysOn?: unknown };
+  if (typeof b.alwaysOn !== "boolean")
+    return sendJson(res, 400, { error: "bad_request", message: "alwaysOn (boolean) required" });
+  try {
+    return sendJson(res, 200, { deployment: deploymentView(await app.setDeploymentAlwaysOn(id, b.alwaysOn)) });
+  } catch (e) {
+    return sendJson(res, 400, { error: "always_on_failed", message: errMessage(e) });
+  }
+}
+
 type ShareTarget =
   | { kind: "ok"; scope: string; label: string }
   | { kind: "none" }
@@ -1509,4 +1541,5 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments/:id/restore", auth: "either", handle: restoreDeployment },
   { method: "POST", path: "/v1/deployments/:id/name", auth: "either", handle: renameDeployment },
   { method: "POST", path: "/v1/deployments/:id/display-name", auth: "either", handle: setDeploymentDisplayName },
+  { method: "POST", path: "/v1/deployments/:id/always-on", auth: "either", handle: setDeploymentAlwaysOn },
 ];

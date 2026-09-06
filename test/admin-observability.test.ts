@@ -924,6 +924,98 @@ test("the Crons history lists one row per cron; ?cron= paginates that cron's fir
   }
 });
 
+test("cron fire rows carry the fire's result digest from the cron's fire log", async () => {
+  const s = start();
+  try {
+    const scope = "channel:C8";
+    const cron = await s.built.app.createCron({
+      ownerScopeId: scope,
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      title: "Sticky watcher",
+      action: "Check yna's watched stickies",
+    });
+    const mkFire = async (slot: string) => {
+      const sess = await s.built.sessions.getOrCreateByThread(`cron:${cron.id}:${slot}`, "channel", scope, "eng");
+      const { lease } = await s.built.sessions.acquireLease(sess.id);
+      assert.ok(lease);
+      await s.built.sessions.append(lease, {
+        type: "user",
+        payload: { text: "Stored cron task: Check yna's watched stickies" },
+        scopeLabel: scope,
+      });
+      await s.built.sessions.releaseLease(lease);
+      return sess;
+    };
+    const replied = await mkFire("slot0");
+    const noted = await mkFire("slot1");
+    const bare = await mkFire("slot2");
+    await s.built.crons.recordFire(cron.id, {
+      fireKey: `cron:${cron.id}:slot0`,
+      threadRef: `cron:${cron.id}:slot0`,
+      firedAt: 1,
+      status: "ok",
+      reply: "No new stickies; nothing to report.",
+      note: "recipient consent missing",
+      sessionId: replied.id,
+    });
+    await s.built.crons.recordFire(cron.id, {
+      fireKey: `cron:${cron.id}:slot1`,
+      threadRef: `cron:${cron.id}:slot1`,
+      firedAt: 2,
+      status: "failed",
+      note: "sandbox provisioning failed",
+    });
+
+    const fires = await getJson(
+      s.base,
+      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron&cron=${cron.id}`,
+    );
+    const byId = new Map(fires.sessions.map((x: { id: string }) => [x.id, x]));
+    assert.equal(
+      (byId.get(replied.id) as any).result,
+      "No new stickies; nothing to report.",
+      "the reply wins over delivery-plumbing notes as the result digest",
+    );
+    assert.equal(
+      (byId.get(noted.id) as any).result,
+      "sandbox provisioning failed",
+      "a fire keyed by threadRef surfaces its note as the result digest",
+    );
+    assert.equal(
+      (byId.get(bare.id) as any).result,
+      "Stored cron task: Check yna's watched stickies",
+      "a fire without a log entry falls back to the stored-task preview, computed once server-side",
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test("session deep links resolve by id even when the scope filter does not match", async () => {
+  const s = start();
+  try {
+    const sess = await s.built.sessions.getOrCreateByThread("dm:U9:t1", "dm", "personal:U9");
+    const mismatched = await get(
+      s.base,
+      `/v1/admin/sessions/${encodeURIComponent(sess.id)}?scope=${encodeURIComponent("personal:someone-else")}`,
+    );
+    assert.equal(mismatched.status, 200, "a stale or mismatched scope param cannot break a session link");
+    const body = (await mismatched.json()) as any;
+    assert.equal(body.session.id, sess.id);
+    assert.equal(body.session.scopeId, "personal:U9");
+
+    const llm = await get(
+      s.base,
+      `/v1/admin/sessions/${encodeURIComponent(sess.id)}/llm?scope=${encodeURIComponent("personal:someone-else")}`,
+    );
+    assert.equal(llm.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
 test("the Files view is the document store (write-tool artifacts), not the sandbox backup", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-fly-")) }));
   const scope = "channel:C_FILE_FIXTURE";
@@ -959,6 +1051,39 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     assert.ok(doc.openable);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("the files listing filters by name server-side with q", async () => {
+  const s = start();
+  const scope = "org:default-org";
+  const doc = (id: string, name: string) => ({
+    id,
+    ownerScopeId: scope,
+    createdBy: "U1",
+    name,
+    path: `notes/${name}`,
+    mimetype: "text/plain",
+    data: Buffer.from(name),
+    direction: "out" as const,
+  });
+  try {
+    await s.built.files.put(doc("q-art-1", "Quarterly Report.pdf"));
+    await s.built.files.put(doc("q-art-2", "notes.txt"));
+    await s.built.files.put(doc("q-art-3", "report-draft.txt"));
+
+    const hit = await getJson(s.base, `/v1/admin/files?scope=${encodeURIComponent(scope)}&q=REPORT`);
+    assert.deepEqual(
+      (hit.files as { name: string }[]).map((f) => f.name).sort(),
+      ["Quarterly Report.pdf", "report-draft.txt"],
+      "q matches names case-insensitively",
+    );
+    const miss = await getJson(s.base, `/v1/admin/files?scope=${encodeURIComponent(scope)}&q=missing`);
+    assert.deepEqual(miss.files, []);
+    const all = await getJson(s.base, `/v1/admin/files?scope=${encodeURIComponent(scope)}&q=`);
+    assert.equal((all.files as unknown[]).length, 3, "a blank q lists everything");
+  } finally {
+    await s.close();
   }
 });
 
@@ -1375,6 +1500,45 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("the sessions listing digests cron fires from the fire table, even after the cron is deleted", async () => {
+  const s = start();
+  try {
+    const scope = "channel:C-digest";
+    const cron = await s.built.app.createCron({
+      ownerScopeId: scope,
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "count signups",
+    });
+    const threadRef = `cron:${cron.id}:fire:abc123`;
+    const session = await s.built.sessions.getOrCreateByThread(threadRef, "channel", scope, "ops");
+    const { lease } = await s.built.sessions.acquireLease(session.id);
+    assert.ok(lease);
+    await s.built.sessions.append(lease, { type: "user", payload: { text: "count signups" }, scopeLabel: scope });
+    await s.built.sessions.releaseLease(lease);
+    await s.built.crons.recordFire(cron.id, {
+      fireKey: `cron:${cron.id}:1000`,
+      threadRef,
+      firedAt: Date.now() - 1000,
+      endedAt: Date.now(),
+      status: "ok",
+      reply: "42 signups today",
+    });
+
+    const listed = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
+    const row = listed.sessions.find((x: any) => x.id === session.id);
+    assert.equal(row?.result, "42 signups today", "the digest is read from the cron_fires table by thread ref");
+
+    await s.built.app.deleteCron(cron.id);
+    const relisted = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
+    const survivor = relisted.sessions.find((x: any) => x.id === session.id);
+    assert.equal(survivor?.result, "42 signups today", "fire digests outlive their cron");
+  } finally {
+    await s.close();
   }
 });
 

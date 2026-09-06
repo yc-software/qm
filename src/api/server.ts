@@ -21,7 +21,14 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
-import { canonicalPayload, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import {
+  armBodyDeadline,
+  canonicalPayload,
+  PayloadTooLargeError,
+  readRawBody,
+  sendJson,
+  verifyOrReject,
+} from "./http.ts";
 import { dispatch, findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
@@ -54,12 +61,6 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
   ) {
     return "bulk configuration imports may contain credentials — run them from a DM or the portal";
   }
-  if (
-    /^\/v1\/admin\/scopes\/[^/]+\/admin-session-reads$/.test(pathname) &&
-    parseScopeId(claims.scopeId).kind !== "personal"
-  ) {
-    return "the admin-session-reads flag governs what may be disclosed here — change it from a DM or the portal";
-  }
   if (method === "GET" && isAdminContentRead(pathname) && parseScopeId(claims.scopeId).kind !== "personal") {
     let target = "";
     if (pathname.startsWith("/v1/admin/scopes/"))
@@ -72,15 +73,23 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
   return null;
 }
 
+const UNATTENDED_READ_PATHS: Record<string, (pathname: string) => boolean> = {
+  "admin.sessions.read": (p) =>
+    p === "/v1/admin/sessions" ||
+    /^\/v1\/admin\/sessions\/[^/]+$/.test(p) ||
+    p === "/v1/admin/scopes" ||
+    p === "/v1/admin/errors" ||
+    p === "/v1/admin/runs",
+  "admin.audit.read": (p) => p === "/v1/admin/audit",
+  "admin.metrics.read": (p) => p === "/v1/admin/metrics",
+  "admin.egress.read": (p) => p === "/v1/admin/egress",
+  "admin.files.read": (p) =>
+    p === "/v1/admin/files" || p === "/v1/admin/files/read" || p === "/v1/admin/files/download",
+};
+
 function unattendedAdminReadAllowed(method: string, pathname: string, claims: CapabilityClaims): boolean {
-  if (method !== "GET" || !claims.grants?.includes("admin.sessions.read")) return false;
-  return (
-    pathname === "/v1/admin/sessions" ||
-    /^\/v1\/admin\/sessions\/[^/]+$/.test(pathname) ||
-    pathname === "/v1/admin/scopes" ||
-    pathname === "/v1/admin/errors" ||
-    pathname === "/v1/admin/runs"
-  );
+  if (method !== "GET") return false;
+  return (claims.grants ?? []).some((grant) => UNATTENDED_READ_PATHS[grant]?.(pathname) === true);
 }
 
 function isAdminContentRead(pathname: string): boolean {
@@ -186,6 +195,18 @@ async function gate(
       await deps.identity.refresh();
       if (deps.identity.classify(capability.actorId).type !== "internal") {
         sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
+        return null;
+      }
+    }
+    if (capability.deployment !== undefined) {
+      const deployment = await app.getDeployment(capability.deployment);
+      if (
+        !deployment ||
+        deployment.id !== capability.deployment ||
+        deployment.status !== "running" ||
+        deployment.createdBy !== capability.actorId
+      ) {
+        sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
         return null;
       }
     }
@@ -468,12 +489,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
-  server.requestTimeout = 30_000;
+  server.requestTimeout = 0;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
   server.maxConnections = 1024;
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    armBodyDeadline(req, 30_000);
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) return;
     if (await dispatch(rawRoutes, base)) return;

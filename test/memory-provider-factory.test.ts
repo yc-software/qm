@@ -44,22 +44,22 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
     return response({
       jsonrpc: "2.0",
       id: rpc.id,
-      result: { content: [{ type: "text", text: rpc.params.name === "read_brain" ? "org knowledge" : "ok" }] },
+      result: { content: [{ type: "text", text: rpc.params.name === "search_knowledge" ? "org knowledge" : "ok" }] },
     });
   };
   const raw = JSON.stringify({
     providers: [
       {
-        id: "brain",
+        id: "knowledge",
         type: "mcp",
-        url: "http://brain.internal:8080",
-        read: { tool: "read_brain", clientIdEnv: "RO_ID", clientSecretEnv: "RO_SECRET" },
-        write: { tool: "write_brain", clientIdEnv: "RW_ID", clientSecretEnv: "RW_SECRET" },
+        url: "http://knowledge.internal:8080",
+        read: { tool: "search_knowledge", clientIdEnv: "RO_ID", clientSecretEnv: "RO_SECRET" },
+        write: { tool: "write_knowledge", clientIdEnv: "RW_ID", clientSecretEnv: "RW_SECRET" },
       },
     ],
     routes: [
       { provider: "default", scopes: ["personal"], capture: "automatic" },
-      { provider: "brain", scopes: ["org"], capture: "explicit", manage: false },
+      { provider: "knowledge", scopes: ["org"], capture: "explicit", manage: false },
     ],
   });
   const memory = createConfiguredMemoryService({
@@ -73,10 +73,10 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
 
-  assert.equal(calls[0]?.url, "http://brain.internal:8080/token");
+  assert.equal(calls[0]?.url, "http://knowledge.internal:8080/token");
   assert.equal(calls[1]?.authorization, "Bearer ro-token");
-  assert.match(calls[1]?.body ?? "", /read_brain/);
-  assert.equal(calls[2]?.url, "http://brain.internal:8080/token");
+  assert.match(calls[1]?.body ?? "", /search_knowledge/);
+  assert.equal(calls[2]?.url, "http://knowledge.internal:8080/token");
   assert.equal(calls[3]?.authorization, "Bearer rw-token");
-  assert.match(calls[3]?.body ?? "", /write_brain/);
+  assert.match(calls[3]?.body ?? "", /write_knowledge/);
 });

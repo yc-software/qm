@@ -20,7 +20,7 @@ function dm(text: string, thread: string): TurnRequest {
 }
 
 test("forking copies the transcript into a fresh independent web session", async () => {
-  const { app } = freshApp();
+  const { app, sessions } = freshApp();
   await app.turn(dm("First question about deploys", "web:U1:f1"));
   const r2 = await app.turn(dm("Second question about rollbacks", "web:U1:f1"));
   const sid = r2.sessionId!;
@@ -41,6 +41,16 @@ test("forking copies the transcript into a fresh independent web session", async
 
   const mine = await app.listSessions("U1");
   assert.ok(mine.some((s) => s.id === fork.session.id));
+
+  assert.ok(
+    (await sessions.tapeCoverage(fork.session.id)) >= fork.entries.at(-1)!.seq,
+    "the fork is born tape-covered — its first turn needs no heal import",
+  );
+  const imports = (await sessions.getTape(fork.session.id)).filter(
+    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
+  );
+  assert.equal(imports.length, 1);
+  assert.ok(Array.isArray((imports[0]!.payload as { scopes?: unknown }).scopes), "the import carries its scopes");
 });
 
 test("upToSeq truncates the copy at the cut point", async () => {

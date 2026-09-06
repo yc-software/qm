@@ -41,7 +41,7 @@ const emptyCounts = (): AmbientJudgmentCounts => ({ act: 0, ignore: 0, fastlane:
 
 export function createPostgresAmbientJudgmentStore(connectionString: string): AmbientJudgmentStore {
   const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, [
+  const { q, close } = createPgPool(connectionString, "surface-cache/ambient-judgment/0001", [
     `CREATE TABLE IF NOT EXISTS ambient_judgments(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, surface TEXT NOT NULL, container TEXT NOT NULL,

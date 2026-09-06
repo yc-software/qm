@@ -41,6 +41,15 @@ export async function migrateSandboxScope(ctx: ApiCtx): Promise<void> {
   const to = typeof b.to === "string" ? (b.to as SandboxBackendName) : undefined;
   const reason = typeof b.reason === "string" ? b.reason : undefined;
   const force = b.force === true;
+  const copyTimeoutSec =
+    typeof b.copyTimeoutSec === "number" && Number.isFinite(b.copyTimeoutSec)
+      ? Math.min(7200, Math.max(60, Math.floor(b.copyTimeoutSec)))
+      : undefined;
+  const strategy = b.strategy === "snapshot" ? ("snapshot" as const) : undefined;
+  const resumeBlobId =
+    strategy === "snapshot" && typeof b.resumeBlobId === "string" && /^[0-9a-f]{32}$/.test(b.resumeBlobId)
+      ? b.resumeBlobId
+      : undefined;
   if (!to || !runner.availableBackends().includes(to)) {
     return sendJson(res, 400, {
       error: "bad_request",
@@ -48,7 +57,12 @@ export async function migrateSandboxScope(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    const result = await runner.migrateScope(scopeId, to, reason, { force });
+    const result = await runner.migrateScope(scopeId, to, reason, {
+      force,
+      ...(copyTimeoutSec !== undefined ? { copyTimeoutSec } : {}),
+      ...(strategy ? { strategy } : {}),
+      ...(resumeBlobId ? { resumeBlobId } : {}),
+    });
     audit(deps, {
       principalId: actor.id,
       action: "sandbox_routes.migrate",

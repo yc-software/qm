@@ -7,7 +7,7 @@ import { ensureDockerDaemon } from "./postgres.ts";
 import { bestEffortValue, sleep } from "./util.ts";
 
 export interface SandboxResolution {
-  backend: "local" | "sprites" | "smolmachines" | "porter" | "agent37";
+  backend: "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37";
   env: Record<string, string>;
   detail: string;
   publicApiUrl: string | null;
@@ -24,7 +24,7 @@ async function localImagePresent(image: string): Promise<boolean> {
 
 export async function resolveSandbox(opts: {
   worktree: string;
-  requested: "local" | "sprites" | "smolmachines" | "porter" | "agent37" | "auto";
+  requested: "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37" | "auto";
   corePort: number;
   lock: string;
   baseEnv: Record<string, string>;
@@ -61,6 +61,27 @@ export async function resolveSandbox(opts: {
       publicApiUrl,
       warnings,
     };
+  }
+
+  if (backend === "e2b") {
+    const e2bKey = opts.baseEnv.E2B_API_KEY;
+    if (!e2bKey) throw new Error("--sandbox e2b requires E2B_API_KEY in the environment");
+    let e2bApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
+    if (!e2bApiUrl) {
+      e2bApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      if (!e2bApiUrl)
+        warnings.push(
+          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
+        );
+    }
+    const e2bEnv: Record<string, string> = {
+      SANDBOX_BACKEND: "e2b",
+      E2B_API_KEY: e2bKey,
+      E2B_NAME_PREFIX: opts.baseEnv.E2B_NAME_PREFIX || "qmdev",
+    };
+    if (opts.baseEnv.E2B_TEMPLATE_ID) e2bEnv.E2B_TEMPLATE_ID = opts.baseEnv.E2B_TEMPLATE_ID;
+    if (e2bApiUrl) e2bEnv.PUBLIC_API_URL = e2bApiUrl;
+    return { backend: "e2b", env: e2bEnv, detail: "e2b (api.e2b.dev)", publicApiUrl: e2bApiUrl, warnings };
   }
 
   if (backend === "smolmachines") {

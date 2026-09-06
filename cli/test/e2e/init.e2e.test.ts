@@ -17,7 +17,7 @@ test("init --org scaffolds config + generated .env + a runnable sandbox/, which 
     const cfg = loadConfigAt(cfgPath).config;
     assert.equal(cfg.orgId, "acme");
     assert.equal(cfg.target, "docker");
-    assert.deepEqual(cfg.sandbox, { app: "acme-sandboxes" });
+    assert.equal(cfg.sandbox, undefined);
 
     assert.ok(existsSync(join(dir, ".env.example")), ".env.example written");
     assert.ok(existsSync(join(dir, ".env")), ".env written with generated local keys");

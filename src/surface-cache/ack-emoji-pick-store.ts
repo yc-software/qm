@@ -41,7 +41,7 @@ const emptyCounts = (): AckPickCounts => ({ picked: 0, declined: 0 });
 
 export function createPostgresAckEmojiPickStore(connectionString: string): AckEmojiPickStore {
   const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, [
+  const { q, close } = createPgPool(connectionString, "surface-cache/ack-emoji-pick/0001", [
     `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, surface TEXT NOT NULL, channel TEXT NOT NULL, ts TEXT NOT NULL,

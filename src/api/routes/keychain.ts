@@ -12,7 +12,7 @@ import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { audit, resolveCapabilityDestination } from "./shared.ts";
+import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
 import { keychainUseCommand } from "../contract.ts";
 
@@ -89,12 +89,30 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
       if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
       const files = Array.isArray(b.files)
-        ? (b.files as unknown[]).filter(
-            (f): f is CredentialFile =>
-              typeof (f as CredentialFile)?.path === "string" &&
-              typeof (f as CredentialFile)?.contentBase64 === "string",
-          )
+        ? (b.files as unknown[])
+            .filter(
+              (f): f is CredentialFile =>
+                typeof (f as CredentialFile)?.path === "string" &&
+                typeof (f as CredentialFile)?.contentBase64 === "string",
+            )
+            .map((f) => ({ path: f.path, contentBase64: f.contentBase64, rawMode: (f as { mode?: unknown }).mode }))
         : undefined;
+      const badMode = files?.find(
+        (f) =>
+          f.rawMode !== undefined &&
+          (typeof f.rawMode !== "number" || !Number.isInteger(f.rawMode) || f.rawMode < 0 || f.rawMode > 0o777),
+      );
+      if (badMode) {
+        return sendJson(res, 400, {
+          error: "bad_request",
+          message: `files[].mode must be an integer between 0 and 511 (octal 0o777); got ${JSON.stringify(badMode.rawMode)} for ${badMode.path}`,
+        });
+      }
+      const cleanFiles: CredentialFile[] | undefined = files?.map(({ path, contentBase64, rawMode }) => ({
+        path,
+        contentBase64,
+        ...(typeof rawMode === "number" ? { mode: rawMode } : {}),
+      }));
       let fields: CredentialFieldInput[] | undefined;
       if (b.fields !== undefined) {
         if (
@@ -120,7 +138,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ownerId: actorId,
         service: b.service,
         ...(typeof b.secret === "string" ? { secret: b.secret } : {}),
-        ...(files?.length ? { files } : {}),
+        ...(cleanFiles?.length ? { files: cleanFiles } : {}),
         ...(fields?.length ? { fields } : {}),
         ...(typeof b.envKey === "string" ? { envKey: b.envKey } : {}),
         ...(typeof b.target === "string" ? { target: b.target } : {}),
@@ -181,7 +199,14 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
 
     if (method === "POST" && pathname === "/v1/keychain/grants") {
       if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: CONSENT_ON_TRIGGERED_TURN });
-      const b = body as { credential?: unknown; ask?: unknown; mode?: unknown; purpose?: unknown; expiresAt?: unknown };
+      const b = body as {
+        credential?: unknown;
+        ask?: unknown;
+        mode?: unknown;
+        purpose?: unknown;
+        expiresAt?: unknown;
+        onBehalfOf?: unknown;
+      };
       const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
       if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
       if (
@@ -199,6 +224,13 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         note: "Run the task in that same shell. The secret never appears in output — do not cat the file.",
       });
       if (typeof b.ask === "string") {
+        if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
+          return sendJson(res, 403, {
+            error: "forbidden",
+            message:
+              "onBehalfOf cannot approve an ask — an ask can release the credential into another conversation, so only its owner's own turn can approve it",
+          });
+        }
         const { ask, grant } = await kc.approveAsk({
           askId: b.ask,
           ownerId: actorId,
@@ -227,14 +259,24 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
                 },
         });
       }
+      let granter = actorId;
+      if (typeof b.onBehalfOf === "string" && b.onBehalfOf.trim() && !samePerson(b.onBehalfOf, actorId)) {
+        const speaker = await verifiedConversationSpeaker(ctx, b.onBehalfOf.trim());
+        if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
+        granter = speaker.principalId;
+      }
       const credentialId = b.credential as string;
       const credential = await kc.getCredential(credentialId);
-      if (credential && !samePerson(credential.ownerId, actorId)) {
-        return sendJson(res, 403, { error: "forbidden", message: "only the credential owner can grant it" });
+      if (credential && !samePerson(credential.ownerId, granter)) {
+        return sendJson(res, 403, {
+          error: "forbidden",
+          message:
+            "only the credential owner can grant it — if the owner authorized this in the conversation, pass onBehalfOf with their id",
+        });
       }
       const grant = await kc.createGrant({
         credentialId,
-        ownerId: actorId,
+        ownerId: granter,
         audienceScopeId: capability.scopeId,
         mode: b.mode as GrantMode,
         purpose: b.purpose,
@@ -243,7 +285,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       audit(deps, {
         principalId: actorId,
         action: `keychain.grant.${grant.mode}`,
-        resource: `${grant.credentialId}→${grant.audienceScopeId}`,
+        resource: `${grant.credentialId}→${grant.audienceScopeId}${samePerson(granter, actorId) ? "" : ` (onBehalfOf ${granter})`}`,
         scopeLabel: capability.scopeId,
       });
       for (const adopted of await kc.resolveAsksForGrant(grant)) {

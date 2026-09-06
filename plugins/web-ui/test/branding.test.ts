@@ -71,6 +71,32 @@ test("injectBranding rewrites the tab title with the escaped label when a suffix
   assert.match(hostile, /<title>x&lt;\/title&gt;/);
 });
 
+test("injectBranding refuses any CSS value that could escape the style block it writes", async () => {
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const shell = "<!doctype html><html><head></head><body></body></html>";
+  assert.match(
+    injectBranding(shell, { markUrl: "https://cdn.example.com/icon.png" }),
+    /--brand-mark-image:url\("https:\/\/cdn\.example\.com\/icon\.png"\)/,
+  );
+  for (const markUrl of [
+    "https://a/</style><script>alert(1)</script>",
+    'https://a/");background:url("evil',
+    "https://a/x;color:red",
+    "https://a/}:root{color:red",
+    "http://cdn.example.com/icon.png",
+    "javascript:alert(1)",
+  ]) {
+    assert.equal(injectBranding(shell, { markUrl }), shell, `markUrl rejected: ${markUrl}`);
+  }
+  assert.equal(injectBranding(shell, { accent: "red;}</style><script>alert(1)</script>" }), shell);
+  assert.equal(injectBranding(shell, { mark: '"}</style><script>alert(1)</script>' }), shell);
+  assert.match(
+    injectBranding(shell, { mark: "A " }),
+    /--brand-mark:"A "/,
+    "a two-char mark whose second char is a space is legal and still ships",
+  );
+});
+
 test("brandName() reads the injected self-label and falls back to the product name", async () => {
   const ui = await import("../src/ui.ts");
   const brandName = (ui as { brandName?: () => string }).brandName;
@@ -83,4 +109,18 @@ test("brandName() reads the injected self-label and falls back to the product na
     delete (globalThis as { document?: Document }).document;
   }
   assert.equal(brandName!(), "QM");
+});
+
+test("the installable-app metadata follows the brand: manifest link, touch icon, home-screen title", async () => {
+  const template = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  assert.match(template, /<link rel="manifest" href="%BASE_URL%manifest\.webmanifest"\s*\/?>/);
+  assert.match(template, /<link rel="apple-touch-icon" href="%BASE_URL%brand-mark\.svg"\s*\/?>/);
+  assert.match(template, /<meta name="apple-mobile-web-app-title" content="QM"\s*\/?>/);
+  assert.match(template, /viewport-fit=cover, interactive-widget=resizes-content/);
+  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const shell =
+    '<html><head><meta name="brand-self-label" content="QM" /><meta name="apple-mobile-web-app-title" content="QM" /></head></html>';
+  const branded = injectBranding(shell, { selfLabel: 'Ship "Q"' });
+  assert.match(branded, /<meta name="apple-mobile-web-app-title" content="Ship &quot;Q&quot;" \/>/);
+  assert.match(injectBranding(shell, {}), /<meta name="apple-mobile-web-app-title" content="QM" \/>/);
 });

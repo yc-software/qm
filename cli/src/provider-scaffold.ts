@@ -116,6 +116,10 @@ const AWS_AGENTS_APPENDIX = `
    and the MicroVM roles. Set \`publicUrl\` to
    \`https://<cloudfront_hostname>\` and
    \`env.core.AWS_PUBLIC_ORIGIN_URL\` to \`http://<alb_hostname>\`.
+   A deployment with a separate \`apiUrl\` or \`AWS_DEPLOY_APPS_DOMAIN\` instead
+   sets \`certificate_arn\`, points those HTTPS hostnames at \`<alb_hostname>\`,
+   and uses the ALB directly; the generated security group exposes only that
+   TLS listener in direct mode.
 3. Sign-in is handled by the built-in \`auth\` broker: set
    \`env.auth.AUTH_ALLOWED_EMAIL_DOMAIN\` (or leave it out and supply
    \`AUTH_ALLOWED_EMAILS\`), then run \`npm exec qm -- setup\` for the sender address
@@ -162,16 +166,12 @@ export const dockerScaffold: ProviderScaffold = {
       services: ["core", "web-ui"],
       env: `{ "core": { "HARNESS": "pi" } }`,
       secretEnv: "",
-      sandbox: `,
-
-  // The Fly app agents execute in. The core boots the immutable sandbox image
-  // recorded by \`qm sandbox publish\`.
-  "sandbox": { "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
+      sandbox: "",
     }),
   ignores: [".env", "node_modules/", ".generated/"],
   agentsAppendix: "",
   files: noFiles,
-  configurationHint: "docker: confirm the local public port and Fly sandbox app before setup",
+  configurationHint: "docker: confirm the local public port before setup",
   finalCommand: "npm exec qm -- up",
   finalWhy: "pull images, start services, print URLs",
 };
@@ -195,12 +195,8 @@ export const flyScaffold: ProviderScaffold = {
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.
-  "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } },`,
-      sandbox: `
-
-  // The Fly app agents execute in. The core boots the immutable sandbox image
-  // recorded by \`qm sandbox publish\`.
-  "sandbox": { "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
+  "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`,
+      sandbox: "",
     }),
   ignores: [".env", "node_modules/", ".generated/"],
   agentsAppendix: "",
@@ -257,9 +253,8 @@ export const awsScaffold: ProviderScaffold = {
       sandbox: `
 
   // Where agent sandboxes execute. Omitting "sandbox" entirely runs AWS Lambda MicroVMs
-  // (published by \`qm infra build-image\`). To boot an operator-published sandbox layer
-  // image in a Fly app instead (published by \`qm sandbox publish\`), declare it explicitly:
-  //   "sandbox": { "backend": "sprites", "app": ${JSON.stringify(`${orgId}-sandboxes`)} }`,
+  // (published by \`qm infra build-image\`). To run Fly Sprites instead, declare it explicitly:
+  //   "sandbox": { "backend": "sprites" }`,
     });
   },
   ignores: [

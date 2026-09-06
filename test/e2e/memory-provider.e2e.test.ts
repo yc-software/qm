@@ -19,22 +19,22 @@ interface WriteCall {
   acting_user?: string;
 }
 
-describe("memory provider e2e (live Pi + stub MCP brain)", { skip: NO_KEY ? "set ANTHROPIC_API_KEY" : false }, () => {
+describe("memory provider e2e (live Pi + stub MCP)", { skip: NO_KEY ? "set ANTHROPIC_API_KEY" : false }, () => {
   const facts: string[] = ["Josh's secret project codename is BLACKBEARD-42."];
   const writes: WriteCall[] = [];
   let tokenMints = 0;
-  let brain: Server;
+  let knowledge: Server;
   let server: Server;
   let base: string;
 
   before(async () => {
-    brain = createServer((req, res) => {
+    knowledge = createServer((req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         if (req.url === "/token") {
           const params = new URLSearchParams(body);
-          if (params.get("client_id") !== "brain-id" || params.get("client_secret") !== "brain-secret") {
+          if (params.get("client_id") !== "knowledge-id" || params.get("client_secret") !== "knowledge-secret") {
             res.writeHead(401).end();
             return;
           }
@@ -55,7 +55,7 @@ describe("memory provider e2e (live Pi + stub MCP brain)", { skip: NO_KEY ? "set
           };
           if (rpc.method === "tools/call") {
             const { name, arguments: args } = rpc.params;
-            if (name === "read_brain") {
+            if (name === "search_knowledge") {
               const q = String(args.query ?? "").toLowerCase();
               const hits = q
                 ? facts.filter((f) => q.split(/\W+/).some((w) => w.length > 2 && f.toLowerCase().includes(w)))
@@ -63,7 +63,7 @@ describe("memory provider e2e (live Pi + stub MCP brain)", { skip: NO_KEY ? "set
               reply({ content: [{ type: "text", text: (hits.length ? hits : facts).join("\n") }] });
               return;
             }
-            if (name === "write_brain") {
+            if (name === "write_knowledge") {
               writes.push({ content: String(args.content), acting_user: args.acting_user });
               facts.push(String(args.content));
               reply({ content: [{ type: "text", text: "stored" }] });
@@ -76,37 +76,43 @@ describe("memory provider e2e (live Pi + stub MCP brain)", { skip: NO_KEY ? "set
         res.writeHead(404).end();
       });
     });
-    await new Promise<void>((r) => brain.listen(0, r));
-    const brainUrl = `http://127.0.0.1:${(brain.address() as AddressInfo).port}`;
+    await new Promise<void>((r) => knowledge.listen(0, r));
+    const knowledgeUrl = `http://127.0.0.1:${(knowledge.address() as AddressInfo).port}`;
 
     const providerJson = JSON.stringify({
       providers: [
         {
-          id: "stub-brain",
+          id: "stub-knowledge",
           type: "mcp",
-          url: brainUrl,
+          url: knowledgeUrl,
           timeoutMs: 5000,
           read: {
-            tool: "read_brain",
-            clientIdEnv: "BRAIN_ID",
-            clientSecretEnv: "BRAIN_SECRET",
+            tool: "search_knowledge",
+            clientIdEnv: "KNOWLEDGE_ID",
+            clientSecretEnv: "KNOWLEDGE_SECRET",
             actorArg: "acting_user",
           },
           write: {
-            tool: "write_brain",
-            clientIdEnv: "BRAIN_ID",
-            clientSecretEnv: "BRAIN_SECRET",
+            tool: "write_knowledge",
+            clientIdEnv: "KNOWLEDGE_ID",
+            clientSecretEnv: "KNOWLEDGE_SECRET",
             actorArg: "acting_user",
           },
         },
       ],
       routes: [
-        { provider: "stub-brain", scopes: ["personal"], capture: "explicit", label: "Stub brain", failOpen: false },
+        {
+          provider: "stub-knowledge",
+          scopes: ["personal"],
+          capture: "explicit",
+          label: "Stub knowledge",
+          failOpen: false,
+        },
       ],
     });
     const memoryProviderConfig = parseMemoryProviderConfig(providerJson, {
-      BRAIN_ID: "brain-id",
-      BRAIN_SECRET: "brain-secret",
+      KNOWLEDGE_ID: "knowledge-id",
+      KNOWLEDGE_SECRET: "knowledge-secret",
     });
     assert.ok(memoryProviderConfig, "provider config should parse");
 
@@ -126,7 +132,7 @@ describe("memory provider e2e (live Pi + stub MCP brain)", { skip: NO_KEY ? "set
 
   after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
-    await new Promise<void>((r) => brain.close(() => r()));
+    await new Promise<void>((r) => knowledge.close(() => r()));
   });
 
   async function turn(text: string, threadRef: string): Promise<{ http: number; json: any }> {
@@ -158,7 +164,7 @@ describe("memory provider e2e (live Pi + stub MCP brain)", { skip: NO_KEY ? "set
     );
     assert.equal(r.http, 200);
     const hit = writes.find((w) => w.content.includes("HMS-OSPREY-7"));
-    assert.ok(hit, `write_brain should have received the fact; got: ${JSON.stringify(writes)}`);
+    assert.ok(hit, `write_knowledge should have received the fact; got: ${JSON.stringify(writes)}`);
     assert.equal(hit!.acting_user, "U1");
   });
 });

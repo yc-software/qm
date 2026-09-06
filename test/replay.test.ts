@@ -49,11 +49,7 @@ function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>
   const open = new Set<string>();
   for (const m of msgs) {
     const w = wire(m);
-    if (prevWire === w)
-      assert.ok(
-        prevWasToolResult && m.role === "toolResult",
-        `no two consecutive ${w} turns (except grouped tool results)`,
-      );
+    if (prevWire === w) assert.ok(prevWasToolResult, `no two consecutive ${w} turns (except after a tool result)`);
     if (m.role === "assistant") for (const b of m.content) if (b.type === "toolCall") open.add(b.id);
     if (m.role === "toolResult") {
       assert.ok(open.has(m.toolCallId), "tool_result pairs an open tool_use");
@@ -73,7 +69,7 @@ test("replayPreamble renders user, assistant, and delivered-file entries", () =>
   ]);
   assert.match(out, /User: send me a pirate flag/);
   assert.match(out, /Assistant: done!/);
-  assert.match(out, /Assistant delivered file\(s\) to the conversation: pirate_flag\.png \(image\/png, 142 bytes\)/);
+  assert.match(out, /^\[files delivered to the conversation: pirate_flag\.png \(image\/png, 142 bytes\)\]$/m);
 });
 
 test("replayPreamble is empty when there is nothing to replay", () => {
@@ -173,7 +169,28 @@ test("a tool call with no recorded result replays with a synthetic interrupted r
   assert.equal(synthetic.content[0]!.text, INTERRUPTED_TOOL_RESULT);
 });
 
-test("reconstructMessagesFromHistory coalesces consecutive assistant turns (reply + delivery) to keep alternation", () => {
+test("a user turn that lands right after a tool result stays adjacent — no words put in the assistant's mouth", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "check the build" }, 1),
+    ent("tool_call", { tool: "execute", command: "make build", callId: "c1" }, 2),
+    ent("tool_result", { tool: "execute", callId: "c1", result: "built ok", isError: false }, 3),
+    ent("user", { text: "actually, ship it" }, 4),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant", "toolResult", "user"],
+  );
+  const assistantText = msgs
+    .filter((m) => m.role === "assistant")
+    .flatMap((m) => m.content)
+    .filter((c) => c.type === "text")
+    .map((c) => (c as { text: string }).text);
+  assert.deepEqual(assistantText, []);
+});
+
+test("reconstructMessagesFromHistory replays a delivery in user voice, never the assistant's", () => {
   const history: SessionEntry[] = [
     ent("user", { text: "make a flag" }, 1),
     ent("assistant", { text: "here you go" }, 2),
@@ -186,9 +203,29 @@ test("reconstructMessagesFromHistory coalesces consecutive assistant turns (repl
     msgs.map((m) => m.role),
     ["user", "assistant", "user"],
   );
-  const joined = (msgs[1] as { content: Array<{ text: string }> }).content.map((c) => c.text).join(" ");
-  assert.match(joined, /here you go/);
-  assert.match(joined, /delivered file/);
+  const assistantText = (msgs[1] as { content: Array<{ text: string }> }).content.map((c) => c.text).join(" ");
+  assert.equal(assistantText, "here you go");
+  const userText = (msgs[2] as { content: Array<{ text: string }> }).content.map((c) => c.text).join(" ");
+  assert.match(userText, /\[files delivered to the conversation: flag\.png \(image\/png, 100 bytes\)\]/);
+  assert.match(userText, /thanks/);
+});
+
+test("reconstructMessagesFromHistory coalesces consecutive assistant text entries to keep alternation", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "hi" }, 1),
+    ent("assistant", { text: "part one" }, 2),
+    ent("assistant", { text: "part two" }, 3),
+    ent("user", { text: "ok" }, 4),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant", "user"],
+  );
+  const assistantText = (msgs[1] as { content: Array<{ text: string }> }).content.map((c) => c.text).join(" ");
+  assert.match(assistantText, /part one/);
+  assert.match(assistantText, /part two/);
 });
 
 test("reconstructMessagesFromHistory replays a context summary as a user turn and stays valid across two tool turns", () => {

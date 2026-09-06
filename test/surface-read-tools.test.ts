@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createPiTools, type ToolContextRef } from "../src/harness/pi-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -153,7 +153,7 @@ test("read_file returns text content for a text blob and a POINTER (never bytes)
 
 function surfaceTool(tc: Record<string, unknown>): any {
   const ref = { current: tc } as unknown as ToolContextRef;
-  return createPiTools(ref, { surfaceTools: true }).find((t) => t.name === "slack")!;
+  return createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "slack")!;
 }
 
 test("search action appends the mirror-coverage window to hits, and gives an honest no-match line when the mirror is bounded", async () => {

@@ -11,6 +11,7 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS turn_metrics CASCADE");
   await p.end();
 });
@@ -110,6 +111,7 @@ test("pg metrics sink: survives a fresh sink over the same table (durability)", 
 test("pg metrics sink: back-fills optional columns onto a pre-existing minimal table", { skip }, async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
+  await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'admin/scoped-events/turn_metrics/%'");
   await p.query("DROP TABLE IF EXISTS turn_metrics CASCADE");
   await p.query(
     `CREATE TABLE turn_metrics(

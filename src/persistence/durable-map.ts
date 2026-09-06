@@ -1,8 +1,15 @@
 import { createPgPool, type PgPool, type PoolClient } from "./pg-pool.ts";
+import { pgTextSafe } from "../util/text.ts";
+
+export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
+  omit?: readonly K[];
+  where?: { field: Extract<keyof T, string>; anyOfFold: readonly string[] };
+}
 
 export interface DurableMap<T> {
   all(): Promise<T[]>;
   entries(): Promise<Array<[string, T]>>;
+  select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>): Promise<Array<Omit<T, K>>>;
   get(id: string): Promise<T | null>;
   put(id: string, value: T): Promise<void>;
   putIfAbsent(id: string, value: T): Promise<T>;
@@ -23,21 +30,12 @@ export interface DurableMap<T> {
  * replace lone surrogates with U+FFFD, recursively, only when a string
  * actually needs it.
  */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-
-function jsonbSafeString(s: string): string {
-  let out = s;
-  if (out.includes("\u0000")) out = out.replaceAll("\u0000", "");
-  if (LONE_SURROGATE.test(out)) out = out.replace(LONE_SURROGATE, "\uFFFD");
-  return out;
-}
-
 function jsonbSafe(value: unknown): unknown {
-  if (typeof value === "string") return jsonbSafeString(value);
+  if (typeof value === "string") return pgTextSafe(value);
   if (Array.isArray(value)) return value.map(jsonbSafe);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) out[jsonbSafeString(k)] = jsonbSafe(v);
+    for (const [k, v] of Object.entries(value)) out[pgTextSafe(k)] = jsonbSafe(v);
     return out;
   }
   return value;
@@ -45,6 +43,34 @@ function jsonbSafe(value: unknown): unknown {
 
 export function jsonbStringify(value: unknown): string {
   return JSON.stringify(jsonbSafe(value));
+}
+
+function fieldText(value: unknown): string | null {
+  if (value == null) return null;
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function isAscii(text: string): boolean {
+  for (const ch of text) if (ch.codePointAt(0)! > 0x7f) return false;
+  return true;
+}
+
+export function selectValues<T, K extends Extract<keyof T, string>>(
+  values: readonly T[],
+  query: DurableMapSelect<T, K>,
+): Array<Omit<T, K>> {
+  const folded = query.where ? new Set(query.where.anyOfFold.map((v) => v.toLowerCase())) : null;
+  const out: Array<Omit<T, K>> = [];
+  for (const value of values) {
+    if (folded && query.where) {
+      const text = fieldText((value as Record<string, unknown>)[query.where.field]);
+      if (text === null || !(folded.has(text.toLowerCase()) || !isAscii(text))) continue;
+    }
+    const projected = structuredClone(value) as Record<string, unknown>;
+    for (const key of query.omit ?? []) delete projected[key];
+    out.push(projected as Omit<T, K>);
+  }
+  return out;
 }
 
 function applyPatch<T>(value: T, patch: Partial<T>): T {
@@ -70,6 +96,12 @@ export function createMemoryMap<T>(): DurableMap<T> {
     },
     async entries() {
       return sortedEntries();
+    },
+    async select(query) {
+      return selectValues(
+        sortedEntries().map(([, v]) => v),
+        query,
+      );
     },
     async get(id) {
       return m.get(id) ?? null;
@@ -123,16 +155,18 @@ const VERSIONS_TABLE = "durable_map_versions";
 
 export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
   if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+  const migration = {
+    id: `durable-map/${table}/0001`,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
+    ],
+  };
+  pg.registerMigration(migration);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      const statements = [
-        `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-        `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
-      ];
-      readyP = (async () => {
-        for (const sql of statements) await (pg.schema ? pg.schema(sql) : pg.query(sql));
-      })().catch((e) => {
+      readyP = pg.migrate(migration).catch((e) => {
         readyP = null;
         throw e;
       });
@@ -175,6 +209,20 @@ export function createPostgresMap<T>(pg: PgPool, table: string): DurableMap<T> {
     },
     async entries() {
       return snapshot();
+    },
+    async select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>) {
+      await ready();
+      const params: unknown[] = [[...(query.omit ?? [])]];
+      let sql = `SELECT json - $1::text[] AS json FROM ${table}`;
+      if (query.where) {
+        params.push(
+          query.where.field,
+          query.where.anyOfFold.map((v) => v.toLowerCase()),
+        );
+        sql += ` WHERE lower(json->>$2) = ANY($3::text[]) OR json->>$2 ~ '[^\\x01-\\x7f]'`;
+      }
+      const rows = await pg.q(`${sql} ORDER BY id`, params);
+      return rows.map((row) => row.json as Omit<T, K>);
     },
     async get(id) {
       await ready();
@@ -257,6 +305,6 @@ export interface PostgresArtifactMaps {
 }
 
 export function createPostgresMapFactory(connectionString: string): PostgresArtifactMaps {
-  const pg = createPgPool(connectionString, []);
+  const pg = createPgPool(connectionString);
   return { map: <T>(table: string): DurableMap<T> => createPostgresMap<T>(pg, table), pool: pg };
 }

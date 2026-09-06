@@ -219,6 +219,32 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       ).status,
       403,
     );
+    assert.equal(
+      (
+        await post(
+          `/v1/crons/${cron.id}/note`,
+          { note: "steer the next privileged fire" },
+          { "x-agent-capability": await capFor("admin-alice") },
+        )
+      ).status,
+      403,
+      "an unattended non-fire session cannot note a privileged cron over HTTP either",
+    );
+    assert.equal(
+      (
+        await post(
+          `/v1/crons/${cron.id}/note`,
+          { note: "scan clean, nothing carried over" },
+          {
+            "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), {
+              threadRef: `cron:${cron.id}:fire:abc`,
+            }),
+          },
+        )
+      ).status,
+      200,
+      "the cron's own fire leaves its shift-change note over the agent API",
+    );
   });
 
   it("creates a cron as the TOKEN's actor, ignoring a forged owner in the body", async () => {
@@ -287,6 +313,16 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     );
     assert.equal(fallback.status, 200);
     assert.equal(((await fallback.json()) as any).cron.schedule.timezone, "America/Los_Angeles");
+  });
+
+  it("rejects a one-shot firstFireAt in the past under a capability", async () => {
+    const create = await post(
+      "/v1/crons",
+      { schedule: { firstFireAt: Date.now() - 60 * 60 * 1000 }, action: "late" },
+      { "x-agent-capability": await capFor("U1") },
+    );
+    assert.equal(create.status, 400);
+    assert.match(((await create.json()) as any).message, /in the past/);
   });
 
   it("rejects mixed calendar and legacy schedule fields under a capability", async () => {
@@ -629,6 +665,42 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await get(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") })).status, 404);
   });
 
+  it("the runs endpoint reads the fire table and strips the legacy fireLog from the cron", async () => {
+    const created = (await (
+      await post(
+        "/v1/crons",
+        { schedule: { everyMs: 60_000 }, action: "count things" },
+        { "x-agent-capability": await capFor("U1") },
+      )
+    ).json()) as any;
+    const id = created.cron.id;
+    await built.crons.recordFire(id, {
+      fireKey: "k1",
+      threadRef: "t1",
+      firedAt: 1_000,
+      endedAt: 2_000,
+      status: "failed",
+      note: "first",
+    });
+    await built.crons.recordFire(id, {
+      fireKey: "k2",
+      threadRef: "t2",
+      firedAt: 3_000,
+      endedAt: 4_000,
+      status: "ok",
+      reply: "second",
+    });
+
+    const res = await get(`/v1/crons/${id}/runs?limit=1`, { "x-agent-capability": await capFor("U1") });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    assert.equal(body.total, 2);
+    assert.equal(body.runs.length, 1);
+    assert.equal(body.runs[0].fireKey, "k2");
+    assert.equal(body.runs[0].reply, "second");
+    assert.equal("fireLog" in body.cron, false);
+  });
+
   it("another public-channel user can read an OWNER cron but cannot patch, run, or delete it", async () => {
     const created = (await (
       await post(
@@ -742,36 +814,6 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     );
   });
 
-  it("a public channel remains available to an active internal principal outside its current roster", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: false }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-    );
-    assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
-  });
-
-  it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: true }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
-    );
-    const members = [{ id: "B-LEGACY", type: "internal" as const }];
-    const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
-      botActor: true,
-      liveActor: true,
-      members,
-    });
-    assert.equal((await get("/v1/soul", { "x-agent-capability": token })).status, 200);
-    assert.equal(
-      (
-        await get("/v1/soul", {
-          "x-agent-capability": await capFor("B-LEGACY", scopeId("channel", "C"), { members }),
-        })
-      ).status,
-      403,
-    );
-  });
-
   it("registers a webhook as the TOKEN's actor, ignoring a forged owner in the body", async () => {
     const res = await post(
       "/v1/webhooks",
@@ -881,5 +923,35 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       { "x-agent-capability": await capFor("U1") },
     );
     assert.equal(ok.status, 200);
+  });
+
+  it("a public channel remains available to an active internal principal outside its current roster", async () => {
+    await built.directory.replaceChannels(
+      [{ channelId: "C", name: "eng", isPrivate: false }],
+      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+    );
+    assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
+  });
+
+  it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
+    await built.directory.replaceChannels(
+      [{ channelId: "C", name: "eng", isPrivate: true }],
+      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+    );
+    const members = [{ id: "B-LEGACY", type: "internal" as const }];
+    const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
+      botActor: true,
+      liveActor: true,
+      members,
+    });
+    assert.equal((await get("/v1/soul", { "x-agent-capability": token })).status, 200);
+    assert.equal(
+      (
+        await get("/v1/soul", {
+          "x-agent-capability": await capFor("B-LEGACY", scopeId("channel", "C"), { members }),
+        })
+      ).status,
+      403,
+    );
   });
 });

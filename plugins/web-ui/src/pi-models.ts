@@ -4,6 +4,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 const KNOWN_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 
 const CLONE_TEMPLATES: Readonly<Record<string, { template: string; name: string }>> = {
+  "claude-fable-5-1": { template: "claude-opus-4-8", name: "Claude Fable 5.1" },
   "claude-fable-5": { template: "claude-opus-4-8", name: "Claude Fable 5" },
   "claude-opus-5": { template: "claude-opus-4-8", name: "Claude Opus 5" },
   "claude-sonnet-5": { template: "claude-sonnet-4-6", name: "Claude Sonnet 5" },

@@ -1,7 +1,8 @@
 import { button } from "./approval-cards.ts";
 import { extractDirectives } from "./directives.ts";
 
-export type AgentRequestActionId = "agent_request_run" | "agent_request_deny";
+export const AGENT_REQUEST_ACTION_IDS = ["agent_request_run", "agent_request_deny"] as const;
+export type AgentRequestActionId = (typeof AGENT_REQUEST_ACTION_IDS)[number];
 
 export interface AgentRequestDirective {
   targetUserId: string;
@@ -75,8 +76,22 @@ export const AGENT_REQUEST_INSTRUCTION =
   "the People here line) is a colleague, not a personal agent to hand off to — just @mention it in your " +
   "normal reply using its `<@…>` id and it will answer here in the thread.";
 
-const AGENT_REQUEST_DIRECTIVE = /\[\[ask-agent:\s*([^|\]]+?)\s*\|\s*([\s\S]*?)\]\]/gi;
-const TRAILING_OPEN_AGENT_REQUEST_DIRECTIVE = /\[\[ask-agent:[\s\S]*$/i;
+const AGENT_REQUEST_DIRECTIVE = /\[\[ask-agent:([^|\]]{0,400})\|([\s\S]*?)\]\]/gi;
+const AGENT_REQUEST_OPENER = /\[\[ask-agent:/gi;
+
+function stripLeftoverAgentRequests(text: string): string {
+  let out = "";
+  let cursor = 0;
+  AGENT_REQUEST_OPENER.lastIndex = 0;
+  for (let m = AGENT_REQUEST_OPENER.exec(text); m; m = AGENT_REQUEST_OPENER.exec(text)) {
+    out += text.slice(cursor, m.index);
+    const close = text.indexOf("]]", m.index + m[0].length);
+    if (close < 0) return out;
+    cursor = close + 2;
+    AGENT_REQUEST_OPENER.lastIndex = cursor;
+  }
+  return out + text.slice(cursor);
+}
 const SLACK_USER_REF = /^(?:<@([A-Z0-9]+)(?:\|[^>]*)?>|@?([A-Z0-9]+))$/i;
 
 function parseSlackUserRef(ref: string): string | undefined {
@@ -88,7 +103,7 @@ export function extractAgentRequests(reply: string): { text: string; requests: A
   const { text, matches } = extractDirectives(
     reply,
     AGENT_REQUEST_DIRECTIVE,
-    TRAILING_OPEN_AGENT_REQUEST_DIRECTIVE,
+    stripLeftoverAgentRequests,
     ([targetRef, taskRaw]) => {
       const targetUserId = parseSlackUserRef(targetRef ?? "");
       const task = (taskRaw ?? "").trim();
@@ -100,5 +115,5 @@ export function extractAgentRequests(reply: string): { text: string; requests: A
 
 export function stripAgentRequestDirectives(partial: string): string {
   if (!partial) return partial ?? "";
-  return partial.replace(AGENT_REQUEST_DIRECTIVE, "").replace(TRAILING_OPEN_AGENT_REQUEST_DIRECTIVE, "");
+  return stripLeftoverAgentRequests(partial.replace(AGENT_REQUEST_DIRECTIVE, ""));
 }

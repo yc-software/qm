@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import {
   createSkillMaterializer,
@@ -464,10 +464,27 @@ test("materializeSkillTree removes stale bundle paths but preserves another curr
   assert.equal(files.has("skills/alpha/.tree"), true, "the clean body-only projection remains idempotent");
 });
 
-test("materializeSkillTree uses extractFiles (one batch) when the backend offers it", async () => {
+test("a router-advertised importFiles the handle's backend refuses falls back to per-file writes", async () => {
+  const { sandbox, files } = fakeSandbox();
+  (sandbox as unknown as { importFiles: Sandbox["importFiles"] }).importFiles = async () => {
+    throw new CapabilityUnsupportedError("local", "importFiles");
+  };
+  await materializeSkillTree(
+    sandbox,
+    handle,
+    res("delta", "D", [
+      { path: "a.py", content: "A" },
+      { path: "b.py", content: "B" },
+    ]),
+  );
+  assert.equal(files.get("skills/delta/a.py"), "A");
+  assert.equal(files.get("skills/delta/b.py"), "B");
+});
+
+test("materializeSkillTree uses importFiles (one batch) when the backend offers it", async () => {
   const { sandbox, files } = fakeSandbox();
   let batches = 0;
-  (sandbox as unknown as { extractFiles: Sandbox["extractFiles"] }).extractFiles = async (_h, entries) => {
+  (sandbox as unknown as { importFiles: Sandbox["importFiles"] }).importFiles = async (_h, entries) => {
     batches++;
     for (const e of entries) files.set(e.path, Buffer.from(e.data).toString("utf8"));
   };

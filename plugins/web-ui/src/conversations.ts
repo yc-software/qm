@@ -31,6 +31,10 @@ export function allConversations(): Conversation[] {
   return [...live];
 }
 
+export function isLiveConversation(conv: Conversation): boolean {
+  return live.has(conv);
+}
+
 export function mainConversation(): Conversation {
   main ??= createConversation({
     pane: false,
@@ -61,6 +65,18 @@ export function onExitCanvas(fn: () => void): void {
   exitCanvas = fn;
 }
 
+let inboxItemHandler: ((event: { loopId: string; itemId: string; op: string }) => void) | null = null;
+
+export function onInboxItemEvent(fn: (event: { loopId: string; itemId: string; op: string }) => void): void {
+  inboxItemHandler = fn;
+}
+
+let inboxResyncHandler: (() => void) | null = null;
+
+export function onInboxResync(fn: () => void): void {
+  inboxResyncHandler = fn;
+}
+
 let deliveryStreamOpen = false;
 
 export function ensureDeliveryStream(): void {
@@ -86,6 +102,8 @@ export function ensureDeliveryStream(): void {
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
     },
     () => void refreshSessions({ silent: true }),
+    (event) => inboxItemHandler?.(event),
+    () => inboxResyncHandler?.(),
   );
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
