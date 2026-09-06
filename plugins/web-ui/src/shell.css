@@ -8729,3 +8729,7 @@ code-block copy-button span {
     opacity: 1;
   }
 }
+
+.live-work-line .think-orb {
+  --orb: 20px;
+}
