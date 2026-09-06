@@ -3054,7 +3054,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               spine.surfaceOutboundCount += 1;
               if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
             } catch (e) {
-              console.error(`[orchestrator] direct reply delivery failed session=${session.id}:`, errMessage(e));
+              console.error("%s", `[orchestrator] direct reply delivery failed session=${session.id}:`, errMessage(e));
             }
           }
           if (spine.surfaceOutboundCount === 0 && !silentPollNarration) {

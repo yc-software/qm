@@ -111,7 +111,7 @@ const poller = createMonitorPoller({
 });
 
 try {
-  console.log(`[${ts()}] provisioning sprite for`, scope, "…");
+  console.log("%s", `[${ts()}] provisioning sprite for`, scope, "…");
   h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
 
   console.log(`[${ts()}] staging job.sh + diffusion.py into the workspace …`);

@@ -467,7 +467,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
       const settled = fire(cron, t, fireKey).then(
         () => undefined,
-        (e: unknown) => console.error(`[scheduler] manual fire of cron ${cronId} failed:`, errMessage(e)),
+        (e: unknown) => console.error("%s", `[scheduler] manual fire of cron ${cronId} failed:`, errMessage(e)),
       );
       return { started: true, fireKey, settled };
     },

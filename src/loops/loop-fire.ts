@@ -428,7 +428,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           sourceScopeId: loop.ownerScopeId,
           sourceThreadRef: `loop:${loop.id}:governor`,
         },
-      }).catch((e: unknown) => console.error(`[loops] governor ping for ${loop.id} failed:`, errMessage(e)));
+      }).catch((e: unknown) => console.error("%s", `[loops] governor ping for ${loop.id} failed:`, errMessage(e)));
     }
   }
 

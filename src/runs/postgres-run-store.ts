@@ -396,7 +396,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
               if (r && isTerminal(r.status)) finish(r);
             })
             .catch((err: unknown) => {
-              console.error(`[postgres-run-store] waitFor poll for run ${runId} failed transiently:`, errMessage(err));
+              console.error("%s", `[postgres-run-store] waitFor poll for run ${runId} failed transiently:`, errMessage(err));
             });
         }, 250);
         poll.unref?.();

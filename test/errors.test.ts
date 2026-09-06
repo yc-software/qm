@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { errMessage } from "../src/util/errors.ts";
+import { asError, errMessage } from "../src/util/errors.ts";
+import { errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
+import { runInNewContext } from "node:vm";
 
 test("errMessage keeps the cause chain that fetch failures hide behind their generic message", () => {
   const socket = Object.assign(new Error(""), { name: "Error", code: "ETIMEDOUT" });
@@ -42,4 +44,38 @@ test("errMessage does not echo a cause whose message the wrapper already carries
 test("a short cause message is not mistaken for an echo", () => {
   const cause = Object.assign(new Error("fetch"), { code: "ECONNRESET" });
   assert.equal(errMessage(new Error("fetch failed", { cause })), "fetch failed <- Error ECONNRESET: fetch");
+});
+
+for (const [name, message] of [
+  ["core", errMessage],
+  ["plugin", pluginErrMessage],
+] as const) {
+  test(`${name} errors preserve useful messages without stringifying thrown objects`, () => {
+    const exposed = {
+      toString: () => {
+        assert.fail("object stringification must not run");
+      },
+    };
+    assert.equal(message(exposed), "Unknown error");
+    assert.equal(message({ ...exposed, message: "actionable validation error" }), "actionable validation error");
+    assert.equal(message(runInNewContext('new Error("cross-realm validation error")')), "cross-realm validation error");
+    assert.equal(message(new Error("normal validation error")), "normal validation error");
+    assert.equal(message("plain thrown string"), "plain thrown string");
+    assert.equal(message(42), "42");
+  });
+}
+
+test("error causes cannot expose a custom object stack through stringification", () => {
+  const cause = { toString: () => "Error: internal failure\n    at /private/server.ts:123:4" };
+  assert.equal(errMessage(new Error("operation failed", { cause })), "operation failed <- Unknown error");
+});
+
+test("asError preserves cross-realm messages without invoking custom stringifiers", () => {
+  const original = new Error("original");
+  assert.equal(asError(original), original);
+  assert.equal(asError(runInNewContext('new Error("cross-realm")')).message, "cross-realm");
+  assert.equal(
+    asError({ toString: () => assert.fail("object stringification must not run") }).message,
+    "Unknown error",
+  );
 });

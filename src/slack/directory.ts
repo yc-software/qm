@@ -258,7 +258,7 @@ export function createDirectory(deps: {
           try {
             memberIds = await fetchChannelMemberIds(client, ref.id);
           } catch (err) {
-            console.error(`[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`, (err as Error).message);
+            console.error("%s", `[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`, (err as Error).message);
             continue;
           }
           const actors: ActorAssertion[] = [];

@@ -832,7 +832,7 @@ export function createApprovals(deps: {
       );
       ackConveyedQuarantine(outcome);
     } catch (err) {
-      console.error(`[slack] approval ${requestId} action failed:`, errMessage(err));
+      console.error("%s", `[slack] approval ${requestId} action failed:`, errMessage(err));
       const msg = slackFailureText(err);
       if (settled) {
         await updateSlackMessage(client, cardChannel, messageTs, `⚠️ ${msg}`).catch(

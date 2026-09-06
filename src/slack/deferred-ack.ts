@@ -41,7 +41,7 @@ export function createDeferredEnvelopeAck(
     if (note) console.error(`[slack-plugin] ${note}`);
     if (send) {
       void sendAck(response).catch((err: unknown) =>
-        console.error(`[slack-plugin] envelope ack failed for ${label}:`, errMessage(err)),
+        console.error("%s", `[slack-plugin] envelope ack failed for ${label}:`, errMessage(err)),
       );
     } else {
       opts.onWithhold?.();

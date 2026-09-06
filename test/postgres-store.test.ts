@@ -86,7 +86,8 @@ test("pg session store: a bare failed acquire means the session is gone, not a l
 });
 
 test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibility window", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!, { leaseTtlMs: 50 });
+  let now = Date.now();
+  const s = createPostgresSessionStore(URL!, { leaseTtlMs: 50, now: () => now });
   const scope = scopeId("personal", "U1");
 
   const a = await s.getOrCreateByThread("t1", "dm", scope);
@@ -165,7 +166,7 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
   assert.equal(await s.getEntry(a.id, 99), undefined, "a missing seq is undefined");
   assert.equal(await s.getEntry("nope", 0), undefined, "an unknown session is undefined");
 
-  await new Promise((r) => setTimeout(r, 70));
+  now += 70;
   assert.equal(await s.renewLease(dead!), false, "an expired lease cannot be revived by its old holder");
   const { lease: fresh } = await s.acquireLease(a.id);
   assert.ok(fresh, "expired lease is reclaimable");
@@ -197,7 +198,7 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
   assert.ok(reacquired, "force-released lease can be re-acquired");
   await assert.rejects(s.append(fresh!, { type: "user", payload: {}, scopeLabel: scope }), /valid session lease/);
 
-  await new Promise((r) => setTimeout(r, 5));
+  now += 5;
   await s.removeParticipant(a.id, "U1");
   await s.addParticipant(a.id, "U1");
   assert.equal(
@@ -205,7 +206,7 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     false,
     "old entries fall outside the new tenure",
   );
-  await new Promise((r) => setTimeout(r, 5));
+  now += 5;
   await s.append(reacquired!, { type: "user", payload: { text: "re-joined" }, scopeLabel: scope });
   assert.equal(
     (await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries,
@@ -1853,12 +1854,13 @@ test(
   "pg deleteSessionIfEmpty: an expired lease forfeits, and the stale holder cannot orphan entries",
   { skip },
   async () => {
-    const s = createPostgresSessionStore(URL!, { leaseTtlMs: 40 });
+    let now = Date.now();
+    const s = createPostgresSessionStore(URL!, { leaseTtlMs: 40, now: () => now });
     const scope = scopeId("personal", "USTALE");
     const sess = await s.getOrCreateByThread("web:USTALE:seed", "dm", scope);
     const att = await s.acquireLease(sess.id);
     assert.ok(att.lease);
-    await new Promise((r) => setTimeout(r, 60));
+    now += 60;
     assert.equal(await s.deleteSessionIfEmpty(sess.id), true, "an expired lease does not block the discard");
     assert.equal(await s.get(sess.id), null);
     await assert.rejects(

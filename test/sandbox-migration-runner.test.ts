@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createSandboxMigrationRunner } from "../src/sandbox/sandbox-migration-runner.ts";
@@ -93,7 +93,9 @@ test("snapshot strategy exports once, adopts into the target's snapshot store, a
   const root = mkdtempSync(join(tmpdir(), "mig-snap-"));
   try {
     const { aws: src, routes } = build(root);
-    writeFileSync(join(root, "aws-home", "notes.txt"), "hello snapshot\n");
+    const notes = join(root, "aws-home", "notes.txt");
+    writeFileSync(notes, "hello snapshot\n");
+    utimesSync(notes, new Date(0), new Date(0));
     const blobs = new Map<string, Buffer>();
     const adopted: string[] = [];
     (src as unknown as { stageOut: Sandbox["stageOut"]; importFiles: unknown; stageIn: unknown }).stageOut = async (
@@ -141,6 +143,7 @@ test("snapshot strategy exports once, adopts into the target's snapshot store, a
     assert.match(res.sha, /^[0-9a-f]{64}$/);
     assert.ok(res.destFiles >= 1);
     assert.equal(adopted.length, 1);
+    assert.equal(res.resynced, false);
     assert.equal(readFileSync(join(dstHome, "notes.txt"), "utf8"), "hello snapshot\n");
     assert.equal((await routes.get("personal:alice"))?.backend, "e2b");
     assert.equal(existsSync(join(root, "aws-home", "notes.txt")), true, "source untouched");

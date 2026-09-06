@@ -232,7 +232,7 @@ export function createDeliveryPoller(deps: {
                 try {
                   await uploadAttachments(client, channel, root, d.attachments, core);
                 } catch (err) {
-                  console.error(`[slack-plugin] delivery ${d.id} attachment upload failed:`, (err as Error).message);
+                  console.error("%s", `[slack-plugin] delivery ${d.id} attachment upload failed:`, (err as Error).message);
                   await client.chat
                     .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root))
                     .catch(swallowAs("slack: post upload-failure note", undefined));

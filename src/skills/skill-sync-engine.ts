@@ -44,7 +44,7 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
       try {
         await syncOne(pack.id);
       } catch (e) {
-        console.error(`[skill-sync] pack ${pack.id} failed:`, errMessage(e));
+        console.error("%s", `[skill-sync] pack ${pack.id} failed:`, errMessage(e));
       }
     }
   }

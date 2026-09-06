@@ -536,7 +536,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             await liveEndpoint(cur);
             warmed++;
           } catch (e) {
-            console.error(`[deploy] keep-warm failed for ${d.name ?? d.id}:`, errMessage(e));
+            console.error("%s", `[deploy] keep-warm failed for ${d.name ?? d.id}:`, errMessage(e));
           }
         }
         return warmed;
@@ -588,7 +588,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             scopeLabel: before.ownerScopeId,
           });
         } catch (e) {
-          console.error(`[deploy] failed to register pushed version for ${id}:`, errMessage(e));
+          console.error("%s", `[deploy] failed to register pushed version for ${id}:`, errMessage(e));
           deps.auditLog.record({
             at: Date.now(),
             principalId: "system",

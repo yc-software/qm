@@ -330,7 +330,7 @@ export function createMemoryConfigStore(
   const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
   const persistWarn = (what: string) => (e: unknown) =>
-    console.error(`[config] failed to persist ${what}:`, errMessage(e));
+    console.error("%s", `[config] failed to persist ${what}:`, errMessage(e));
   const writeQueue = createKeyedQueue();
   const pendingWrites = new Map<string, Promise<void>>();
   const persist = (key: string, what: string, op: () => Promise<unknown>): void => {

@@ -140,7 +140,7 @@ export function wireRunResultDeliveries(
   runs.onTerminal((run) => {
     if (sessions) {
       void recordRunFailureEntry(sessions, run).catch((err) =>
-        console.error(`[delivery] failed to record turn_failure entry for run ${run.id}:`, errMessage(err)),
+        console.error("%s", `[delivery] failed to record turn_failure entry for run ${run.id}:`, errMessage(err)),
       );
     }
     void (async () => {
@@ -149,7 +149,7 @@ export function wireRunResultDeliveries(
       if (!delivery) return;
       await deliveries.enqueue(delivery);
     })().catch((err) =>
-      console.error(`[delivery] failed to enqueue recovery delivery for run ${run.id}:`, errMessage(err)),
+      console.error("%s", `[delivery] failed to enqueue recovery delivery for run ${run.id}:`, errMessage(err)),
     );
   });
 }

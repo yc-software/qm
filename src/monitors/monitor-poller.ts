@@ -284,7 +284,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           if (await poll(sandbox, handle, m, t)) fires++;
         } catch (e) {
           await deps.monitors.recordError(m.id, errMessage(e));
-          console.error(`[monitor] poll failed for ${m.id}:`, errMessage(e));
+          console.error("%s", `[monitor] poll failed for ${m.id}:`, errMessage(e));
         }
       }
     } finally {

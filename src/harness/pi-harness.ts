@@ -1477,7 +1477,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           );
         }
       } catch (err) {
-        console.error(`${tag} fold threw:`, errMessage(err));
+        console.error("%s", `${tag} fold threw:`, errMessage(err));
       }
     }
     const seedSource = foldSeed ?? reconstructed;
