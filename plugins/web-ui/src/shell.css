@@ -8674,3 +8674,58 @@ code-block copy-button span {
     animation: none;
   }
 }
+
+.streaming-text.live-stream {
+  transition:
+    opacity 240ms ease-out,
+    transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@starting-style {
+  .streaming-text.live-stream {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+.streaming-text.live-stream .stream-tail > div > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+.streaming-text.live-stream .stream-tail > div > :is(ul, ol):last-child > li:last-child::after,
+.streaming-text.live-stream .stream-tail > div > blockquote:last-child > p:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 0.92em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  border-radius: 1px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--foreground) 70%, var(--background)) 0%,
+    var(--foreground) 55%
+  );
+  box-shadow:
+    0 0 0.35em color-mix(in srgb, var(--brand-accent) 35%, transparent),
+    1px 1px 0 color-mix(in srgb, var(--foreground) 12%, transparent);
+  transform-origin: 50% 100%;
+  animation: caret-breathe 1.05s ease-in-out infinite;
+}
+@keyframes caret-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scaleY(0.82);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .streaming-text.live-stream {
+    transition: none;
+  }
+  .streaming-text.live-stream .stream-tail > div > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+  .streaming-text.live-stream .stream-tail > div > :is(ul, ol):last-child > li:last-child::after,
+  .streaming-text.live-stream .stream-tail > div > blockquote:last-child > p:last-child::after {
+    animation: none;
+    opacity: 1;
+  }
+}
