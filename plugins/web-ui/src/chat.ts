@@ -6,6 +6,7 @@ import "./marked-dedupe";
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import { html, nothing, render, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import {
   Activity,
   ArrowDown,
@@ -1056,7 +1057,7 @@ export function createChatSurface(
     if (activePendingApprovals().length) return "Needs your approval";
     if (runIsLive(agent)) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
-      const summary = liveWorkSummary(work);
+      const summary = liveWorkSummary(work, activeToolRow(work));
       if (!summary) return "Thinking…";
       return summary.detail ? `${summary.label} — ${summary.detail}` : summary.label;
     }
@@ -1892,11 +1893,13 @@ export function createChatSurface(
     if (!runIsLive(agent)) return nothing;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
-    const summary = liveWorkSummary(work);
+    const active = activeToolRow(work);
+    const summary = liveWorkSummary(work, active);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
     let title = "";
     if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
+    const faceKey = work.stale ? "stale" : (active?.call?.seq ?? "thinking");
     return html`
       <section class="live-work-dock ${expanded ? "expanded" : ""}" aria-live="polite">
         <button
@@ -1907,11 +1910,16 @@ export function createChatSurface(
           title=${title}
           @click=${toggleLiveWorkExpanded}
         >
-          ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : thinkingOrb("sm")}
-          <span class="live-work-label"
-            >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
-          >
-          ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
+          ${keyed(
+            faceKey,
+            html`<span class="live-work-face"
+              >${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : thinkingOrb("sm")}
+              <span class="live-work-label"
+                >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
+              >
+              ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}</span
+            >`,
+          )}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
         </button>
       </section>
@@ -1923,9 +1931,11 @@ export function createChatSurface(
     drawActiveChat();
   }
 
-  function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; detail: string } | null {
+  function liveWorkSummary(
+    work: WorkBlock,
+    active: ToolRowModel | null,
+  ): { icon: IconNode; label: string; detail: string } | null {
     if (work.stale) {
-      const active = activeToolRow(work);
       const call = (active?.call?.payload ?? {}) as ToolPayload;
       const tool = call.tool ?? "";
       const verb = active ? (TOOL_META[tool] ?? UNKNOWN_TOOL).active : null;
@@ -1935,7 +1945,6 @@ export function createChatSurface(
         detail: active ? toolDetail(tool, call, (active.result?.payload ?? {}) as ToolPayload) : "",
       };
     }
-    const active = activeToolRow(work);
     return active ? activeToolSummary(active, work) : null;
   }
 
