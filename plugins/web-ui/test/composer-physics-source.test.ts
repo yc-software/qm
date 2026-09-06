@@ -29,7 +29,7 @@ test("the send button springs between disabled and enabled and the stop button e
 });
 
 test("reduced motion keeps the composer usable: instant ring, opacity fades only, no emerge", () => {
-  const reduced = css.slice(css.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
+  const reduced = css.split("@media (prefers-reduced-motion: reduce)").slice(1).join("\n");
   assert.match(reduced, /\.composer-wrap,\s*\.composer-wrap::before \{\s*transition: none;/);
   assert.match(reduced, /\.composer-wrap:focus-within \{\s*transform: none;/);
   assert.match(reduced, /\.send-btn,\s*\.send-btn svg,\s*\.stop-btn svg \{\s*transition: opacity 120ms ease;/);
