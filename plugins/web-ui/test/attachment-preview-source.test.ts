@@ -31,7 +31,7 @@ test("the card shows after hover intent, hides on Escape, and drops motion under
     css,
     /\.file-chip:hover \.attachment-preview,\s*\.file-chip:focus-within \.attachment-preview \{[^}]*transition-delay: 0\.25s;/,
   );
-  assert.match(css, /\.file-chip\.preview-dismissed \.attachment-preview \{[^}]*visibility: hidden;/);
+  assert.match(css, /\.file-chip\.preview-dismissed \.attachment-preview \{[^}]*pointer-events: none;/);
   assert.match(
     css,
     /@media \(prefers-reduced-motion: reduce\) \{\s*\.attachment-preview \{[^}]*transition-duration: 0s;/,

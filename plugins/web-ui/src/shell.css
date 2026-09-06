@@ -8088,13 +8088,12 @@ h3.ambient-field-label {
     0 8px 18px color-mix(in srgb, var(--foreground) 10%, transparent),
     0 22px 55px color-mix(in srgb, var(--foreground) 14%, transparent);
   opacity: 0;
-  visibility: hidden;
+  pointer-events: none;
   transform: translateY(4px) scale(0.98);
   transform-origin: bottom left;
   transition:
     opacity 0.14s cubic-bezier(0.2, 0.8, 0.2, 1),
-    transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1),
-    visibility 0s linear 0.14s;
+    transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .attachment-preview::after {
   content: "";
@@ -8104,13 +8103,13 @@ h3.ambient-field-label {
 .file-chip:hover .attachment-preview,
 .file-chip:focus-within .attachment-preview {
   opacity: 1;
-  visibility: visible;
+  pointer-events: auto;
   transform: none;
   transition-delay: 0.25s;
 }
 .file-chip.preview-dismissed .attachment-preview {
   opacity: 0;
-  visibility: hidden;
+  pointer-events: none;
   transform: translateY(4px) scale(0.98);
   transition-delay: 0s;
 }
