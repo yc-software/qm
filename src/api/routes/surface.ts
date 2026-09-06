@@ -72,6 +72,18 @@ async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function tidySessions(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const b = body as { principalId?: unknown; idleDays?: unknown };
+  if (typeof b.principalId !== "string" || !b.principalId) {
+    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  }
+  if (typeof b.idleDays !== "number" || !Number.isFinite(b.idleDays) || b.idleDays < 0) {
+    return sendJson(res, 400, { error: "bad_request", message: "idleDays must be a non-negative number" });
+  }
+  return sendJson(res, 200, await app.tidySessions(b.principalId, { idleMs: b.idleDays * 86_400_000 }));
+}
+
 async function forkSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -1397,6 +1409,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
 export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/session-cap", auth: "source", handle: sessionCapability },
   { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
+  { method: "POST", path: "/v1/sessions/tidy", auth: "source", handle: tidySessions },
   { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
   { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
   { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },

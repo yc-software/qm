@@ -1463,6 +1463,19 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/sessions/tidy",
+    handle: async (c) => {
+      const { req, res, user } = c;
+      const p = await readJson<{ idleDays?: unknown }>(req, res, false);
+      if (!p) return;
+      if (typeof p.idleDays !== "number" || !Number.isFinite(p.idleDays) || p.idleDays < 0) {
+        return json(res, 400, { error: "bad_request", message: "idleDays must be a non-negative number" });
+      }
+      return relayCore(res, "POST", "/v1/sessions/tidy", JSON.stringify({ principalId: user, idleDays: p.idleDays }));
+    },
+  },
+  {
+    method: "POST",
     path: "/api/sessions/:id",
     handle: async (c) => {
       const { req, res, user } = c;

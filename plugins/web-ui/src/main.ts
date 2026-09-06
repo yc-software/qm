@@ -8,6 +8,7 @@ import {
   clearSessionSelection,
   closeOpenSessionMenu,
   closeSessionSelectionColor,
+  closeTidyMenu,
   renderList,
   sessionsState,
 } from "./sessions";
@@ -34,6 +35,7 @@ document.addEventListener("click", (e) => {
     renderList();
   }
   if (!target?.closest(".multi-select-color")) closeSessionSelectionColor();
+  if (!target?.closest(".tidy-menu")) closeTidyMenu();
   closeDeployMenu(target);
 });
 

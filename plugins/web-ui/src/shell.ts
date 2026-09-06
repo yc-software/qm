@@ -60,6 +60,7 @@ import {
   resetSessionsState,
   sessionTitle,
   sessionsState,
+  tidyControl,
   toggleWebOnly,
   sessionSelectionBar,
 } from "./sessions";
@@ -583,6 +584,7 @@ export function renderSidebarTop(): void {
             >
               ${icon(Search, 13)}
             </button>
+            ${tidyControl()}
             <button
               class="web-only-toggle ${sessionsState.webOnly ? "on" : ""}"
               type="button"

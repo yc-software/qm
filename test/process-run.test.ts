@@ -24,6 +24,9 @@ function fakeOrchestrator(handle: (input: OrchestratorInput) => Promise<TurnResu
     async regenerateTitle() {
       return null;
     },
+    async judgeConcluded() {
+      return { archived: [], judged: 0 };
+    },
   };
 }
 

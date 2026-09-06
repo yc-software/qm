@@ -46,6 +46,7 @@ export function createSessionMethods(
   | "authorizesCapabilityScope"
   | "updateSession"
   | "regenerateTitle"
+  | "tidySessions"
   | "spawnSession"
   | "discardSession"
   | "forkSession"
@@ -512,6 +513,26 @@ export function createSessionMethods(
       const parsed = parseScopeId(session.scopeId);
       const projectMembers = parsed.kind === "group" ? await deps.projects?.members(parsed.ref) : undefined;
       return deps.orchestrator.regenerateTitle(sessionId, principalId, projectMembers);
+    },
+
+    async tidySessions(principalId, { idleMs }) {
+      const cutoff = Date.now() - idleMs;
+      const candidates = (await this.listSessions(principalId))
+        .filter(
+          (s) =>
+            !s.archived &&
+            !s.pinned &&
+            !s.working &&
+            !s.awaitingInput &&
+            !s.crons &&
+            !s.watches &&
+            !s.backgroundJobs &&
+            (s.lastActivityAt ?? s.createdAt) <= cutoff,
+        )
+        .sort((a, b) => (a.lastActivityAt ?? a.createdAt) - (b.lastActivityAt ?? b.createdAt));
+      const { archived, judged } = await deps.orchestrator.judgeConcluded(principalId, candidates);
+      for (const id of archived) await deps.sessions.updateParticipantView(id, principalId, { archived: true });
+      return { archived, considered: judged };
     },
 
     async forkSession(sessionId, principalId, opts) {

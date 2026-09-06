@@ -269,6 +269,10 @@ export async function fetchEntry(sessionId: string, seq: number): Promise<Sessio
   return r.entry;
 }
 
+export async function tidySessions(idleDays: number): Promise<{ archived: string[]; considered: number }> {
+  return api(`/api/sessions/tidy`, { method: "POST", body: JSON.stringify({ idleDays }) });
+}
+
 export async function regenerateTitle(id: string): Promise<{ title: string | null }> {
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
