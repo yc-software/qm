@@ -21,9 +21,16 @@ export function attachmentKind(mimeType: string): string {
   return type === "image" ? `${label} image` : label;
 }
 
+const imageSrcCache = new WeakMap<Attachment, string | null>();
+
 function previewImageSrc(a: Attachment): string | null {
-  if (a.type === "image") return `data:${a.mimeType};base64,${a.preview ?? a.content}`;
-  return a.preview ? `data:image/png;base64,${a.preview}` : null;
+  const cached = imageSrcCache.get(a);
+  if (cached !== undefined) return cached;
+  let src: string | null = null;
+  if (a.type === "image") src = `data:${a.mimeType};base64,${a.preview ?? a.content}`;
+  else if (a.preview) src = `data:image/png;base64,${a.preview}`;
+  imageSrcCache.set(a, src);
+  return src;
 }
 
 function previewBody(a: Attachment, kind: string): TemplateResult {
