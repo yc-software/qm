@@ -8170,3 +8170,152 @@ h3.ambient-field-label {
     transform: none;
   }
 }
+
+.think-orb {
+  --orb: 16px;
+  --orb-ink: color-mix(in srgb, var(--foreground) 55%, transparent);
+  --orb-edge: color-mix(in srgb, var(--foreground) 92%, transparent);
+  --orb-glow: color-mix(in srgb, var(--brand-accent) 72%, var(--primary));
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--orb);
+  height: var(--orb);
+  perspective: calc(var(--orb) * 2.6);
+  transform-style: preserve-3d;
+}
+.think-orb-lg {
+  --orb: 28px;
+}
+.thinking-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.think-orb .orb-core,
+.think-orb .orb-ring,
+.think-orb .orb-ring::before,
+.think-orb .orb-ring::after {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border-radius: 50%;
+}
+.think-orb .orb-ring::before,
+.think-orb .orb-ring::after {
+  content: "";
+}
+.think-orb .orb-core {
+  inset: 31%;
+  background: radial-gradient(
+    circle at 36% 34%,
+    color-mix(in srgb, var(--brand-accent) 45%, white),
+    var(--orb-glow) 72%
+  );
+  filter: drop-shadow(0 0 calc(var(--orb) / 6) var(--orb-glow));
+  animation: awaiting-breathe 2.4s ease-in-out infinite;
+}
+.think-orb .orb-ring {
+  transform-style: preserve-3d;
+  will-change: transform;
+  rotate: var(--axis, 0 1 0) 0turn;
+  animation: orb-spin var(--period, 4s) linear infinite;
+}
+@keyframes orb-spin {
+  to {
+    rotate: var(--axis, 0 1 0) 1turn;
+  }
+}
+
+.think-orb[data-variant="gyro"] .orb-ring {
+  border: 1px solid var(--orb-ink);
+}
+.think-orb[data-variant="gyro"] .orb-ring::before {
+  border: 1px solid transparent;
+  border-top-color: var(--orb-edge);
+  border-right-color: var(--orb-edge);
+}
+.think-orb[data-variant="gyro"] .orb-ring:nth-child(2) {
+  --axis: 0 1 0;
+  --period: 3.3s;
+  transform: rotateX(66deg);
+}
+.think-orb[data-variant="gyro"] .orb-ring:nth-child(3) {
+  --axis: 1 0 0;
+  --period: 4.7s;
+  transform: rotateY(66deg);
+  animation-direction: reverse;
+}
+.think-orb[data-variant="gyro"] .orb-ring:nth-child(4) {
+  --axis: 1 1 0;
+  --period: 6.1s;
+  transform: rotateX(52deg) rotateY(-38deg);
+}
+
+.think-orb[data-variant="tesseract"] .orb-ring::before,
+.think-orb[data-variant="tesseract"] .orb-ring::after {
+  inset: calc(50% - var(--half));
+  border: 1px solid var(--orb-ink);
+  border-radius: 1px;
+  transform: translateZ(var(--half));
+}
+.think-orb[data-variant="tesseract"] .orb-ring::after {
+  transform: translateZ(calc(-1 * var(--half)));
+}
+.think-orb[data-variant="tesseract"] .orb-ring:nth-child(-n + 3) {
+  --half: calc(var(--orb) * 0.32);
+  --axis: 1 0.8 0.3;
+  --period: 7.4s;
+}
+.think-orb[data-variant="tesseract"] .orb-ring:nth-child(n + 4) {
+  --half: calc(var(--orb) * 0.16);
+  --axis: 0.4 1 -0.6;
+  --period: 4.6s;
+  animation-direction: reverse;
+}
+.think-orb[data-variant="tesseract"] .orb-ring:nth-child(n + 4)::before,
+.think-orb[data-variant="tesseract"] .orb-ring:nth-child(n + 4)::after {
+  border-color: var(--orb-edge);
+}
+.think-orb[data-variant="tesseract"] .orb-ring:nth-child(odd) {
+  transform: rotateY(90deg);
+}
+
+.think-orb[data-variant="orbit"] .orb-ring {
+  border: 1px solid color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+.think-orb[data-variant="orbit"] .orb-ring::before,
+.think-orb[data-variant="orbit"] .orb-ring::after {
+  --dot: calc(var(--orb) / 7);
+  inset: auto;
+  left: calc(50% - var(--dot) / 2);
+  top: calc(var(--dot) / -2);
+  width: var(--dot);
+  height: var(--dot);
+  background: var(--orb-edge);
+}
+.think-orb[data-variant="orbit"] .orb-ring::after {
+  top: auto;
+  bottom: calc(var(--dot) / -2);
+}
+.think-orb[data-variant="orbit"] .orb-ring:nth-child(2) {
+  --axis: 0 -0.94 0.34;
+  --period: 2.9s;
+  transform: rotateX(70deg);
+}
+.think-orb[data-variant="orbit"] .orb-ring:nth-child(3) {
+  --axis: 0.94 0 0.34;
+  --period: 3.9s;
+  transform: rotateY(70deg);
+  animation-direction: reverse;
+}
+.think-orb[data-variant="orbit"] .orb-ring:nth-child(4) {
+  --axis: -0.57 0.67 0.47;
+  --period: 5.3s;
+  transform: rotateX(-55deg) rotateY(-35deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .think-orb .orb-ring {
+    animation: none;
+  }
+}

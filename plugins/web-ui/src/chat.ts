@@ -1580,7 +1580,7 @@ export function createChatSurface(
   }
 
   function typingRow(): TemplateResult {
-    return html`<div class="thinking-placeholder">${sheenLabel("Thinking", true)}</div>`;
+    return html`<div class="thinking-placeholder">${thinkingOrb("lg")}${sheenLabel("Thinking", true)}</div>`;
   }
 
   function syncWorkTicker(): void {
@@ -1895,7 +1895,7 @@ export function createChatSurface(
           title=${title}
           @click=${toggleLiveWorkExpanded}
         >
-          ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
+          ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : thinkingOrb("sm")}
           <span class="live-work-label"
             >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
           >
@@ -1986,7 +1986,9 @@ export function createChatSurface(
   function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
     if (work.status === "thinking" && !work.activity.length) {
       return html`<div class="work work-thinking">
-        <div class="work-head">${sheenLabel(workLabel(work), isStreaming)}</div>
+        <div class="work-head">
+          ${isStreaming ? thinkingOrb("sm") : nothing}${sheenLabel(workLabel(work), isStreaming)}
+        </div>
       </div>`;
     }
     const timeline = buildTimeline(work);
@@ -1997,7 +1999,9 @@ export function createChatSurface(
       ${rows}`;
     if (isStreaming || work.status === "working" || work.status === "thinking") {
       return html`<div class="work work-working">
-        <div class="work-head">${sheenLabel(workLabel(work), isStreaming)}</div>
+        <div class="work-head">
+          ${isStreaming ? thinkingOrb("sm") : nothing}${sheenLabel(workLabel(work), isStreaming)}
+        </div>
         ${body}
       </div>`;
     }
@@ -2091,6 +2095,21 @@ export function createChatSurface(
     return html`<div class="approval-card inline-approval-marker">
       <div class="approval-text">${approvalSummaryView(a)}</div>
     </div>`;
+  }
+
+  const orbVariants = ["gyro", "tesseract", "orbit"] as const;
+
+  function orbVariantFor(key: string): (typeof orbVariants)[number] {
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+    return orbVariants[Math.abs(hash) % orbVariants.length];
+  }
+
+  function thinkingOrb(size: "sm" | "lg", variant = orbVariantFor(chatState.threadRef ?? "")): TemplateResult {
+    const rings = variant === "tesseract" ? 4 : 3;
+    return html`<span class="think-orb think-orb-${size}" data-variant=${variant} aria-hidden="true"
+      ><span class="orb-core"></span>${Array.from({ length: rings }, () => html`<span class="orb-ring"></span>`)}</span
+    >`;
   }
 
   function sheenLabel(label: string, active: boolean): TemplateResult {
