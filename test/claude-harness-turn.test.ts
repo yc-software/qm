@@ -144,6 +144,88 @@ test("a steered turn persists every reply, not only the last result's", async ()
   assert.deepEqual(userTexts, ["what is the capital of france?", "now do the other three"]);
 });
 
+function lifecycle(commandUuid: unknown, state: string): FakeSdkMessage {
+  return { type: "command_lifecycle", command_uuid: commandUuid, state };
+}
+
+test(
+  "a steer folded into the running turn ends the turn on the SDK's lifecycle signal, not a second result",
+  { timeout: 5_000 },
+  async () => {
+    const signals = createMemoryRunSignalStore();
+    const runId = "run-steer-folded";
+    currentScript = async function* (prompts) {
+      const iterator = prompts[Symbol.asyncIterator]();
+      const initial = (await iterator.next()).value as { uuid: string };
+      yield { type: "system", subtype: "init", capabilities: ["interrupt_receipt_v1", "msg_lifecycle_v1"] };
+      yield lifecycle(initial.uuid, "queued");
+      yield lifecycle(initial.uuid, "started");
+      await signals.send(runId, { kind: "steer", text: "also include the word STEERED", ts: "123.456" });
+      const steer = (await iterator.next()).value as { uuid: string };
+      yield lifecycle(steer.uuid, "queued");
+      yield lifecycle(steer.uuid, "started");
+      yield assistantMessage("msg_A", "DONE1 STEERED", {
+        input_tokens: 3,
+        output_tokens: 8,
+        cache_read_input_tokens: 50,
+        cache_creation_input_tokens: 0,
+      });
+      yield lifecycle(steer.uuid, "completed");
+      yield resultMessage("DONE1 STEERED", { num_turns: 2 });
+      yield lifecycle(initial.uuid, "completed");
+      assert.equal(
+        (await iterator.next()).done,
+        true,
+        "the harness closes its prompt queue once every command settled",
+      );
+    };
+
+    const harness = createClaudeHarness({ signals });
+    const { turn, entries } = harnessTurn({ runId });
+    const result = await harness.turns.runTurn(turn);
+
+    assert.equal(result.reply, "DONE1 STEERED");
+    const userTexts = entries
+      .filter((entry) => entry.type === "user")
+      .map((entry) => (entry.payload as { text: string }).text);
+    assert.deepEqual(userTexts, ["what is the capital of france?", "also include the word STEERED"]);
+  },
+);
+
+test(
+  "a steer that arrives after the model's last reply gets its own turn, and the turn waits for it",
+  { timeout: 5_000 },
+  async () => {
+    const signals = createMemoryRunSignalStore();
+    const runId = "run-steer-queued";
+    currentScript = async function* (prompts) {
+      const iterator = prompts[Symbol.asyncIterator]();
+      const initial = (await iterator.next()).value as { uuid: string };
+      yield { type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] };
+      yield lifecycle(initial.uuid, "started");
+      await signals.send(runId, { kind: "steer", text: "now say STEERED", ts: "123.457" });
+      const steer = (await iterator.next()).value as { uuid: string };
+      yield lifecycle(steer.uuid, "queued");
+      yield resultMessage("The capital of France is Paris.");
+      yield lifecycle(initial.uuid, "completed");
+      yield lifecycle(steer.uuid, "started");
+      yield resultMessage("STEERED", { num_turns: 1 });
+      yield lifecycle(steer.uuid, "completed");
+      assert.equal((await iterator.next()).done, true);
+    };
+
+    const harness = createClaudeHarness({ signals });
+    const { turn, entries } = harnessTurn({ runId });
+    const result = await harness.turns.runTurn(turn);
+
+    assert.equal(result.reply, "STEERED");
+    const assistantTexts = entries
+      .filter((entry) => entry.type === "assistant")
+      .map((entry) => (entry.payload as { text: string }).text);
+    assert.deepEqual(assistantTexts, ["The capital of France is Paris.", "STEERED"]);
+  },
+);
+
 test("model calls are counted per API response and charged their real input tokens", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
