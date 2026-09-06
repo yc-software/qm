@@ -315,7 +315,15 @@ test("custom providers materialize into the opencode config (enabled + provider 
           name: "LiteLLM",
           protocol: "openai" as const,
           baseUrl: "http://litellm.internal:4000/v1",
-          models: [{ id: "deepseek-chat", name: "DeepSeek", contextWindow: 128000, maxTokens: 8192 }],
+          models: [
+            {
+              id: "deepseek-chat",
+              name: "DeepSeek",
+              contextWindow: 128000,
+              maxTokens: 8192,
+              modalities: ["text", "image"],
+            },
+          ],
         },
         apiKey: "sk-lite",
       },
@@ -331,7 +339,11 @@ test("custom providers materialize into the opencode config (enabled + provider 
     assert.equal(litellm.npm, "@ai-sdk/openai-compatible");
     assert.equal(litellm.options.baseURL, "http://litellm.internal:4000/v1");
     assert.equal(litellm.options.apiKey, "sk-lite");
-    assert.deepEqual(litellm.models["deepseek-chat"], { name: "DeepSeek", limit: { context: 128000, output: 8192 } });
+    assert.deepEqual(litellm.models["deepseek-chat"], {
+      name: "DeepSeek",
+      modalities: { input: ["text", "image"], output: ["text"] },
+      limit: { context: 128000, output: 8192 },
+    });
   } finally {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });

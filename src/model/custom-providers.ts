@@ -23,6 +23,7 @@ interface CustomModelSpec {
   name?: string;
   contextWindow?: number;
   maxTokens?: number;
+  modalities?: ("text" | "image")[];
   /** USD per million input tokens. Defaults to 0 (unknown / not metered). */
   input?: number;
   /** USD per million output tokens. Defaults to 0. */
@@ -63,6 +64,9 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
       throw new Error(`model "${m.id}": name must be a string of 200 chars or fewer`);
     if (seen.has(m.id)) throw new Error(`duplicate model id "${m.id}"`);
     seen.add(m.id);
+    if (m.modalities !== undefined && !isCustomModelInputModalities(m.modalities)) {
+      throw new Error(`model "${m.id}": modalities must contain text and optional image exactly once`);
+    }
     for (const [field, v] of [
       ["contextWindow", m.contextWindow],
       ["maxTokens", m.maxTokens],
@@ -97,6 +101,23 @@ export interface CustomRuntimeModel {
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
+function isCustomModelInputModalities(value: unknown): value is ("text" | "image")[] {
+  return (
+    Array.isArray(value) &&
+    value.includes("text") &&
+    new Set(value).size === value.length &&
+    value.every((modality) => modality === "text" || modality === "image")
+  );
+}
+
+export function customModelInputModalities(model: { modalities?: unknown }): ("text" | "image")[] {
+  const value =
+    model.modalities && typeof model.modalities === "object" && !Array.isArray(model.modalities)
+      ? (model.modalities as { input?: unknown }).input
+      : model.modalities;
+  return isCustomModelInputModalities(value) ? [...value] : ["text"];
+}
+
 function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): CustomRuntimeModel {
   return {
     id: m.id,
@@ -105,7 +126,7 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     api: provider.protocol === "anthropic" ? "anthropic-messages" : "openai-completions",
     baseUrl: provider.baseUrl,
     reasoning: false,
-    input: ["text"],
+    input: customModelInputModalities(m),
     cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: m.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: m.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -173,6 +194,7 @@ export function customModelsJson(): { providers: Record<string, unknown> } | und
             name: m.name ?? m.id,
             contextWindow: m.contextWindow ?? 128_000,
             maxTokens: m.maxTokens ?? 8_192,
+            input: customModelInputModalities(m),
             cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
           })),
         },

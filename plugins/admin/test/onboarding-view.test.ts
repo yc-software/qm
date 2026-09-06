@@ -28,6 +28,15 @@ function resolveView(pathname: string, search: string): string {
   return vm.runInContext(src, context);
 }
 
+function customModelFields(): {
+  parseCustomModels(text: string): unknown[];
+  formatCustomModels(models: unknown[]): string;
+} {
+  const source = slice("function parseCustomModels(text) {", "async function loadCustomProviders()");
+  const context = vm.createContext({});
+  return vm.runInContext(`${source}; ({ parseCustomModels, formatCustomModels })`, context);
+}
+
 interface FakeElement {
   textContent: string;
   className: string;
@@ -134,4 +143,24 @@ test("?view=onboarding resolves to the onboarding view", () => {
 
 test("unknown views still fall back to the default view", () => {
   assert.equal(resolveView("/admin/no-such-view", ""), "history");
+});
+
+test("custom model fields preserve optional positions, modalities, and pricing", () => {
+  const { parseCustomModels, formatCustomModels } = customModelFields();
+  const models = [
+    {
+      id: "vision-model",
+      contextWindow: 128000,
+      maxTokens: 8192,
+      modalities: ["text", "image"],
+      input: 1.25,
+      output: 4.5,
+    },
+  ];
+  const formatted = formatCustomModels(models);
+  assert.equal(formatted, "vision-model |  | 128000 | 8192 | text,image | 1.25 | 4.5");
+  assert.deepEqual(JSON.parse(JSON.stringify(parseCustomModels(formatted))), models);
+  assert.deepEqual(JSON.parse(JSON.stringify(parseCustomModels("legacy | Legacy | 64000 | 4096"))), [
+    { id: "legacy", name: "Legacy", contextWindow: 64000, maxTokens: 4096 },
+  ]);
 });
