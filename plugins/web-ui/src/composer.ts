@@ -53,6 +53,7 @@ import type { ComposerSurface, ConvCtx } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
+import { attachmentPreview, dismissPreviewOnEscape, restorePreview } from "./attachment-preview";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 
 export type ComposerMenu = "effort" | "harness" | "model" | "settings";
@@ -502,7 +503,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                 <div class="attachment-strip">
                   ${composerState.attachments.map(
                     (a) => html`
-                      <span class="file-chip">
+                      <span
+                        class="file-chip"
+                        @keydown=${dismissPreviewOnEscape}
+                        @pointerleave=${restorePreview}
+                        @focusout=${restorePreview}
+                      >
                         ${
                           pastedTextIds.has(a.id)
                             ? html`
@@ -526,6 +532,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                         >
                           ${icon(X, 13)}
                         </button>
+                        ${attachmentPreview(a)}
                       </span>
                     `,
                   )}

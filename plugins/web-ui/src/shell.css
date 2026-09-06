@@ -8045,3 +8045,111 @@ h3.ambient-field-label {
   border: 0;
   background: white;
 }
+
+.attachment-strip .file-chip {
+  position: relative;
+}
+.attachment-preview {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 300px;
+  max-width: calc(100vw - 36px);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: default;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--foreground) 8%, transparent),
+    0 8px 18px color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 22px 55px color-mix(in srgb, var(--foreground) 14%, transparent);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px) scale(0.98);
+  transform-origin: bottom left;
+  transition:
+    opacity 0.14s cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 0.14s;
+}
+.attachment-preview::after {
+  content: "";
+  position: absolute;
+  inset: 100% 0 -8px;
+}
+.file-chip:hover .attachment-preview,
+.file-chip:focus-within .attachment-preview {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0.25s;
+}
+.file-chip.preview-dismissed .attachment-preview {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px) scale(0.98);
+  transition-delay: 0s;
+}
+.attachment-preview-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+.attachment-preview-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.attachment-preview-meta {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.attachment-preview-image {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--secondary) 76%, var(--background));
+}
+.attachment-preview-text {
+  max-height: 160px;
+  overflow: hidden;
+  margin: 0 0 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--secondary) 76%, var(--background));
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.attachment-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--secondary) 76%, var(--background));
+  color: var(--muted-foreground);
+}
+@media (prefers-reduced-motion: reduce) {
+  .attachment-preview {
+    transition-duration: 0s;
+    transform: none;
+  }
+}
