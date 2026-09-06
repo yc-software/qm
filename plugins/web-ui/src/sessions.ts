@@ -355,6 +355,27 @@ export function renderList(): void {
     requestAnimationFrame(() => placeSessionMenu(appState.listEl?.querySelector(".session-menu-popover") ?? undefined));
   }
   notifySessionsChanged();
+  placeActiveIndicator();
+}
+
+function placeActiveIndicator(): void {
+  requestAnimationFrame(() => {
+    const el = appState.listEl;
+    if (!el) return;
+    const row = [...el.querySelectorAll<HTMLElement>(".session-row.active")].find((r) => !r.closest("[hidden]"));
+    if (!row) {
+      el.style.setProperty("--active-on", "0");
+      return;
+    }
+    const rect = row.getBoundingClientRect();
+    el.style.setProperty("--active-y", `${rect.top - el.getBoundingClientRect().top + el.scrollTop}px`);
+    el.style.setProperty("--active-h", `${rect.height}px`);
+    const color = row.style.getPropertyValue("--session-color").trim();
+    if (color) el.style.setProperty("--active-color", color);
+    else el.style.removeProperty("--active-color");
+    if (el.style.getPropertyValue("--active-on") === "1") return;
+    requestAnimationFrame(() => el.style.setProperty("--active-on", "1"));
+  });
 }
 
 function projectsSection(sessions: readonly CoreSession[]): TemplateResult | typeof nothing {

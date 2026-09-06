@@ -347,6 +347,7 @@ a.chat-row-open {
 }
 
 .sidebar .list {
+  position: relative;
   flex: 1;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -8317,5 +8318,27 @@ h3.ambient-field-label {
 @media (prefers-reduced-motion: reduce) {
   .think-orb .orb-ring {
     animation: none;
+  }
+}
+
+.sidebar .list::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 2px;
+  width: 2px;
+  height: var(--active-h, 0px);
+  border-radius: 1px;
+  background: var(--active-color, color-mix(in srgb, var(--foreground) 70%, transparent));
+  transform: translateY(var(--active-y, 0px));
+  opacity: var(--active-on, 0);
+  pointer-events: none;
+  transition:
+    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 160ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar .list::before {
+    transition: opacity 160ms ease;
   }
 }
