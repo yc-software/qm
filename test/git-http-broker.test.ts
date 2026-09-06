@@ -148,6 +148,54 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
   });
 });
 
+test("git HTTP broker sends a raw token as Basic, not Bearer", async () => {
+  let seen: { headers: Record<string, string> } | undefined;
+  const deps: ServerDeps = {
+    control: {} as ServerDeps["control"],
+    serviceCreds: {
+      getServiceCredentialSecret: async () => ({
+        slug: "gitlab",
+        name: "GitLab git",
+        secret: "ghp_rawtoken",
+        host: "gitlab.example",
+        allowedMethods: ["GET", "POST"],
+        allowedPathPrefixes: ["/acme/repo.git"],
+        enabled: true,
+      }),
+    } as unknown as ServerDeps["serviceCreds"],
+    gitHttpFetch: async (url, init) => {
+      seen = { headers: init.headers };
+      return {
+        status: 200,
+        headers: { "content-type": "application/x-git-upload-pack-advertisement" },
+        body: Readable.from(["0000"]),
+      };
+    },
+  };
+  const c = await ctx("/v1/credentials/git/gitlab/acme/repo.git/info/refs?service=git-upload-pack", "GET", deps);
+  c.req.headers["x-agent-capability"] = await mintCapabilityToken(
+    {
+      actorId: "B-LEGACY",
+      scopeId: "channel:C1",
+      aud: CREDENTIAL_BROKER_AUD,
+      credentials: ["gitlab"],
+      botActor: true,
+      liveActor: true,
+      members: [{ id: "B-LEGACY", type: "internal" }],
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    SECRET,
+  );
+  c.app.authorizesCapabilityScope = async () => true;
+  await brokerGitHttp(c);
+
+  assert.equal(c.res.statusCode, 200);
+  assert.equal(
+    seen?.headers.Authorization,
+    `Basic ${Buffer.from("x-access-token:ghp_rawtoken", "utf8").toString("base64")}`,
+  );
+});
+
 test("git HTTP broker rejects the wrong audience before contacting upstream", async () => {
   const deps: ServerDeps = {
     control: {} as ServerDeps["control"],

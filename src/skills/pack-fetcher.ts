@@ -6,6 +6,7 @@ import { join, relative, sep } from "node:path";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { errMessage } from "../util/errors.ts";
+import { gitAuthHeader } from "../util/auth-header.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";
 import { isProbablyBinary } from "./seed.ts";
 import type { FetchedRepo, RepoFile } from "./ingest.ts";
@@ -129,14 +130,16 @@ export async function resolvePackAuth(
     ) {
       throw new Error(`skill pack credential is not authorized for ${repo.pathname}`);
     }
-    const header = credential.injection?.header?.trim() || "Authorization";
-    const scheme = credential.injection?.scheme ?? "Bearer ";
-    return { header, value: `${scheme}${credential.secret}`, secret: credential.secret };
+    const [header, value] = gitAuthHeader(credential.injection, credential.secret, credential.host);
+    return { header, value, secret: credential.secret };
   }
   const host = connectorHostFor(pack.url);
   if (host) {
     const token = await sources.connectorToken(host, pack.createdBy);
-    if (token) return { header: "Authorization", value: `Bearer ${token}`, secret: token };
+    if (token) {
+      const [tokenHeader, tokenValue] = gitAuthHeader(undefined, token, host);
+      return { header: tokenHeader, value: tokenValue, secret: token };
+    }
   }
   return undefined;
 }

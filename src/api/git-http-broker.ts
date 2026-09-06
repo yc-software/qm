@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 import { CREDENTIAL_BROKER_AUD, verifyCapabilityToken, type CapabilityClaims } from "../auth/capability-token.ts";
 import { scopeId as makeScopeId } from "../types.ts";
 import { type DecryptedServiceCredential, isValidCredentialSlug } from "../credentials/keychain.ts";
-import { brokerCredentialAuthHeader, brokerPathAllowed } from "./credential-broker.ts";
+import { brokerPathAllowed, gitCredentialAuthHeader } from "./credential-broker.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { headerValue, pipeToResponse, sendJson } from "./http.ts";
 import type { BaseCtx } from "./routes/route.ts";
@@ -200,7 +200,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   }
 
   const headers = callerHeaders(ctx);
-  const [authHeader, authValue] = brokerCredentialAuthHeader(rec);
+  const [authHeader, authValue] = gitCredentialAuthHeader(rec);
   headers[authHeader] = authValue;
 
   let upstreamResp: GitHttpFetchResponse;
