@@ -189,6 +189,7 @@ function derivedValues(
           memory: service!.memory,
           architecture: awsWorkloadArchitecture(config, name),
           internal_port: isServiceName(name) ? serviceDef(name).docker.internalPort : 8080,
+          ...(service!.publicPaths ? { public_paths: service!.publicPaths } : {}),
           ...(service!.taskRoleArn ? { task_role_arn: service!.taskRoleArn } : {}),
           ...(service!.executionRoleArn ? { execution_role_arn: service!.executionRoleArn } : {}),
           ...(service!.assumeRoleArns !== undefined ? { assume_role_arns: service!.assumeRoleArns } : {}),
@@ -280,17 +281,26 @@ function declaredInDir(configDir: string): string[] | undefined {
 }
 
 export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDir: string): void {
-  if (!Object.values(config.aws?.services ?? {}).some((service) => service?.assumeRoleArns !== undefined)) return;
+  const services = Object.values(config.aws?.services ?? {});
+  const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
+  const hasAssumeRoles = services.some((service) => service?.assumeRoleArns !== undefined);
+  if (!hasPublicPaths && !hasAssumeRoles) return;
   const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(tfvarsPath)) return;
   const variablesPath = join(configDir, "infra", "variables.tf");
   const mainPath = join(configDir, "infra", "main.tf");
   const variables = existsSync(variablesPath) ? readFileSync(variablesPath, "utf8") : "";
   const main = existsSync(mainPath) ? readFileSync(mainPath, "utf8") : "";
+  if (hasPublicPaths && (!/public_paths\s*=\s*optional/.test(variables) || !/public_path_services\s*=/.test(main))) {
+    throw new CliError(
+      "the vendored AWS scaffold predates aws.services.*.publicPaths; update infra/variables.tf and infra/main.tf before exposing plugins",
+    );
+  }
   if (
-    !/assume_role_arns\s*=\s*optional/.test(variables) ||
-    !/manage_task_role\s*=\s*optional/.test(variables) ||
-    !/qm_scaffold_version\s*=\s*3\b/.test(main)
+    hasAssumeRoles &&
+    (!/assume_role_arns\s*=\s*optional/.test(variables) ||
+      !/manage_task_role\s*=\s*optional/.test(variables) ||
+      !/qm_scaffold_version\s*=\s*3\b/.test(main))
   ) {
     throw new CliError(
       "the vendored AWS scaffold predates aws.services.*.assumeRoleArns; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",

@@ -1,7 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
-  "ignore": ["deploy/layers/**"],
   "ignoreBinaries": ["tail", "cloudflared"],
   "ignoreDependencies": ["opencode-ai"],
   "ignoreIssues": {
@@ -14,7 +13,6 @@
       "entry": [
         "src/migrate-main.ts",
         "src/sandbox/local-sandbox.ts",
-        ".scenarios/coworker-comms/bash/_status.mjs",
         "scripts/aws-deploy-smoke.ts",
         "scripts/aws-litestream-smoke.ts",
         "scripts/backfill-search-index.ts",
@@ -36,7 +34,9 @@
         "scripts/slack-user-token.ts"
       ]
     },
-    "cli": {},
+    "cli": {
+      "entry": ["bin/qm.ts"]
+    },
     "plugins/*": {},
     "plugins/web-ui": {
       "entry": [

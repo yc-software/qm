@@ -168,3 +168,17 @@ The destination host, HTTP methods, and paths remain constrained by the credenti
 record. If its injection configuration enables actor attestation, the broker sets
 `x-qm-actor` from the stored publisher. Caller-supplied actor headers are rejected.
 The destination receives the configured credential, never the deployment token.
+
+### Public AWS plugin routes
+
+Plugins stay private by default. An AWS plugin workload can declare
+`publicPaths: ["/hooks/*"]` under `aws.services.hooks` to expose its own
+namespace. Each of the one to five unique patterns must start with the plugin
+name and end in `/*`; broader catch-all paths and paths outside that namespace
+are rejected. The plugin must authenticate its requests.
+
+The AWS scaffold renders these paths before core host rules and portal catch-all
+rules. Deployment preflight verifies the exact paths, target-group attachments
+and listener precedence, including native blue/green weighted routing. Update
+vendored Terraform with the `public_paths` service attribute and
+`public_path_services` routing before enabling this setting.

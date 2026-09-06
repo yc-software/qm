@@ -74,6 +74,7 @@ export interface AwsServiceConfig {
   buildArgs?: Record<string, string>;
   dockerfile?: string;
   targetGroup?: string;
+  publicPaths?: string[];
   logGroup?: string;
   stopTimeout?: number;
 }
@@ -1225,6 +1226,30 @@ function validateAws(
     }
     for (const role of ["taskRoleArn", "executionRoleArn"] as const) {
       if (value[role] !== undefined) service[role] = roleArn(value[role], `services.${name}.${role}`);
+    }
+    if (value["publicPaths"] !== undefined) {
+      const paths = validateStringArray(value["publicPaths"], path, `aws.services.${name}.publicPaths`);
+      if (
+        isServiceName(name) ||
+        ["v1", "d", "key", "models", "slack", "api", "assets", "oauth", "healthz", "readyz", "metrics"].includes(
+          name,
+        ) ||
+        paths.length === 0 ||
+        paths.length > 5 ||
+        new Set(paths).size !== paths.length
+      ) {
+        throw new CliError(`${path}: aws.services.${name}.publicPaths requires 1–5 unique plugin path prefixes`);
+      }
+      for (const prefix of paths) {
+        if (
+          prefix.length > 128 ||
+          !prefix.startsWith(`/${name}/`) ||
+          !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/\*$/.test(prefix)
+        ) {
+          throw new CliError(`${path}: aws.services.${name}.publicPaths must use /${name}/ paths ending in /*`);
+        }
+      }
+      service.publicPaths = paths;
     }
     if (value["assumeRoleArns"] !== undefined) {
       const arns = validateStringArray(value["assumeRoleArns"], path, `aws.services.${name}.assumeRoleArns`);

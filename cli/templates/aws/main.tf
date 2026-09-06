@@ -5,9 +5,10 @@ locals {
   subnet_ids              = values(aws_subnet.public)[*].id
   vpc_id                  = aws_vpc.this.id
   has_portal              = contains(keys(var.services), "portal")
-  public_service_names    = local.has_portal ? concat(["portal"], length(var.core_public_hosts) > 0 ? ["core"] : []) : ["core"]
+  public_path_services    = { for name, service in var.services : name => service.public_paths if length(service.public_paths) > 0 }
+  public_service_names    = concat(local.has_portal ? concat(["portal"], length(var.core_public_hosts) > 0 ? ["core"] : []) : ["core"], keys(local.public_path_services))
   ingress_services        = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
-  direct_path_services    = local.has_portal ? {} : { core = ["/v1/*"] }
+  direct_path_services    = merge(local.has_portal ? {} : { core = ["/v1/*"] }, local.public_path_services)
   alb_name                = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
   service_security_groups = [aws_security_group.services.id]
   default_task_role_arn   = aws_iam_role.task.arn
@@ -876,7 +877,7 @@ resource "aws_cloudfront_distribution" "portal" {
 resource "aws_lb_listener_rule" "production" {
   for_each     = local.ingress_services
   listener_arn = aws_lb_listener.public.arn
-  priority     = 10 + index(sort(keys(var.services)), each.key)
+  priority     = contains(keys(local.public_path_services), each.key) ? 1 + index(sort(keys(local.public_path_services)), each.key) : (length(local.public_path_services) > 0 ? 1000 : 10) + index(sort(keys(var.services)), each.key)
   lifecycle {
     ignore_changes = [action]
   }
@@ -894,7 +895,7 @@ resource "aws_lb_listener_rule" "production" {
     }
   }
   dynamic "condition" {
-    for_each = each.key == "portal" || !local.has_portal ? [1] : []
+    for_each = each.key == "portal" || contains(keys(local.direct_path_services), each.key) ? [1] : []
     content {
       path_pattern { values = each.key == "portal" ? ["/*"] : local.direct_path_services[each.key] }
     }

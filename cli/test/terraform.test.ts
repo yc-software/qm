@@ -523,9 +523,12 @@ test("terraform owns secret containers but never creates operator-secret placeho
 test("AWS module keeps human routes on portal and preserves CLI-owned ECS state", () => {
   assert.match(
     mainTf,
-    /public_service_names\s*= local\.has_portal \? concat\(\["portal"\], length\(var\.core_public_hosts\) > 0 \? \["core"\] : \[\]\) : \["core"\]/,
+    /public_service_names\s*= concat\(local\.has_portal \? concat\(\["portal"\], length\(var\.core_public_hosts\) > 0 \? \["core"\] : \[\]\) : \["core"\], keys\(local\.public_path_services\)\)/,
   );
-  assert.match(mainTf, /direct_path_services\s*= local\.has_portal \? \{\} : \{ core = \["\/v1\/\*"\] \}/);
+  assert.match(
+    mainTf,
+    /direct_path_services\s*= merge\(local\.has_portal \? \{\} : \{ core = \["\/v1\/\*"\] \}, local\.public_path_services\)/,
+  );
   const listener = mainTf.match(/resource "aws_lb_listener" "public" \{([\s\S]*?)\n\}/)?.[1] ?? "";
   assert.match(listener, /type\s*= "fixed-response"[\s\S]*status_code\s*= "404"/);
   assert.match(mainTf, /resource "aws_lb_listener_rule" "production"/);

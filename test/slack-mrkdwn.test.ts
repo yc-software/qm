@@ -175,7 +175,7 @@ test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
     new Map([
       ["ankit", "U111"],
       ["alex", "U222"],
-      ["regan bell", "U222"],
+      ["alex morgan", "U222"],
       ["ren", "U888"],
       ["renée", "U999"],
     ]),
@@ -183,7 +183,7 @@ test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
   try {
     assert.equal(toSlackMrkdwn("thanks @ankit!"), "thanks <@U111>!");
     assert.equal(toSlackMrkdwn("@Alex Morgan said so"), "<@U222> said so");
-    assert.equal(toSlackMrkdwn("cc @regan can you look"), "cc <@U222> can you look");
+    assert.equal(toSlackMrkdwn("cc @alex can you look"), "cc <@U222> can you look");
     assert.equal(toSlackMrkdwn("ping @unknown-person"), "ping @unknown-person");
     assert.equal(toSlackMrkdwn("email me a@ankit.com"), "email me a@ankit.com");
     assert.equal(toSlackMrkdwn("`@ankit` and ```\n@ankit\n```"), "`@ankit` and ```\n@ankit\n```");

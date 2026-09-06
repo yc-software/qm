@@ -137,6 +137,7 @@ variable "services" {
     execution_role_arn = optional(string)
     assume_role_arns   = optional(set(string))
     manage_task_role   = optional(bool, false)
+    public_paths       = optional(list(string), [])
   }))
 }
 variable "secret_names" { type = set(string) }

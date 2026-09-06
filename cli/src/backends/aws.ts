@@ -2910,7 +2910,7 @@ function awsCoreHostnames(config: QmConfig): string[] {
   return [...new Set(hosts)];
 }
 
-function assertAwsPublicRouting(
+export function assertAwsPublicRouting(
   config: QmConfig,
   ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
 ): ReadonlyMap<string, string> {
@@ -2924,6 +2924,12 @@ function assertAwsPublicRouting(
   const coreHosts = hasPortal ? awsCoreHostnames(config) : [];
   let ingress = ["core"];
   if (hasPortal) ingress = coreHosts.length ? ["portal", "core"] : ["portal"];
+  const publicPaths = new Map(
+    Object.entries(aws.services).flatMap(([name, service]) =>
+      service?.publicPaths?.length ? [[name, service.publicPaths] as const] : [],
+    ),
+  );
+  ingress.push(...publicPaths.keys());
   const { loadBalancerArn, listener } = awsPublicFrontDoor(config);
   const targetGroups =
     awsJson<{ TargetGroups?: Array<{ TargetGroupArn?: string; TargetGroupName?: string }> }>(aws, [
@@ -3007,6 +3013,7 @@ function assertAwsPublicRouting(
     awsJson<{
       Rules?: Array<{
         RuleArn?: string;
+        Priority?: string;
         IsDefault?: boolean;
         Actions?: Array<{
           Type?: string;
@@ -3021,7 +3028,44 @@ function assertAwsPublicRouting(
         }>;
       }>;
     }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
-  const nonDefault = rules.filter((rule) => !rule.IsDefault);
+  let nonDefault = rules.filter((rule) => !rule.IsDefault);
+  const pluginRules = new Set<(typeof nonDefault)[number]>();
+  for (const [name, paths] of publicPaths) {
+    const matches = nonDefault.filter((rule) =>
+      alternateTargets.size
+        ? rule.RuleArn === productionRules.get(name)
+        : rule.Actions?.length === 1 &&
+          rule.Actions[0]?.Type === "forward" &&
+          rule.Actions[0]?.TargetGroupArn === targets.get(name),
+    );
+    const rule = matches[0];
+    const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
+    const actual =
+      condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
+    if (
+      matches.length !== 1 ||
+      !rule ||
+      actual.length !== paths.length ||
+      paths.some((path) => !actual.includes(path))
+    ) {
+      throw new Error(`public plugin ${name} must route exactly its declared publicPaths`);
+    }
+    pluginRules.add(rule);
+  }
+  for (const rule of pluginRules) {
+    const priority = Number(rule.Priority);
+    if (
+      !Number.isInteger(priority) ||
+      priority < 1 ||
+      nonDefault.some(
+        (other) =>
+          !pluginRules.has(other) && (!Number.isInteger(Number(other.Priority)) || priority >= Number(other.Priority)),
+      )
+    ) {
+      throw new Error("public plugin routes must precede core and portal routes");
+    }
+  }
+
   if (alternateTargets.size) {
     if (nonDefault.length !== ingress.length) {
       throw new Error("blue/green ALB has unexpected non-default rules");
@@ -3049,7 +3093,8 @@ function assertAwsPublicRouting(
       const hostValues =
         condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
       let expectedPaths: string[];
-      if (name === "portal") expectedPaths = ["/*"];
+      if (publicPaths.has(name)) expectedPaths = publicPaths.get(name)!;
+      else if (name === "portal") expectedPaths = ["/*"];
       else if (hasPortal) expectedPaths = [];
       else expectedPaths = ["/v1/*"];
       const expectedHosts = name === "core" && hasPortal ? coreHosts : [];
@@ -3065,6 +3110,7 @@ function assertAwsPublicRouting(
     }
     return targets;
   }
+  nonDefault = nonDefault.filter((rule) => !pluginRules.has(rule));
   if (hasPortal && !coreHosts.length && nonDefault.length)
     throw new Error("portal mode must not expose non-default ALB rules");
   if (hasPortal && coreHosts.length) {

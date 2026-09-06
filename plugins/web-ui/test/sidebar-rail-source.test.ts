@@ -4,6 +4,10 @@ import test from "node:test";
 
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
+const mobileButton = css.indexOf("\n.mobile-menu-btn {");
+assert.ok(mobileButton >= 0, "the mobile menu button has a desktop visibility rule");
+const mobileShell = css.indexOf("@media (max-width: 860px) {", mobileButton);
+assert.ok(mobileShell > mobileButton, "the phone shell media query follows the mobile menu button rule");
 
 test("collapsed sidebar is an in-flow rail, not a floating button", () => {
   assert.doesNotMatch(shell, /sidebar-peek-toggle/);
@@ -22,7 +26,7 @@ test("hidden sidebar innards are out of the focus order and keep their layout wh
     /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\):not\(#sidebar-footer\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;\s*\}/,
   );
 
-  assert.doesNotMatch(css.slice(0, css.indexOf("Mobile shell")), /transition:[^;}]*visibility/);
+  assert.doesNotMatch(css.slice(0, mobileShell), /transition:[^;}]*visibility/);
   assert.doesNotMatch(shell, /sidebar\.inert/);
 });
 
@@ -53,7 +57,7 @@ test("the collapse toggle's tooltip is pushed in step with the aria-label it mir
 });
 
 test("phone viewports swap the rail for a slide-over drawer with one floating menu button", () => {
-  const mobile = css.slice(css.indexOf("Mobile shell"));
+  const mobile = css.slice(mobileShell);
 
   assert.match(mobile, /\.layout\.sidebar-closed \.sidebar \{\s*transform: translateX\(-106%\);\s*visibility: hidden;/);
   assert.match(mobile, /\.mobile-menu-btn \{\s*display: inline-flex;\s*position: absolute;/);

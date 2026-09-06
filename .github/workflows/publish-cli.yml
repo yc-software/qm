@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   package:
-    if: github.ref == 'refs/heads/main'
+    if: github.repository == 'yc-software/qm' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       manifest: ${{ steps.pin.outputs.manifest }}
