@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envSha, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
+import { envSha, errMessage, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
 import {
   clearSlotFlag,
   ensureStore,
@@ -471,4 +471,10 @@ test("formatAge renders the bash-compatible shapes", () => {
   assert.equal(formatAge(150), "2m");
   assert.equal(formatAge(3 * 3600 + 5 * 60), "3h05m");
   assert.equal(formatAge(2 * 86400 + 3 * 3600), "2d03h");
+});
+
+test("dev errors preserve messages without calling custom object stringifiers", () => {
+  const unsafe = { toString: () => assert.fail("object stringification must not run") };
+  assert.equal(errMessage(unsafe), "Unknown error");
+  assert.equal(errMessage({ ...unsafe, message: "actionable failure" }), "actionable failure");
 });

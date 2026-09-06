@@ -118,7 +118,7 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
 
   const note = refusalNote(got!.result!, "channel");
   console.log("\n  Slack would post:\n  " + note + "\n");
-  assert.match(note, new RegExp(`Full error: ${ADMIN}/admin/history/s/${session!.id}`));
+  assert.equal(note.split("Full error: ")[1], `${ADMIN}/admin/history/s/${session!.id} Try again, or DM me.`);
   assert.doesNotMatch(note, /ch:C_UUID_FIXTURE/, "the link must not contain the threadRef");
   assert.doesNotMatch(note, /fully-internal/, "a turn failure is not a boundary refusal");
 });

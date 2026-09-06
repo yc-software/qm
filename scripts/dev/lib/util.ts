@@ -75,9 +75,7 @@ export function envSha(env: Record<string, string>): string {
   return sha256Hex(lines.join("\n")).slice(0, 16);
 }
 
-export function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
+export { errMessage } from "../../../src/util/errors.ts";
 
 export function bestEffort(fn: () => void): unknown {
   try {

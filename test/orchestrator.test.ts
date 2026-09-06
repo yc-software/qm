@@ -905,7 +905,7 @@ test("the egress claim keeps the control-plane host reachable under an allowlist
   const core = "https://core.example.com";
 
   const a = egressClaimAllowingControlPlane({ allowedHosts: ["api.github.com"] }, core)!;
-  assert.ok(a.allowedHosts.includes("core.example.com"));
+  assert.deepEqual(a.allowedHosts, ["api.github.com", "core.example.com"]);
   assert.equal(egressDecision("core.example.com", a).allow, true);
   assert.equal(egressDecision("evil.com", a).allow, false, "the allowlist still bites everything else");
 

@@ -137,7 +137,7 @@ test("force-through pins the platform policy and injects proxy env", async () =>
   const h = await s.provision(layers, { egressToken: token });
   const pol = fake.policy(h.id);
   assert.deepEqual(pol, [{ domain: "proxy.example.com", action: "allow" }]);
-  assert.ok(h.env?.HTTPS_PROXY?.includes("proxy.example.com"));
+  assert.equal(new URL(h.env!.HTTPS_PROXY!).hostname, "proxy.example.com");
   assert.ok(h.env?.HTTPS_PROXY?.includes(token));
   assert.equal(h.env?.NO_PROXY, "localhost,127.0.0.1,::1");
 });
