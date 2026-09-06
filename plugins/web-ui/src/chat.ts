@@ -900,10 +900,7 @@ export function createChatSurface(
                               requestAnimationFrame(() => {
                                 const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
                                 if (!scrollerNow) return;
-                                const prev = scrollerNow.style.scrollBehavior;
-                                scrollerNow.style.scrollBehavior = "auto";
                                 scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-                                scrollerNow.style.scrollBehavior = prev;
                               });
                             } catch {
                               btn.disabled = false;
@@ -1002,10 +999,7 @@ export function createChatSurface(
       requestAnimationFrame(() => {
         const scrollerNow = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
         if (!scrollerNow) return;
-        const prev = scrollerNow.style.scrollBehavior;
-        scrollerNow.style.scrollBehavior = "auto";
         scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-        scrollerNow.style.scrollBehavior = prev;
       });
     } catch {
       void 0;
@@ -2332,15 +2326,6 @@ export function createChatSurface(
     if (!scroller) return;
     if (!force && !stickToBottom) return;
     requestAnimationFrame(() => {
-      if (force) {
-        const prev = scroller.style.scrollBehavior;
-        scroller.style.scrollBehavior = "auto";
-        scroller.scrollTop = scroller.scrollHeight;
-        requestAnimationFrame(() => {
-          scroller.style.scrollBehavior = prev;
-        });
-        return;
-      }
       scroller.scrollTop = scroller.scrollHeight;
     });
   }

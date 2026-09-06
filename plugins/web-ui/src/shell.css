@@ -1260,7 +1260,6 @@ a.chat-row-open {
   overflow-y: auto;
 
   padding: 28px var(--chat-pad) 8px;
-  scroll-behavior: smooth;
 }
 
 .fork-origin-row {

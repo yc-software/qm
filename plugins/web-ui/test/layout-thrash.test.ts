@@ -4,6 +4,7 @@ import test from "node:test";
 
 const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("resizeComposer skips the forced-reflow measure pass when the draft value is unchanged", () => {
   const fn = composer.match(/function resizeComposer\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
@@ -41,9 +42,9 @@ test("revealing a transcript re-arms auto-follow; read-only mounts start at the 
   assert.match(chat, /const scroller = ctx\.container\(\)\?\.querySelector/);
 });
 
-test("both pagination paths adjust their anchor without smooth scrolling", () => {
-  const anchors = chat.match(
-    /const prev = scrollerNow\.style\.scrollBehavior;\s*scrollerNow\.style\.scrollBehavior = "auto";\s*scrollerNow\.scrollTop = priorTop \+ \(scrollerNow\.scrollHeight - priorHeight\);\s*scrollerNow\.style\.scrollBehavior = prev;/g,
-  );
+test("programmatic transcript scrolls never animate", () => {
+  assert.doesNotMatch(css, /scroll-behavior:\s*smooth/);
+  assert.doesNotMatch(chat, /scrollBehavior/);
+  const anchors = chat.match(/scrollerNow\.scrollTop = priorTop \+ \(scrollerNow\.scrollHeight - priorHeight\);/g);
   assert.equal(anchors?.length, 2);
 });
