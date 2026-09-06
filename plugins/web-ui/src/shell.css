@@ -2764,7 +2764,9 @@ a.chat-row-open {
   background: var(--foreground);
   color: var(--background);
   cursor: pointer;
-  transition: opacity 0.12s ease;
+  transition:
+    opacity 120ms ease,
+    transform 220ms cubic-bezier(0.34, 1.45, 0.64, 1);
 }
 .send-btn:hover:not(:disabled) {
   opacity: 0.9;
@@ -8439,6 +8441,83 @@ code-block copy-button span {
   ::view-transition-group(*),
   ::view-transition-old(*),
   ::view-transition-new(*) {
+    animation: none;
+  }
+}
+
+.composer-wrap {
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.composer-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ring) 45%, var(--border)),
+    0 2px 4px color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 20px 44px color-mix(in srgb, var(--foreground) 12%, transparent);
+  transition: opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.composer-wrap:focus-within {
+  transform: translateY(-1px);
+}
+.composer-wrap:focus-within::before {
+  opacity: 1;
+}
+.send-btn:disabled {
+  transform: scale(0.88);
+}
+.send-btn:active:not(:disabled) {
+  transform: scale(0.92);
+  transition-duration: 80ms;
+}
+.send-btn svg,
+.stop-btn svg {
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.send-btn:hover:not(:disabled) svg {
+  transform: translateY(-1px);
+}
+.stop-btn:hover svg {
+  transform: scale(1.12);
+}
+.stop-btn {
+  animation: stop-emerge 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes stop-emerge {
+  from {
+    opacity: 0;
+    transform: translateX(41px) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-wrap,
+  .composer-wrap::before {
+    transition: none;
+  }
+  .composer-wrap:focus-within {
+    transform: none;
+  }
+  .send-btn,
+  .send-btn svg,
+  .stop-btn svg {
+    transition: opacity 120ms ease;
+  }
+  .send-btn:disabled,
+  .send-btn:active:not(:disabled),
+  .send-btn:hover:not(:disabled) svg,
+  .stop-btn:hover svg {
+    transform: none;
+  }
+  .stop-btn {
     animation: none;
   }
 }
