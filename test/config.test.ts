@@ -344,6 +344,19 @@ test("HARNESS=claude uses native Claude authentication and does not require an A
   assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8" }).claudeModel, "claude-opus-4-8");
 });
 
+test("QM_CORE_CONTAINER reaches the local sandbox, which is the only backend that reads it", () => {
+  // The docker target sets QM_CORE_CONTAINER so the local sandbox can join core
+  // to the sandbox network and reach the exec daemon by container name. Without
+  // it the sandbox publishes a port and core resolves 127.0.0.1, which inside a
+  // containerized core is core itself, so every tool call fails with
+  // "exec daemon never became reachable".
+  assert.equal(
+    loadConfig({ ...productionEnv, QM_CORE_CONTAINER: "qm-acme-core" }).localSandbox.coreContainer,
+    "qm-acme-core",
+  );
+  assert.equal(loadConfig({ ...productionEnv }).localSandbox.coreContainer, undefined);
+});
+
 test("SANDBOX_BACKEND: unset defaults to local (dev only); the secondary must be recognized and differ", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(
