@@ -13,8 +13,7 @@ const notice = (subject: string) => formatDeployNotice({ subject, repo: REPO, sh
 test("a PR reference becomes a Slack link and the bare parens go away", () => {
   assert.equal(
     notice("fix(web-ui): align the sample toolbar (#101)"),
-    "🔧 fix(web-ui): align the sample toolbar " +
-      `<https://github.com/${REPO}/pull/101|#101>`,
+    "🔧 fix(web-ui): align the sample toolbar " + `<https://github.com/${REPO}/pull/101|#101>`,
   );
 });
 
