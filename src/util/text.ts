@@ -22,19 +22,19 @@ export function pgTextSafe(s: string): string {
 }
 
 function withPgSafeKeys(obj: Record<string, unknown>): Record<string, unknown> {
-  let dirty = false;
+  const keys = Object.keys(obj);
+  if (keys.every((k) => pgTextSafe(k) === k)) return obj;
+  const cleanWithValue = new Set(keys.filter((k) => pgTextSafe(k) === k && obj[k] !== undefined));
   const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  for (const k of Object.keys(obj)) {
+  for (const k of keys) {
     const safe = pgTextSafe(k);
-    if (safe !== k) dirty = true;
     if (safe === k) {
-      if (obj[k] !== undefined || !Object.hasOwn(out, k)) out[k] = obj[k];
+      if (obj[k] !== undefined) out[k] = obj[k];
       continue;
     }
-    const twinTaken = Object.hasOwn(obj, safe) && obj[safe] !== undefined;
-    if (!twinTaken && !Object.hasOwn(out, safe)) out[safe] = obj[k];
+    if (!cleanWithValue.has(safe) && !Object.hasOwn(out, safe)) out[safe] = obj[k];
   }
-  return dirty ? out : obj;
+  return out;
 }
 
 const JSONB_REJECTED_ESCAPE = /(?<!\\)(?:\\\\)*\\u(?:0000|d[89a-f])/i;

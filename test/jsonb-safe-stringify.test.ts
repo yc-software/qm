@@ -59,3 +59,9 @@ test("two dirty keys that clean to the same key keep the first value", () => {
 test("a clean twin key holding undefined does not shadow the dirty key", () => {
   assert.equal(jsonbSafeStringify({ ["a\u0000"]: 1, a: undefined }), '{"a":1}');
 });
+
+test("key order does not decide which value survives", () => {
+  assert.equal(jsonbSafeStringify({ a: undefined, ["a\u0000"]: 1 }), '{"a":1}');
+  assert.equal(jsonbSafeStringify({ ["a\u0000"]: 1, a: 2 }), '{"a":2}');
+  assert.equal(jsonbSafeStringify({ a: 2, ["a\u0000"]: 1 }), '{"a":2}');
+});

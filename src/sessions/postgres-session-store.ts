@@ -802,7 +802,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                AND safe_jsonb(payload) -> 'turnEnd' = 'true'::jsonb
            ), -1),
            COALESCE(MAX(covers_entry_seq) FILTER (
-             WHERE kind = 'context_event' AND safe_jsonb(payload)->>'event' = 'legacy_import'
+             WHERE kind = 'context_event' AND payload LIKE '%legacy_import%' AND safe_jsonb(payload)->>'event' = 'legacy_import'
            ), -1)
          ) AS n FROM session_tape WHERE session_id = $1`,
         [sessionId],

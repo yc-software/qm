@@ -43,6 +43,7 @@ import {
   sessionOrigin,
   userMessagePreview,
   withoutSecurityTaint,
+  type TapeMeta,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 import { pgTextSafeOrNull } from "../util/text.ts";
@@ -281,10 +282,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (rest) entry.payload = rest;
       }
       for (const rec of tape.get(sessionId) ?? []) {
-        if (!rec.meta?.securityTainted) continue;
-        const meta = { ...rec.meta };
-        delete meta.securityTainted;
-        rec.meta = meta;
+        const meta = withoutSecurityTaint(rec.meta);
+        if (meta) rec.meta = meta as TapeMeta;
       }
       return true;
     },

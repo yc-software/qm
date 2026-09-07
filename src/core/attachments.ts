@@ -10,7 +10,12 @@ import type {
 } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
+import {
+  fileArtifactId,
+  type FileArtifactStore,
+  type FileDirection,
+  artifactPath,
+} from "../files/file-artifact-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
@@ -133,8 +138,8 @@ async function registerArtifact(
 > {
   try {
     const id = fileArtifactId(reg.seed, direction, batchIndex);
-    const path = `artifacts/${id}/${name}`;
-    const { created, artifact } = await reg.store.put({
+    const path = artifactPath(id, name);
+    const { created } = await reg.store.put({
       id,
       ownerScopeId: reg.ownerScopeId,
       createdBy: reg.createdBy,
@@ -146,7 +151,7 @@ async function registerArtifact(
       ...(reg.createdInScope ? { createdInScope: reg.createdInScope } : {}),
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
-    const registered = { id, path: artifact.path, ownerScopeId: reg.ownerScopeId, direction, created };
+    const registered = { id, path, ownerScopeId: reg.ownerScopeId, direction, created };
     await reg.onRegistered?.(registered);
     return registered;
   } catch (e) {
