@@ -12,6 +12,7 @@ import {
   type FileSource,
   type ListOwnedOptions,
 } from "./file-artifact-store.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS file_artifacts(
@@ -90,9 +91,9 @@ export function createPostgresFileArtifactStore(
         [
           input.id,
           input.ownerScopeId,
-          input.path,
-          input.name,
-          input.mimetype,
+          pgTextSafe(input.path),
+          pgTextSafe(input.name),
+          pgTextSafe(input.mimetype),
           sizeBytes,
           blobKey,
           sha256,

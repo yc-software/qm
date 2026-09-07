@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { headSlice, tailSlice, hasLoneSurrogate } from "../src/util/text.ts";
+import { headSlice, tailSlice } from "../src/util/text.ts";
 
 test("headSlice and tailSlice pass short strings through and cut long ones", () => {
   assert.equal(headSlice("abc", 5), "abc");
@@ -19,7 +19,7 @@ test("headSlice and tailSlice return empty for zero or negative budgets (slice(-
 test("headSlice and tailSlice never strand half a surrogate pair", () => {
   const s = "😀".repeat(10);
   for (let n = 1; n < s.length; n++) {
-    assert.ok(!hasLoneSurrogate(headSlice(s, n)), `headSlice at ${n}`);
-    assert.ok(!hasLoneSurrogate(tailSlice(s, n)), `tailSlice at ${n}`);
+    assert.ok(headSlice(s, n).isWellFormed(), `headSlice at ${n}`);
+    assert.ok(tailSlice(s, n).isWellFormed(), `tailSlice at ${n}`);
   }
 });

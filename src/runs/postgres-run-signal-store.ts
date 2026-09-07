@@ -1,6 +1,7 @@
 import { createPgPool, type PoolClient, type Rows } from "../persistence/pg-pool.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import { jsonbSafeStringify, pgTextSafeOrNull } from "../util/text.ts";
 
 const CHANNEL = "run_signals";
 const RECONNECT_DELAY_MS = 1_000;
@@ -98,7 +99,14 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
            RETURNING id
          )
          SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
-        [runId, signal.kind, signal.text ?? null, JSON.stringify(signal), Date.now(), signal.dedupeKey ?? null],
+        [
+          runId,
+          signal.kind,
+          pgTextSafeOrNull(signal.text),
+          jsonbSafeStringify(signal),
+          Date.now(),
+          signal.dedupeKey ?? null,
+        ],
       );
       return rows.length > 0;
     },

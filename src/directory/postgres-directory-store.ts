@@ -12,6 +12,7 @@ import {
   type DirectoryMember,
   type DirectoryStore,
 } from "./directory-store.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const INITIAL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS directory_members(
@@ -279,8 +280,8 @@ export function createPostgresDirectoryStore(connectionString: string): Director
             [
               orgId,
               internal.map((m) => m.principalId),
-              internal.map((m) => m.displayName),
-              internal.map((m) => normDirectoryQuery(m.displayName)),
+              internal.map((m) => pgTextSafe(m.displayName)),
+              internal.map((m) => normDirectoryQuery(pgTextSafe(m.displayName))),
               internal.map((m) => m.type),
               internal.map((m) => m.slackId ?? null),
             ],

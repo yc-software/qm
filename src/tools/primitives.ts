@@ -64,6 +64,7 @@ import type { Cron, Webhook } from "../types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const SKILL_SKILLMD_RE = /^(?:\.\/)?skills\/([^/]+)\/SKILL\.md$/;
 function skillTreeDirFor(path: string): string | null {
@@ -835,6 +836,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
+      if (path !== pgTextSafe(path))
+        throw new Error(`invalid path ${JSON.stringify(path)}: contains a NUL or unpaired surrogate`);
       const wantShare = share !== undefined && share.length > 0;
       if (data === undefined && !wantShare) {
         throw new Error("write needs `data` to save content, `share` to grant access, or both");

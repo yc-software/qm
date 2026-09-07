@@ -1,4 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
 
@@ -133,7 +134,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.processId,
           row.scopeId,
           row.kind,
-          row.command,
+          pgTextSafe(row.command),
           row.startedAt,
           row.expiresAt,
           row.status,

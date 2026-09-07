@@ -1,6 +1,7 @@
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
+import { TaintUnclearableError } from "../../../sessions/session-store.ts";
 
 const MAX_FLAGS = 200;
 
@@ -39,7 +40,22 @@ export async function releaseSecurityTaint(ctx: ApiCtx): Promise<void> {
     sendJson(ctx.res, 400, { error: "bad_request", message: "sessionId required" });
     return;
   }
-  const released = (await ctx.deps.sessions?.clearSecurityTaint(sessionId)) ?? false;
+  let released: boolean;
+  try {
+    released = (await ctx.deps.sessions?.clearSecurityTaint(sessionId)) ?? false;
+  } catch (err) {
+    if (!(err instanceof TaintUnclearableError)) throw err;
+    audit(ctx.deps, {
+      principalId: actor.id,
+      action: "security_posture.release",
+      resource: sessionId,
+      scopeLabel: scope,
+      status: "refused",
+      detail: err.message,
+    });
+    sendJson(ctx.res, 409, { error: "taint_unclearable", message: err.message });
+    return;
+  }
   if (!released) {
     sendJson(ctx.res, 404, { error: "not_found" });
     return;

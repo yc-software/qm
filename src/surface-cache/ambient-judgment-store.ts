@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { pgTextSafeOrNull } from "../util/text.ts";
 
 type AmbientDecisionKind = "act" | "ignore" | "fastlane";
 
@@ -81,9 +82,9 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
           j.surface,
           j.container,
           j.decision,
-          j.reason ?? null,
+          pgTextSafeOrNull(j.reason),
           j.askedBy ?? null,
-          j.prompt ?? null,
+          pgTextSafeOrNull(j.prompt),
           j.model ?? null,
           j.latencyMs ?? null,
           j.tsFrom ?? null,

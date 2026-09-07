@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { jsonbSafeStringify, pgTextSafe, pgTextSafeOrNull } from "../util/text.ts";
 import type {
   ActiveThread,
   CachedFile,
@@ -167,9 +168,9 @@ export function createPostgresSurfaceCache(
               e.ts,
               e.sub ?? null,
               e.authorId ?? null,
-              e.authorName ?? null,
-              e.text ?? "",
-              e.mentions ? JSON.stringify(e.mentions) : null,
+              pgTextSafeOrNull(e.authorName),
+              pgTextSafe(e.text ?? ""),
+              e.mentions ? jsonbSafeStringify(e.mentions) : null,
               e.self ?? false,
               e.bot ?? false,
               e.mentionsSelf ?? false,
@@ -187,7 +188,15 @@ export function createPostgresSurfaceCache(
               `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7)
                ON CONFLICT (org_id, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype`,
-              [orgId, e.container, e.ts, f.fileId, f.name ?? null, f.mimetype ?? null, e.createdAt ?? now],
+              [
+                orgId,
+                e.container,
+                e.ts,
+                f.fileId,
+                pgTextSafeOrNull(f.name),
+                pgTextSafeOrNull(f.mimetype),
+                e.createdAt ?? now,
+              ],
             );
           }
           await client.query(
@@ -202,7 +211,15 @@ export function createPostgresSurfaceCache(
                kind = COALESCE(EXCLUDED.kind, channel_state.kind),
                members = CASE WHEN EXCLUDED.members = '[]'::jsonb THEN channel_state.members ELSE EXCLUDED.members END,
                updated_at = EXCLUDED.updated_at`,
-            [orgId, e.container, e.ts, e.containerName ?? null, e.kind ?? null, JSON.stringify(e.members ?? []), now],
+            [
+              orgId,
+              e.container,
+              e.ts,
+              pgTextSafeOrNull(e.containerName),
+              e.kind ?? null,
+              jsonbSafeStringify(e.members ?? []),
+              now,
+            ],
           );
         }
         await client.query("COMMIT");

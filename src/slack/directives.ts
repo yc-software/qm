@@ -10,11 +10,12 @@ export function extractDirectives<T>(
   if (!reply) return { text: reply ?? "", matches: [] };
   const code: string[] = [];
   const masked = reply.replace(CODE_REGION, (m) => `\u0000CODE${code.push(m) - 1}\u0000`);
+  const unmask = (s: string): string => s.replace(CODE_PLACEHOLDER, (_m, i: string) => code[Number(i)] ?? "");
   const matches: T[] = [];
   let changed = false;
   let text = masked.replace(directiveRe, (_m: string, ...rest: unknown[]) => {
     changed = true;
-    const parsed = onMatch(rest.slice(0, -2) as string[]);
+    const parsed = onMatch(rest.slice(0, -2).map((g) => (typeof g === "string" ? unmask(g) : g)) as string[]);
     if (parsed !== undefined) matches.push(parsed);
     return "";
   });
@@ -24,8 +25,7 @@ export function extractDirectives<T>(
     text = stripped;
   }
   if (!changed) return { text: reply, matches };
-  text = text
-    .replace(CODE_PLACEHOLDER, (_m, i: string) => code[Number(i)] ?? "")
+  text = unmask(text)
     .split("\n")
     .map((line) => line.trimEnd())
     .join("\n")

@@ -12,6 +12,6 @@ export interface FailureLike {
 
 export function userFacingFailureText(result: FailureLike): string {
   if (result.refusalKind === "security_quarantine") return SECURITY_QUARANTINE_REFUSAL_TEXT;
-  if (result.status === "refused" && result.reason) return result.reason;
+  if ((result.status === "refused" || result.status === "pending_approval") && result.reason) return result.reason;
   return GENERIC_FAILURE_TEXT;
 }

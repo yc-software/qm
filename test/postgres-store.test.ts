@@ -936,7 +936,6 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
     );
   } finally {
     await raw.query("DROP INDEX IF EXISTS safe_jsonb_parallel_repair_test");
-    await raw.query("DROP FUNCTION IF EXISTS safe_jsonb(text)");
     await raw.end();
   }
 });

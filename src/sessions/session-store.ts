@@ -22,6 +22,19 @@ export interface ContextSummaryPayload {
   text: string;
 }
 
+export class TaintUnclearableError extends Error {
+  readonly sessionId: string;
+  readonly seqs: readonly number[];
+  constructor(sessionId: string, seqs: readonly number[]) {
+    super(
+      `session ${sessionId} has tainted entries that cannot be parsed (seq ${seqs.join(", ")}); nothing was cleared`,
+    );
+    this.name = "TaintUnclearableError";
+    this.sessionId = sessionId;
+    this.seqs = seqs;
+  }
+}
+
 export function contextSummaryPayload(entry: SessionEntry): ContextSummaryPayload | null {
   const payload = entry.payload as Partial<ContextSummaryPayload> | null;
   if (
@@ -47,6 +60,14 @@ export interface ContextWindow {
 
 export function entrySecurityTainted(entry: SessionEntry): boolean {
   return (entry.payload as { securityTainted?: unknown } | null)?.securityTainted === true;
+}
+
+export function withoutSecurityTaint(payload: unknown): Record<string, unknown> | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  if (!Object.hasOwn(payload, "securityTainted")) return null;
+  const rest = { ...(payload as Record<string, unknown>) };
+  delete rest.securityTainted;
+  return rest;
 }
 
 export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {

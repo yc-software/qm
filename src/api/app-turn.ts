@@ -21,6 +21,7 @@ import { selectableCatalogForHarness, selectableModelCatalog } from "../model/mo
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { pgSafeValue } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
@@ -73,7 +74,17 @@ export function createTurnMethods(
   } = h;
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
   return {
-    async turn(req: TurnRequest): Promise<TurnResult> {
+    async turn(rawReq: TurnRequest): Promise<TurnResult> {
+      const req: TurnRequest = {
+        ...rawReq,
+        ...pgSafeValue({
+          text: rawReq.text,
+          displayText: rawReq.displayText,
+          conversationHeader: rawReq.conversationHeader,
+          overheard: rawReq.overheard,
+          attachments: rawReq.attachments,
+        }),
+      };
       await deps.identity.refresh();
       const actor: Principal = deps.identity.resolve(req.actor);
       if (!deps.identity.isInternal(actor)) {

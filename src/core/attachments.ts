@@ -10,12 +10,18 @@ import type {
 } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { MAX_BLOB_BYTES, collectBlob, type BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
+import {
+  fileArtifactId,
+  type FileArtifactStore,
+  type FileDirection,
+  artifactPath,
+} from "../files/file-artifact-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 export const INBOX_DIR = "inbox";
 export const SHARED_DIR = "shared";
@@ -75,7 +81,7 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
 }
 
 export function safeAttachmentName(name: string): string {
-  const base = basename(String(name ?? "").replace(/\\/g, "/")).trim();
+  const base = basename(pgTextSafe(String(name ?? "")).replace(/\\/g, "/")).trim();
   if (!base || /^\.+$/.test(base)) return "file";
   return base;
 }
@@ -132,7 +138,7 @@ async function registerArtifact(
 > {
   try {
     const id = fileArtifactId(reg.seed, direction, batchIndex);
-    const path = `artifacts/${id}/${name}`;
+    const path = artifactPath(id, name);
     const { created } = await reg.store.put({
       id,
       ownerScopeId: reg.ownerScopeId,

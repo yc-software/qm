@@ -1,6 +1,7 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
+import { pgTextSafeOrNull } from "../util/text.ts";
 
 export interface Environment {
   id: string;
@@ -122,7 +123,7 @@ export function createPostgresEnvironmentStore(
       await q(
         `INSERT INTO environments(id, org_id, name, owner_actor_id, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$5) ON CONFLICT (id) DO NOTHING`,
-        [input.id, configOrgId(), input.name ?? null, input.ownerActorId ?? null, ts],
+        [input.id, configOrgId(), pgTextSafeOrNull(input.name), input.ownerActorId ?? null, ts],
       );
       const rows = await q("SELECT * FROM environments WHERE id = $1", [input.id]);
       return rowToEnvironment(rows[0]!);

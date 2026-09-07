@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import type { ScopeId } from "../types.ts";
 import type { ByteSource, DurableByteStore } from "./durable-byte-store.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 function idOrderDesc(a: string, b: string): number {
   if (a < b) return 1;
@@ -84,7 +85,7 @@ export function fileArtifactId(seed: string, direction: FileDirection, batchInde
  * read pick the right backing store without a precedence rule.
  */
 export function artifactPath(id: string, name: string): string {
-  return `artifacts/${id}/${name}`;
+  return `artifacts/${id}/${pgTextSafe(name)}`;
 }
 
 export function isArtifactPath(path: string): boolean {

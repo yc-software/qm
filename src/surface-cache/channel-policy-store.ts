@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export const DEFAULT_ROLLUP_HOURS = 24;
@@ -135,8 +136,8 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
         [
           orgId,
           container,
-          orders,
-          opts?.bots ? JSON.stringify(opts.bots) : null,
+          pgTextSafe(orders),
+          opts?.bots ? jsonbSafeStringify(opts.bots) : null,
           opts?.setBy ?? null,
           now,
           opts?.sessionId ?? null,

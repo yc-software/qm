@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
+import { TaintUnclearableError } from "../src/sessions/session-store.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -889,6 +890,32 @@ test("historical cutover policies remain visible and clearable without layer too
     });
     assert.equal(clear.status, 200);
     assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "retired"), "ephemeral_only");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("security release answers 409 with the unreadable rows and audits the refusal", async () => {
+  const srv = start();
+  try {
+    const session = await srv.built.sessions.getOrCreateByThread("unclearable-taint", "dm", "personal:U1");
+    srv.built.sessions.clearSecurityTaint = async () => {
+      throw new TaintUnclearableError(session.id, [4, 9]);
+    };
+    const res = await fetch(`${srv.base}/v1/admin/security/release`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ sessionId: session.id }),
+    });
+    assert.equal(res.status, 409);
+    const body = (await res.json()) as { error: string; message: string };
+    assert.equal(body.error, "taint_unclearable");
+    assert.match(body.message, /seq 4, 9/);
+    const refused = (await srv.built.auditLog.events()).find(
+      (e) => e.action === "security_posture.release" && e.status === "refused",
+    );
+    assert.ok(refused, "the refused release is audited");
+    assert.match(refused!.detail ?? "", /seq 4, 9/);
   } finally {
     await srv.close();
   }

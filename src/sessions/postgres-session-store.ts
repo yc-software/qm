@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool, type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
-import { jsonbSafeStringify } from "../util/text.ts";
+import { jsonbSafeStringify, pgTextSafe, pgTextSafeOrNull } from "../util/text.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type {
   NewSessionPin,
@@ -34,14 +34,16 @@ import type {
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
 import {
+  ORIGIN_ALTERNATION,
+  TaintUnclearableError,
   cronIdOf,
   legacyOriginPattern,
-  ORIGIN_ALTERNATION,
   promptEnvelopeBody,
   sessionOrigin,
   stableOriginPattern,
   threadRefCronIdExpr,
   userMessagePreview,
+  withoutSecurityTaint,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -209,11 +211,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const hasOrigin = (alias: string, origin: SessionOrigin): string => `${originExpr(alias)} = '${origin}'`;
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
     origin === "other_background" ? `${originExpr(alias)} NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
+  const taintFlag = '"securityTainted":';
+  const taintCandidate = (payload: string): string => `${payload} LIKE '%${taintFlag}%'`;
+  const entryTainted = (j: string): string =>
+    `(${j} IS NULL OR COALESCE((${j} -> 'securityTainted') = 'true'::jsonb, FALSE))`;
   const previewExpr = (col: string): string =>
-    `(SELECT CASE WHEN json_typeof(j -> 'text') = 'string' THEN j ->> 'text'
-                  WHEN json_typeof(j) = 'string' THEN j #>> '{}'
+    `(SELECT CASE WHEN jsonb_typeof(j -> 'text') = 'string' THEN j ->> 'text'
+                  WHEN jsonb_typeof(j) = 'string' THEN j #>> '{}'
                   ELSE NULL END
-        FROM (SELECT safe_json(replace(${col}, '\\u0000', '')) AS j) _)`;
+        FROM (SELECT safe_jsonb(${col}) AS j OFFSET 0) _)`;
 
   const recountRecentSessions = `UPDATE sessions s
         SET messages = c.messages, turns = c.turns, last_activity = c.last_activity
@@ -466,14 +472,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     ],
     [
       {
-        id: "sessions/maintenance/safe-jsonb-parallel",
+        id: "sessions/maintenance/safe-jsonb",
         statements: [
-          `DO $safe_jsonb_parallel$
+          String.raw`CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb
+        LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $safe_jsonb$
         BEGIN
-          IF to_regprocedure('safe_jsonb(text)') IS NOT NULL THEN
-            ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;
-          END IF;
-        END $safe_jsonb_parallel$`,
+          RETURN t::jsonb;
+        EXCEPTION WHEN others THEN
+          BEGIN
+            RETURN regexp_replace(t,
+              '(\\\\|\\ud[89ab][0-9a-f]{2}\\ud[c-f][0-9a-f]{2})|\\u0000|\\ud[89a-f][0-9a-f]{2}',
+              '\1', 'gi')::jsonb;
+          EXCEPTION WHEN others THEN
+            RETURN NULL;
+          END;
+        END $safe_jsonb$`,
         ],
       },
       {
@@ -525,14 +538,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         rec.harness ?? null,
         stored,
         rec.scopeLabel,
-        rec.meta?.bareText ?? null,
+        pgTextSafeOrNull(rec.meta?.bareText),
         rec.meta?.ts ?? null,
         rec.meta?.changeTime ?? null,
         rec.meta?.hidden ?? null,
         rec.meta?.overheard ?? null,
-        rec.meta?.author ?? null,
+        pgTextSafeOrNull(rec.meta?.author),
         rec.meta?.attachments !== undefined ? jsonbSafeStringify(rec.meta.attachments) : null,
-        rec.meta?.display ?? null,
+        pgTextSafeOrNull(rec.meta?.display),
         rec.meta?.securityTainted ?? null,
         rec.meta?.entryCreatedAt ?? null,
         rec.entrySeq ?? null,
@@ -545,7 +558,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, rawChannelName, surface): Promise<Session> {
+      const channelName = pgTextSafeOrNull(rawChannelName) ?? undefined;
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -598,13 +612,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async updateTitle(sessionId, title): Promise<void> {
-      await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, title]);
+      await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, pgTextSafeOrNull(title)]);
     },
 
     async updateForkProvenance(sessionId, provenance): Promise<void> {
       await q(
         "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4 WHERE id = $1",
-        [sessionId, provenance.forkedFrom.sessionId, provenance.forkedFrom.title ?? null, provenance.forkBoundarySeq],
+        [
+          sessionId,
+          provenance.forkedFrom.sessionId,
+          pgTextSafeOrNull(provenance.forkedFrom.title),
+          provenance.forkBoundarySeq,
+        ],
       );
     },
 
@@ -714,13 +733,43 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async clearSecurityTaint(sessionId) {
-      const updated = await q(
-        "UPDATE session_entries SET payload = (payload::jsonb - 'securityTainted')::text " +
-          "WHERE session_id = $1 AND payload LIKE '%\"securityTainted\"%' RETURNING 1",
-        [sessionId],
-      );
-      if (updated.length > 0) return true;
-      return (await q("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).length === 1;
+      return withPgTransaction(await pool(), async (client) => {
+        await lockSession(client, sessionId);
+        const { rows } = await client.query(
+          `SELECT seq, payload, safe_jsonb(payload) IS NULL AS unparseable
+             FROM session_entries WHERE session_id = $1 AND ${taintCandidate("payload")} ORDER BY seq`,
+          [sessionId],
+        );
+        const unreadable: number[] = [];
+        const cleared: Array<{ seq: number; payload: string }> = [];
+        for (const row of rows) {
+          let parsed: unknown;
+          try {
+            if (row.unparseable === true) throw new Error("unparseable");
+            parsed = JSON.parse(row.payload as string);
+          } catch {
+            unreadable.push(Number(row.seq));
+            continue;
+          }
+          const rest = withoutSecurityTaint(parsed);
+          if (rest) cleared.push({ seq: Number(row.seq), payload: jsonbSafeStringify(rest) });
+        }
+        if (unreadable.length > 0) throw new TaintUnclearableError(sessionId, unreadable);
+        if (cleared.length > 0) {
+          await client.query(
+            `UPDATE session_entries e SET payload = c.payload
+               FROM unnest($2::int[], $3::text[]) AS c(seq, payload)
+              WHERE e.session_id = $1 AND e.seq = c.seq`,
+            [sessionId, cleared.map((c) => c.seq), cleared.map((c) => c.payload)],
+          );
+        }
+        const tape = await client.query(
+          "UPDATE session_tape SET security_tainted = NULL WHERE session_id = $1 AND security_tainted",
+          [sessionId],
+        );
+        if (cleared.length > 0 || (tape.rowCount ?? 0) > 0) return true;
+        return (await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).rows.length === 1;
+      });
     },
 
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
@@ -749,12 +798,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const rows = await q(
         `SELECT GREATEST(
            COALESCE(MAX(entry_seq) FILTER (
-             WHERE kind = 'annotation'
-               AND json_typeof(safe_json(payload)->'turnEnd') = 'boolean'
-               AND safe_json(payload)->>'turnEnd' = 'true'
+             WHERE kind = 'annotation' AND payload LIKE '%"turnEnd":%'
+               AND safe_jsonb(payload) -> 'turnEnd' = 'true'::jsonb
            ), -1),
            COALESCE(MAX(covers_entry_seq) FILTER (
-             WHERE kind = 'context_event' AND safe_json(payload)->>'event' = 'legacy_import'
+             WHERE kind = 'context_event' AND payload LIKE '%legacy_import%' AND safe_jsonb(payload)->>'event' = 'legacy_import'
            ), -1)
          ) AS n FROM session_tape WHERE session_id = $1`,
         [sessionId],
@@ -789,18 +837,23 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const [meta, summary] = await Promise.all([
         q(
           `SELECT count(*)::int AS total,
-                  bool_or((payload::jsonb -> 'securityTainted') = 'true'::jsonb) AS taint
+                  EXISTS (
+                    SELECT 1 FROM session_entries e
+                     WHERE e.session_id = $1 AND ${taintCandidate("e.payload")}
+                       AND (SELECT ${entryTainted("j")}
+                              FROM (SELECT safe_jsonb(e.payload) AS j OFFSET 0) _)) AS taint
              FROM session_entries WHERE session_id = $1`,
           [sessionId],
         ),
         q(
-          `SELECT (payload::jsonb ->> 'throughSeq')::int AS through
-             FROM session_entries
-            WHERE session_id = $1 AND type = 'system'
-              AND payload::jsonb ->> 'kind' = 'context_summary'
-              AND jsonb_typeof(payload::jsonb -> 'throughSeq') = 'number'
-              AND jsonb_typeof(payload::jsonb -> 'text') = 'string'
-            ORDER BY seq DESC LIMIT 1`,
+          `SELECT (p.j ->> 'throughSeq')::int AS through
+             FROM session_entries c,
+                  LATERAL (SELECT safe_jsonb(c.payload) AS j WHERE c.payload LIKE '%context_summary%' OFFSET 0) p
+            WHERE c.session_id = $1 AND c.type = 'system'
+              AND p.j ->> 'kind' = 'context_summary'
+              AND jsonb_typeof(p.j -> 'throughSeq') = 'number'
+              AND jsonb_typeof(p.j -> 'text') = 'string'
+            ORDER BY c.seq DESC LIMIT 1`,
           [sessionId],
         ),
       ]);
@@ -953,7 +1006,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            WHERE participants.valid_to IS NOT NULL
               OR EXCLUDED.title IS NOT NULL
               OR ($5 AND (participants.valid_from_seq IS DISTINCT FROM 0 OR participants.valid_from <> 0))`,
-        [sessionId, principalId, includeHistory ? 0 : now(), title ?? null, includeHistory],
+        [sessionId, principalId, includeHistory ? 0 : now(), pgTextSafeOrNull(title), includeHistory],
       );
     },
 
@@ -1012,7 +1065,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         await q("UPDATE participants SET title = $3 WHERE session_id = $1 AND principal_id = $2", [
           sessionId,
           principalId,
-          patch.title,
+          pgTextSafeOrNull(patch.title),
         ]);
       }
       if (patch.archived !== undefined) {
@@ -1048,7 +1101,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $2)
               AND ($7::int IS NULL OR (SELECT COUNT(*) FROM session_pins WHERE session_id = $2) < $7)
            RETURNING id`,
-          [rec.id, sessionId, rec.text ?? null, rec.entrySeq ?? null, rec.addedBy, rec.createdAt, maxPins ?? null],
+          [
+            rec.id,
+            sessionId,
+            pgTextSafeOrNull(rec.text),
+            rec.entrySeq ?? null,
+            rec.addedBy,
+            rec.createdAt,
+            maxPins ?? null,
+          ],
         );
         return inserted.rowCount ? rec : null;
       });
@@ -1105,8 +1166,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                    LIMIT $3)
                   UNION ALL
                  (SELECT e.session_id, e.seq, e.type,
-                         (SELECT CASE WHEN e.type = 'user' AND json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
-                            FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) AS author,
+                         (SELECT CASE WHEN e.type = 'user' AND jsonb_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
+                            FROM (SELECT safe_jsonb(e.payload) AS j OFFSET 0) _) AS author,
                          entry_search_text(e.payload) AS text,
                          e.created_at
                     FROM session_entries e
@@ -1147,14 +1208,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           await client.query(
             `INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)
              VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (session_id, seq) DO NOTHING`,
-            [
-              lease.sessionId,
-              row.seq,
-              row.type,
-              row.author?.replaceAll("\u0000", "") ?? null,
-              row.text.replaceAll("\u0000", ""),
-              row.createdAt,
-            ],
+            [lease.sessionId, row.seq, row.type, pgTextSafeOrNull(row.author), pgTextSafe(row.text), row.createdAt],
           );
         }
       });

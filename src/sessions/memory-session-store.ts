@@ -42,8 +42,11 @@ import {
   sessionCategory,
   sessionOrigin,
   userMessagePreview,
+  withoutSecurityTaint,
+  type TapeMeta,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
+import { pgTextSafeOrNull } from "../util/text.ts";
 
 function toParticipantWindow(
   sessionId: string,
@@ -119,7 +122,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface) {
+    async getOrCreateByThread(threadRef, type, scopeId, rawChannelName, surface) {
+      const channelName = pgTextSafeOrNull(rawChannelName) ?? undefined;
       const existingId = byThread.get(threadRef);
       if (existingId) {
         const s = sessions.get(existingId);
@@ -274,10 +278,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = entries.get(sessionId);
       if (!log) return false;
       for (const entry of log) {
-        if (!entry.payload || typeof entry.payload !== "object") continue;
-        const payload = { ...(entry.payload as Record<string, unknown>) };
-        delete payload.securityTainted;
-        entry.payload = payload;
+        const rest = withoutSecurityTaint(entry.payload);
+        if (rest) entry.payload = rest;
+      }
+      for (const rec of tape.get(sessionId) ?? []) {
+        const meta = withoutSecurityTaint(rec.meta);
+        if (meta) rec.meta = meta as TapeMeta;
       }
       return true;
     },

@@ -37,6 +37,7 @@ import {
   TAPE_IMPORT_MAX_ENTRIES,
   tapeCheckpointPayload,
   tapeEntryMirrorRecord,
+  TaintUnclearableError,
 } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
@@ -1691,12 +1692,41 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ],
               };
             }
-            await pending.delete(input.approval.requestId);
             if (p.kind === "input") {
-              await deps.sessions
-                .clearSecurityTaint(session.id)
-                .catch(swallowAs("clearSecurityTaint on input approval", false));
+              try {
+                await deps.sessions.clearSecurityTaint(session.id);
+              } catch (e) {
+                deps.errors?.record({
+                  category: "security",
+                  code: "taint_release_failed",
+                  message: errMessage(e),
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                });
+                const unclearable = e instanceof TaintUnclearableError;
+                deps.auditLog.record({
+                  at: Date.now(),
+                  principalId: actor.id,
+                  action: `command_approval.${scope}`,
+                  resource: p.command,
+                  scopeLabel: scopeId,
+                  status: "refused",
+                  detail: JSON.stringify(
+                    unclearable
+                      ? { approvalOutcome: "taint_unclearable", seqs: e.seqs }
+                      : { approvalOutcome: "taint_release_error", error: errMessage(e) },
+                  ),
+                });
+                return {
+                  status: "pending_approval",
+                  sessionId: session.id,
+                  reason: unclearable
+                    ? "The quarantined message could not be released because part of this conversation's stored history cannot be read. An operator needs to repair it before this approval can complete."
+                    : "The approval could not be applied just now. Try again in a moment.",
+                };
+              }
             }
+            await pending.delete(input.approval.requestId);
             const useKey = p.approvalKey ?? p.command;
             commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" ? 1 : Infinity));
             if (scope === "session" || scope === "always") {

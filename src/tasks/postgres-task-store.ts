@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { pgTextSafe } from "../util/text.ts";
 import type {
   OpenTaskFilter,
   Task,
@@ -103,7 +104,7 @@ export function createPostgresTaskStore(connectionString: string, opts: { now?: 
         const inserted = await client.query(
           `INSERT INTO tasks(id, session_id, origin_run_id, title, status, created_at, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6,$6) RETURNING *`,
-          [id, input.sessionId, input.originRunId, input.title, status, at],
+          [id, input.sessionId, input.originRunId, pgTextSafe(input.title), status, at],
         );
         await client.query(
           `INSERT INTO task_events(task_id, run_id, type, from_status, to_status, created_at)
