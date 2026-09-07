@@ -32,7 +32,7 @@ function withPgSafeKeys(obj: Record<string, unknown>): Record<string, unknown> {
   return dirty ? out : obj;
 }
 
-const JSONB_REJECTED_ESCAPE = /\\u0000|\\ud[89a-f]/i;
+const JSONB_REJECTED_ESCAPE = /(?<!\\)(?:\\\\)*\\u(?:0000|d[89a-f])/i;
 
 function pgSafeReplacer(_key: string, v: unknown): unknown {
   if (typeof v === "string") return pgTextSafe(v);

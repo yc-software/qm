@@ -1718,21 +1718,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   sessionId: session.id,
                   reason:
                     "the quarantined message could not be released because part of this conversation's stored history cannot be read; an operator needs to repair it before this approval can complete",
-                  pendingApprovals: [
-                    {
-                      requestId: input.approval.requestId,
-                      command: p.command,
-                      reason: p.reason ?? "requires approval",
-                      blocksInput: p.blocksInput !== false,
-                      grantModes: p.grantModes ?? resolution.approvalGrantModes,
-                      ...(p.matched ? { matched: p.matched } : {}),
-                      ...(p.purpose ? { purpose: p.purpose } : {}),
-                      ...(p.summary ? { summary: p.summary } : {}),
-                      ...(p.summaryDetail ? { summaryDetail: p.summaryDetail } : {}),
-                      ...(p.approvalKey ? { approvalKey: p.approvalKey } : {}),
-                      ...(p.kind ? { kind: p.kind } : {}),
-                    },
-                  ],
                 };
               }
             }

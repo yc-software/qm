@@ -45,3 +45,9 @@ test("pgSafeValue returns the same object when nothing needs sanitizing", () => 
   const dirty = { text: "a\u0000b", nested: { cut: "prefix 😀".slice(0, 8) } };
   assert.deepEqual(pgSafeValue(dirty), { text: "ab", nested: { cut: "prefix \uFFFD" } });
 });
+
+test("text that merely quotes an escape sequence takes the fast path", () => {
+  const quoted = { text: "replace(payload, '\\u0000', '') and \\ud83d" };
+  assert.equal(pgSafeValue(quoted), quoted);
+  assert.equal(jsonbSafeStringify(quoted), JSON.stringify(quoted));
+});

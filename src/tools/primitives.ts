@@ -835,8 +835,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async write(rawPath: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
-      const path = pgTextSafe(rawPath);
+    async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
+      if (path !== pgTextSafe(path))
+        throw new Error(`invalid path ${JSON.stringify(path)}: contains a NUL or unpaired surrogate`);
       const wantShare = share !== undefined && share.length > 0;
       if (data === undefined && !wantShare) {
         throw new Error("write needs `data` to save content, `share` to grant access, or both");

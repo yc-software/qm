@@ -210,7 +210,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const hasOrigin = (alias: string, origin: SessionOrigin): string => `${originExpr(alias)} = '${origin}'`;
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
     origin === "other_background" ? `${originExpr(alias)} NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
-  const taintFlag = '"securityTainted":true';
+  const taintFlag = '"securityTainted":';
   const taintCandidate = (payload: string): string => `${payload} LIKE '%${taintFlag}%'`;
   const entryTainted = (j: string): string =>
     `(${j} IS NULL OR COALESCE((${j} -> 'securityTainted') = 'true'::jsonb, FALSE))`;

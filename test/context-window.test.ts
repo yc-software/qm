@@ -317,3 +317,35 @@ test("postgres store: a channel name carrying a NUL is stored once and never re-
   assert.equal(first.channelName, "opsroom");
   assert.equal(again.channelName, "opsroom");
 });
+
+test(
+  "postgres store: a flag written in jsonb's spaced form still reads tainted and still clears",
+  { skip: pgSkip },
+  async () => {
+    const pg = (await import("pg")).default;
+    const pool = new pg.Pool({ connectionString: URL });
+    const store = createPostgresSessionStore(URL!);
+    const scope = scopeId("channel", "C1");
+    const s = await store.getOrCreateByThread(`ch:C1:pg-spaced-${Date.now()}`, "channel", scope);
+    const { lease } = await store.acquireLease(s.id);
+    const row = await store.append(lease!, {
+      type: "user",
+      payload: { text: "x", securityTainted: true },
+      scopeLabel: scope,
+    });
+    await store.releaseLease(lease!);
+    await pool.query(`UPDATE session_entries SET payload = (payload::jsonb)::text WHERE session_id = $1 AND seq = $2`, [
+      s.id,
+      row.seq,
+    ]);
+    assert.match(
+      (await pool.query(`SELECT payload FROM session_entries WHERE session_id = $1 AND seq = $2`, [s.id, row.seq]))
+        .rows[0].payload,
+      /"securityTainted": true/,
+    );
+    assert.equal((await store.getContextWindow(s.id)).hasSecurityTaint, true);
+    assert.equal(await store.clearSecurityTaint(s.id), true);
+    assert.equal((await store.getContextWindow(s.id)).hasSecurityTaint, false);
+    await pool.end();
+  },
+);

@@ -188,7 +188,15 @@ export function createPostgresSurfaceCache(
               `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7)
                ON CONFLICT (org_id, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype`,
-              [orgId, e.container, e.ts, f.fileId, pgTextSafeOrNull(f.name), f.mimetype ?? null, e.createdAt ?? now],
+              [
+                orgId,
+                e.container,
+                e.ts,
+                f.fileId,
+                pgTextSafeOrNull(f.name),
+                pgTextSafeOrNull(f.mimetype),
+                e.createdAt ?? now,
+              ],
             );
           }
           await client.query(
