@@ -1704,11 +1704,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeLabel: scopeId,
                   sessionId: session.id,
                 });
-                return {
+                deps.auditLog.record({
+                  at: Date.now(),
+                  principalId: actor.id,
+                  action: `command_approval.${scope}`,
+                  resource: p.command,
+                  scopeLabel: scopeId,
                   status: "refused",
+                  detail: JSON.stringify({ approvalOutcome: "taint_unclearable", seqs: e.seqs }),
+                });
+                return {
+                  status: "pending_approval",
                   sessionId: session.id,
                   reason:
-                    "The quarantined message could not be released because part of this conversation's stored history cannot be read. An operator needs to repair it before this approval can complete.",
+                    "the quarantined message could not be released because part of this conversation's stored history cannot be read; an operator needs to repair it before this approval can complete",
+                  pendingApprovals: [
+                    {
+                      requestId: input.approval.requestId,
+                      command: p.command,
+                      reason: p.reason ?? "requires approval",
+                      blocksInput: p.blocksInput !== false,
+                      grantModes: p.grantModes ?? resolution.approvalGrantModes,
+                      ...(p.matched ? { matched: p.matched } : {}),
+                      ...(p.purpose ? { purpose: p.purpose } : {}),
+                      ...(p.summary ? { summary: p.summary } : {}),
+                      ...(p.summaryDetail ? { summaryDetail: p.summaryDetail } : {}),
+                      ...(p.approvalKey ? { approvalKey: p.approvalKey } : {}),
+                      ...(p.kind ? { kind: p.kind } : {}),
+                    },
+                  ],
                 };
               }
             }

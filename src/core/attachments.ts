@@ -16,6 +16,7 @@ import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 export const INBOX_DIR = "inbox";
 export const SHARED_DIR = "shared";
@@ -75,7 +76,7 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
 }
 
 export function safeAttachmentName(name: string): string {
-  const base = basename(String(name ?? "").replace(/\\/g, "/")).trim();
+  const base = pgTextSafe(basename(String(name ?? "").replace(/\\/g, "/")).trim());
   if (!base || /^\.+$/.test(base)) return "file";
   return base;
 }

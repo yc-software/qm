@@ -44,6 +44,7 @@ import {
   userMessagePreview,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
+import { pgTextSafeOrNull } from "../util/text.ts";
 
 function toParticipantWindow(
   sessionId: string,
@@ -119,7 +120,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface) {
+    async getOrCreateByThread(threadRef, type, scopeId, rawChannelName, surface) {
+      const channelName = pgTextSafeOrNull(rawChannelName) ?? undefined;
       const existingId = byThread.get(threadRef);
       if (existingId) {
         const s = sessions.get(existingId);
@@ -280,7 +282,10 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         entry.payload = payload;
       }
       for (const rec of tape.get(sessionId) ?? []) {
-        if (rec.meta?.securityTainted) rec.meta = { ...rec.meta, securityTainted: false };
+        if (!rec.meta?.securityTainted) continue;
+        const meta = { ...rec.meta };
+        delete meta.securityTainted;
+        rec.meta = meta;
       }
       return true;
     },

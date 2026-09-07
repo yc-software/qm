@@ -12,10 +12,6 @@ export function tailSlice(s: string, n: number): string {
   return /^[\uDC00-\uDFFF]/.test(cut) ? cut.slice(1) : cut;
 }
 
-export function hasLoneSurrogate(s: string): boolean {
-  return !s.isWellFormed();
-}
-
 export function pgTextSafeOrNull(s: string | null | undefined): string | null {
   return s === undefined || s === null ? null : pgTextSafe(s);
 }
