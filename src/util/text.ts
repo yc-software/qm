@@ -23,17 +23,19 @@ export function pgTextSafe(s: string): string {
 
 function withPgSafeKeys(obj: Record<string, unknown>): Record<string, unknown> {
   const keys = Object.keys(obj);
-  if (keys.every((k) => pgTextSafe(k) === k)) return obj;
-  const cleanWithValue = new Set(keys.filter((k) => pgTextSafe(k) === k && obj[k] !== undefined));
+  const safeKeys = keys.map(pgTextSafe);
+  if (safeKeys.every((safe, i) => safe === keys[i])) return obj;
+  const taken = new Set(keys.filter((k, i) => safeKeys[i] === k && obj[k] !== undefined));
   const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  for (const k of keys) {
-    const safe = pgTextSafe(k);
+  keys.forEach((k, i) => {
+    const safe = safeKeys[i]!;
     if (safe === k) {
       if (obj[k] !== undefined) out[k] = obj[k];
-      continue;
+    } else if (!taken.has(safe)) {
+      taken.add(safe);
+      out[safe] = obj[k];
     }
-    if (!cleanWithValue.has(safe) && !Object.hasOwn(out, safe)) out[safe] = obj[k];
-  }
+  });
   return out;
 }
 
