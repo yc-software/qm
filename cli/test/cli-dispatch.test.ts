@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import https from "node:https";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -252,7 +254,7 @@ else console.log("{}");
   }
 });
 
-test("successful check --json --live reports the live-drift clause", async () => {
+test("successful check --json --live reports the live-drift clause", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
   const aws = join(dir, "aws-fake");
   const digest = `sha256:${"a".repeat(64)}`;
@@ -327,22 +329,37 @@ else console.log("{}");
   const previousFetch = globalThis.fetch;
   process.env.AWS_BIN = aws;
   delete process.env.GITHUB_SHA;
-  globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({
-        bundle: JSON.parse(layerBody),
-        contentHash: layerHash,
-        status: "applied",
-        runtimeContentHash: layerHash,
-      }),
-      { status: 200 },
-    );
+  const layerResponse = JSON.stringify({
+    bundle: JSON.parse(layerBody),
+    contentHash: layerHash,
+    status: "applied",
+    runtimeContentHash: layerHash,
+  });
+  globalThis.fetch = async () => new Response(layerResponse, { status: 200 });
+  let layerRequests = 0;
+  t.mock.method(https, "request", (url: URL, options: https.RequestOptions, callback: (response: unknown) => void) => {
+    assert.equal(url.pathname, "/v1/deployment-layer");
+    assert.equal(options.hostname, "acme.example.com");
+    assert.equal(options.servername, "acme.example.com");
+    assert.equal(options.method, "GET");
+    const request = new EventEmitter() as EventEmitter & { end(): void };
+    request.end = () =>
+      queueMicrotask(() => {
+        layerRequests++;
+        const response = Object.assign(new EventEmitter(), { statusCode: 200 });
+        callback(response);
+        response.emit("data", Buffer.from(layerResponse));
+        response.emit("end");
+      });
+    return request;
+  });
   try {
     const checked = await run(["check", "--json", "--live"], dir);
     assert.equal(checked.exitCode, null, checked.out);
     const result = JSON.parse(checked.out) as { valid: boolean; clauses: Record<string, { status: string }> };
     assert.equal(result.valid, true);
     assert.equal(result.clauses["aws.live-drift"]?.status, "pass");
+    assert.equal(layerRequests, 1);
   } finally {
     if (previousAwsBin === undefined) delete process.env.AWS_BIN;
     else process.env.AWS_BIN = previousAwsBin;
