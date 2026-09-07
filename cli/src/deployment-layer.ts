@@ -197,6 +197,7 @@ export function httpDeploymentLayerTransport(
     urlOf?: (config: QmConfig) => URL;
     secretFallback?: (config: QmConfig) => string | undefined;
     timeoutMs?: number;
+    request?: (config: QmConfig, url: URL, init: RequestInit) => Promise<{ status: number; body: string }>;
   } = {},
 ): DeploymentLayerTransport {
   return async (opts) => {
@@ -206,12 +207,15 @@ export function httpDeploymentLayerTransport(
     if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
     const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
-    const response = await fetch(url, {
+    const init: RequestInit = {
       method: opts.method,
       headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
       ...(opts.method === "PUT" ? { body: opts.body } : {}),
       ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
-    });
+      redirect: "error",
+    };
+    if (o.request) return o.request(opts.config, url, init);
+    const response = await fetch(url, init);
     return { status: response.status, body: await response.text() };
   };
 }

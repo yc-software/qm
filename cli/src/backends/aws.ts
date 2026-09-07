@@ -1,3 +1,4 @@
+import https from "node:https";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lookup, resolveCname } from "node:dns/promises";
@@ -65,11 +66,41 @@ import {
   type DeploymentLayerTransport,
 } from "../deployment-layer.ts";
 
-/**
- * Deployment-layer transport for AWS: signed HTTP to the public core URL,
- * with a Secrets Manager fallback for CORE_SIGNING_SECRET and a 60s timeout.
- */
 export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
+  urlOf: (config) => {
+    const url = new URL(config.apiUrl ?? config.publicUrl);
+    if (url.protocol !== "https:" || url.username || url.password || url.hash)
+      throw new CliError("AWS deployment-layer URL must be HTTPS without credentials or a fragment");
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
+    return url;
+  },
+  request: async (config, url, init) => {
+    const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
+    if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
+    return new Promise((resolve, reject) => {
+      const request = https.request(
+        url,
+        {
+          hostname: target,
+          servername: url.hostname,
+          method: init.method,
+          headers: { ...(init.headers as Record<string, string>), host: url.host },
+          signal: init.signal ?? undefined,
+          agent: false,
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("error", reject);
+          response.on("end", () =>
+            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+          );
+        },
+      );
+      request.on("error", reject);
+      request.end(init.body as string | undefined);
+    });
+  },
   secretFallback: (config) =>
     config.aws
       ? capture(process.env.AWS_BIN ?? "aws", [

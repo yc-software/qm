@@ -1,7 +1,9 @@
 import test from "node:test";
+import https from "node:https";
+import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,6 +12,7 @@ import {
   assertAwsPublicListener,
   assertGithubDeployTrust,
   awsCheckLive,
+  awsDeploymentLayerTransport,
   awsDown,
   awsLogs,
   awsMigrateCandidate,
@@ -156,6 +159,31 @@ ${script}
   chmodSync(bin, 0o755);
   const prior = process.env.AWS_BIN;
   const priorFetch = globalThis.fetch;
+  const priorRequest = https.request;
+  https.request = ((url: URL, options: https.RequestOptions, callback: (response: unknown) => void) => {
+    const request = new EventEmitter() as EventEmitter & { end(body?: string): void };
+    request.end = (body) => {
+      void globalThis
+        .fetch(url, {
+          method: options.method,
+          headers: options.headers as Record<string, string>,
+          body,
+          signal: options.signal,
+        })
+        .then(async (result) => {
+          const response = Object.assign(new EventEmitter(), { statusCode: result.status });
+          callback(response);
+          try {
+            response.emit("data", Buffer.from(await result.text()));
+            response.emit("end");
+          } catch (error) {
+            response.emit("error", error);
+          }
+        })
+        .catch((error) => request.emit("error", error));
+    };
+    return request;
+  }) as typeof https.request;
   process.env.AWS_BIN = bin;
   globalThis.fetch = async () => new Response("", { status: Number(process.env.AWS_FAKE_HTTP_STATUS ?? 404) });
   return {
@@ -164,6 +192,7 @@ ${script}
       if (prior === undefined) delete process.env.AWS_BIN;
       else process.env.AWS_BIN = prior;
       globalThis.fetch = priorFetch;
+      https.request = priorRequest;
     },
   };
 }
@@ -4276,6 +4305,159 @@ test("AWS private canary reaches core without a core ingress target and refuses 
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS name, and signed path", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-target-"));
+  const fake = fakeAws(dir, "console.log('')");
+  const priorSecret = process.env.CORE_SIGNING_SECRET;
+  const priorAlb = process.env.AWS_FAKE_ALB_DNS;
+  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  process.env.AWS_FAKE_ALB_DNS = "inactive-stack.elb.example";
+  const calls: Array<{ url: URL; options: https.RequestOptions; body: string }> = [];
+  t.mock.method(https, "request", (url: URL, options: https.RequestOptions, callback: (response: unknown) => void) => {
+    const request = new EventEmitter() as EventEmitter & { end(body?: string): void };
+    request.end = (body = "") => {
+      calls.push({ url, options, body });
+      queueMicrotask(() => {
+        const response = Object.assign(new EventEmitter(), { statusCode: 307 });
+        callback(response);
+        response.emit("data", Buffer.from("redirect must not be followed"));
+        response.emit("end");
+      });
+    };
+    return request;
+  });
+  try {
+    const configured = {
+      ...config,
+      aws: { ...config.aws!, alb: "inactive-stack" },
+      apiUrl: "https://api.acme.example/base?revision=1",
+    };
+    for (const method of ["GET", "PUT"] as const) {
+      const body = method === "PUT" ? '{"contract":1}' : "";
+      const result = await awsDeploymentLayerTransport({ config: configured, configDir: dir, method, body });
+      assert.equal(result.status, 307);
+    }
+    assert.equal(calls.length, 2);
+    for (const { url, options, body } of calls) {
+      assert.equal(url.href, "https://api.acme.example/base/v1/deployment-layer?revision=1");
+      assert.equal(options.hostname, "inactive-stack.elb.example");
+      assert.equal(options.servername, "api.acme.example");
+      assert.notEqual(options.rejectUnauthorized, false);
+      assert.equal(options.agent, false);
+      assert.ok(options.signal instanceof AbortSignal);
+      const headers = options.headers as Record<string, string>;
+      assert.equal(headers.host, "api.acme.example");
+      assert.equal(
+        headers["x-signature"],
+        `v0=${createHmac("sha256", TEST_SECRET_VALUE).update(`v0:${headers["x-timestamp"]}:${options.method}\n${url.pathname}${url.search}\n${body}`).digest("hex")}`,
+      );
+    }
+    assert.match(readFileSync(fake.log, "utf8"), /describe-load-balancers --names inactive-stack/);
+  } finally {
+    t.mock.restoreAll();
+    fake.restore();
+    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+    else process.env.CORE_SIGNING_SECRET = priorSecret;
+    if (priorAlb === undefined) delete process.env.AWS_FAKE_ALB_DNS;
+    else process.env.AWS_FAKE_ALB_DNS = priorAlb;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS layer transport rejects invalid targets and propagates TLS and body failures without fallback", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-failure-"));
+  const fake = fakeAws(dir, "console.log('')");
+  const priorSecret = process.env.CORE_SIGNING_SECRET;
+  const priorAlb = process.env.AWS_FAKE_ALB_DNS;
+  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  let calls = 0;
+  let failBody = false;
+  t.mock.method(
+    https,
+    "request",
+    (_url: URL, _options: https.RequestOptions, callback: (response: unknown) => void) => {
+      calls++;
+      const request = new EventEmitter() as EventEmitter & { end(): void };
+      request.end = () =>
+        queueMicrotask(() => {
+          if (!failBody) request.emit("error", new Error("certificate verification failed"));
+          else {
+            const response = Object.assign(new EventEmitter(), { statusCode: 200 });
+            callback(response);
+            response.emit("data", Buffer.from("partial"));
+            response.emit("error", new Error("response aborted"));
+          }
+        });
+      return request;
+    },
+  );
+  const send = (configured = config) =>
+    awsDeploymentLayerTransport({ config: configured, configDir: dir, method: "GET", body: "" });
+  try {
+    process.env.AWS_FAKE_ALB_DNS = "invalid/target";
+    await assert.rejects(send, /ALB hostname is invalid/);
+    assert.equal(calls, 0);
+    await assert.rejects(() => send({ ...config, apiUrl: "http://api.acme.example" }), /must be HTTPS/);
+    assert.equal(calls, 0);
+    process.env.AWS_FAKE_ALB_DNS = "inactive-stack.elb.example";
+    await assert.rejects(send, /certificate verification failed/);
+    assert.equal(calls, 1);
+    failBody = true;
+    await assert.rejects(send, /response aborted/);
+    assert.equal(calls, 2);
+  } finally {
+    t.mock.restoreAll();
+    fake.restore();
+    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+    else process.env.CORE_SIGNING_SECRET = priorSecret;
+    if (priorAlb === undefined) delete process.env.AWS_FAKE_ALB_DNS;
+    else process.env.AWS_FAKE_ALB_DNS = priorAlb;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS layer deadline aborts a native response body that never finishes", async (t) => {
+  const http = await import("node:http");
+  const controller = new AbortController();
+  t.mock.method(AbortSignal, "timeout", () => controller.signal);
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200);
+    response.write("partial");
+    setTimeout(() => controller.abort(), 10);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-abort-"));
+  const fake = fakeAws(dir, "console.log('')");
+  const priorSecret = process.env.CORE_SIGNING_SECRET;
+  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  let calls = 0;
+  t.mock.method(
+    https,
+    "request",
+    (_url: URL, options: https.RequestOptions, callback: (response: import("node:http").IncomingMessage) => void) => {
+      calls++;
+      return http.request({ ...options, hostname: "127.0.0.1", port: address.port }, callback);
+    },
+  );
+  try {
+    await assert.rejects(
+      () => awsDeploymentLayerTransport({ config, configDir: dir, method: "GET", body: "" }),
+      /abort/i,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    t.mock.restoreAll();
+    fake.restore();
+    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+    else process.env.CORE_SIGNING_SECRET = priorSecret;
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
   }
 });
