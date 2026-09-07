@@ -745,7 +745,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           try {
             parsed = JSON.parse(row.payload as string);
           } catch {
-            if ((row.payload as string).includes(taintFlag)) unreadable.push(Number(row.seq));
+            unreadable.push(Number(row.seq));
             continue;
           }
           if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) continue;
@@ -756,19 +756,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         }
         if (unreadable.length > 0) throw new TaintUnclearableError(sessionId, unreadable);
         if (cleared.length > 0) {
-          const seqs = cleared.map((c) => c.seq);
           await client.query(
             `UPDATE session_entries e SET payload = c.payload
                FROM unnest($2::int[], $3::text[]) AS c(seq, payload)
               WHERE e.session_id = $1 AND e.seq = c.seq`,
-            [sessionId, seqs, cleared.map((c) => c.payload)],
+            [sessionId, cleared.map((c) => c.seq), cleared.map((c) => c.payload)],
           );
-          await client.query(
-            "UPDATE session_tape SET security_tainted = NULL WHERE session_id = $1 AND entry_seq = ANY($2::int[])",
-            [sessionId, seqs],
-          );
-          return true;
         }
+        const tape = await client.query(
+          "UPDATE session_tape SET security_tainted = NULL WHERE session_id = $1 AND security_tainted",
+          [sessionId],
+        );
+        if (cleared.length > 0 || (tape.rowCount ?? 0) > 0) return true;
         return (await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).rows.length === 1;
       });
     },

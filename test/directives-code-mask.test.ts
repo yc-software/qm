@@ -6,6 +6,6 @@ test("captured directive groups are unmasked, so quoted code never leaves as a p
   const reply = "Sure.\n@agent please run `npm test` and report\nThanks";
   const { text, matches } = extractDirectives(reply, /^@agent (.+)$/gm, /$^/, (groups) => groups[0]);
   assert.deepEqual(matches, ["please run `npm test` and report"]);
-  assert.equal(text, "Sure.\n\nThanks".replace("\n\n", "\n\n"));
+  assert.equal(text, "Sure.\n\nThanks");
   assert.ok(!matches[0]!.includes("\u0000"));
 });

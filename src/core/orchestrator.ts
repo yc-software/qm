@@ -1704,9 +1704,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeLabel: scopeId,
                   sessionId: session.id,
                 });
-                throw new NonRetryableTurnError(
-                  "The quarantined message could not be released because part of this conversation's stored history cannot be read. An operator needs to repair it before this approval can complete.",
-                );
+                return {
+                  status: "refused",
+                  sessionId: session.id,
+                  reason:
+                    "The quarantined message could not be released because part of this conversation's stored history cannot be read. An operator needs to repair it before this approval can complete.",
+                };
               }
             }
             await pending.delete(input.approval.requestId);
