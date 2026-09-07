@@ -279,6 +279,9 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         delete payload.securityTainted;
         entry.payload = payload;
       }
+      for (const rec of tape.get(sessionId) ?? []) {
+        if (rec.meta?.securityTainted) rec.meta = { ...rec.meta, securityTainted: false };
+      }
       return true;
     },
 

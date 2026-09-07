@@ -307,3 +307,13 @@ test(
     await pool.end();
   },
 );
+
+test("postgres store: a channel name carrying a NUL is stored once and never re-healed", { skip: pgSkip }, async () => {
+  const store = createPostgresSessionStore(URL!);
+  const scope = scopeId("channel", "C1");
+  const threadRef = `ch:C1:pg-channel-name-${Date.now()}`;
+  const first = await store.getOrCreateByThread(threadRef, "channel", scope, "ops\u0000room");
+  const again = await store.getOrCreateByThread(threadRef, "channel", scope, "ops\u0000room");
+  assert.equal(first.channelName, "opsroom");
+  assert.equal(again.channelName, "opsroom");
+});

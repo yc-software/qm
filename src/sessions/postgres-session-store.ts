@@ -557,7 +557,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, rawChannelName, surface): Promise<Session> {
+      const channelName = pgTextSafeOrNull(rawChannelName) ?? undefined;
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -589,7 +590,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           session.scopeId,
           session.threadRef,
           session.createdAt,
-          pgTextSafeOrNull(channelName),
+          channelName ?? null,
           surface ?? null,
           sessionOrigin(threadRef),
           cronIdOf(threadRef),

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jsonbSafeStringify } from "../src/util/text.ts";
+import { jsonbSafeStringify, pgSafeValue } from "../src/util/text.ts";
 
 test("NUL characters are dropped for jsonb", () => {
   const out = jsonbSafeStringify({ name: "a\u0000b" });
@@ -32,4 +32,16 @@ test("a key that only differs by a NUL never overwrites the clean key", () => {
 test("a dirty key whose clean form is an inherited property name is kept", () => {
   assert.equal(jsonbSafeStringify({ ["constructor\u0000"]: 1 }), '{"constructor":1}');
   assert.equal(jsonbSafeStringify({ ["toString\u0000"]: 1, x: 2 }), '{"toString":1,"x":2}');
+});
+
+test("a dirty key whose clean form is __proto__ is stored as an own key", () => {
+  assert.equal(jsonbSafeStringify({ ["__proto__\u0000"]: 1 }), '{"__proto__":1}');
+  assert.equal(jsonbSafeStringify(JSON.parse('{"__proto__":{"x":1},"a\\u0000":1}')), '{"__proto__":{"x":1},"a":1}');
+});
+
+test("pgSafeValue returns the same object when nothing needs sanitizing", () => {
+  const clean = { text: "hello 😀", list: [{ deep: "ok" }] };
+  assert.equal(pgSafeValue(clean), clean);
+  const dirty = { text: "a\u0000b", nested: { cut: "prefix 😀".slice(0, 8) } };
+  assert.deepEqual(pgSafeValue(dirty), { text: "ab", nested: { cut: "prefix \uFFFD" } });
 });

@@ -1696,8 +1696,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               try {
                 await deps.sessions.clearSecurityTaint(session.id);
               } catch (e) {
-                if (e instanceof TaintUnclearableError) throw new NonRetryableTurnError(e.message);
-                throw e;
+                if (!(e instanceof TaintUnclearableError)) throw e;
+                deps.errors?.record({
+                  category: "security",
+                  code: "taint_release_failed",
+                  message: e.message,
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                });
+                throw new NonRetryableTurnError(
+                  "The quarantined message could not be released because part of this conversation's stored history cannot be read. An operator needs to repair it before this approval can complete.",
+                );
               }
             }
             await pending.delete(input.approval.requestId);

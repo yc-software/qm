@@ -27,7 +27,7 @@ export function pgTextSafe(s: string): string {
 
 function withPgSafeKeys(obj: Record<string, unknown>): Record<string, unknown> {
   let dirty = false;
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const k of Object.keys(obj)) {
     const safe = pgTextSafe(k);
     if (safe !== k) dirty = true;
@@ -47,4 +47,9 @@ function pgSafeReplacer(_key: string, v: unknown): unknown {
 export function jsonbSafeStringify(value: unknown): string {
   const plain = JSON.stringify(value);
   return JSONB_REJECTED_ESCAPE.test(plain) ? JSON.stringify(value, pgSafeReplacer) : plain;
+}
+
+export function pgSafeValue<T>(value: T): T {
+  const plain = JSON.stringify(value);
+  return JSONB_REJECTED_ESCAPE.test(plain) ? (JSON.parse(JSON.stringify(value, pgSafeReplacer)) as T) : value;
 }

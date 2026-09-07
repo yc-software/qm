@@ -133,7 +133,7 @@ async function registerArtifact(
   try {
     const id = fileArtifactId(reg.seed, direction, batchIndex);
     const path = `artifacts/${id}/${name}`;
-    const { created } = await reg.store.put({
+    const { created, artifact } = await reg.store.put({
       id,
       ownerScopeId: reg.ownerScopeId,
       createdBy: reg.createdBy,
@@ -145,7 +145,7 @@ async function registerArtifact(
       ...(reg.createdInScope ? { createdInScope: reg.createdInScope } : {}),
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
-    const registered = { id, path, ownerScopeId: reg.ownerScopeId, direction, created };
+    const registered = { id, path: artifact.path, ownerScopeId: reg.ownerScopeId, direction, created };
     await reg.onRegistered?.(registered);
     return registered;
   } catch (e) {
