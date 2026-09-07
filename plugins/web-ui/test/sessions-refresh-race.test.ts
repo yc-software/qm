@@ -29,9 +29,9 @@ test("superseded session refreshes observe the winning refresh's list", async ()
 
   const sessionA = {
     id: "sess-a",
-    threadRef: "web:josh:aaa",
-    scopeId: "personal:josh",
-    title: "Optimize QM webapp",
+    threadRef: "web:alex:aaa",
+    scopeId: "personal:alex",
+    title: "Review sample workspace",
   };
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
@@ -45,7 +45,7 @@ test("superseded session refreshes observe the winning refresh's list", async ()
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState, sessionsReady, refreshSessions } = await vite.ssrLoadModule("/src/sessions.ts");
-    appState.me = { user: "josh", org: "yc" };
+    appState.me = { user: "alex", org: "acme" };
     const boot = refreshSessions({ silent: true });
     const pane1 = (async () => {
       const refreshed = await refreshSessions({ silent: true });
@@ -218,13 +218,13 @@ test("an open that joined a refresh whose answer was discarded asks again itself
     refreshSessionsOnOpen();
     assert.equal(pending.length, 1, "both opens join the refresh already running");
 
-    pending[0]!(Response.json({ sessions: [{ id: "b", threadRef: "web:josh:b", scopeId: "personal:josh" }] }));
+    pending[0]!(Response.json({ sessions: [{ id: "b", threadRef: "web:alex:b", scopeId: "personal:alex" }] }));
     assert.equal(await stale, false, "a patch landing mid-flight makes a refresh discard its answer");
     assert.equal(sessionsState.list.length, 0, "so the list it fetched never reaches the sidebar");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(pending.length, 2, "the opens that joined it ask again — once between them, not once each");
-    pending[1]!(Response.json({ sessions: [{ id: "b", threadRef: "web:josh:b", scopeId: "personal:josh" }] }));
+    pending[1]!(Response.json({ sessions: [{ id: "b", threadRef: "web:alex:b", scopeId: "personal:alex" }] }));
   } finally {
     await vite.close();
     dom.window.close();

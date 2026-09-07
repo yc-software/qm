@@ -12,24 +12,24 @@ const notice = (subject: string) => formatDeployNotice({ subject, repo: REPO, sh
 
 test("a PR reference becomes a Slack link and the bare parens go away", () => {
   assert.equal(
-    notice("fix(web-ui): collapse the sidebar to a rail so the toggle never overlaps content (#1576)"),
-    "🔧 fix(web-ui): collapse the sidebar to a rail so the toggle never overlaps content " +
-      `<https://github.com/${REPO}/pull/1576|#1576>`,
+    notice("fix(web-ui): align the sample toolbar (#101)"),
+    "🔧 fix(web-ui): align the sample toolbar " +
+      `<https://github.com/${REPO}/pull/101|#101>`,
   );
 });
 
 test("the emoji comes from the conventional-commit type", () => {
-  assert.match(notice("feat(sandbox): exportFiles is shared (#1602)"), /^✨ /);
-  assert.match(notice("perf: delete unused projection (#1529)"), /^⚡ /);
-  assert.match(notice("refactor: centralize blob capability validation (#1530)"), /^🧹 /);
-  assert.match(notice("revert: bring back the old sweeper (#1)"), /^⏪ /);
-  assert.match(notice("feat!: drop the legacy principal mode (#1561)"), /^✨ /);
+  assert.match(notice("feat(files): add sample export (#102)"), /^✨ /);
+  assert.match(notice("perf: speed up sample lookup (#103)"), /^⚡ /);
+  assert.match(notice("refactor: simplify sample formatter (#104)"), /^🧹 /);
+  assert.match(notice("revert: restore sample layout (#105)"), /^⏪ /);
+  assert.match(notice("feat!: replace sample format (#106)"), /^✨ /);
 });
 
 test("prose before a colon is not mistaken for a commit type", () => {
   assert.equal(
-    notice("Remove vestigial multi-org setup: single-tenant by contract (#1536)"),
-    `🚀 Remove vestigial multi-org setup: single-tenant by contract <https://github.com/${REPO}/pull/1536|#1536>`,
+    notice("Update sample settings: use consistent defaults (#107)"),
+    `🚀 Update sample settings: use consistent defaults <https://github.com/${REPO}/pull/107|#107>`,
   );
   assert.match(notice("wibble(thing): not a real type (#7)"), /^🚀 /);
 });
