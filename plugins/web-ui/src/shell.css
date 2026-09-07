@@ -11,6 +11,7 @@
   --radius-lg: 16px;
   --chat-pad: 16px;
   --composer-inset: 13px;
+  --chat-surface-shadow: 0 2px 5px rgb(0 0 0 / 0.08), 0 8px 24px rgb(0 0 0 / 0.1);
   /* Height reserved at the bottom of every chat message for its own hover footer; it doubles
      as the rhythm between message blocks. */
   --meta-lane: 18px;
@@ -1312,53 +1313,14 @@ a.chat-row-open {
   --chat-scroll-pad-top: 28px;
   container-type: size;
 
-  --chat-edge-fade: 24px;
+  --chat-edge-space: 24px;
+  --chat-scroll-pad-bottom: calc(var(--chat-edge-space) + 16px);
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
 
-  padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
+  padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
   scroll-behavior: smooth;
-}
-
-.chat-scroll::before,
-.chat-scroll::after {
-  content: "";
-  display: block;
-  position: sticky;
-  z-index: 2;
-  height: var(--chat-edge-fade);
-  margin-left: calc(-1 * var(--chat-pad));
-  margin-right: calc(-1 * var(--chat-pad));
-  pointer-events: none;
-  backdrop-filter: blur(1px);
-  -webkit-backdrop-filter: blur(1px);
-}
-.chat-scroll::before {
-  top: calc(-1 * var(--chat-scroll-pad-top));
-  margin-top: calc(-1 * var(--chat-scroll-pad-top));
-  margin-bottom: calc(var(--chat-scroll-pad-top) - var(--chat-edge-fade));
-  background: linear-gradient(
-    to bottom,
-    var(--background),
-    color-mix(in srgb, var(--background) 74%, transparent) 38%,
-    color-mix(in srgb, var(--background) 32%, transparent) 68%,
-    transparent
-  );
-  mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-}
-.chat-scroll::after {
-  bottom: 0;
-  background: linear-gradient(
-    to top,
-    var(--background),
-    color-mix(in srgb, var(--background) 74%, transparent) 38%,
-    color-mix(in srgb, var(--background) 32%, transparent) 68%,
-    transparent
-  );
-  mask-image: linear-gradient(to top, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  -webkit-mask-image: linear-gradient(to top, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
 }
 
 .fork-origin-row {
@@ -1427,6 +1389,7 @@ a.chat-row-open {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  box-shadow: var(--chat-surface-shadow);
 }
 .pinned-strip.expanded {
   padding: 6px 10px;
@@ -1571,34 +1534,14 @@ a.chat-row-open {
   z-index: 3;
   padding-top: 14px;
   margin-top: -14px;
-  margin-bottom: var(--chat-edge-fade);
-  background: var(--background);
+  margin-bottom: var(--chat-edge-space);
+  background: transparent;
+  pointer-events: none;
 }
 
-.message-stack .user-row:not(:has(~ .user-row))::after {
-  content: "";
-  position: absolute;
-  left: calc(-1 * var(--chat-pad));
-  right: calc(-1 * var(--chat-pad));
-  top: 100%;
-  height: var(--chat-edge-fade, 20px);
-  pointer-events: none;
-  opacity: 0;
-  background: linear-gradient(
-    to bottom,
-    var(--background),
-    color-mix(in srgb, var(--background) 74%, transparent) 38%,
-    color-mix(in srgb, var(--background) 32%, transparent) 68%,
-    transparent
-  );
-  mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  transition: opacity 120ms ease;
-}
-.message-stack .user-row.stuck:not(:has(~ .user-row))::after {
-  opacity: 1;
+.message-stack .user-row:not(:has(~ .user-row)) > .user-bubble {
+  pointer-events: auto;
+  box-shadow: var(--chat-surface-shadow);
 }
 
 .assistant-row + .user-row {
@@ -2474,7 +2417,12 @@ a.chat-row-open {
 }
 
 .chat-bottom-dock {
+  position: relative;
+  z-index: 4;
   min-width: 0;
+}
+.custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {
+  margin-top: -16px;
 }
 
 .bg-chip {
@@ -2837,6 +2785,7 @@ a.chat-row-open {
   border: 1px solid var(--border);
   border-radius: 24px;
   background: var(--background);
+  box-shadow: var(--chat-surface-shadow);
 }
 .composer-input {
   width: 100%;
@@ -7242,8 +7191,8 @@ h3.ambient-field-label {
 
 [data-density="compact"] .chat-scroll {
   --chat-scroll-pad-top: 14px;
-  --chat-edge-fade: 14px;
-  padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
+  --chat-edge-space: 14px;
+  padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
 }
 [data-density="compact"] .message-row {
   --meta-lane: 16px;
@@ -8772,11 +8721,11 @@ h3.ambient-field-label {
 }
 .mini-convo-body .chat-scroll {
   --chat-scroll-pad-top: 12px;
-  --chat-edge-fade: 12px;
+  --chat-edge-space: 12px;
   --chat-pad: 12px;
   container-type: normal;
   max-height: 250px;
-  padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
+  padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
 }
 .mini-convo-body .message-stack {
   width: 100%;
