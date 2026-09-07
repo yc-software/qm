@@ -27,7 +27,12 @@ function withPgSafeKeys(obj: Record<string, unknown>): Record<string, unknown> {
   for (const k of Object.keys(obj)) {
     const safe = pgTextSafe(k);
     if (safe !== k) dirty = true;
-    if (safe === k || (!Object.hasOwn(obj, safe) && !Object.hasOwn(out, safe))) out[safe] = obj[k];
+    if (safe === k) {
+      if (obj[k] !== undefined || !Object.hasOwn(out, k)) out[k] = obj[k];
+      continue;
+    }
+    const twinTaken = Object.hasOwn(obj, safe) && obj[safe] !== undefined;
+    if (!twinTaken && !Object.hasOwn(out, safe)) out[safe] = obj[k];
   }
   return dirty ? out : obj;
 }

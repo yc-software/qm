@@ -55,3 +55,7 @@ test("text that merely quotes an escape sequence takes the fast path", () => {
 test("two dirty keys that clean to the same key keep the first value", () => {
   assert.equal(jsonbSafeStringify({ ["a\u0000"]: 1, ["a\u0000\u0000"]: 2 }), '{"a":1}');
 });
+
+test("a clean twin key holding undefined does not shadow the dirty key", () => {
+  assert.equal(jsonbSafeStringify({ ["a\u0000"]: 1, a: undefined }), '{"a":1}');
+});

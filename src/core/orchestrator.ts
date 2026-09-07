@@ -1703,13 +1703,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeLabel: scopeId,
                   sessionId: session.id,
                 });
-                if (!(e instanceof TaintUnclearableError)) {
-                  return {
-                    status: "pending_approval",
-                    sessionId: session.id,
-                    reason: "the approval could not be applied just now; try again in a moment",
-                  };
-                }
+                const unclearable = e instanceof TaintUnclearableError;
                 deps.auditLog.record({
                   at: Date.now(),
                   principalId: actor.id,
@@ -1717,13 +1711,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   resource: p.command,
                   scopeLabel: scopeId,
                   status: "refused",
-                  detail: JSON.stringify({ approvalOutcome: "taint_unclearable", seqs: e.seqs }),
+                  detail: JSON.stringify(
+                    unclearable
+                      ? { approvalOutcome: "taint_unclearable", seqs: e.seqs }
+                      : { approvalOutcome: "taint_release_error", error: errMessage(e) },
+                  ),
                 });
                 return {
                   status: "pending_approval",
                   sessionId: session.id,
-                  reason:
-                    "the quarantined message could not be released because part of this conversation's stored history cannot be read; an operator needs to repair it before this approval can complete",
+                  reason: unclearable
+                    ? "The quarantined message could not be released because part of this conversation's stored history cannot be read. An operator needs to repair it before this approval can complete."
+                    : "The approval could not be applied just now. Try again in a moment.",
                 };
               }
             }
