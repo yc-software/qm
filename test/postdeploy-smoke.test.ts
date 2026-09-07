@@ -130,17 +130,29 @@ test("live session smoke proves a model turn, persistence, title, error log, and
   }
 
   let archivedFailedSession = false;
+  let titleWait = 0;
   await assert.rejects(
-    checkLiveSession(config, "http://core.internal:8080", async (input, init) => {
-      const path = new URL(String(input)).pathname;
-      if (path === "/v1/turns")
-        return Response.json({ status: "ok", sessionId: "sess-2", reply: "QM deployment canary passed." });
-      if (path === "/v1/sessions/sess-2" && init?.method === "POST") archivedFailedSession = true;
-      return Response.json({ session: { id: "sess-2" }, entries: [{ type: "user" }, { type: "assistant" }] });
-    }),
+    checkLiveSession(
+      config,
+      "http://core.internal:8080",
+      async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/turns")
+          return Response.json({ status: "ok", sessionId: "sess-2", reply: "QM deployment canary passed." });
+        if (path === "/v1/sessions/sess-2" && init?.method === "POST") archivedFailedSession = true;
+        return Response.json({ session: { id: "sess-2" }, entries: [{ type: "user" }, { type: "assistant" }] });
+      },
+      {
+        now: () => titleWait,
+        sleep: async (ms) => {
+          titleWait += ms;
+        },
+      },
+    ),
     /generated title/,
   );
   assert.equal(archivedFailedSession, true);
+  assert.equal(titleWait, 60_000);
 
   await assert.rejects(
     checkLiveSession(config, "http://core.internal:8080", async (input) => {
@@ -169,4 +181,131 @@ test("live session smoke proves a model turn, persistence, title, error log, and
     /returned 500/,
   );
   assert.equal(archivedFailedRequest, true);
+});
+
+test("live session smoke waits for a background worker title before checking errors and archiving", async () => {
+  let elapsed = 0;
+  let reads = 0;
+  let checkedErrors = false;
+  let archived = false;
+  await checkLiveSession(
+    {
+      adminGrants: "josh@example.com:org_admin",
+      orgId: "acme",
+      portalIdentitySecret: "portal-secret",
+      signingSecret: "source-secret",
+    },
+    "http://core.internal:8080",
+    async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/turns")
+        return Response.json({ status: "ok", sessionId: "delayed-title", reply: "QM deployment canary passed." });
+      if (path === "/v1/admin/errors") {
+        assert.equal(reads, 3);
+        checkedErrors = true;
+        return Response.json({ errors: [] });
+      }
+      if (init?.method === "POST") {
+        assert.equal(checkedErrors, true);
+        archived = true;
+        return Response.json({});
+      }
+      assert.equal(path, "/v1/sessions/delayed-title");
+      reads += 1;
+      return Response.json({
+        session: { id: "delayed-title", ...(reads >= 3 ? { title: "Verify deployment canary" } : {}) },
+        entries: [{ type: "user" }, { type: "assistant" }],
+      });
+    },
+    {
+      now: () => elapsed,
+      sleep: async (ms) => {
+        elapsed += ms;
+      },
+    },
+  );
+  assert.equal(elapsed, 1000);
+  assert.equal(archived, true);
+});
+
+test("live session smoke aborts a hung first title read and still archives", async () => {
+  const controller = new AbortController();
+  let archived = false;
+  await assert.rejects(
+    checkLiveSession(
+      {
+        adminGrants: "josh@example.com:org_admin",
+        orgId: "acme",
+        portalIdentitySecret: "portal-secret",
+        signingSecret: "source-secret",
+      },
+      "http://core.internal:8080",
+      async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/turns") {
+          assert.equal(init?.signal, undefined);
+          return Response.json({ status: "ok", sessionId: "hung-title", reply: "QM deployment canary passed." });
+        }
+        if (init?.method === "POST") {
+          assert.equal(init.signal, undefined);
+          archived = true;
+          return Response.json({});
+        }
+        assert.equal(path, "/v1/sessions/hung-title");
+        assert.equal(init?.signal, controller.signal);
+        return new Promise((_resolve, reject) => {
+          controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+          queueMicrotask(() => controller.abort(new DOMException("Title deadline", "TimeoutError")));
+        });
+      },
+      {
+        now: Date.now,
+        sleep: async () => {
+          throw new Error("Unexpected sleep");
+        },
+        timeout: (ms) => {
+          assert.equal(ms, 60_000);
+          return controller.signal;
+        },
+      },
+    ),
+    { name: "TimeoutError" },
+  );
+  assert.equal(archived, true);
+});
+
+test("live session smoke rejects a title returned after the deadline", async () => {
+  let elapsed = 0;
+  let archived = false;
+  await assert.rejects(
+    checkLiveSession(
+      {
+        adminGrants: "josh@example.com:org_admin",
+        orgId: "acme",
+        portalIdentitySecret: "portal-secret",
+        signingSecret: "source-secret",
+      },
+      "http://core.internal:8080",
+      async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/turns")
+          return Response.json({ status: "ok", sessionId: "late-title", reply: "QM deployment canary passed." });
+        if (init?.method === "POST") {
+          archived = true;
+          return Response.json({});
+        }
+        assert.equal(path, "/v1/sessions/late-title");
+        elapsed = 60_001;
+        return Response.json({ session: { title: "Late title" }, entries: [{ type: "user" }, { type: "assistant" }] });
+      },
+      {
+        now: () => elapsed,
+        sleep: async () => {
+          throw new Error("Unexpected sleep");
+        },
+      },
+    ),
+    /generated title/,
+  );
+  assert.equal(archived, true);
 });

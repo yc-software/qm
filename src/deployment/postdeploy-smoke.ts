@@ -6,6 +6,7 @@ import { mintSignedPayload } from "../auth/signed-token.ts";
 import { signedRequestHeaders } from "../auth/source-auth-sign.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
 
 export const PARALLEL_EXCEPTION_QUERY = `
   SELECT n.nspname AS schema_name, p.proname AS function_name
@@ -118,6 +119,10 @@ export async function checkLiveSession(
   config: LiveSessionConfig,
   baseUrl: string,
   fetchImpl: FetchLike = fetch,
+  timing: { now: () => number; sleep: (ms: number) => Promise<void>; timeout?: (ms: number) => AbortSignal } = {
+    now: Date.now,
+    sleep,
+  },
 ): Promise<void> {
   const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
   if (!orgId) throw new Error("live session smoke requires ORG_ID");
@@ -125,7 +130,13 @@ export async function checkLiveSession(
   if (!portalIdentitySecret) throw new Error("live session smoke requires PORTAL_IDENTITY_SECRET");
   const principalId = firstAdminPrincipal(config.adminGrants);
   const root = baseUrl.replace(/\/+$/, "");
-  const request = async (method: "GET" | "POST", path: string, body?: unknown, admin = false): Promise<unknown> => {
+  const request = async (
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    admin = false,
+    signal?: AbortSignal,
+  ): Promise<unknown> => {
     const raw = body === undefined ? "" : JSON.stringify(body);
     const headers = await stagingApiHeaders(
       principalId,
@@ -140,6 +151,7 @@ export async function checkLiveSession(
       method,
       headers: { ...headers, ...(raw ? { "content-type": "application/json" } : {}) },
       ...(raw ? { body: raw } : {}),
+      ...(signal ? { signal } : {}),
     });
     const text = await response.text();
     if (!response.ok)
@@ -173,11 +185,19 @@ export async function checkLiveSession(
     if (turn.reply?.trim() !== expectedReply) throw new Error("live session received an unexpected model reply");
 
     const sessionPath = `/v1/sessions/${encodeURIComponent(turn.sessionId)}?viewer=${encodeURIComponent(principalId)}&tailTurns=1`;
-    const persisted = (await request("GET", sessionPath)) as {
+    const titleDeadline = timing.now() + 60_000;
+    const titleSignal = (timing.timeout ?? AbortSignal.timeout)(60_000);
+    let persisted = (await request("GET", sessionPath, undefined, false, titleSignal)) as {
       session?: { title?: string | null };
       entries?: Array<{ type?: string }>;
     };
-    if (!persisted.session?.title?.trim()) throw new Error("live session has no generated title");
+    while (!persisted.session?.title?.trim() && timing.now() < titleDeadline && !titleSignal.aborted) {
+      await timing.sleep(Math.min(500, titleDeadline - timing.now()));
+      if (timing.now() >= titleDeadline || titleSignal.aborted) break;
+      persisted = (await request("GET", sessionPath, undefined, false, titleSignal)) as typeof persisted;
+    }
+    if (timing.now() >= titleDeadline || titleSignal.aborted || !persisted.session?.title?.trim())
+      throw new Error("live session has no generated title");
     if (!persisted.entries?.some((entry) => entry.type === "user"))
       throw new Error("live session has no persisted user turn");
     if (!persisted.entries.some((entry) => entry.type === "assistant")) {
