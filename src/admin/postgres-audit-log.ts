@@ -61,17 +61,18 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
+  const values = (e: Omit<AuditEvent, "id">): unknown[] => [
+    e.at,
+    e.principalId,
+    e.action,
+    pgTextSafe(e.resource),
+    e.scopeLabel,
+    e.status ?? null,
+    pgTextSafeOrNull(e.detail),
+  ];
   return {
     record(e) {
-      const write = q(`INSERT INTO audit_log(${COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [
-        e.at,
-        e.principalId,
-        e.action,
-        typeof e.resource === "string" ? pgTextSafe(e.resource) : e.resource,
-        e.scopeLabel,
-        e.status ?? null,
-        pgTextSafeOrNull(e.detail),
-      ])
+      const write = q(`INSERT INTO audit_log(${COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7)`, values(e))
         .then(() => undefined)
         .catch((err) => console.error("[audit] failed to persist event to durable store:", errMessage(err)));
       pendingWrites.add(write);
@@ -81,16 +82,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       await q(
         `INSERT INTO audit_log(${COLS}, idempotency_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-        [
-          e.at,
-          e.principalId,
-          e.action,
-          typeof e.resource === "string" ? pgTextSafe(e.resource) : e.resource,
-          e.scopeLabel,
-          e.status ?? null,
-          pgTextSafeOrNull(e.detail),
-          key,
-        ],
+        [...values(e), key],
       );
     },
     async events() {
