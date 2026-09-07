@@ -735,7 +735,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
         const { rows } = await client.query(
-          `SELECT seq, payload FROM session_entries WHERE session_id = $1 AND ${taintCandidate("payload")} ORDER BY seq`,
+          `SELECT seq, payload, safe_jsonb(payload) IS NULL AS unparseable
+             FROM session_entries WHERE session_id = $1 AND ${taintCandidate("payload")} ORDER BY seq`,
           [sessionId],
         );
         const unreadable: number[] = [];
@@ -743,6 +744,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         for (const row of rows) {
           let parsed: unknown;
           try {
+            if (row.unparseable === true) throw new Error("unparseable");
             parsed = JSON.parse(row.payload as string);
           } catch {
             unreadable.push(Number(row.seq));
@@ -798,7 +800,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const rows = await q(
         `SELECT GREATEST(
            COALESCE(MAX(entry_seq) FILTER (
-             WHERE kind = 'annotation'
+             WHERE kind = 'annotation' AND payload LIKE '%"turnEnd":%'
                AND safe_jsonb(payload) -> 'turnEnd' = 'true'::jsonb
            ), -1),
            COALESCE(MAX(covers_entry_seq) FILTER (

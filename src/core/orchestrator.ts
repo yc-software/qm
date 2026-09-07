@@ -1696,14 +1696,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               try {
                 await deps.sessions.clearSecurityTaint(session.id);
               } catch (e) {
-                if (!(e instanceof TaintUnclearableError)) throw e;
                 deps.errors?.record({
                   category: "security",
                   code: "taint_release_failed",
-                  message: e.message,
+                  message: errMessage(e),
                   scopeLabel: scopeId,
                   sessionId: session.id,
                 });
+                if (!(e instanceof TaintUnclearableError)) {
+                  return {
+                    status: "pending_approval",
+                    sessionId: session.id,
+                    reason: "the approval could not be applied just now; try again in a moment",
+                  };
+                }
                 deps.auditLog.record({
                   at: Date.now(),
                   principalId: actor.id,
