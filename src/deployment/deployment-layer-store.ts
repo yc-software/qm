@@ -91,20 +91,6 @@ const pathOrder = (a: DeploymentLayerFile, b: DeploymentLayerFile): number => {
   return 0;
 };
 
-function hasLoneSurrogate(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(i + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
-      i++;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
   if (input.contract !== 1 || !Array.isArray(input.tools) || !Array.isArray(input.skills)) {
     throw new Error("deployment layer requires contract: 1, tools[], and skills[]");
@@ -121,7 +107,7 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
             `deployment layer ${kind} entry contains a NUL character, which the store cannot persist: ${file.path}`,
           );
         }
-        if (hasLoneSurrogate(file.path) || hasLoneSurrogate(file.content)) {
+        if (!file.path.isWellFormed() || !file.content.isWellFormed()) {
           throw new Error(
             `deployment layer ${kind} entry contains an unpaired Unicode surrogate, which the store cannot persist: ${file.path}`,
           );

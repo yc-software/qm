@@ -1,6 +1,6 @@
 import type { CronFireLogEntry } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgTextSafe, pgTextSafeOrNull } from "../util/text.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -129,8 +129,8 @@ const FIRE_COLUMN_DEFS: readonly FireColumn[] = [
   { name: "scheduled_at", cast: "bigint", value: (_cronId, e) => e.scheduledAt ?? null },
   { name: "ended_at", cast: "bigint", value: (_cronId, e) => e.endedAt ?? null },
   { name: "status", cast: "text", value: (_cronId, e) => e.status ?? null },
-  { name: "note", cast: "text", value: (_cronId, e) => (e.note !== undefined ? pgTextSafe(e.note) : null) },
-  { name: "reply", cast: "text", value: (_cronId, e) => (e.reply !== undefined ? pgTextSafe(e.reply) : null) },
+  { name: "note", cast: "text", value: (_cronId, e) => pgTextSafeOrNull(e.note) },
+  { name: "reply", cast: "text", value: (_cronId, e) => pgTextSafeOrNull(e.reply) },
 ];
 
 const FIRE_COLUMNS = FIRE_COLUMN_DEFS.map((c) => c.name).join(", ");

@@ -342,7 +342,7 @@ export function createSessionMethods(
       if (createdInScope !== ownerScopeId) {
         await deps.acl.grant({
           ownerScopeId,
-          ref: path,
+          ref: artifact.path,
           granteeScopeId: createdInScope,
           permission: "read",
           grantedBy: principalId,
@@ -352,7 +352,7 @@ export function createSessionMethods(
         at: Date.now(),
         principalId,
         action: "file.upload",
-        resource: path,
+        resource: artifact.path,
         scopeLabel: createdInScope,
       });
       return toFileItem(artifact);

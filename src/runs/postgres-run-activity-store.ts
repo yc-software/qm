@@ -1,5 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { RUN_ACTIVITY_TTL_MS, type RunActivityEntry, type RunActivityStore } from "./run-activity-store.ts";
+import { jsonbSafeStringify } from "../util/text.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS run_activity(
@@ -32,7 +33,7 @@ export function createPostgresRunActivityStore(connectionString: string): RunAct
       await q(
         `INSERT INTO run_activity(run_id, seq, parent_seq, type, payload, created_at)
          VALUES ($1,$2,$3,$4,$5,$6)`,
-        [runId, entry.seq, entry.parentSeq, entry.type, JSON.stringify(entry.payload ?? null), entry.createdAt],
+        [runId, entry.seq, entry.parentSeq, entry.type, jsonbSafeStringify(entry.payload ?? null), entry.createdAt],
       );
     },
 

@@ -1,5 +1,6 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { foldCapture, normalizeReplace, queryBullets, recallBody, type MemoryService } from "./memory-service.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS memory_revisions(
@@ -52,7 +53,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
         await client.query("ROLLBACK");
         return false;
       }
-      const next = normalizeReplace(content);
+      const next = pgTextSafe(normalizeReplace(content));
       if (next !== String(head.rows[0]?.body ?? "")) {
         await client.query(
           "INSERT INTO memory_revisions (scope_id, seq, op, body, author, at) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -83,7 +84,8 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
         [scopeId],
       );
       const existing = (head.rows[0]?.body as string | undefined) ?? "";
-      const next = derive(existing);
+      const derived = derive(existing);
+      const next = derived ? { body: pgTextSafe(derived.body) } : null;
       if (next && next.body !== existing) {
         const seq = Number(head.rows[0]?.seq ?? 0) + 1;
         await client.query(

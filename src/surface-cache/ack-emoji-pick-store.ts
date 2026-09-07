@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { pgTextSafeOrNull } from "../util/text.ts";
 
 type AckPickOutcome = "picked" | "declined";
 
@@ -83,7 +84,7 @@ export function createPostgresAckEmojiPickStore(connectionString: string): AckEm
           p.outcome,
           p.picked ?? null,
           p.icon ?? null,
-          p.message ?? null,
+          pgTextSafeOrNull(p.message),
           p.candidates ?? null,
           p.model ?? null,
           p.latencyMs ?? null,

@@ -37,6 +37,7 @@ import {
   TAPE_IMPORT_MAX_ENTRIES,
   tapeCheckpointPayload,
   tapeEntryMirrorRecord,
+  TaintUnclearableError,
 } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
@@ -1691,12 +1692,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ],
               };
             }
-            await pending.delete(input.approval.requestId);
             if (p.kind === "input") {
-              await deps.sessions
-                .clearSecurityTaint(session.id)
-                .catch(swallowAs("clearSecurityTaint on input approval", false));
+              try {
+                await deps.sessions.clearSecurityTaint(session.id);
+              } catch (e) {
+                if (e instanceof TaintUnclearableError) throw new NonRetryableTurnError(e.message);
+                throw e;
+              }
             }
+            await pending.delete(input.approval.requestId);
             const useKey = p.approvalKey ?? p.command;
             commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" ? 1 : Infinity));
             if (scope === "session" || scope === "always") {

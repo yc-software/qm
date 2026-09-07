@@ -1,6 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage } from "../util/errors.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 export interface ScopedEvent {
   scopeLabel: ScopeId;
@@ -189,7 +190,11 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
     q,
     record(input) {
       const s = input as Record<string, unknown>;
-      const values = cfg.columns.map(([, js]) => (js === "ts" ? Date.now() : (s[js] ?? null)));
+      const values = cfg.columns.map(([, js]) => {
+        if (js === "ts") return Date.now();
+        const v = s[js] ?? null;
+        return typeof v === "string" ? pgTextSafe(v) : v;
+      });
       const write = q(insertSql, values)
         .catch((err) => console.error(cfg.persistErrorMessage, errMessage(err)))
         .finally(() => pendingWrites.delete(write));
