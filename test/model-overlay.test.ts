@@ -124,7 +124,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.equal(resolveModel(MODEL_ID), undefined);
   await reader.refresh();
   const inFlight = getRequiredModel(MODEL_ID);
-  assert.equal(contextTokenBudgetForModel(MODEL_ID), 190_000);
+  assert.equal(contextTokenBudgetForModel(MODEL_ID), 150_000);
   assert.deepEqual(inFlight.cost, spec.cost);
   assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
   assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
@@ -137,7 +137,7 @@ test("store reload and independent readers observe edits and soft deletion witho
     "editor",
   );
   await reader.refresh();
-  assert.equal(contextTokenBudgetForModel(MODEL_ID), 290_000);
+  assert.equal(getRequiredModel(MODEL_ID).contextWindow, 600_000);
   assert.equal(getRequiredModel(MODEL_ID).cost.input, 1);
   assert.equal(getRequiredModel(MODEL_ID).cost.tiers, undefined);
   assert.equal(inFlight.contextWindow, 400_000);

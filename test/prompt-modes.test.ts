@@ -373,8 +373,9 @@ test("a display name containing template tokens cannot break prompt rendering", 
     text: "",
     origin: { kind: "direct" },
   });
-  assert.match(prompt, /1:1 with Alice/);
-  assert.doesNotMatch(prompt, /\{\{/);
+  const systemPrompt = prompt.split("\n\n<environment>")[0]!;
+  assert.match(systemPrompt, /1:1 with Alice/);
+  assert.doesNotMatch(systemPrompt, /\{\{/);
 });
 
 test("template tokens in a stored branding value are stripped, never rendered or thrown", async () => {
@@ -403,17 +404,14 @@ test("Mode 2 (spine channel): static prose stays within the word-count ceiling (
   const orch = buildOrchestrator({ orgSoul: ORG_SOUL });
   const prompt = await sysprompt(orch, spineChannelTurn("", { timezone: "America/New_York" }));
 
-  const VOLATILE_BOUNDARY = "\n\n## The user's local time";
-  const boundaryAt = prompt.indexOf(VOLATILE_BOUNDARY);
-  assert.notEqual(
-    boundaryAt,
-    -1,
-    "expected the cached-prefix/volatile-tail boundary ('## The user's local time') to still exist — " +
-      "if compose renamed or moved this heading, update VOLATILE_BOUNDARY here to match",
+  const systemPrompt = prompt.split("\n\n<environment>")[0]!;
+  assert.match(
+    prompt,
+    /## The user's local time/,
+    "the volatile tail rides the environment note, not the system prompt",
   );
-  const cachedPrefix = prompt.slice(0, boundaryAt);
 
-  const staticProse = cachedPrefix.split(ORG_SOUL).join("");
+  const staticProse = systemPrompt.split(ORG_SOUL).join("");
 
   const wordCount = staticProse.trim().split(/\s+/).filter(Boolean).length;
 

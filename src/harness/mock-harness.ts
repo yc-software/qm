@@ -325,7 +325,7 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!histcount") {
           reply = `history:${turn.history.length}`;
         } else if (command0 === "!sysprompt") {
-          reply = turn.systemPrompt;
+          reply = [turn.systemPrompt, turn.environment].filter((s) => s && s.trim()).join("\n\n");
         } else if (command0 === "!wallclock") {
           reply = `wallclock:${turn.turnWallClockMs ?? 0}`;
         } else if (command0 === "!surfacename") {

@@ -179,16 +179,15 @@ test("context token budget is half of each model's real input room", () => {
     cacheWrite: 12.5,
     tiers: undefined,
   });
-  assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), Math.floor((1_000_000 - 128_000) * 0.5));
+  assert.equal(contextTokenBudgetForModel("claude-fable-5-1"), 150_000, "a 1M window is capped, not halved");
   assert.equal(getRequiredModel("claude-fable-5").contextWindow, 1_000_000);
-  assert.equal(contextTokenBudgetForModel("claude-fable-5"), Math.floor((1_000_000 - 128_000) * 0.5));
-  const sol = contextTokenBudgetForModel("gpt-5.6-sol");
-  assert.equal(sol, Math.floor((1_050_000 - 128_000) * 0.5));
-  assert.ok(sol !== undefined && sol < 1_050_000 * 0.5, "budget stays below half the window");
+  assert.equal(contextTokenBudgetForModel("claude-fable-5"), 150_000);
+  assert.equal(contextTokenBudgetForModel("gpt-5.6-sol"), 150_000);
   assert.equal(contextTokenBudgetForModel("claude-not-a-real-model"), undefined);
   for (const m of SELECTABLE_BASE_MODELS) {
     const budget = contextTokenBudgetForModel(m.id);
     assert.ok(budget !== undefined && budget >= 60_000, `${m.id} budget ${budget} suspiciously small`);
+    assert.ok(budget <= 150_000, `${m.id} budget ${budget} exceeds the cap`);
   }
 });
 

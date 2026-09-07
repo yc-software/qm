@@ -1052,11 +1052,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);
       if (sharedFilesBlock) systemPrompt += `\n\n${sharedFilesBlock}`;
 
-      const stableSystemBytes = systemPrompt.length;
-      if (turnTimezone) {
-        const timeBlock = currentTimeBlock(turnTimezone, Date.now());
-        if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
-      }
+      const timeBlock = turnTimezone ? currentTimeBlock(turnTimezone, Date.now()) : "";
       let memoryContext = "a channel";
       if (conversation.kind === "dm") memoryContext = "a direct message";
       else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
@@ -1861,8 +1857,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
           systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
         }
+        const stableSystemBytes = systemPrompt.length;
+        if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
         systemPrompt += memoryBlock;
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
+        const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
+        systemPrompt = systemPrompt.slice(0, stableSystemBytes);
 
         if (
           ambientTurn &&
@@ -2500,7 +2500,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote = inputUnscreened || inbound.unscreened.length ? unscreenedNotice("inbound content") : "";
         const turnEnv = environmentNote(
-          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim()]
+          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim(), volatileContext]
             .filter((s) => s && s.trim())
             .join("\n\n"),
         );
@@ -2810,7 +2810,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : {}),
             ...(securityPolicy.toolApprovals === "all" ? { toolApprovalGate: authorizeToolCall } : {}),
             systemPrompt,
-            systemCacheBoundary: stableSystemBytes,
             history: continuation?.history ?? history,
             tools,
             ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),

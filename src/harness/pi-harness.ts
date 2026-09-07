@@ -1115,6 +1115,7 @@ function customModelsPath(): string | null {
 async function buildModelRuntime(
   keys: ProviderKeys | string,
   modelGateway?: ModelGatewayTransportConfig,
+  cacheRetention?: "long",
 ): Promise<ModelRuntime> {
   const k: ProviderKeys = typeof keys === "string" ? { anthropic: keys } : keys;
   // Custom providers must exist in the runtime's own registry — a runtime
@@ -1128,6 +1129,8 @@ async function buildModelRuntime(
   for (const [provider, apiKey] of Object.entries(k)) {
     if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
+  const retained = <T extends object | undefined>(options: T): T =>
+    cacheRetention ? ({ ...options, cacheRetention } as T) : options;
   const stream = runtime.stream.bind(runtime);
   runtime.stream = (<TApi extends Api>(
     model: Model<TApi>,
@@ -1135,9 +1138,9 @@ async function buildModelRuntime(
     options?: ModelsApiStreamOptions<TApi>,
   ) => {
     const request = modelGatewayRequest(modelGateway, model);
-    if (!request) return stream(model, context, options);
+    if (!request) return stream(model, context, retained(options));
     const routedOptions = {
-      ...options,
+      ...retained(options),
       apiKey: request.apiKey,
       transformHeaders: async (headers: ProviderHeaders) => ({
         ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
@@ -1157,9 +1160,9 @@ async function buildModelRuntime(
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
     const request = modelGatewayRequest(modelGateway, model);
-    if (!request) return streamSimple(model, context, options);
+    if (!request) return streamSimple(model, context, retained(options));
     const routedOptions = {
-      ...options,
+      ...retained(options),
       apiKey: request.apiKey,
       transformHeaders: async (headers: ProviderHeaders) => ({
         ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
@@ -1298,32 +1301,6 @@ export function applyFastSpeed<T>(payload: T, fast: boolean | undefined, api?: s
 export function modelHasFastMode(model: unknown): boolean {
   const m = model as { headers?: Record<string, string>; fastMode?: boolean } | undefined;
   return Boolean(m?.fastMode) || Boolean(m?.headers?.["anthropic-beta"]?.includes(FAST_MODE_BETA));
-}
-
-const ONE_HOUR_CACHE_CONTROL = { type: "ephemeral", ttl: "1h" } as const;
-
-export function applySystemPromptCacheSplit(payload: unknown, boundary: number | undefined): void {
-  if (typeof boundary !== "number" || !Number.isFinite(boundary) || boundary <= 0) return;
-  if (!payload || typeof payload !== "object") return;
-  const p = payload as { system?: unknown; tools?: unknown };
-  if (!Array.isArray(p.system) || p.system.length !== 1) return;
-  const block = p.system[0] as { type?: unknown; text?: unknown } | undefined;
-  if (!block || block.type !== "text" || typeof block.text !== "string") return;
-  const text = block.text;
-  if (boundary >= text.length) return;
-  const stable = text.slice(0, boundary);
-  const rest = text.slice(boundary);
-  if (!stable.trim() || !rest.trim()) return;
-  p.system = [
-    { type: "text", text: stable, cache_control: { ...ONE_HOUR_CACHE_CONTROL } },
-    { type: "text", text: rest },
-  ];
-  if (Array.isArray(p.tools)) {
-    for (const t of p.tools) {
-      const tool = t as { cache_control?: unknown } | undefined;
-      if (tool && tool.cache_control) tool.cache_control = { ...ONE_HOUR_CACHE_CONTROL };
-    }
-  }
 }
 
 export const OUTPUT_BUDGET_FLOOR_TOKENS = 1_024;
@@ -1474,7 +1451,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     systemPrompt: string,
     history: SessionEntry[],
     priorTurns?: ConversationTurn[],
-    systemCacheBoundary?: number,
     readOnly?: boolean,
     surfaceTools?: boolean,
     surfaceName?: string,
@@ -1488,12 +1464,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     turnProviderKeys?: ProviderKeys,
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
-    const cacheBoundary =
-      systemCacheSplit &&
-      typeof systemCacheBoundary === "number" &&
-      systemPrompt.slice(0, systemCacheBoundary).isWellFormed()
-        ? systemCacheBoundary
-        : undefined;
     let reconstructed: PiReplayMessage[] | null;
     try {
       reconstructed = reconstructMessagesFromHistory(history);
@@ -1527,6 +1497,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
       turnProviderKeys ? undefined : modelGateway,
+      systemCacheSplit ? "long" : undefined,
     );
     const ref: ToolContextRef = { current: null };
     const { resourceLoader, cwd, agentDir } = await createIsolatedResources(tempDirPrefix, composedPrompt);
@@ -1608,13 +1579,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          if (cacheBoundary !== undefined) {
-            try {
-              applySystemPromptCacheSplit(payload, cacheBoundary);
-            } catch (e) {
-              swallow("pi: system prompt cache split", e);
-            }
-          }
           const guarded = guardOutputBudget(payload, model);
           if (guarded.kind === "raised") {
             console.error(
@@ -1709,7 +1673,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.systemPrompt,
           turn.history,
           turn.priorTurns,
-          turn.systemCacheBoundary,
           turn.readOnly,
           turn.surfaceTools,
           turn.surfaceName,
@@ -1759,6 +1722,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             type: "user",
             payload: {
               text: turn.input,
+              ...(turn.environment ? { environment: turn.environment } : {}),
               ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
               ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
             },

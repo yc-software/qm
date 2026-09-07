@@ -88,7 +88,6 @@ export interface HarnessTurnInput {
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
-  systemCacheBoundary?: number;
   history: SessionEntry[];
   tools: ToolContext;
   credentialExecServices?: readonly { service: string; binary: string }[];

@@ -505,3 +505,14 @@ test("a legacy call with a numeric files count replays without it (schema wants 
   assert.ok(!("files" in args), "numeric files count must not replay");
   assert.ok(!("bytes" in args));
 });
+
+test("reconstructMessagesFromHistory replays the environment note the user message was sent with", () => {
+  const history = [
+    ent("user", { text: "what's on today?", environment: "<environment>\nIt is Monday 9am\n</environment>" }, 1),
+    ent("assistant", { text: "Nothing yet." }, 2),
+  ];
+  const [user] = reconstructMessagesFromHistory(history);
+  assert.deepEqual(user!.content, [
+    { type: "text", text: "what's on today?\n\n<environment>\nIt is Monday 9am\n</environment>" },
+  ]);
+});

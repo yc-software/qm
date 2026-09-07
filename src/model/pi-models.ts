@@ -429,6 +429,7 @@ export function auxiliaryModelFor(baseModelId: string): string {
 }
 
 const CONTEXT_BUDGET_FRACTION = 0.5;
+const CONTEXT_BUDGET_CAP_TOKENS = 150_000;
 
 export function contextTokenBudgetForModel(id: string): number | undefined {
   const model = resolveModel(id);
@@ -436,7 +437,7 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
   const output = model?.maxTokens;
   if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0 || output >= window)
     return undefined;
-  return Math.floor((window - output) * CONTEXT_BUDGET_FRACTION);
+  return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
 }
 
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {

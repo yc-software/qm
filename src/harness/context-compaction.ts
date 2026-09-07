@@ -78,8 +78,11 @@ const entryTokenCache = new Map<string, number>();
 const ENTRY_TOKEN_CACHE_MAX = 50_000;
 
 export function estimateEntryTokens(entry: SessionEntry): number {
-  const payload = entry.payload as { text?: string } | null;
-  const text = typeof payload?.text === "string" ? payload.text : JSON.stringify(entry.payload ?? {});
+  const payload = entry.payload as { text?: string; environment?: string } | null;
+  const text =
+    typeof payload?.text === "string"
+      ? [payload.text, payload.environment].filter((s) => typeof s === "string" && s).join("\n\n")
+      : JSON.stringify(entry.payload ?? {});
   const key = `${entry.sessionId}:${entry.seq}:${text.length}`;
   const hit = entryTokenCache.get(key);
   if (hit !== undefined) return hit;
