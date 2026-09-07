@@ -62,6 +62,14 @@ export function entrySecurityTainted(entry: SessionEntry): boolean {
   return (entry.payload as { securityTainted?: unknown } | null)?.securityTainted === true;
 }
 
+export function withoutSecurityTaint(payload: unknown): Record<string, unknown> | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  if (!Object.hasOwn(payload, "securityTainted")) return null;
+  const rest = { ...(payload as Record<string, unknown>) };
+  delete rest.securityTainted;
+  return rest;
+}
+
 export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {
   let latest: ContextSummaryPayload | null = null;
   for (const entry of entries) latest = contextSummaryPayload(entry) ?? latest;

@@ -51,3 +51,7 @@ test("text that merely quotes an escape sequence takes the fast path", () => {
   assert.equal(pgSafeValue(quoted), quoted);
   assert.equal(jsonbSafeStringify(quoted), JSON.stringify(quoted));
 });
+
+test("two dirty keys that clean to the same key keep the first value", () => {
+  assert.equal(jsonbSafeStringify({ ["a\u0000"]: 1, ["a\u0000\u0000"]: 2 }), '{"a":1}');
+});

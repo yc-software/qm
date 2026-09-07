@@ -76,7 +76,7 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
 }
 
 export function safeAttachmentName(name: string): string {
-  const base = pgTextSafe(basename(String(name ?? "").replace(/\\/g, "/")).trim());
+  const base = basename(pgTextSafe(String(name ?? "")).replace(/\\/g, "/")).trim();
   if (!base || /^\.+$/.test(base)) return "file";
   return base;
 }

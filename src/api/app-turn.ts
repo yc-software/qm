@@ -75,10 +75,16 @@ export function createTurnMethods(
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
   return {
     async turn(rawReq: TurnRequest): Promise<TurnResult> {
-      const req = pgSafeValue(rawReq);
-      if (req.actor.externalId !== rawReq.actor.externalId || req.idempotencyKey !== rawReq.idempotencyKey) {
-        return { status: "refused", reason: "identifiers must not contain NUL or unpaired surrogate characters" };
-      }
+      const req: TurnRequest = {
+        ...rawReq,
+        ...pgSafeValue({
+          text: rawReq.text,
+          displayText: rawReq.displayText,
+          conversationHeader: rawReq.conversationHeader,
+          overheard: rawReq.overheard,
+          attachments: rawReq.attachments,
+        }),
+      };
       await deps.identity.refresh();
       const actor: Principal = deps.identity.resolve(req.actor);
       if (!deps.identity.isInternal(actor)) {

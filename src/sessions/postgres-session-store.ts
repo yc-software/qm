@@ -43,6 +43,7 @@ import {
   stableOriginPattern,
   threadRefCronIdExpr,
   userMessagePreview,
+  withoutSecurityTaint,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -750,11 +751,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             unreadable.push(Number(row.seq));
             continue;
           }
-          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-          if (!Object.hasOwn(parsed, "securityTainted")) continue;
-          const rest = { ...(parsed as Record<string, unknown>) };
-          delete rest.securityTainted;
-          cleared.push({ seq: Number(row.seq), payload: jsonbSafeStringify(rest) });
+          const rest = withoutSecurityTaint(parsed);
+          if (rest) cleared.push({ seq: Number(row.seq), payload: jsonbSafeStringify(rest) });
         }
         if (unreadable.length > 0) throw new TaintUnclearableError(sessionId, unreadable);
         if (cleared.length > 0) {
