@@ -93,6 +93,10 @@ export function browserRenderableImage(mimeType?: string): boolean {
   return RENDERABLE_IMAGE_TYPES.has((mimeType ?? "").split(";")[0]!.trim().toLowerCase());
 }
 
+export function inlineImageSrc(mimeType: string | undefined, content: string): string {
+  return content.startsWith("data:") ? content : `data:${mimeType ?? "application/octet-stream"};base64,${content}`;
+}
+
 const copyFeedback = new WeakMap<HTMLButtonElement, { html: string; timer: ReturnType<typeof setTimeout> }>();
 
 export async function copyText(text: string, btn?: HTMLButtonElement): Promise<void> {

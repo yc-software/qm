@@ -49,7 +49,9 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
   transcript, bottom composer, inline **model selector** (the models core reports as
   serviceable for the approved harnesses),
   explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
-  toggle, attachments, streaming partials, and a theme toggle.
+  toggle, attachments (image attachments open in a full-screen viewer with arrow-key,
+  swipe, and filmstrip navigation across every image in the message), streaming partials,
+  and a theme toggle.
   The UI drives Pi's `Agent` with a custom `streamFn` (`src/core-bridge.ts`) instead of
   mounting Pi's stock `AgentInterface`.
 - **Slash-command skill picker** — type `/` at the start of the composer for a Codex-style

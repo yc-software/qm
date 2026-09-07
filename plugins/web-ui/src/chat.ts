@@ -82,7 +82,8 @@ import {
   harnessSupportsEffort,
   harnessSupportsFastMode,
 } from "./model-options";
-import { browserRenderableImage, formatBytes, icon, relTime } from "./ui";
+import { browserRenderableImage, formatBytes, icon, inlineImageSrc, relTime } from "./ui";
+import { openLightbox, type LightboxImage } from "./lightbox";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -1300,7 +1301,7 @@ export function createChatSurface(
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           <div class="message-bubble user-bubble">
             ${markdown(messageText(message))}
-            ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
+            ${attachments.length ? messageFiles(attachments, attachmentImage, userAttachmentChip) : nothing}
           </div>
           ${
             sendFailure
@@ -1535,7 +1536,7 @@ export function createChatSurface(
 
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
     if (!files?.length) return nothing;
-    return html`<div class="message-files">${files.map((f) => deliveredFileBadge(f))}</div>`;
+    return messageFiles(files, deliveredImage, deliveredFileChip);
   }
 
   function markdown(text: string): TemplateResult {
@@ -2283,36 +2284,62 @@ export function createChatSurface(
     artifactId?: string;
   }
 
-  function userAttachmentBadge(a: UserAttachmentView): TemplateResult {
-    const artifactHref = a.artifactId ? withBase(`/api/files/${encodeURIComponent(a.artifactId)}/content`) : undefined;
-    if (a.mimeType?.startsWith("image/")) {
-      let src = artifactHref;
-      if (!src && a.content) {
-        src = a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`;
-      }
-      if (src && !browserRenderableImage(a.mimeType)) return imageChip(a.fileName, a.size, src);
-      if (src) {
-        const img = html`<img src=${src} alt=${a.fileName} loading="lazy" />`;
-        return artifactHref
-          ? html`<a class="file-image" href=${artifactHref} target="_blank" rel="noreferrer" title=${a.fileName}
-              >${img}</a
-            >`
-          : html`<span class="file-image" title=${a.fileName}>${img}</span>`;
-      }
-    }
-    return fileChip(a.fileName, a.size, artifactHref);
+  function artifactHref(artifactId: string | undefined): string | undefined {
+    return artifactId ? withBase(`/api/files/${encodeURIComponent(artifactId)}/content`) : undefined;
   }
 
-  function deliveredFileBadge(file: DeliveredFile): TemplateResult {
-    if (!file.artifactId) return fileChip(file.name, file.sizeBytes);
-    const href = withBase(`/api/files/${encodeURIComponent(file.artifactId)}/content`);
-    if (file.mimetype?.startsWith("image/")) {
-      if (!browserRenderableImage(file.mimetype)) return imageChip(file.name, file.sizeBytes, href);
-      return html`<a class="file-image" href=${href} target="_blank" rel="noreferrer" title=${file.name}
-        ><img src=${href} alt=${file.name} loading="lazy"
-      /></a>`;
+  function attachmentImage(a: UserAttachmentView): LightboxImage | undefined {
+    if (!browserRenderableImage(a.mimeType)) return undefined;
+    const href = artifactHref(a.artifactId);
+    const src = href ?? (a.content ? inlineImageSrc(a.mimeType, a.content) : undefined);
+    return src ? { src, name: a.fileName, size: a.size, href } : undefined;
+  }
+
+  function userAttachmentChip(a: UserAttachmentView): TemplateResult {
+    const href = artifactHref(a.artifactId);
+    if (a.mimeType?.startsWith("image/")) {
+      const src = href ?? (a.content ? inlineImageSrc(a.mimeType, a.content) : undefined);
+      if (src) return imageChip(a.fileName, a.size, src);
     }
+    return fileChip(a.fileName, a.size, href);
+  }
+
+  function deliveredImage(file: DeliveredFile): LightboxImage | undefined {
+    const href = artifactHref(file.artifactId);
+    if (!href || !browserRenderableImage(file.mimetype)) return undefined;
+    return { src: href, name: file.name, size: file.sizeBytes, href };
+  }
+
+  function deliveredFileChip(file: DeliveredFile): TemplateResult {
+    const href = artifactHref(file.artifactId);
+    if (href && file.mimetype?.startsWith("image/")) return imageChip(file.name, file.sizeBytes, href);
     return fileChip(file.name, file.sizeBytes, href);
+  }
+
+  function messageFiles<T>(
+    files: T[],
+    toImage: (file: T) => LightboxImage | undefined,
+    chip: (file: T) => TemplateResult,
+  ): TemplateResult {
+    const images = files.map(toImage);
+    const gallery = images.filter((image): image is LightboxImage => image !== undefined);
+    return html`<div class="message-files">
+      ${files.map((file, i) => {
+        const image = images[i];
+        return image ? imageTile(image, gallery) : chip(file);
+      })}
+    </div>`;
+  }
+
+  function imageTile(image: LightboxImage, gallery: LightboxImage[]): TemplateResult {
+    return html`<button
+      class="file-image"
+      type="button"
+      title=${image.name}
+      @click=${(e: MouseEvent) => openLightbox(gallery, gallery.indexOf(image), e.currentTarget as HTMLElement)}
+    >
+      <img src=${image.src} alt=${image.name} loading="lazy" />
+    </button>`;
   }
 
   let stickToBottom = true;
