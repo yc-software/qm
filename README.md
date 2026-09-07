@@ -13,6 +13,10 @@ with its configuration and secrets, then open the five-minute, single-use link.
 Configure email delivery later for ordinary email sign-in and invitation emails.
 See the [CLI instructions](cli/README.md#administrator-login-without-email).
 
+You can also try out a 3rd-party hosted version of QM [here](https://www.agent37.com/qm).
+
+If you're an infra provider interested in providing a hosted version of QM, feel free to reach out.
+
 ## What is QM?
 
 Most agents are designed like personal assistants. You can make one work for a whole
