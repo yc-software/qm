@@ -1300,134 +1300,112 @@ a.chat-row-open {
 .chat-topbar {
   position: relative;
   z-index: 1;
-  height: 56px;
+  height: 40px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-  background: color-mix(in srgb, var(--background) 94%, var(--secondary));
-}
-.chat-heading {
-  min-width: 0;
-  flex: 1;
-}
-.chat-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.25;
-}
-.chat-subtitle {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--background);
 }
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-.session-topbar {
-  gap: 12px;
+  gap: 2px;
 }
 .session-heading {
   min-width: 0;
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  gap: 2px;
+  font-size: 13px;
   line-height: 1.25;
 }
-.session-crumb {
-  color: var(--muted-foreground);
+.session-crumb,
+.session-title {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 0 3 auto;
 }
-.session-crumb-sep {
-  color: color-mix(in srgb, var(--muted-foreground) 65%, transparent);
-  flex: none;
+.session-crumb {
+  flex: 0 3 auto;
+  color: var(--ink-2);
 }
 .session-title {
   min-width: 0;
   flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: var(--field);
+  color: var(--ink);
+  font-weight: 500;
 }
 .session-fork-badge {
   flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--muted);
-  color: var(--muted-foreground);
+  margin-left: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: var(--ink-2);
   font-size: 11.5px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
 }
 .session-fork-badge:hover:not(:disabled) {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--secondary) 85%, transparent);
+  color: var(--ink);
+  background: var(--hover);
 }
 .session-fork-badge:disabled {
   cursor: default;
 }
 .session-tools {
-  gap: 2px;
   flex: none;
 }
 .session-tool {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
+  justify-content: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  font-weight: 550;
+  color: var(--ink-3);
   cursor: pointer;
-  white-space: nowrap;
 }
 .session-tool:hover {
-  background: color-mix(in srgb, var(--secondary) 70%, transparent);
-  color: var(--foreground);
+  background: var(--hover);
+  color: var(--ink);
 }
 .session-tool.active {
-  background: color-mix(in srgb, var(--secondary) 85%, transparent);
-  color: var(--foreground);
+  background: var(--field);
+  color: var(--ink);
 }
 .session-tool-count {
-  min-width: 15px;
-  padding: 0 4px;
+  min-width: 14px;
+  padding: 0 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--secondary) 90%, transparent);
-  color: var(--muted-foreground);
-  font-size: 10.5px;
+  background: var(--field);
+  color: var(--ink-2);
+  font-size: 10px;
   font-weight: 600;
-  line-height: 15px;
+  line-height: 14px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 .session-tool.active .session-tool-count,
 .session-tool:hover .session-tool-count {
-  color: var(--foreground);
+  background: var(--hover-2);
+  color: var(--ink);
 }
 .session-heading.as-link {
   border: 0;
@@ -1439,7 +1417,7 @@ a.chat-row-open {
   font: inherit;
 }
 .session-heading.as-link:hover .session-title {
-  text-decoration: underline;
+  background: var(--hover-2);
 }
 .pane .session-topbar {
   margin: -28px -28px 12px;
@@ -1462,38 +1440,30 @@ a.chat-row-open {
 .session-crumb.as-link {
   border: 0;
   background: transparent;
-  padding: 0;
   font: inherit;
   cursor: pointer;
-  color: var(--muted-foreground);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 3 auto;
 }
 .session-crumb.as-link:hover {
-  color: var(--foreground);
-  text-decoration: underline;
+  background: var(--hover);
+  color: var(--ink);
 }
 .icon-btn {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--foreground);
+  color: var(--ink-3);
   cursor: pointer;
   text-decoration: none;
 }
 .icon-btn:hover {
-  background: var(--secondary);
-}
-.icon-btn.subtle {
-  color: var(--muted-foreground);
+  background: var(--hover);
+  color: var(--ink);
 }
 .chat-scroll {
   isolation: isolate;
@@ -1672,20 +1642,18 @@ a.chat-row-open {
   width: 100%;
   max-width: var(--content-w);
   margin: 0 0 20px;
-  font-size: 26px;
-  font-weight: 450;
-  letter-spacing: -0.01em;
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.375;
+  letter-spacing: -0.02em;
   text-align: center;
+  text-wrap: balance;
 }
 @container chat (min-width: 471px) {
   .custom-chat-shell.empty-chat .composer-wrap {
     width: min(calc(var(--content-w) * 0.75), 75%);
     margin-inline: auto;
-  }
-}
-@container chat (max-width: 470px) {
-  .chat-cta {
-    font-size: 22px;
   }
 }
 
@@ -1695,7 +1663,7 @@ a.chat-row-open {
   max-width: var(--content-w);
 }
 .welcome-greeting .assistant-body {
-  font-size: 15px;
+  font-size: 13.5px;
   line-height: 1.55;
 }
 .message-row {
@@ -4701,8 +4669,7 @@ a.chat-row-open {
   .session-tool span {
     display: none;
   }
-  .session-crumb,
-  .session-crumb-sep {
+  .session-crumb {
     display: none;
   }
   .message-stack {
@@ -8337,10 +8304,13 @@ h3.ambient-field-label {
 }
 .inbox-chat-cta {
   margin: 0;
+  color: var(--ink);
   font-size: 19px;
-  font-weight: 450;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  line-height: 1.375;
+  letter-spacing: -0.02em;
   text-align: center;
+  text-wrap: balance;
 }
 .inbox-chat-log {
   display: flex;
@@ -9384,9 +9354,6 @@ h3.ambient-field-label {
   }
   .session-topbar .session-heading {
     justify-content: center;
-    text-align: center;
-    font-size: 15px;
-    font-weight: 550;
   }
   .session-tools {
     display: none;
@@ -9924,7 +9891,7 @@ h3.ambient-field-label {
 .shared-conversation {
   height: 100dvh;
   display: grid;
-  grid-template-rows: 56px minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .shared-brand {
   display: flex;

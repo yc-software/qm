@@ -21,6 +21,7 @@ import {
   FileText,
   Files,
   GitFork,
+  Lock,
   Maximize2,
   Paperclip,
   Pause,
@@ -974,7 +975,7 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), true)}
+            ${chatHeader(groupDmTitle(s))}
             <div class="readonly-banner">
               ${
                 surfaceOf(s) === "slack"
@@ -1401,12 +1402,12 @@ export function createChatSurface(
     });
   }
 
-  function chatHeader(title: string | TemplateResult, detail: string, readOnly: boolean): TemplateResult {
+  function chatHeader(title: string | TemplateResult): TemplateResult {
     return html`
-      <header class="chat-topbar">
-        <div class="chat-heading">
-          <div class="chat-title" dir="auto">${title}</div>
-          <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
+      <header class="chat-topbar session-topbar">
+        <div class="session-heading">
+          <span class="session-title" dir="auto">${title}</span>
+          <span class="shared-view-badge">${icon(Lock, 12)}Read-only</span>
         </div>
       </header>
     `;

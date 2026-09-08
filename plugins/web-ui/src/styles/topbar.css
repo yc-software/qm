@@ -1,0 +1,11 @@
+.session-tool .session-tool-count {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border: 1px solid var(--background);
+}
+@media (max-width: 860px) {
+  .session-topbar .session-title {
+    font-size: 15px;
+  }
+}
