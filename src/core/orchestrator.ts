@@ -1858,7 +1858,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             swallow("orchestrator: connected-app status", e);
           }
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
+          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl, {
+            isOrgAdmin: actorIsOrgAdmin,
+            url: deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/admin/connectors` : undefined,
+          })}`;
         }
         systemPrompt += memoryBlock;
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;

@@ -67,6 +67,7 @@ export function renderConnectedAppsBlock(
   record: ConnectorStatusRecord | null,
   availableProviders: readonly string[] = [],
   connectionsUrl?: string,
+  setup?: { isOrgAdmin: boolean; url?: string },
 ): string {
   const allowed = new Set(availableProviders);
   const entries = Object.entries(record?.providers ?? {}).filter(([name]) => allowed.has(name));
@@ -77,6 +78,16 @@ export function renderConnectedAppsBlock(
   const lines = ["## Connected apps"];
   if (!availableProviders.length) {
     lines.push("No app connections are enabled by the admin. Do not suggest or offer any app connection.");
+    if (setup?.isOrgAdmin) {
+      lines.push(
+        "This user is an org admin. Offer to walk them through org OAuth app setup during onboarding, using the admin skill. This configures connections for the organization; it does not link their personal account. Do not mint consent links until the chosen app is configured and enabled. If they defer setup, continue onboarding without connections.",
+      );
+      if (setup.url) lines.push(`OAuth app setup page: ${setup.url}`);
+    } else {
+      lines.push(
+        "During onboarding, explain that an org admin needs to configure OAuth apps before accounts can be linked, and continue onboarding without connections. Do not ask this user to configure the organization.",
+      );
+    }
     return lines.join("\n");
   }
   const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));

@@ -128,3 +128,21 @@ test("connected-apps block: reconnect-needed apps are named separately", () => {
   assert.match(out, /Needs reconnect: GitHub \(refresh failed: revoked by provider\)/);
   assert.match(out, /Do not use these apps until the user reconnects them/);
 });
+
+test("connected-apps block: org setup is admin-only and separate from account linking", () => {
+  const url = "https://qm.example/admin/connectors";
+  const admin = renderConnectedAppsBlock(null, [], undefined, { isOrgAdmin: true, url });
+  assert.match(admin, /Offer to walk.*OAuth app setup/);
+  assert.match(admin, /does not link their personal account/);
+  assert.match(admin, /Do not mint consent links until/);
+  assert.match(admin, /https:\/\/qm\.example\/admin\/connectors/);
+  const noUrl = renderConnectedAppsBlock(null, [], undefined, { isOrgAdmin: true });
+  assert.match(noUrl, /Offer to walk/);
+  assert.doesNotMatch(noUrl, /OAuth app setup page:|undefined/);
+  const member = renderConnectedAppsBlock(null, [], undefined, { isOrgAdmin: false, url });
+  assert.match(member, /an org admin needs to configure/);
+  assert.doesNotMatch(member, /Offer to walk|OAuth app setup page:/);
+  const configured = renderConnectedAppsBlock(null, ["google"], undefined, { isOrgAdmin: true, url });
+  assert.match(configured, /Available to connect: Google/);
+  assert.doesNotMatch(configured, /Offer to walk|OAuth app setup page:/);
+});

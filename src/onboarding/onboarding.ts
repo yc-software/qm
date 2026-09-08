@@ -4,7 +4,7 @@ const ONBOARDING_SKILL_NAME = "onboarding";
 const ONBOARDING_VERSION = "v2";
 
 export const PROACTIVE_OPENER_PROMPT =
-  "The user just opened the app for the first time and hasn't typed anything yet. You already know who they are from their sign-in (see \"Who you're talking to\") — open the conversation yourself: greet them by name as their AI teammate, briefly say what you can do, and start onboarding by walking them through connecting their accounts. Don't ask their name or role, and don't research them in this opening turn — the hello is just a hello; you'll learn their role from connected tools and the people directory later, once their accounts are connecting.";
+  "The user just opened the app for the first time and hasn't typed anything yet. You already know who they are from their sign-in (see \"Who you're talking to\") — open the conversation yourself: greet them by name as their AI teammate, briefly say what you can do, and start onboarding using the live Connected apps block. If apps are configured, offer only those connections. If none are configured, offer org OAuth app setup first for a user the system identifies as an org admin; for a non-admin, explain that an admin must enable connections and continue onboarding without them. Don't ask their name or role, and don't research them in this opening turn — the hello is just a hello; you'll learn about their work later, from available tools or by asking if nothing is connected.";
 
 export type OnboardingStatus = "completed" | "dismissed" | "pending" | "not_started";
 
