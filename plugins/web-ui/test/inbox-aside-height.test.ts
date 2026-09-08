@@ -51,6 +51,12 @@ test("the height is recomputed when the pane resizes, not only when it renders",
   assert.match(inbox, /appState\.mainEl\.replaceChildren\(host\);\s*observeAsideSize\(host\);/);
 });
 
+test("recreating the page host replaces its observer instead of stacking another one", () => {
+  const observer = inbox.match(/function observeAsideSize\(host: HTMLElement\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(observer, /asideObserver\?\.disconnect\(\);/);
+  assert.match(inbox, /let asideObserver: ResizeObserver \| null = null;/);
+});
+
 test("writing the same height twice is skipped, so the observer cannot feed itself", () => {
   assert.match(sizeAside, /if \(host\.style\.getPropertyValue\("--inbox-aside-height"\) === next\) return;/);
 });

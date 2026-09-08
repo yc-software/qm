@@ -1239,6 +1239,7 @@ function drawSurface(surface: InboxSurface): void {
 }
 
 let fullSurface: InboxSurface | null = null;
+let asideObserver: ResizeObserver | null = null;
 let fullViewId = "all";
 let pendingItemId: string | null = null;
 
@@ -1323,10 +1324,12 @@ function sizeAside(host: HTMLElement): void {
 
 function observeAsideSize(host: HTMLElement): void {
   if (typeof ResizeObserver === "undefined") return;
-  new ResizeObserver(() => {
+  asideObserver?.disconnect();
+  asideObserver = new ResizeObserver(() => {
     sizeAside(host);
     sizeChatInputs(host);
-  }).observe(host);
+  });
+  asideObserver.observe(host);
 }
 
 function autosizeChatInput(box: HTMLTextAreaElement): void {
