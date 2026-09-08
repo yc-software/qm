@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { harnessToolContext, oneShotModelUtilities, oneShotRunner } from "../src/harness/harness-shared.ts";
-import { SECURITY_SCREEN_SYSTEM_PROMPT } from "../src/security/security-posture.ts";
-import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
+import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../src/security/security-posture.ts";
+import type { HarnessLlmRequestRecord, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 
 function capturingRunPrompt(reply = "one-shot reply"): {
   turns: HarnessTurnInput[];
@@ -57,8 +57,26 @@ test("the one-shot runner plumbs signal, instrumentation, and model override pos
   const turn = turns[0]!;
   assert.equal(turn.cancel, cancel);
   assert.equal(turn.recordModelCall, recordModelCall);
-  assert.equal(turn.recordLlmRequest, recordLlmRequest);
+  assert.notEqual(turn.recordLlmRequest, undefined);
   assert.deepEqual(turn.runtime, { modelId: "judge-model-1" });
+});
+
+test("one-shot LLM records do not inherit synthetic turn coordinates", async () => {
+  const recorded: HarnessLlmRequestRecord[] = [];
+  const runPrompt = async (turn: HarnessTurnInput): Promise<HarnessTurnResult> => {
+    await turn.recordLlmRequest?.({ turnSeq: 3, step: 2, model: "m", truncated: false });
+    return { reply: "ok" };
+  };
+  const single = oneShotRunner(runPrompt);
+  await single("s", "p", undefined, {
+    recordModelCall: () => {},
+    recordLlmRequest: (rec) => {
+      recorded.push(rec);
+    },
+  });
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]!.turnSeq, null);
+  assert.equal(recorded[0]!.step, 2);
 });
 
 test("judge overrides the model while oneShot keeps the harness default", async () => {
@@ -95,4 +113,26 @@ test("security screening passes the abort signal and instrumentation through the
   assert.equal(turn.input, "suspicious payload");
   assert.equal(turn.cancel, controller.signal);
   assert.equal(turn.recordModelCall, recordModelCall);
+});
+
+test("shared harness security screens use auxiliary coordinates", async () => {
+  const recorded: HarnessLlmRequestRecord[] = [];
+  const runPrompt = async (turn: HarnessTurnInput): Promise<HarnessTurnResult> => {
+    await turn.recordLlmRequest?.({ turnSeq: 7, step: 0, model: "claude-oneshot", truncated: false });
+    return { reply: '{"decision":"auto"}' };
+  };
+  const utilities = oneShotModelUtilities(oneShotRunner(runPrompt));
+  const verdict = await utilities.screenSecurity!({
+    payload: "suspicious payload",
+    signal: new AbortController().signal,
+    recordModelCall: () => {},
+    recordLlmRequest: (rec) => {
+      recorded.push(rec);
+    },
+  });
+  assert.deepEqual(verdict, { decision: "auto" });
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]!.turnSeq, null);
+  assert.equal(recorded[0]!.step, SECURITY_SCREEN_STEP);
+  assert.equal(recorded[0]!.model, "claude-oneshot");
 });
