@@ -108,7 +108,7 @@ test("settings rows live in titled inspector cards, with the radiogroups as segm
   assert.match(css, /\.settings-choice-option\.selected \{[^}]*background: var\(--surface\);/);
   assert.match(settingsCss, /\.settings-group-action \{[^}]*color: var\(--blue-ink\);/);
   assert.match(
-    settingsCss,
+    css,
     /@media \(max-width: 560px\) \{\s*\.settings-choice,\s*\.settings-theme-controls \{\s*width: 100%;/,
     "segmented controls span the phone width",
   );

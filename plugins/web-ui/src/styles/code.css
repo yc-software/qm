@@ -158,10 +158,3 @@ markdown-block code-block:not([language="text"]) pre code .hljs-deletion {
 .code-card-exit.exit-err {
   color: var(--red);
 }
-
-@media (prefers-reduced-motion: reduce) {
-  markdown-block code-block[language] copy-button button,
-  .show-full-btn {
-    transition: none;
-  }
-}

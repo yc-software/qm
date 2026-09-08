@@ -295,7 +295,7 @@ function toggleDisabledCrons(): void {
 }
 
 function cronEmptyRow(text: string): TemplateResult {
-  return html`<div class="empty compact cron-filter-empty">${text}</div>`;
+  return html`<div class="empty compact">${text}</div>`;
 }
 
 function cronTabs(counts: Record<CronTab, number>): TemplateResult {

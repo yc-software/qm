@@ -35,16 +35,3 @@
   flex: 1 1 240px;
   min-width: 0;
 }
-@media (max-width: 560px) {
-  .settings-choice,
-  .settings-theme-controls {
-    width: 100%;
-  }
-  .settings-theme-controls {
-    justify-content: flex-start;
-  }
-  .settings-row-action,
-  .settings-group-action {
-    min-height: 44px;
-  }
-}

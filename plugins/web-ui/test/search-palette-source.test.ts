@@ -16,15 +16,12 @@ test("result rows carry the speaker avatar, the highlighted snippet, and a machi
   );
 });
 
-test("searching shimmers instead of spinning and holds still under reduced motion", () => {
-  assert.match(search, /class="chat-search-empty chat-search-searching">Searching…</);
-  assert.doesNotMatch(search, /spinner/);
-  assert.match(searchCss, /\.chat-search-searching \{[^}]*animation: shimmer-text/);
-  assert.match(
-    searchCss,
-    /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.chat-search-searching \{[^}]*animation: none/,
-  );
+test("searching reuses the thinking shimmer and never throws on a missing timestamp", () => {
+  assert.match(search, /class="chat-search-empty sheen-label thinking-sheen">Searching…</);
+  assert.doesNotMatch(search, /spinner|chat-search-searching/);
+  assert.doesNotMatch(searchCss, /chat-search-searching|shimmer-text/);
   assert.match(shell, /@keyframes shimmer-text/);
+  assert.match(search, /Number\.isFinite\(hit\.createdAt\)\s*\?\s*html`<time datetime=/);
 });
 
 test("the palette keeps its dialog semantics and keyboard contract", () => {

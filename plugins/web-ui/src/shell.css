@@ -19,14 +19,14 @@
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url("/fonts/inter-latin.woff2") format("woff2");
+  src: url("./fonts/inter-latin.woff2") format("woff2");
 }
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
   font-weight: 100 800;
   font-display: swap;
-  src: url("/fonts/jetbrains-mono-latin.woff2") format("woff2");
+  src: url("./fonts/jetbrains-mono-latin.woff2") format("woff2");
 }
 
 :root {
@@ -207,15 +207,6 @@ body {
   100% {
     opacity: 1;
     transform: scale(1);
-  }
-}
-@keyframes caret-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
   }
 }
 @keyframes spin {
@@ -1298,6 +1289,7 @@ a.chat-row-open {
   outline-offset: 2px;
 }
 .chat-topbar {
+  min-width: 0;
   position: relative;
   z-index: 1;
   height: 40px;
@@ -4785,6 +4777,17 @@ summary.work-head:hover {
 }
 
 @media (max-width: 560px) {
+  .settings-choice,
+  .settings-theme-controls {
+    width: 100%;
+  }
+  .settings-theme-controls {
+    justify-content: flex-start;
+  }
+  .settings-row-action,
+  .settings-group-action {
+    min-height: 44px;
+  }
   .pane {
     padding: calc(20px + var(--surface-safe-top)) max(14px, env(safe-area-inset-right))
       calc(32px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
@@ -10290,12 +10293,7 @@ h3.ambient-field-label {
   border-radius: 50%;
   border: 2px solid var(--border);
   border-top-color: var(--foreground);
-  animation: mc-spin 0.7s linear infinite;
-}
-@keyframes mc-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin 0.7s linear infinite;
 }
 .mc-close {
   position: absolute;
@@ -10447,4 +10445,14 @@ h3.ambient-field-label {
   flex: none;
   white-space: nowrap;
   color: var(--ink-3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-search-row {
+    animation: none;
+    transition: none;
+  }
+  markdown-block code-block[language] copy-button button,
+  .show-full-btn {
+    transition: none;
+  }
 }
