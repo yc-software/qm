@@ -26,3 +26,13 @@ test("the live-work row uses the floating composer column", () => {
   assert.match(rule, /margin: 0 auto 8px;/);
   assert.doesNotMatch(css, /live-work-dock/);
 });
+
+test("goal and queued messages precede thinking without the queue's composer overlap", () => {
+  const dock = chat.slice(chat.indexOf('<div class="chat-bottom-dock">'));
+  const goal = dock.indexOf("goalStrip(agent)");
+  const queue = dock.indexOf("ctx.composer.queuedStrip(agent)");
+  const thinking = dock.indexOf("liveWorkStatus(agent)");
+  assert.ok(goal >= 0 && goal < queue && queue < thinking);
+  const spacing = css.match(/\.queued-strip:has\(\+ \.live-work-status\) \{[^}]*\}/)?.[0] ?? "";
+  assert.match(spacing, /margin-bottom: 6px;/);
+});

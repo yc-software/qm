@@ -1778,6 +1778,9 @@ a.chat-row-open {
   width: min(calc(var(--content-w) - 24px), calc(100% - 56px));
   margin: 0 auto -10px;
 }
+.queued-strip:has(+ .live-work-status) {
+  margin-bottom: 6px;
+}
 .queued-chip {
   display: flex;
   align-items: center;
