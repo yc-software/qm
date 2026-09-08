@@ -207,7 +207,7 @@ function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconN
     };
   }
   if (c.kind === "personal") {
-    return { title: "Personal", sub: "Just you. Your web chats and DMs with the agent live here.", glyph: User };
+    return { title: "My chats", sub: "Private to you. Your web chats and DMs with the agent live here.", glyph: User };
   }
   if (c.kind === "group") {
     return {
@@ -259,7 +259,7 @@ function metaForScope(scopeId: string | null, fallbackName?: string | null): { t
   if (shared) return { title: shared, glyph: scopeId?.startsWith("group:") ? Users : Hash };
   if (scopeId?.startsWith("personal:") && scopeId !== personalScopeId())
     return { title: "Shared personal space", glyph: User };
-  return { title: fallbackName?.trim() || "Personal", glyph: User };
+  return { title: fallbackName?.trim() || "My chats", glyph: User };
 }
 
 export function scopeTitle(scopeId: string | null, fallbackName?: string | null): string {
@@ -346,8 +346,8 @@ function gridTpl(): TemplateResult {
     return context.project ? "web" : "slack";
   };
   const groups = [
-    { key: "personal", label: "Personal" },
-    { key: "web", label: "Web" },
+    { key: "personal", label: "My chats" },
+    { key: "web", label: "Shared projects" },
     { key: "slack", label: "Slack" },
   ]
     .map((g) => ({ ...g, items: projects.filter((context) => groupOf(context) === g.key) }))

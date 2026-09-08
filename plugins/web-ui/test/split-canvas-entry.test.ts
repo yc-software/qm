@@ -26,7 +26,7 @@ test("every new-chat affordance follows the shared placement rule", () => {
   const start = fn(sessions, "startNewChat");
   assert.match(start, /if \(splitState\.active\) return startNewChatInCanvas/);
   assert.match(start, /addPendingSession\(conv\.newChat/);
-  assert.match(shell, /startNewChatInLastScope\(\);/);
+  assert.match(shell, /new-chat-menu-toggle[\s\S]*toggleNewChatMenu/);
   assert.match(fn(sessions, "startProjectChat"), /startNewChat\(scopeId, name\);/);
   assert.match(fn(sessions, "startNewChatInLastScope"), /startNewChat\(/);
   assert.match(fn(shell, "openAppEditChat"), /startNewChat\(null, null, threadRef\)/);

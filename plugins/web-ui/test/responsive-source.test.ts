@@ -18,7 +18,8 @@ test("mobile shell follows the visual viewport and device safe areas", () => {
 });
 
 test("mobile sidebar is modal, dismissible, and sized for touch", () => {
-  assert.match(shell, /actionRow\(ICON\.newChat[\s\S]{0,200}startNewChatInLastScope\(\);/);
+  assert.match(shell, /new-chat-menu-toggle[\s\S]{0,500}toggleNewChatMenu/);
+  assert.match(shell, /newChatContextMenu\(\)/);
   assert.match(sessions, /export function startNewChat\([^)]*\)[^{]*\{\s*closeSidebarOnNarrowView\(\);/);
   assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
@@ -65,6 +66,13 @@ test("the sidebar's quick actions share the navrow treatment", () => {
   assert.doesNotMatch(css, /split-new-session/);
 });
 
+test("new chats make private and shared scope choices explicit", () => {
+  assert.match(shell, /new-chat-context-heading">Choose where this chat lives/);
+  assert.match(shell, /if \(context\.kind === "personal"\) return "My chats"/);
+  assert.match(shell, /context\.kind === "personal" \? "Private" : "Shared"/);
+  assert.match(shell, /startNewChat\(context\.scopeId, newChatContextName\(context\)\)/);
+});
+
 test("the quick nav is home, search, browse; create sits under the divider with the sessions it starts", () => {
   assert.match(
     shell,
@@ -77,7 +85,7 @@ test("the quick nav is home, search, browse; create sits under the divider with 
   );
   assert.match(
     shell,
-    /<div class="nav new-chat-nav">[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/div>[\s\S]*?section-label recents-label/,
+    /<div class="nav new-chat-nav">[\s\S]*?new-chat-menu-toggle[\s\S]*?newChatContextMenu\(\)[\s\S]*?section-label recents-label/,
     "create sits between the divider and the Sessions header",
   );
   assert.doesNotMatch(shell, /navRow\("chats", ICON\.chats/);

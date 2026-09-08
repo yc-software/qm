@@ -1,6 +1,6 @@
 import "dockview-core/dist/styles/dockview.css";
 import "./shell.css";
-import { bootSafely, closeUserMenu } from "./shell";
+import { bootSafely, closeNewChatMenu, closeUserMenu } from "./shell";
 import "./draft-review";
 import { registerChatSearchHotkey } from "./search";
 import { registerSessionJumpHotkeys } from "./session-jump";
@@ -37,6 +37,7 @@ document.addEventListener("click", (e) => {
   }
   if (!target?.closest(".multi-select-color")) closeSessionSelectionColor();
   if (!target?.closest(".user-menu")) closeUserMenu();
+  if (!target?.closest(".new-chat-menu")) closeNewChatMenu();
 });
 
 document.addEventListener("keydown", (e) => {
@@ -46,6 +47,7 @@ document.addEventListener("keydown", (e) => {
   clearSessionSelection();
   closeFormMenus();
   closeUserMenu();
+  closeNewChatMenu();
 });
 
 onPhoneChange(() => {
@@ -66,6 +68,7 @@ document.addEventListener(
     closeFormMenus();
     closeOpenSessionMenu();
     closeUserMenu();
+    closeNewChatMenu();
   },
   true,
 );
@@ -75,6 +78,7 @@ document.addEventListener("qm:close-overlays", () => {
   closeFormMenus();
   closeOpenSessionMenu();
   closeUserMenu();
+  closeNewChatMenu();
 });
 
 let sheetSwipe: { y: number; el: HTMLElement } | null = null;

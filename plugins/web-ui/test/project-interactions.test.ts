@@ -50,7 +50,7 @@ test("project interactions preserve focus and successful local mutations", async
   const personal = {
     scopeId: "personal:owner",
     kind: "personal",
-    name: "Personal",
+    name: "My chats",
     sessionCount: 0,
     lastActivityAt: null,
   } as const;

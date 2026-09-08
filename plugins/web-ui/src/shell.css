@@ -255,6 +255,53 @@ body.resizing-sidebar {
 .new-chat-nav {
   margin-top: 4px;
 }
+.new-chat-menu {
+  position: relative;
+}
+.new-chat-menu-toggle {
+  justify-content: flex-start;
+}
+.new-chat-menu-toggle > svg:last-child {
+  margin-left: auto;
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+.new-chat-context-menu {
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  min-width: 240px;
+}
+.new-chat-context-heading {
+  padding: 5px 9px 7px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.new-chat-context-option {
+  justify-content: space-between;
+}
+.new-chat-context-copy {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+.new-chat-context-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-chat-context-detail {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.new-chat-context-loading {
+  padding: 8px 9px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
 a.navrow,
 a.session,
 a.chat-row-open {

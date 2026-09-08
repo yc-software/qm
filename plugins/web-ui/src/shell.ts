@@ -3,6 +3,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import {
   Box,
   Brain,
+  ChevronDown,
   Clock,
   Files,
   Folder,
@@ -70,7 +71,6 @@ import {
   sessionsState,
   sessionSelectionBar,
   revealSessionSurface,
-  startNewChatInLastScope,
   startNewChat,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
@@ -101,6 +101,7 @@ import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-t
 export { appState, can, type Me, type View } from "./shell-state";
 
 let userMenuOpen = false;
+let newChatMenuOpen = false;
 let footerEl: HTMLElement | null = null;
 
 applyTheme();
@@ -116,6 +117,67 @@ export function closeUserMenu(): void {
   if (!userMenuOpen) return;
   userMenuOpen = false;
   renderSidebarFooter();
+}
+
+export function closeNewChatMenu(): void {
+  if (!newChatMenuOpen) return;
+  newChatMenuOpen = false;
+  renderSidebarTop();
+}
+
+function newChatContextName(context: (typeof contextsState.list)[number]): string {
+  if (context.project?.name) return context.project.name;
+  if (context.kind === "personal") return "My chats";
+  return context.name?.trim() || "Shared context";
+}
+
+function toggleNewChatMenu(e: Event): void {
+  e.stopPropagation();
+  newChatMenuOpen = !newChatMenuOpen;
+  renderSidebarTop();
+  if (!newChatMenuOpen) return;
+  void ensureContexts().then(() => {
+    if (newChatMenuOpen) renderSidebarTop();
+  });
+}
+
+function startNewChatInContext(context: (typeof contextsState.list)[number]): void {
+  newChatMenuOpen = false;
+  renderSidebarTop();
+  if (context.kind === "personal") startNewChat();
+  else startNewChat(context.scopeId, newChatContextName(context));
+}
+
+function newChatContextMenu(): TemplateResult {
+  const contexts = [...contextsState.list].sort((a, b) => {
+    if (a.kind === "personal") return -1;
+    if (b.kind === "personal") return 1;
+    return newChatContextName(a).localeCompare(newChatContextName(b));
+  });
+  return html`
+    <div class="session-menu-popover new-chat-context-menu" role="menu" @click=${(e: Event) => e.stopPropagation()}>
+      <div class="new-chat-context-heading">Choose where this chat lives</div>
+      ${
+        contexts.length
+          ? contexts.map(
+              (context) =>
+                html`<button
+                  class="session-menu-option new-chat-context-option"
+                  type="button"
+                  role="menuitem"
+                  @click=${() => startNewChatInContext(context)}
+                >
+                  <span class="new-chat-context-copy">
+                    ${icon(context.kind === "personal" ? MessageSquare : context.project ? Folder : MessageSquare, 15)}
+                    <span>${newChatContextName(context)}</span>
+                  </span>
+                  <span class="new-chat-context-detail">${context.kind === "personal" ? "Private" : "Shared"}</span>
+                </button>`,
+            )
+          : html`<div class="new-chat-context-loading">Loading contexts…</div>`
+      }
+    </div>
+  `;
 }
 
 function signOutFromMenu(): void {
@@ -225,6 +287,7 @@ export async function signOut(): Promise<void> {
     }
   }
   appState.me = null;
+  newChatMenuOpen = false;
   closeBrowse();
   resetInboxState();
   clearAllDrafts();
@@ -621,10 +684,20 @@ export function renderSidebarTop(): void {
         })}
       </nav>
       <div class="nav new-chat-nav">
-        ${actionRow(ICON.newChat, newChatLabel, () => {
-          hideTooltip();
-          startNewChatInLastScope();
-        })}
+        <div class="new-chat-menu ${newChatMenuOpen ? "menu-open" : ""}">
+          <button
+            class="navrow new-chat-menu-toggle"
+            type="button"
+            aria-label=${newChatLabel}
+            aria-haspopup="menu"
+            aria-expanded=${newChatMenuOpen ? "true" : "false"}
+            ${tip(sidebarOpen ? "Choose a chat context" : newChatLabel)}
+            @click=${toggleNewChatMenu}
+          >
+            ${icon(ICON.newChat, 17)}<span>${newChatLabel}</span>${icon(ChevronDown, 14)}
+          </button>
+          ${newChatMenuOpen ? newChatContextMenu() : nothing}
+        </div>
       </div>
       ${sessionSelectionBar() ?? html` <div class="section-label recents-label"><span>Sessions</span></div> `}
     `,

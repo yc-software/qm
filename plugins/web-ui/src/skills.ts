@@ -619,7 +619,7 @@ function drawSkills(loading = false): void {
                 },
                 options: [
                   html`<option value="all">All scopes</option>`,
-                  html`<option value="personal">Personal</option>`,
+                  html`<option value="personal">My chats</option>`,
                   html`<option value="channel">Channel</option>`,
                   html`<option value="group">Project / group</option>`,
                   html`<option value="team">Team</option>`,
@@ -893,7 +893,7 @@ export async function renderSkills(): Promise<void> {
     skillRows = (r.skills ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
     const personal = appState.me ? `personal:${appState.me.user}` : "";
     createScopes = [
-      { scopeId: personal, name: "Personal (only you)" },
+      { scopeId: personal, name: "My chats (only you)" },
       ...(contexts.contexts ?? [])
         .filter(
           (context) =>

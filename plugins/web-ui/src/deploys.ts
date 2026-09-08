@@ -97,7 +97,7 @@ function ownerLabel(d: DeploymentView): string {
   const me = appState.me?.user;
   if (d.ownerScopeId === `personal:${me}`) return "Your personal context";
   if (d.ownerScopeId?.startsWith("personal:"))
-    return `${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))} · Personal`;
+    return `${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))} · My chats`;
   if (d.ownerScopeId?.startsWith("org:")) return "Organization";
   return d.createdBy ? `Shared context · created by ${friendlyPrincipal(d.createdBy)}` : "Shared context";
 }

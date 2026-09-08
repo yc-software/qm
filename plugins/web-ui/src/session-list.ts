@@ -41,7 +41,7 @@ export function recentProjectSeeds(contexts: readonly ProjectAwareContext[]): Re
   return contexts.map((context): RecentProjectSeed => {
     if (context.project)
       return { scopeId: context.scopeId, name: context.project.name.trim() || null, kind: "project" };
-    if (context.kind === "personal") return { scopeId: context.scopeId, name: "Personal", kind: "personal" };
+    if (context.kind === "personal") return { scopeId: context.scopeId, name: "My chats", kind: "personal" };
     if (context.kind === "group")
       return { scopeId: context.scopeId, name: sharedContextLabel(context.scopeId, context.name), kind: "group" };
     return { scopeId: context.scopeId, name: sharedContextLabel(context.scopeId, context.name), kind: "channel" };
