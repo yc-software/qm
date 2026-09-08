@@ -379,7 +379,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     ctx.chat.drawActiveChat(agent);
   }
 
-  function composerForm(agent: Agent): TemplateResult {
+  function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
     const selectedModel = currentModelOption();
     if (!selectedModel) {
       const selected =
@@ -516,7 +516,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         `;
     return html`
       <form class="composer-wrap ${compact ? "compact" : ""}" @submit=${(e: Event) => submitComposer(e, agent)}>
-        ${slashMenu(agent)}
+        ${header} ${slashMenu(agent)}
         ${
           activeRuntimeConfig?.upgradeAvailable
             ? html`<div class="runtime-upgrade">

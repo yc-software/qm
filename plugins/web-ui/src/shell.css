@@ -1310,7 +1310,7 @@ a.chat-row-open {
 }
 .chat-scroll {
   isolation: isolate;
-  --chat-scroll-pad-top: 28px;
+  --chat-scroll-pad-top: 8px;
   container-type: size;
 
   --chat-edge-space: 24px;
@@ -1381,7 +1381,7 @@ a.chat-row-open {
   top: 0;
   z-index: 6;
   width: min(var(--content-w), 100%);
-  margin: 0 auto 10px;
+  margin: 0 auto 8px;
   border: 1px solid var(--border, #d0d0d0);
   border-radius: 10px;
   background: var(--background, #fff);
@@ -1532,9 +1532,9 @@ a.chat-row-open {
   position: sticky;
   top: var(--chat-sticky-top, 0px);
   z-index: 3;
-  padding-top: 14px;
-  margin-top: -14px;
-  margin-bottom: var(--chat-edge-space);
+  padding-top: 8px;
+  margin-top: -8px;
+  margin-bottom: 12px;
   background: transparent;
   pointer-events: none;
 }
@@ -2471,6 +2471,19 @@ a.chat-row-open {
   color: var(--muted-foreground);
   font-size: 12.5px;
 }
+.composer-wrap > .bg-activity {
+  flex: 0 0 calc(100% + var(--composer-pad-inline) + var(--composer-pad-end));
+  width: auto;
+  min-width: 0;
+  margin: calc(-1 * var(--composer-pad-block)) calc(-1 * var(--composer-pad-end)) 8px
+    calc(-1 * var(--composer-pad-inline));
+  padding: 8px var(--composer-pad-end) 8px var(--composer-pad-inline);
+  border-radius: inherit;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--secondary) 40%, var(--background));
+}
 .readonly-chat .bg-activity {
   margin-top: 8px;
 }
@@ -2792,11 +2805,14 @@ a.chat-row-open {
 }
 
 .composer-wrap {
+  --composer-pad-block: 12px;
+  --composer-pad-inline: 12px;
+  --composer-pad-end: var(--composer-pad-inline);
   position: relative;
   z-index: 1;
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
-  padding: 12px;
+  padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
   border: 1px solid var(--border);
   border-radius: 24px;
   background: var(--background);
@@ -3305,7 +3321,7 @@ a.chat-row-open {
   text-underline-offset: 2px;
 }
 .readonly-scroll {
-  --chat-scroll-pad-top: 20px;
+  --chat-scroll-pad-top: 8px;
 }
 .chat-loading {
   flex: 1;
@@ -7205,7 +7221,7 @@ h3.ambient-field-label {
 }
 
 [data-density="compact"] .chat-scroll {
-  --chat-scroll-pad-top: 14px;
+  --chat-scroll-pad-top: 8px;
   --chat-edge-space: 14px;
   padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
 }
@@ -7284,6 +7300,8 @@ h3.ambient-field-label {
 }
 
 [data-density] .composer-wrap {
+  --composer-pad-block: 6px;
+  --composer-pad-inline: 8px;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -7292,7 +7310,7 @@ h3.ambient-field-label {
      the surface's own width — a pane that fills a wide window centres the composer on the
      transcript column instead of stretching across it, and a narrow one still runs full-bleed. */
   margin-bottom: 10px;
-  padding: 6px 8px;
+  padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
   border-radius: 16px;
 }
 [data-density] .composer-input {
@@ -8735,7 +8753,7 @@ h3.ambient-field-label {
   min-height: 0;
 }
 .mini-convo-body .chat-scroll {
-  --chat-scroll-pad-top: 12px;
+  --chat-scroll-pad-top: 8px;
   --chat-edge-space: 12px;
   --chat-pad: 12px;
   container-type: normal;
@@ -9358,7 +9376,10 @@ h3.ambient-field-label {
   .composer-wrap {
     width: calc(100% - 16px);
     margin: 0 auto calc(8px + env(safe-area-inset-bottom));
-    padding: 8px 8px 8px 10px;
+    --composer-pad-block: 8px;
+    --composer-pad-inline: 10px;
+    --composer-pad-end: 8px;
+    padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
     border-radius: 22px;
   }
   .composer-input {
