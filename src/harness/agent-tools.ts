@@ -56,6 +56,7 @@ export interface ToolContextRef {
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
   tapeResultScopes?: Map<string, ScopeId>;
+  tapeResultMirrors?: Map<string, { seq: number; createdAt: number; payload: unknown; scopeLabel: ScopeId }>;
   llmCapture?: Array<{
     envelope: unknown;
     truncated: boolean;
@@ -376,7 +377,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const callId = (payload as { callId?: unknown } | null)?.callId;
       if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
     }
-    await ref.emit({ type, payload, scopeLabel });
+    const saved = await ref.emit({ type, payload, scopeLabel });
+    if (type === "tool_result" && (payload as { isError?: unknown } | null)?.isError === true) {
+      const callId = (payload as { callId?: unknown } | null)?.callId;
+      const entry = saved as { seq?: unknown; createdAt?: unknown } | null | undefined;
+      if (typeof callId === "string" && callId && typeof entry?.seq === "number") {
+        (ref.tapeResultMirrors ??= new Map()).set(callId, {
+          seq: entry.seq,
+          createdAt: typeof entry.createdAt === "number" ? entry.createdAt : Date.now(),
+          payload,
+          scopeLabel,
+        });
+      }
+    }
   };
 
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>

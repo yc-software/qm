@@ -5,6 +5,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
 import { wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
+import { appendEntryOutsideTurn } from "../src/harness/tape-import.ts";
 import { createTranscriptSource } from "../src/harness/tape-projection.ts";
 import { sleep } from "../src/util/async.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -55,12 +56,16 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
     idempotencyKey: "agent:main:cron:c1:100",
     provenance: cronProvenance(),
   });
-  assert.equal((await sessions.getEntries(session.id)).length, 0, "no transcript side effect at enqueue time");
+  assert.equal(
+    (await createTranscriptSource(sessions).forRender(session.id)).entries.length,
+    0,
+    "no transcript side effect at enqueue time",
+  );
 
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1, "the delivery is visible once its text is durable");
 
-  const entries = await sessions.getEntries(session.id);
+  const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.type, "assistant");
   assert.deepEqual(entries[0]!.payload, {
@@ -97,11 +102,11 @@ test("the recorded entry keeps the tape projection servable and renders through 
   assert.equal((projected[0]!.payload as { text?: string }).text, "cron reply body");
 });
 
-test("a session whose tape is already behind gets the entry but no orphan tape rows", async () => {
+test("a delivery into a session with prior history lands after it with no orphan tape rows", async () => {
   const { sessions, deliveries } = wired();
   const session = await webSession(sessions);
   const { lease } = await sessions.acquireLease(session.id, "turn");
-  await sessions.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: SCOPE });
+  await appendEntryOutsideTurn(sessions, lease!, { type: "user", payload: { text: "hi" }, scopeLabel: SCOPE });
   await sessions.releaseLease(lease!);
 
   await deliveries.enqueue({
@@ -113,10 +118,39 @@ test("a session whose tape is already behind gets the entry but no orphan tape r
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1);
 
-  const entries = await sessions.getEntries(session.id);
+  const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(entries.length, 2, "the transcript entry still lands");
-  const tape = await sessions.getTape(session.id);
-  assert.equal(tape.length, 0, "no tape rows without their covering annotation (heal owns this session)");
+  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq, "every tape row is covered — no orphans");
+});
+
+test("an archive-ahead session never duplicates the delivery record its projection cannot render", async () => {
+  const { sessions, inner, deliveries } = wired();
+  const session = await webSession(sessions);
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  await sessions.append(lease!, { type: "user", payload: { text: "pre-cutover question" }, scopeLabel: SCOPE });
+  await sessions.append(lease!, { type: "assistant", payload: { text: "pre-cutover answer" }, scopeLabel: SCOPE });
+  await sessions.releaseLease(lease!);
+  assert.equal(
+    (await createTranscriptSource(sessions).forRender(session.id)).entries.length,
+    2,
+    "the archive is ahead of the tape: rendering falls back to the frozen archive",
+  );
+
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "recorded onto a tape the projection cannot serve",
+    idempotencyKey: "k-archive-ahead",
+    provenance: cronProvenance(),
+  });
+  await deliveries.pending("web");
+  await deliveries.pending("web");
+  const restarted = withWebTranscriptDeliveries(inner, sessions);
+  await restarted.pending("web");
+
+  const recordRows = (await sessions.getTape(session.id)).filter((row) =>
+    JSON.stringify(row.payload).includes("k-archive-ahead"),
+  );
+  assert.equal(recordRows.length, 1, "the record dedupes against the tape even while it cannot render");
 });
 
 test("repeated drains and a restarted decorator never duplicate the transcript entry", async () => {
@@ -134,7 +168,11 @@ test("repeated drains and a restarted decorator never duplicate the transcript e
   const restarted = withWebTranscriptDeliveries(inner, sessions);
   await restarted.pending("web");
 
-  assert.equal((await sessions.getEntries(session.id)).length, 1, "one entry across drains and restarts");
+  assert.equal(
+    (await createTranscriptSource(sessions).forRender(session.id)).entries.length,
+    1,
+    "one entry across drains and restarts",
+  );
 });
 
 test("a failed tape write converges on retry: one entry, no duplicate model rows", async () => {
@@ -164,7 +202,7 @@ test("a failed tape write converges on retry: one entry, no duplicate model rows
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1, "the retry dedupes on the entry and delivers");
 
-  assert.equal((await sessions.getEntries(session.id)).length, 1);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 1);
   const modelRows = (await sessions.getTape(session.id)).filter((row) => row.kind === "message");
   assert.ok(modelRows.length <= 1, "the model never sees the delivered text twice");
 });
@@ -181,12 +219,12 @@ test("a busy session lease holds the delivery back, unacked, until the write lan
     provenance: cronProvenance(),
   });
   assert.deepEqual(await deliveries.pending("web"), [], "not visible (and so never acked) while the turn runs");
-  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 0);
 
   await sessions.releaseLease(lease!);
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1);
-  assert.equal((await sessions.getEntries(session.id)).length, 1);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 1);
 });
 
 test("a lease wedged past the giveup window degrades to a loud nudge-only delivery", async () => {
@@ -210,7 +248,7 @@ test("a lease wedged past the giveup window degrades to a loud nudge-only delive
     restore();
   }
   assert.ok(lines.some((line) => line.includes("k-wedged")));
-  assert.equal((await sessions.getEntries(session!.id)).length, 0);
+  assert.equal((await createTranscriptSource(sessions).forRender(session!.id)).entries.length, 0);
   assert.equal((await inner.pending("web")).length, 1, "still pending for the BFF's own giveup/ack");
 });
 
@@ -224,7 +262,7 @@ test("non-web deliveries pass through untouched", async () => {
     provenance: cronProvenance(),
   });
   assert.equal((await deliveries.pending("slack")).length, 1);
-  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 0);
 });
 
 test("legacy rows without provenance or a note are delivered as a nudge, never rewritten", async () => {
@@ -237,7 +275,11 @@ test("legacy rows without provenance or a note are delivered as a nudge, never r
   });
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1);
-  assert.equal((await sessions.getEntries(session.id)).length, 0, "cutover rows keep pre-reshape behavior");
+  assert.equal(
+    (await createTranscriptSource(sessions).forRender(session.id)).entries.length,
+    0,
+    "cutover rows keep pre-reshape behavior",
+  );
 });
 
 test("a spine post to the session's own thread is nudged, not settled and not rewritten", async () => {
@@ -251,7 +293,7 @@ test("a spine post to the session's own thread is nudged, not settled and not re
   });
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1, "open tabs still get their refetch nudge");
-  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 0);
   assert.equal((await inner.pending("web")).length, 1, "not acked at drain — the BFF settles it");
 });
 
@@ -310,7 +352,7 @@ test("a parked web run's failure note lands as a turn_failure entry the web tran
 
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1, "the failure note still nudges");
-  const entries = await sessions.getEntries(session.id);
+  const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.type, "system");
   const payload = entries[0]!.payload as { kind?: string; message?: string; runId?: string };
@@ -337,7 +379,7 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
     drained = await deliveries.pending("web");
   }
   assert.equal(drained.length, 1, "the nudge still flows");
-  const failures = (await sessions.getEntries(session.id)).filter(
+  const failures = (await createTranscriptSource(sessions).forRender(session.id)).entries.filter(
     (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "turn_failure",
   );
   assert.equal(failures.length, 1, "one durable record per failed run across both writers");
@@ -357,7 +399,7 @@ test("a failure the orchestrator already recorded for this run is not written tw
   });
   await deliveries.pending("web");
 
-  const failures = (await sessions.getEntries(session.id)).filter(
+  const failures = (await createTranscriptSource(sessions).forRender(session.id)).entries.filter(
     (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "turn_failure",
   );
   assert.equal(failures.length, 1, "the in-turn record already covers the failure");
@@ -367,12 +409,12 @@ test("another run's failure record never suppresses this run's note", async () =
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
   const { lease } = await sessions.acquireLease(session.id, "turn");
-  await sessions.append(lease!, {
+  await appendEntryOutsideTurn(sessions, lease!, {
     type: "system",
     payload: { kind: "turn_failure", message: "earlier run, delivered note", deliveryKey: "run:other" },
     scopeLabel: SCOPE,
   });
-  await sessions.append(lease!, {
+  await appendEntryOutsideTurn(sessions, lease!, {
     type: "system",
     payload: { kind: "turn_failure", message: "overlapping run, in-turn record", runId: "other-run" },
     scopeLabel: SCOPE,
@@ -381,7 +423,7 @@ test("another run's failure record never suppresses this run's note", async () =
   await terminalRun(deliveries, inner, { fail: "boom" });
   await deliveries.pending("web");
 
-  const failures = (await sessions.getEntries(session.id)).filter(
+  const failures = (await createTranscriptSource(sessions).forRender(session.id)).entries.filter(
     (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "turn_failure",
   );
   assert.equal(failures.length, 3, "suppression is keyed to this run's own record");
@@ -398,7 +440,7 @@ test("a recovered reply already recorded by its own turn is settled without a re
   });
 
   assert.deepEqual(await deliveries.pending("web"), [], "nothing new to fetch, so nothing to nudge");
-  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 0);
   assert.deepEqual(await inner.pending("web"), [], "the row is acked, not stuck pending");
 });
 
@@ -417,7 +459,7 @@ test("a recovered attachments-only reply is nudged, never silently settled away"
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1, "the attachments ride the nudge instead of being acked away");
   assert.deepEqual(drained[0]!.attachments, atts);
-  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 0);
 });
 
 test("a recovered reply the turn never recorded is written into the transcript, in the agent's plain voice", async () => {
@@ -427,7 +469,7 @@ test("a recovered reply the turn never recorded is written into the transcript, 
 
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1);
-  const entries = await sessions.getEntries(session.id);
+  const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.type, "assistant");
   assert.deepEqual(entries[0]!.payload, { text: "recovered reply", deliveryKey: drained[0]!.idempotencyKey });

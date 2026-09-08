@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createTranscriptSource } from "../src/harness/tape-projection.ts";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -272,7 +273,7 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
   const { sessions, session } = await failureSessions();
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
-  const entries = await sessions.getEntries(session.id);
+  const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.type, "system");
   assert.deepEqual(entries[0]!.payload, {
@@ -285,7 +286,35 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
   assert.equal(tape[0]!.kind, "annotation");
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
-  assert.equal((await sessions.getEntries(session.id)).length, 1);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 1);
+});
+
+test("an archive-ahead session records the run failure once, never twice", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { sessions, session } = await failureSessions();
+  const { lease } = await sessions.acquireLease(session.id);
+  await sessions.append(lease!, {
+    type: "user",
+    payload: { text: "pre-cutover question" },
+    scopeLabel: session.scopeId,
+  });
+  await sessions.append(lease!, {
+    type: "assistant",
+    payload: { text: "pre-cutover answer" },
+    scopeLabel: session.scopeId,
+  });
+  await sessions.releaseLease(lease!);
+
+  assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
+  assert.equal(
+    await recordRunFailureEntry(sessions, failedRun()),
+    false,
+    "the record dedupes against the tape even while the projection cannot render it",
+  );
+  const failureRows = (await sessions.getTape(session.id)).filter((row) =>
+    JSON.stringify(row.payload).includes("turn_failure"),
+  );
+  assert.equal(failureRows.length, 1, "exactly one durable failure record");
 });
 
 test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry", async () => {
@@ -300,7 +329,7 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
   await sessions.releaseLease(lease!);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
-  assert.equal((await sessions.getEntries(session.id)).length, 1, "no duplicate entry");
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 1, "no duplicate entry");
 });
 
 test("a web-drain-recorded failure delivery suppresses the onTerminal entry by its key", async () => {
@@ -315,14 +344,14 @@ test("a web-drain-recorded failure delivery suppresses the onTerminal entry by i
   await sessions.releaseLease(lease!);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
-  assert.equal((await sessions.getEntries(session.id)).length, 1);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 1);
 });
 
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
   assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), false);
-  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await createTranscriptSource(sessions).forRender(session.id)).entries.length, 0);
 });
 
 test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async () => {
@@ -335,10 +364,10 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
 
-  for (let i = 0; i < 50 && (await sessions.getEntries(session.id)).length === 0; i++) {
+  for (let i = 0; i < 50 && (await createTranscriptSource(sessions).forRender(session.id)).entries.length === 0; i++) {
     await new Promise((r) => setTimeout(r, 10));
   }
-  const entries = await sessions.getEntries(session.id);
+  const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(entries.length, 1, "the run's own session carries the failure durably");
   assert.deepEqual(entries[0]!.payload, {
     kind: "turn_failure",

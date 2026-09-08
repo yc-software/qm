@@ -1,6 +1,8 @@
 # The Tape: one session log, model-view first
 
-_Phases 1–2 are implemented; tape serving is the default._
+_The migration is complete: the tape is the only session log. `session_entries` is a
+frozen read-only archive — nothing writes it; renderers and search fall back to it only
+for pre-cutover sessions the final backfill provably could not cover._
 
 ## The problem, in one paragraph
 

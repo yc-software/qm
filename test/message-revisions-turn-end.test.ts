@@ -10,6 +10,7 @@ import { testConfig } from "./support/test-config.ts";
 import { messageRevision } from "../src/core/message-revisions.ts";
 import { sleep } from "../src/util/async.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const actor = { externalId: "U1", displayName: "Ada" };
 
@@ -36,14 +37,14 @@ test("an edit the ingest path could not record is caught up at the end of the ne
       { container: "C1", ts: "t1", authorId: "U1", text: "hello there, edited", editedAt: Date.now() + 50 },
     ]);
     assert.equal(
-      (await built.sessions.getEntries(session!.id)).filter((e) => messageRevision(e)).length,
+      (await projectedEntries(built.sessions, session!.id)).filter((e) => messageRevision(e)).length,
       0,
       "nothing has recorded the edit yet",
     );
 
     const second = await built.app.turn(channelTurn("and again", "t2"));
     assert.equal(second.status, "ok");
-    const marks = (await built.sessions.getEntries(session!.id)).flatMap((e) => {
+    const marks = (await projectedEntries(built.sessions, session!.id)).flatMap((e) => {
       const r = messageRevision(e);
       return r ? [r] : [];
     });
@@ -64,11 +65,11 @@ test("an edit the ingest path could not record is caught up at the end of the ne
     const third = await built.app.turn(channelTurn("once more", "t3"));
     assert.equal(third.status, "ok");
     assert.equal(
-      (await built.sessions.getEntries(session!.id)).filter((e) => messageRevision(e)).length,
+      (await projectedEntries(built.sessions, session!.id)).filter((e) => messageRevision(e)).length,
       1,
       "the catch-up does not re-record on later turns",
     );
-    const marker = (await built.sessions.getEntries(session!.id)).find((e) => messageRevision(e))!;
+    const marker = (await projectedEntries(built.sessions, session!.id)).find((e) => messageRevision(e))!;
     assert.equal(asked.length, 1);
     assert.ok(asked[0]! <= marker.createdAt, "the turn right after a marker still re-checks it");
     const fourth = await built.app.turn(channelTurn("and once more", "t4"));

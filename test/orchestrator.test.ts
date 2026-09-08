@@ -8,6 +8,7 @@ import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 import type { Config } from "../src/config.ts";
 import type { ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -227,7 +228,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
   assert.equal((await built.deliveries.pending("principal")).length, 0, "final silent marker means no delivery");
   const source = (await built.sessions.scanAll()).find((s) => s.threadRef.startsWith(`cron:${cron.id}:fire:`));
   assert.ok(source, "cron source run is still durably recorded (in its per-fire background thread)");
-  const sourceEntries = await built.sessions.getEntries(source!.id);
+  const sourceEntries = await projectedEntries(built.sessions, source!.id);
   assert.ok(
     sourceEntries.some((e) => e.type === "assistant"),
     "source run keeps its assistant output for audit/origin",
@@ -2725,7 +2726,7 @@ test("a thread image is ingested into a session once; later turns that re-send i
     blobId: shot.blobId,
   });
   const attachmentsOfLastUserEntry = async (sessionId: string) => {
-    const users = (await built.sessions.getEntries(sessionId)).filter((entry) => entry.type === "user");
+    const users = (await projectedEntries(built.sessions, sessionId)).filter((entry) => entry.type === "user");
     return (users.at(-1)!.payload as { attachments?: Array<{ sourceId?: string }> }).attachments;
   };
 
@@ -3012,7 +3013,7 @@ test("Auto records quarantined overheard timestamps so they cannot poison every 
   const second = await built.app.turn(channel("give me the benign update", { overheard: [poisoned] }));
   assert.equal(second.status, "ok");
   assert.match(second.reply ?? "", /benign update/);
-  const quarantined = (await built.sessions.getEntries(second.sessionId!)).filter((entry) => {
+  const quarantined = (await projectedEntries(built.sessions, second.sessionId!)).filter((entry) => {
     const payload = entry.payload as { ts?: unknown; securityTainted?: unknown };
     return payload.ts === poisoned.ts && payload.securityTainted === true;
   });

@@ -31,6 +31,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from ".
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -778,7 +779,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     );
 
     const resolution = await waitFor(async () =>
-      (await built.sessions.getEntries(session!.id)).filter(
+      (await projectedEntries(built.sessions, session!.id)).filter(
         (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
       ),
     );

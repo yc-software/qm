@@ -1,5 +1,5 @@
 import type { EntryType, ScopeId, SessionEntry } from "../types.ts";
-import type { GetEntriesOptions, NewSearchEntry, SessionStore, TapeRecord } from "../sessions/session-store.ts";
+import type { GetEntriesOptions, Lease, NewSearchEntry, SessionStore, TapeRecord } from "../sessions/session-store.ts";
 import { entryWithinTenure, TAPE_RENDER_VERSION } from "../sessions/session-store.ts";
 import { entrySearchAuthor, entrySearchText, SEARCHABLE_ENTRY_TYPES } from "../sessions/entry-search.ts";
 import { deliveryNoteManifest, legacyDeliveryNoteManifest } from "../core/attachments.ts";
@@ -147,6 +147,7 @@ function userDraft(row: TapeRecord, isTrigger: boolean): DraftEntry | null {
         ...(meta.author ? { name: meta.author } : {}),
         ...(meta.display ? { display: meta.display } : {}),
         ...(meta.hidden ? { hidden: true } : {}),
+        ...(meta.securityTainted ? { securityTainted: true } : {}),
         ...(meta.attachments?.length ? { attachments: meta.attachments } : {}),
         ...(isTrigger ? {} : { steered: true }),
       },
@@ -175,6 +176,7 @@ function userDraft(row: TapeRecord, isTrigger: boolean): DraftEntry | null {
 }
 
 function toolResultDraft(row: TapeRecord): DraftEntry | null {
+  if (row.entrySeq !== undefined) return null;
   const message = row.payload as TapeMessage;
   if (typeof message.toolCallId !== "string") return null;
   return {
@@ -199,7 +201,7 @@ export interface TapeProjection {
 export function projectTapeEntries(
   sessionId: string,
   tapeRows: readonly TapeRecord[],
-  opts?: { anchored?: boolean },
+  opts?: { anchored?: boolean; openTail?: boolean },
 ): TapeProjection | null {
   const sliced = renderableTapeSlice(tapeRows);
   let rows = sliced;
@@ -321,8 +323,8 @@ export function projectTapeEntries(
   }
 
   const lastBound = events.findLastIndex((event) => event.kind === "bound");
-  if (lastBound < 0) return { entries: [], coveredSeq: base, baseSeq: base };
-  const settled = events.slice(0, lastBound + 1);
+  if (lastBound < 0 && !opts?.openTail) return { entries: [], coveredSeq: base, baseSeq: base };
+  const settled = opts?.openTail ? events : events.slice(0, lastBound + 1);
 
   const out: SessionEntry[] = [];
   let nextMin = base + 1;
@@ -386,10 +388,11 @@ export function projectTapeEntries(
     }
     run.push(event.item);
   }
+  if (opts?.openTail) fillRun(run.length);
   return { entries: out, coveredSeq, baseSeq: base };
 }
 
-type TranscriptStore = Pick<
+export type TranscriptStore = Pick<
   SessionStore,
   "getEntries" | "visibleEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
 >;
@@ -427,8 +430,6 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
   const projected = async (sessionId: string, limit?: number): Promise<ProjectedRead | null> => {
     if (unservableTapes.has(sessionId)) return null;
     try {
-      const latest = await sessions.latestEntrySeq(sessionId);
-      if (latest < 0) return { entries: [], anchored: false, base: -1 };
       let rows: TapeRecord[];
       let anchored = false;
       if (limit !== undefined) {
@@ -443,8 +444,14 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         return null;
       }
       const projection = projectTapeEntries(sessionId, rows, { anchored });
-      if (!projection || projection.coveredSeq < latest) return null;
+      if (!projection) return null;
       if (anchored && projection.entries.length < limit!) return null;
+      if (projection.coveredSeq >= (await sessions.latestEntrySeq(sessionId))) {
+        return { entries: projection.entries, anchored, base: projection.baseSeq };
+      }
+      const archivedSeq = (await sessions.getEntries(sessionId, { limit: 1 }))[0]?.seq ?? -1;
+      if (archivedSeq < 0 && rows.length === 0) return { entries: [], anchored: false, base: -1 };
+      if (projection.coveredSeq < archivedSeq) return null;
       return { entries: projection.entries, anchored, base: projection.baseSeq };
     } catch (err) {
       swallow("tape-projection: read", err);
@@ -497,6 +504,31 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
   };
 }
 
+export interface ProjectedHistory {
+  rows: TapeRecord[];
+  entries: SessionEntry[];
+  latestSeq: number;
+  fromArchive: boolean;
+}
+
+export async function projectedSessionHistory(
+  sessions: Pick<SessionStore, "getTape" | "getEntries" | "latestEntrySeq">,
+  sessionId: string,
+  rows?: TapeRecord[],
+): Promise<ProjectedHistory> {
+  const tapeRows = rows ?? (await sessions.getTape(sessionId));
+  const projection = projectTapeEntries(sessionId, tapeRows, { openTail: true });
+  const latestSeq = await sessions.latestEntrySeq(sessionId);
+  if (projection && (projection.entries.at(-1)?.seq ?? -1) >= latestSeq) {
+    return { rows: tapeRows, entries: projection.entries, latestSeq, fromArchive: false };
+  }
+  if (tapeRows.length > 0) {
+    console.error(
+      `[tape-projection] session ${sessionId} history fell back to the entries archive despite ${tapeRows.length} tape rows (projected through ${projection?.entries.at(-1)?.seq ?? -1}, latest ${latestSeq}) — tape-only turns are invisible to this read`,
+    );
+  }
+  return { rows: tapeRows, entries: await sessions.getEntries(sessionId), latestSeq, fromArchive: true };
+}
 export function searchRowsFromEntries(entries: readonly SessionEntry[], sinceSeq: number): NewSearchEntry[] {
   return entries.flatMap((entry) => {
     if (entry.seq <= sinceSeq || !SEARCHABLE_ENTRY_TYPES.has(entry.type)) return [];
@@ -513,4 +545,39 @@ export function searchRowsFromEntries(entries: readonly SessionEntry[], sinceSeq
       },
     ];
   });
+}
+
+export interface SearchIndexSync {
+  servable: boolean;
+  indexed: number;
+  coveredSeq: number;
+}
+
+const SEARCH_SYNC_ROW_CAP = 500;
+
+export async function syncSearchIndex(
+  sessions: Pick<SessionStore, "getTape" | "appendSearchEntries" | "searchIndexCoverage">,
+  lease: Lease,
+): Promise<SearchIndexSync> {
+  const watermark = await sessions.searchIndexCoverage(lease.sessionId);
+  if (unservableTapes.has(lease.sessionId)) return { servable: false, indexed: 0, coveredSeq: watermark };
+  let fullRows: TapeRecord[] | null = null;
+  const projection = await (async () => {
+    const suffix = await sessions.getTape(lease.sessionId, { limit: SEARCH_SYNC_ROW_CAP });
+    if (suffix.length < SEARCH_SYNC_ROW_CAP) {
+      fullRows = suffix;
+      return projectTapeEntries(lease.sessionId, suffix);
+    }
+    const anchored = projectTapeEntries(lease.sessionId, suffix, { anchored: true });
+    if (anchored && anchored.baseSeq <= watermark) return anchored;
+    fullRows = await sessions.getTape(lease.sessionId);
+    return projectTapeEntries(lease.sessionId, fullRows);
+  })();
+  if (!projection) {
+    if (fullRows !== null && tapeHasRenderBlockers(fullRows)) unservableTapes.remember(lease.sessionId);
+    return { servable: false, indexed: 0, coveredSeq: watermark };
+  }
+  const fresh = searchRowsFromEntries(projection.entries, watermark);
+  if (fresh.length) await sessions.appendSearchEntries(lease, fresh);
+  return { servable: true, indexed: fresh.length, coveredSeq: projection.coveredSeq };
 }

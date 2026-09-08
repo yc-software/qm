@@ -438,6 +438,31 @@ test("sessions over the shared import cap and gapped corpora are skipped", async
   assert.deepEqual(await assessRenderImport(fakeStore, "synthetic"), { action: "skip", reason: "gapped" });
 });
 
+test("a live tape-only turn blocks the render import instead of being buried behind its anchor", async () => {
+  const sim = await simSession();
+  await emitTurnEntries(sim, turnOne);
+  const liveSeq = 4;
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "post-cutover ask" }], timestamp: Date.now() },
+    scopeLabel: scope,
+    entrySeq: liveSeq,
+    meta: { bareText: "post-cutover ask", ts: "1720000001.000100" },
+  });
+  await sim.store.appendTape(sim.lease, {
+    kind: "annotation",
+    payload: { turnEnd: true, render: TAPE_RENDER_VERSION, spanStart: liveSeq },
+    scopeLabel: scope,
+    entrySeq: liveSeq,
+  });
+  assert.deepEqual(await assessRenderImport(sim.store, sim.session.id), { action: "skip", reason: "tape-ahead" });
+  assert.deepEqual(await assessRenderImport(sim.store, sim.session.id, { force: true }), {
+    action: "skip",
+    reason: "tape-ahead",
+  });
+});
+
 test("force replans a covered session", async () => {
   const sim = await preCutoverSession();
   await importSession(sim);

@@ -33,10 +33,10 @@ import {
   searchTerms,
 } from "./entry-search.ts";
 import {
-  contextWindowFromEntries,
   cronIdOf,
   entryWithinTenure,
   isOverheardEntry,
+  mirrorsUserEntry,
   promptEnvelopeBody,
   sessionBucket,
   sessionCategory,
@@ -98,14 +98,70 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   >();
   const leases = new Map<string, { token: string; expiresAt: number; acquiredAt: number; holder?: LeaseHolder }>();
 
+  const tapeStampHighWater = (sessionId: string): number =>
+    (tape.get(sessionId) ?? []).reduce((m, r) => Math.max(m, r.entrySeq ?? -1, r.coversEntrySeq ?? -1), -1);
+  const mirroredEntry = (r: TapeRecord): { type?: unknown; payload?: unknown } | null =>
+    r.kind === "annotation"
+      ? ((r.payload as { entry?: { type?: unknown; payload?: unknown } } | null)?.entry ?? null)
+      : null;
+  const tapeUserTurnRows = (sessionId: string): TapeRecord[] =>
+    (tape.get(sessionId) ?? []).filter(
+      (r) =>
+        (r.kind === "message" && r.meta?.bareText !== undefined && r.meta.overheard !== true) || mirrorsUserEntry(r),
+    );
+  const tapeUserText = (r: TapeRecord): unknown =>
+    r.meta?.bareText ?? (mirroredEntry(r)?.payload as { text?: unknown } | null)?.text;
+  const unmirroredTapeUserTurnRows = (sessionId: string): TapeRecord[] => {
+    const mirrored = (entries.get(sessionId) ?? []).length;
+    const seen = new Set<number>();
+    return tapeUserTurnRows(sessionId).filter((r) => {
+      if (r.entrySeq === undefined) return r.kind === "message";
+      if (r.entrySeq < mirrored || seen.has(r.entrySeq)) return false;
+      seen.add(r.entrySeq);
+      return true;
+    });
+  };
+  const tapeEntryTenureView = (r: TapeRecord): Pick<SessionEntry, "seq" | "createdAt"> => ({
+    seq: r.entrySeq ?? -1,
+    createdAt: r.meta?.entryCreatedAt ?? r.createdAt,
+  });
+  const sessionTurnCount = (sessionId: string): number =>
+    (entries.get(sessionId) ?? []).filter((e) => e.type === "user" && !isOverheardEntry(e)).length +
+    unmirroredTapeUserTurnRows(sessionId).length;
+  const sessionLastActivity = (sessionId: string, createdAt: number): number => {
+    const log = entries.get(sessionId) ?? [];
+    const rows = (tape.get(sessionId) ?? []).filter((r) => r.kind === "message" || r.entrySeq !== undefined);
+    return Math.max(
+      createdAt,
+      log.length ? log[log.length - 1]!.createdAt : createdAt,
+      ...rows.map((r) => r.meta?.entryCreatedAt ?? r.createdAt),
+    );
+  };
   const participantSession = (sessionId: string, principalId: string): Session | null => {
     const s = sessions.get(sessionId);
     if (!s) return null;
     const view = windows.get(sessionId)?.get(principalId);
     const all = entries.get(sessionId) ?? [];
-    const log = all.filter((e) => e.type === "user");
-    const lastActivityAt = log.length ? Math.max(s.createdAt, ...log.map((e) => e.createdAt)) : s.createdAt;
-    const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
+    const userRows = [
+      ...all.filter((e) => e.type === "user").map((e) => e.createdAt),
+      ...(tape.get(sessionId) ?? [])
+        .filter(
+          (r) =>
+            (r.kind === "message" && (r.meta?.bareText !== undefined || r.meta?.overheard === true)) ||
+            (r.entrySeq !== undefined && mirroredEntry(r)?.type === "user"),
+        )
+        .map((r) => r.meta?.entryCreatedAt ?? r.createdAt),
+    ];
+    const lastActivityAt = userRows.length ? Math.max(s.createdAt, ...userRows) : s.createdAt;
+    const visible = view
+      ? all.some((e) => entryWithinTenure(e, view)) ||
+        (tape.get(sessionId) ?? []).some(
+          (r) =>
+            (r.kind === "message" || mirroredEntry(r) !== null) &&
+            r.entrySeq !== undefined &&
+            entryWithinTenure(tapeEntryTenureView(r), view),
+        )
+      : false;
     return {
       ...s,
       ...(view?.title != null ? { title: view.title } : {}),
@@ -219,6 +275,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async deleteSessionIfEmpty(sessionId) {
       if (!sessions.has(sessionId)) return false;
       if ((entries.get(sessionId)?.length ?? 0) > 0) return false;
+      if ((tape.get(sessionId)?.length ?? 0) > 0) return false;
       const held = leases.get(sessionId);
       if (held && now() < held.expiresAt) return false;
       await this.deleteSession(sessionId);
@@ -265,26 +322,36 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
-    async getContextWindow(sessionId) {
-      return contextWindowFromEntries(entries.get(sessionId) ?? []);
-    },
-
     async getEntry(sessionId, seq) {
       return (entries.get(sessionId) ?? []).find((e) => e.seq === seq);
     },
 
     async latestEntrySeq(sessionId) {
-      return (entries.get(sessionId)?.length ?? 0) - 1;
+      return Math.max((entries.get(sessionId)?.length ?? 0) - 1, tapeStampHighWater(sessionId));
     },
 
     async clearSecurityTaint(sessionId) {
       const log = entries.get(sessionId);
-      if (!log) return false;
-      for (const entry of log) {
+      if (!log && !sessions.has(sessionId)) return false;
+      for (const entry of log ?? []) {
         if (!entry.payload || typeof entry.payload !== "object") continue;
         const payload = { ...(entry.payload as Record<string, unknown>) };
         delete payload.securityTainted;
         entry.payload = payload;
+      }
+      for (const row of tape.get(sessionId) ?? []) {
+        if (row.meta?.securityTainted === true) {
+          const { securityTainted: _cleared, ...meta } = row.meta;
+          row.meta = meta;
+        }
+        const mirrored = (row.payload as { entry?: { payload?: unknown } } | null)?.entry;
+        if (row.kind === "annotation" && mirrored && mirrored.payload && typeof mirrored.payload === "object") {
+          const payload = { ...(mirrored.payload as Record<string, unknown>) };
+          if ("securityTainted" in payload) {
+            delete payload.securityTainted;
+            row.payload = { ...(row.payload as Record<string, unknown>), entry: { ...mirrored, payload } };
+          }
+        }
       }
       return true;
     },
@@ -418,7 +485,9 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         w.set(principalId, {
           validFrom: includeHistory ? 0 : now(),
           validTo: null,
-          validFromSeq: includeHistory ? 0 : (entries.get(sessionId)?.length ?? 0),
+          validFromSeq: includeHistory
+            ? 0
+            : Math.max(entries.get(sessionId)?.length ?? 0, tapeStampHighWater(sessionId) + 1),
           validToSeq: null,
           ...(retainedTitle != null ? { title: retainedTitle } : {}),
           ...(existing?.archived ? { archived: existing.archived } : {}),
@@ -438,7 +507,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const win = windows.get(sessionId)?.get(principalId);
       if (win && win.validTo === null) {
         win.validTo = now();
-        win.validToSeq = entries.get(sessionId)?.length ?? 0;
+        win.validToSeq = Math.max(entries.get(sessionId)?.length ?? 0, tapeStampHighWater(sessionId) + 1);
       }
     },
 
@@ -621,18 +690,22 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (page?.cronId && cronIdOf(s.threadRef) !== page.cronId) continue;
         const log = entries.get(s.id) ?? [];
         const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
+        const tapeUsers = tapeUserTurnRows(s.id);
+        const firstUser = userEntries[0]?.payload ?? (tapeUsers.length ? tapeUserText(tapeUsers[0]!) : undefined);
+        const lastUser =
+          (tapeUsers.length ? tapeUserText(tapeUsers.at(-1)!) : undefined) ?? userEntries.at(-1)?.payload;
         out.push({
           id: s.id,
           type: s.type,
           origin,
           scopeId: s.scopeId,
           threadRef: s.threadRef,
-          turns: userEntries.length,
-          messages: log.length,
-          lastActivity: log.length ? log[log.length - 1]!.createdAt : s.createdAt,
+          turns: sessionTurnCount(s.id),
+          messages: Math.max(log.length, tapeStampHighWater(s.id) + 1),
+          lastActivity: sessionLastActivity(s.id, s.createdAt),
           createdAt: s.createdAt,
-          firstMessage: userEntries.length ? userMessagePreview(userEntries[0]!.payload) : "",
-          lastMessage: userEntries.length ? userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100) : "",
+          firstMessage: firstUser !== undefined ? userMessagePreview(firstUser) : "",
+          lastMessage: lastUser !== undefined ? userMessagePreview(lastUser, 100) : "",
         });
       }
       out.sort((a, b) => b.lastActivity - a.lastActivity || idDesc(a.id, b.id));
@@ -653,7 +726,9 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       for (const id of sessionIds) {
         const log = entries.get(id) ?? [];
         const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
-        if (userEntries.length) out.set(id, userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100));
+        const lastTapeUser = tapeUserTurnRows(id).at(-1);
+        const lastUser = (lastTapeUser ? tapeUserText(lastTapeUser) : undefined) ?? userEntries.at(-1)?.payload;
+        if (lastUser !== undefined) out.set(id, userMessagePreview(lastUser, 100));
       }
       return out;
     },
@@ -665,8 +740,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         const cronId = cronIdOf(s.threadRef);
         if (!cronId) continue;
         const log = entries.get(s.id) ?? [];
-        const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
+        const turns = sessionTurnCount(s.id);
+        const lastActivity = sessionLastActivity(s.id, s.createdAt);
         const g = groups.get(cronId) ?? {
           cronId,
           scopeId: s.scopeId,
@@ -678,7 +753,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         };
         g.sessions += 1;
         g.turns += turns;
-        g.messages += log.length;
+        g.messages += Math.max(log.length, tapeStampHighWater(s.id) + 1);
         g.lastActivity = Math.max(g.lastActivity, lastActivity);
         g.createdAt = Math.min(g.createdAt, s.createdAt);
         groups.set(cronId, g);
@@ -696,9 +771,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const winners = new Map<string, { at: number; id: string }>();
       for (const s of sessions.values()) {
         if (!orgWide && s.scopeId !== scope) continue;
-        const log = entries.get(s.id) ?? [];
-        const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
+        const turns = sessionTurnCount(s.id);
+        const lastActivity = sessionLastActivity(s.id, s.createdAt);
         const r = rollups.get(s.scopeId) ?? {
           scopeId: s.scopeId,
           sessions: 0,
@@ -751,8 +825,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           continue;
         if (cronId && sessionCronId !== cronId) continue;
         total++;
-        const log = entries.get(s.id) ?? [];
-        turns += log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
+        turns += sessionTurnCount(s.id);
         byType[bucket] = (byType[bucket] ?? 0) + 1;
       }
       return { total, turns, byType, byTypeAll, totalByCategory, crons: cronIds.size };
@@ -762,7 +835,18 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const DAY = 86_400_000;
       const out: AttributedTurn[] = [];
       for (const [sessionId, byPrincipal] of windows) {
-        const log = (entries.get(sessionId) ?? []).filter((e) => e.type === "user" && !isOverheardEntry(e));
+        const mirrored = (entries.get(sessionId) ?? []).length;
+        const seenSeqs = new Set<number>();
+        const log = [
+          ...(entries.get(sessionId) ?? []).filter((e) => e.type === "user" && !isOverheardEntry(e)),
+          ...tapeUserTurnRows(sessionId)
+            .filter((r) => {
+              if (r.entrySeq === undefined || r.entrySeq < mirrored || seenSeqs.has(r.entrySeq)) return false;
+              seenSeqs.add(r.entrySeq);
+              return true;
+            })
+            .map((r) => tapeEntryTenureView(r)),
+        ];
         for (const [principalId, w] of byPrincipal) {
           const buckets = new Map<number, { turns: number; firstAt: number; lastAt: number }>();
           for (const e of log) {

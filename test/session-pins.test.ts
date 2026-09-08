@@ -8,6 +8,7 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const SECRET = "session-pins-secret-value!".repeat(2);
 
@@ -83,7 +84,7 @@ describe("conversation pins self-API", async () => {
 
   it("pins a transcript entry by seq with a preview", async () => {
     const token = await capFor("U1", THREAD);
-    const entries = await built.sessions.getEntries(sessionId);
+    const entries = await projectedEntries(built.sessions, sessionId);
     const userEntry = entries.find((e) => e.type === "user");
     assert.ok(userEntry, "session has a user entry");
     const res = await call("POST", "/v1/pins", { seq: userEntry!.seq }, token);

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -432,7 +433,7 @@ test("the ambient wake prompt is structured XML (<wake>/<message trigger>), untr
     await pollDeliveries(built.deliveries);
     const sub = await built.sessions.getByThread(`slack:${container}:ambient:300.1`);
     assert.ok(sub, "the ambient worker session exists");
-    const entries = await built.sessions.getEntries(sub!.id);
+    const entries = await projectedEntries(built.sessions, sub!.id);
     const wake = (
       entries.find((e) => e.type === "user" && typeof (e.payload as any)?.text === "string")?.payload as any
     )?.text as string;
@@ -622,7 +623,7 @@ test("worker seed is the trigger plus the 3 messages before it (§2.4)", async (
     await pollDeliveries(built.deliveries);
     const sub = await built.sessions.getByThread(`slack:${container}:ambient:406.0`);
     assert.ok(sub, "the ambient worker session exists");
-    const entries = await built.sessions.getEntries(sub!.id);
+    const entries = await projectedEntries(built.sessions, sub!.id);
     const wake = (
       entries.find((e) => e.type === "user" && typeof (e.payload as any)?.text === "string")?.payload as any
     )?.text as string;

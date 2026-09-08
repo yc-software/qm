@@ -36,6 +36,7 @@ interface SimCall {
   result: string;
   isError?: boolean;
   resultScope?: ScopeId;
+  curated?: Record<string, unknown>;
 }
 
 interface SimStep {
@@ -126,9 +127,11 @@ async function simTurn(sim: Sim, turn: SimTurn): Promise<void> {
     if (step.stopReason) continue;
     for (const c of step.calls) {
       await emit("tool_call", { ...c.args, tool: c.name, callId: c.id });
-      await emit(
+      const resultEntry = await emit(
         "tool_result",
-        { tool: c.name, callId: c.id, isError: c.isError === true, result: c.result },
+        c.curated
+          ? { ...c.curated, tool: c.name, callId: c.id, isError: true, result: c.result }
+          : { tool: c.name, callId: c.id, isError: c.isError === true, result: c.result },
         c.resultScope ?? scope,
       );
       await tape({
@@ -143,7 +146,9 @@ async function simTurn(sim: Sim, turn: SimTurn): Promise<void> {
           timestamp: CLOCK,
         },
         scopeLabel: c.resultScope ?? scope,
+        ...(c.curated ? { entrySeq: resultEntry.seq } : {}),
       });
+      if (c.curated) await mirror(resultEntry);
     }
   }
 
@@ -287,6 +292,35 @@ test("plain turn projects entries byte-equal to the legacy transcript", async ()
     reply: "All three pods are healthy.",
   });
   await assertParity(sim);
+});
+
+test("an errored tool renders its curated payload from the mirror, not the model-facing row", async () => {
+  const sim = await simSession();
+  await simTurn(sim, {
+    input: "read the config",
+    ts: "1720000000.000300",
+    steps: [
+      {
+        calls: [
+          {
+            id: "call_missing",
+            name: "read",
+            args: { path: "missing.txt" },
+            result: "[no such file: missing.txt]",
+            curated: { path: "missing.txt", found: false },
+          },
+        ],
+      },
+    ],
+    reply: "That file does not exist.",
+  });
+  const projected = await assertParity(sim);
+  const toolResult = projected.find((e) => e.type === "tool_result");
+  assert.ok(toolResult);
+  const payload = toolResult!.payload as { isError?: boolean; found?: boolean; path?: string };
+  assert.equal(payload.isError, true, "the operator-facing error flag survives retirement");
+  assert.equal(payload.found, false, "curated extras survive alongside the flag");
+  assert.equal(payload.path, "missing.txt");
 });
 
 test("steered turn preserves the steer as a user entry and the reply seq", async () => {

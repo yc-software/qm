@@ -1,12 +1,15 @@
-import type { Delivery, ScopeId, SessionEntry } from "../types.ts";
+import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import {
-  appendEntryOutsideTurn,
   entryDeliveryKey,
+  tapeRecordedEntries,
+  type RecordedTapeEntry,
   type SessionStore,
   type TranscriptAppendSessions,
 } from "../sessions/session-store.ts";
 import { messageTag } from "../util/message-tag.ts";
+import { createTranscriptSource, type TranscriptStore } from "../harness/tape-projection.ts";
+import { appendEntryOutsideTurn } from "../harness/tape-import.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
@@ -14,10 +17,11 @@ const RECORDED_CACHE_CAP = 1000;
 const WRITE_GIVEUP_MS = 10 * 60_000;
 
 type WebTranscriptSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "getByThread" | "acquireLease" | "releaseLease" | "getEntries">;
+  TranscriptStore &
+  Pick<SessionStore, "getByThread" | "acquireLease" | "releaseLease">;
 
 export function turnRecordedFailure(
-  tail: readonly SessionEntry[],
+  tail: readonly RecordedTapeEntry[],
   note: { notBefore: number; runId?: string },
 ): boolean {
   return tail.some((entry) => {
@@ -52,7 +56,10 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
     const { lease } = await sessions.acquireLease(session.id, "backfill");
     if (!lease) return false;
     try {
-      const tail = await sessions.getEntries(session.id, { limit: DEDUPE_SCAN_LIMIT });
+      const rendered = (await createTranscriptSource(sessions).forRender(session.id, { limit: DEDUPE_SCAN_LIMIT }))
+        .entries;
+      const taped = tapeRecordedEntries(await sessions.getTape(session.id, { limit: DEDUPE_SCAN_LIMIT }));
+      const tail = [...rendered, ...taped];
       if (tail.some((entry) => entryDeliveryKey(entry) === d.idempotencyKey)) return true;
       const note = d.destination.webTranscript;
       const failure = note?.kind === "turn_failure" ? note : undefined;

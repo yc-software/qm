@@ -177,36 +177,85 @@ export function tapeEntryMirrorRecord(entry: {
     payload: { entry: { type: entry.type, payload: entry.payload, at: entry.createdAt } },
     scopeLabel: entry.scopeLabel,
     entrySeq: entry.seq,
+    meta: { entryCreatedAt: entry.createdAt },
   };
 }
 
-export type TranscriptAppendSessions = Pick<SessionStore, "append" | "appendTape" | "latestEntrySeq" | "tapeCoverage">;
+export interface TapeTaintMarkers {
+  tainted: boolean;
+  quarantinedAttachmentSourceIds: Set<string>;
+  messageTimestamps: Set<string>;
+}
 
-export async function appendEntryOutsideTurn(
-  sessions: TranscriptAppendSessions,
-  lease: Lease,
-  entry: NewEntry,
-  modelText?: (appended: SessionEntry) => string,
-): Promise<SessionEntry> {
-  const tapeContiguous =
-    (await sessions.tapeCoverage(lease.sessionId)) === (await sessions.latestEntrySeq(lease.sessionId));
-  const appended = await sessions.append(lease, entry);
-  if (!tapeContiguous) return appended;
-  if (modelText) {
-    await sessions.appendTape(lease, {
-      kind: "message",
-      payload: { role: "user", content: [{ type: "text", text: modelText(appended) }], timestamp: appended.createdAt },
-      scopeLabel: entry.scopeLabel,
-      meta: { entryCreatedAt: appended.createdAt },
-    });
-  }
-  await sessions.appendTape(lease, {
-    kind: "annotation",
-    payload: tapeCheckpointPayload("turnEnd", { type: entry.type, payload: entry.payload, at: appended.createdAt }),
-    scopeLabel: entry.scopeLabel,
-    entrySeq: appended.seq,
+function mirroredTapeEntry(row: Pick<TapeRecord, "kind" | "payload">): { type?: unknown; payload?: unknown } | null {
+  if (row.kind !== "annotation") return null;
+  return (row.payload as { entry?: { type?: unknown; payload?: unknown } } | null)?.entry ?? null;
+}
+
+export function mirrorsUserEntry(rec: Pick<TapeRecord, "kind" | "payload">): boolean {
+  const mirrored = mirroredTapeEntry(rec);
+  return mirrored?.type === "user" && (mirrored.payload as { overheard?: unknown } | null)?.overheard !== true;
+}
+
+export type RecordedTapeEntry = Pick<SessionEntry, "type" | "payload" | "createdAt">;
+
+export function tapeRecordedEntries(rows: readonly TapeRecord[]): RecordedTapeEntry[] {
+  return rows.flatMap((row) => {
+    const mirrored = mirroredTapeEntry(row);
+    if (!mirrored || typeof mirrored.type !== "string") return [];
+    const at = (mirrored as { at?: unknown }).at;
+    return [
+      {
+        type: mirrored.type as SessionEntry["type"],
+        payload: mirrored.payload,
+        createdAt: typeof at === "number" ? at : (row.meta?.entryCreatedAt ?? row.createdAt),
+      },
+    ];
   });
-  return appended;
+}
+
+export function tapeTaintMarkers(rows: readonly TapeRecord[]): TapeTaintMarkers {
+  const out: TapeTaintMarkers = {
+    tainted: false,
+    quarantinedAttachmentSourceIds: new Set(),
+    messageTimestamps: new Set(),
+  };
+  for (const row of rows) {
+    if (row.meta?.ts) out.messageTimestamps.add(row.meta.ts);
+    const mirrored = mirroredTapeEntry(row)?.payload as
+      { securityTainted?: unknown; quarantinedAttachmentSourceIds?: unknown; ts?: unknown } | null | undefined;
+    if (typeof mirrored?.ts === "string" && mirrored.ts) out.messageTimestamps.add(mirrored.ts);
+    const mirrorTainted = mirrored?.securityTainted === true;
+    if (row.meta?.securityTainted === true || mirrorTainted) out.tainted = true;
+    if (mirrorTainted && Array.isArray(mirrored?.quarantinedAttachmentSourceIds)) {
+      for (const id of mirrored.quarantinedAttachmentSourceIds) {
+        if (typeof id === "string") out.quarantinedAttachmentSourceIds.add(id);
+      }
+    }
+  }
+  return out;
+}
+
+export type TranscriptAppendSessions = Pick<SessionStore, "appendTape" | "getTape" | "getEntries" | "latestEntrySeq">;
+
+export function createEntryAllocator(
+  sessionId: string,
+  lastSeq: number,
+  now: () => number = Date.now,
+): (entry: NewEntry) => SessionEntry {
+  let seq = lastSeq;
+  return (entry) => {
+    seq += 1;
+    return {
+      sessionId,
+      seq,
+      parentSeq: seq === 0 ? null : seq - 1,
+      type: entry.type,
+      payload: entry.payload,
+      scopeLabel: entry.scopeLabel,
+      createdAt: now(),
+    };
+  };
 }
 
 export const TAPE_IMPORT_MAX_ENTRIES = 500;
@@ -670,7 +719,6 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
-  getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
   clearSecurityTaint(sessionId: string): Promise<boolean>;

@@ -21,6 +21,7 @@ import { scopeId, type Principal, type TurnRequest, type WorkspaceLayer } from "
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
   const d = createDirectoryStore();
@@ -380,7 +381,7 @@ test("Trap 1 e2e: the reach tool_result is labeled the session scope and survive
   await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
   const res = await built.app.turn(dm("!reach #project-alpha echo hello"));
   assert.equal(res.reply, "hello");
-  const entries = await built.sessions.getEntries(res.sessionId!);
+  const entries = await projectedEntries(built.sessions, res.sessionId!);
   const toolResults = entries.filter((e) => e.type === "tool_result");
   assert.ok(toolResults.length >= 1, "a reach tool_result was recorded");
   for (const e of toolResults) assert.equal(e.scopeLabel, scopeId("personal", "U1"));

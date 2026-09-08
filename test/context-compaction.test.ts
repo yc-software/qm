@@ -35,7 +35,13 @@ import {
 import { countTokens } from "../src/util/tokens.ts";
 import type { Harness, HarnessCompactInput } from "../src/harness/harness.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
+import {
+  contextSummaryPayload,
+  createContextSummaryPayload,
+  tapeCheckpointPayload,
+  tapeEntryMirrorRecord,
+} from "../src/sessions/session-store.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 
@@ -136,11 +142,26 @@ async function seed(sessions: SessionStore, entries: Array<Partial<SessionEntry>
   const session = await sessions.getOrCreateByThread(conv.threadRef, "dm", PERSONAL);
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease, "could not acquire lease to seed");
+  let seq = await sessions.latestEntrySeq(session.id);
   for (const e of entries) {
-    await sessions.append(lease!, {
-      type: e.type ?? "user",
-      payload: e.payload ?? { text: "x" },
-      scopeLabel: (e.scopeLabel ?? PERSONAL) as never,
+    seq += 1;
+    await sessions.appendTape(
+      lease!,
+      tapeEntryMirrorRecord({
+        seq,
+        createdAt: Date.now(),
+        type: e.type ?? "user",
+        payload: e.payload ?? { text: "x" },
+        scopeLabel: (e.scopeLabel ?? PERSONAL) as never,
+      }),
+    );
+  }
+  if (seq >= 0) {
+    await sessions.appendTape(lease!, {
+      kind: "annotation",
+      payload: tapeCheckpointPayload("turnEnd", undefined, 0),
+      scopeLabel: PERSONAL,
+      entrySeq: seq,
     });
   }
   await sessions.releaseLease(lease!);
@@ -164,7 +185,7 @@ const spineTurn = (text: string): OrchestratorInput => ({
 });
 
 async function summaryEntries(sessions: SessionStore, sessionId: string): Promise<SessionEntry[]> {
-  return (await sessions.getEntries(sessionId)).filter((e) => contextSummaryPayload(e));
+  return (await projectedEntries(sessions, sessionId)).filter((e) => contextSummaryPayload(e));
 }
 
 async function waitForSummary(sessions: SessionStore, sessionId: string, deadlineMs = 3_000): Promise<SessionEntry[]> {
@@ -1028,10 +1049,10 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:15");
   await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
-  const beforeTurn = ((await sessions.getEntries(sid)).at(-1)?.seq ?? -1) + 1;
+  const beforeTurn = ((await projectedEntries(sessions, sid)).at(-1)?.seq ?? -1) + 1;
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
-  const appended = (await sessions.getEntries(sid)).filter((e) => e.seq >= beforeTurn);
+  const appended = (await projectedEntries(sessions, sid)).filter((e) => e.seq >= beforeTurn);
   assert.ok(appended.length > 0, "the turn really did write while the summarizer was parked");
 
   open();
@@ -1042,7 +1063,7 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
     throughSeq < appended[0]!.seq,
     `the fold covers only the prefix it summarized (through ${throughSeq}, turn started at ${appended[0]!.seq})`,
   );
-  const survivors = await sessions.getEntries(sid);
+  const survivors = await projectedEntries(sessions, sid);
   for (const entry of appended) {
     assert.ok(
       survivors.some((e) => e.seq === entry.seq),
@@ -1064,10 +1085,13 @@ test("a summary that landed while the pass was summarizing makes it drop its own
 
   const { lease: rival } = await sessions.acquireLease(sid, "compaction");
   assert.ok(rival);
-  await sessions.append(rival!, {
-    type: "system",
-    payload: createContextSummaryPayload(6, "a rival fold"),
+  await sessions.appendTape(rival!, {
+    kind: "context_event",
+    payload: { event: "compaction", text: "a rival fold" },
     scopeLabel: PERSONAL,
+    entrySeq: (await sessions.latestEntrySeq(sid)) + 1,
+    coversEntrySeq: 6,
+    meta: { entryCreatedAt: Date.now() },
   });
   await sessions.releaseLease(rival!);
 

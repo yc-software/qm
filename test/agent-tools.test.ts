@@ -1512,6 +1512,29 @@ const callWith = (tool: ReturnType<typeof createAgentTools>[number] | undefined,
   return (tool.execute as unknown as (i: string, p: unknown) => Promise<unknown>)(id, params);
 };
 
+test("an errored tool result queues its curated payload by callId for a tape mirror", async () => {
+  let seq = 0;
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (entry) => Promise.resolve({ ...entry, seq: seq++, createdAt: 1000 + seq }),
+    scopeLabel: "channel:C1",
+    orgScopeId: "org:acme",
+  };
+  const [, read] = createAgentTools(ref);
+
+  await callWith(read, "call-ok", { path: "a.txt" });
+  await callWith(read, "call-missing", { path: "missing.txt" });
+
+  assert.equal(ref.tapeResultMirrors?.has("call-ok"), false, "successful results render from the model-facing row");
+  const mirror = ref.tapeResultMirrors?.get("call-missing");
+  assert.ok(mirror, "the errored result queues a mirror");
+  assert.equal(typeof mirror!.seq, "number");
+  const payload = mirror!.payload as { isError?: boolean; found?: boolean; tool?: string };
+  assert.equal(payload.isError, true);
+  assert.equal(payload.found, false);
+  assert.equal(payload.tool, "read");
+});
+
 test("a cross-scope result's classified label is recorded by callId for the tape writer", async () => {
   const ref: ToolContextRef = {
     current: fakeToolContext(),

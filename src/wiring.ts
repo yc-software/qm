@@ -1388,7 +1388,6 @@ export function buildApp(
     defaultHarness: fallbackHarness,
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    sessionTapeMode: config.sessionTapeMode,
     sessions,
     workspace,
     files,

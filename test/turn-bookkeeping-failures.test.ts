@@ -23,8 +23,10 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import type { HarnessTurnResult } from "../src/harness/harness.ts";
+import type { HarnessImplementation, HarnessTurnResult } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
+import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../src/sessions/session-store.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -54,7 +56,7 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
+function buildScenario(turnResult?: Partial<HarnessTurnResult>, runTurn?: HarnessImplementation["runTurn"]) {
   const posted: string[] = [];
   const harness = defineHarness(
     {
@@ -65,40 +67,50 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
       capabilities: new Set(),
     },
     {
-      async runTurn(turn) {
-        const userEntry = await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: userEntry.seq,
-          meta: { bareText: turn.input },
-        });
-        if (turn.surfaceTools && turn.input.startsWith("post then fail bookkeeping")) {
-          const result = await turn.tools.post("mid-turn surface post");
-          posted.push(result.ok ? "ok" : "failed");
-        }
-        const reply = turn.input.startsWith("post then fail bookkeeping") ? "" : "done";
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-        });
-        const finalEntry = await turn.emit({
-          type: "assistant",
-          payload: { text: reply },
-          scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "annotation",
-          payload: { subturnEnd: true },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: finalEntry.seq,
-        });
-        return { reply, modelCalls: 1, ...turnResult };
-      },
+      runTurn:
+        runTurn ??
+        (async (turn) => {
+          const userEntry = await turn.emit({
+            type: "user",
+            payload: { text: turn.input },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.tape?.({
+            kind: "message",
+            harness: "pi",
+            payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
+            scopeLabel: turn.scopeLabel,
+            entrySeq: userEntry.seq,
+            meta: { bareText: turn.input },
+          });
+          if (turn.surfaceTools && turn.input.startsWith("post then fail bookkeeping")) {
+            const result = await turn.tools.post("mid-turn surface post");
+            posted.push(result.ok ? "ok" : "failed");
+          }
+          const reply = turn.input.startsWith("post then fail bookkeeping") ? "" : "done";
+          await turn.tape?.({
+            kind: "message",
+            harness: "pi",
+            payload: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: Date.now() },
+            scopeLabel: turn.scopeLabel,
+          });
+          const finalEntry = await turn.emit({
+            type: "assistant",
+            payload: { text: reply },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.tape?.({
+            kind: "annotation",
+            payload: tapeCheckpointPayload("subturnEnd", {
+              type: "assistant",
+              payload: { text: reply },
+              at: finalEntry.createdAt,
+            }),
+            scopeLabel: turn.scopeLabel,
+            entrySeq: finalEntry.seq,
+          });
+          return { reply, modelCalls: 1, ...turnResult };
+        }),
       async screenSecurity() {
         return { decision: "auto" as const };
       },
@@ -119,7 +131,6 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   const orchestrator = createOrchestrator({
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
-    sessionTapeMode: "serve",
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
@@ -203,28 +214,96 @@ test("a cancel-stopped turn still persists and surfaces its pending approvals", 
   assert.equal(result.pendingApprovals?.[0]?.command, "rm -rf /srv/data");
 });
 
-test("an overheard import failure aborts the batch instead of skipping one message", async () => {
+test("an overheard import tape failure fails the turn instead of skipping one message", async () => {
   const { orchestrator, sessions, input } = buildScenario();
   await orchestrator.handleTurn(input("prime"));
-  const append = sessions.append.bind(sessions);
-  sessions.append = async (lease, entry) => {
-    const payload = entry.payload as { overheard?: unknown; ts?: unknown } | null;
-    if (payload?.overheard === true && payload.ts === "200.2") throw new Error("append refused");
-    return append(lease, entry);
+  const appendTape = sessions.appendTape.bind(sessions);
+  sessions.appendTape = async (lease, rec) => {
+    if (rec.meta?.overheard === true && rec.meta.ts === "200.2") throw new Error("append refused");
+    return appendTape(lease, rec);
   };
-  const result = await orchestrator.handleTurn(
-    input("what did I miss?", {
-      overheard: [
-        { role: "user", name: "Ann", text: "first overheard", ts: "100.1" },
-        { role: "user", name: "Bob", text: "second overheard", ts: "200.2" },
-        { role: "user", name: "Cee", text: "third overheard", ts: "300.3" },
-      ],
-    }),
+  await assert.rejects(
+    orchestrator.handleTurn(
+      input("what did I miss?", {
+        overheard: [
+          { role: "user", name: "Ann", text: "first overheard", ts: "100.1" },
+          { role: "user", name: "Bob", text: "second overheard", ts: "200.2" },
+          { role: "user", name: "Cee", text: "third overheard", ts: "300.3" },
+        ],
+      }),
+    ),
+    /append refused/,
+    "a failed overheard tape append is turn-fatal, never a silent skip",
   );
-  assert.equal(result.status, "ok");
   const session = (await sessions.getByThread(conversation.threadRef))!;
-  const overheardTexts = (await sessions.getEntries(session.id))
+  const overheardTexts = (await projectedEntries(sessions, session.id))
     .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
     .map((e) => (e.payload as { text?: string }).text);
-  assert.deepEqual(overheardTexts, ["first overheard"], "the batch stops at the failure; nothing lands out of order");
+  assert.deepEqual(overheardTexts, ["first overheard"], "only the rows before the failure landed, in order");
+});
+
+test("a terminal failure of the trigger tape write itself still back-fills the user message", async () => {
+  const { orchestrator, sessions, input } = buildScenario();
+  await orchestrator.handleTurn(input("prime"));
+  const appendTape = sessions.appendTape.bind(sessions);
+  let refused = false;
+  sessions.appendTape = async (lease, rec) => {
+    if (!refused && rec.kind === "message" && rec.meta?.bareText === "vanishing question") {
+      refused = true;
+      throw new Error("trigger tape write refused");
+    }
+    return appendTape(lease, rec);
+  };
+  await assert.rejects(
+    orchestrator.handleTurn(input("vanishing question", { finalAttempt: true })),
+    /trigger tape write refused/,
+  );
+  const session = (await sessions.getByThread(conversation.threadRef))!;
+  const projected = await projectedEntries(sessions, session.id);
+  const userRows = projected.filter(
+    (e) => e.type === "user" && (e.payload as { text?: string }).text === "vanishing question",
+  );
+  assert.equal(userRows.length, 1, "the emitted-but-never-taped user message is back-filled durably, exactly once");
+  const failure = projected.find(
+    (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "turn_failure",
+  );
+  assert.ok(failure, "the turn failure record lands beside the back-filled message");
+});
+
+test("a user entry mirrored onto the tape as an annotation clears the failure back-fill", async () => {
+  const { orchestrator, sessions, input } = buildScenario(undefined, async (turn) => {
+    const userEntry = await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+    await turn.tape?.(
+      tapeEntryMirrorRecord({
+        seq: userEntry.seq,
+        createdAt: userEntry.createdAt,
+        type: userEntry.type,
+        payload: userEntry.payload,
+        scopeLabel: turn.scopeLabel,
+      }),
+    );
+    throw new Error("model exploded after the mirror landed");
+  });
+  await assert.rejects(
+    orchestrator.handleTurn(input("mirrored once", { finalAttempt: true })),
+    /model exploded after the mirror landed/,
+  );
+  const session = (await sessions.getByThread(conversation.threadRef))!;
+  const projected = await projectedEntries(sessions, session.id);
+  const userRows = projected.filter(
+    (e) => e.type === "user" && (e.payload as { text?: string }).text === "mirrored once",
+  );
+  assert.equal(userRows.length, 1, "the mirror is the durable record — the back-fill must not duplicate it");
+});
+
+test("a turn writes no session_entries rows — the tape is the only session log", async () => {
+  const { orchestrator, sessions, input } = buildScenario();
+  await orchestrator.handleTurn(input("prime"));
+  await orchestrator.handleTurn(input("and again"));
+  const session = (await sessions.getByThread(conversation.threadRef))!;
+  assert.deepEqual(await sessions.getEntries(session.id), [], "nothing writes the entries archive anymore");
+  const projected = await projectedEntries(sessions, session.id);
+  assert.ok(projected.some((e) => e.type === "user" && (e.payload as { text?: string }).text === "prime"));
+  assert.ok(projected.some((e) => e.type === "assistant"));
+  assert.equal(await sessions.tapeCoverage(session.id), projected.at(-1)!.seq);
 });

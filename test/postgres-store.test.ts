@@ -271,6 +271,85 @@ test("pg tape coverage counts only boolean turn-end watermarks and legacy import
   assert.equal(await s.tapeCoverage(session.id), 45);
 });
 
+test("pg stamped user rows count one turn each, mirrors and re-stamps count nothing", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "turn-count");
+  const session = await s.getOrCreateByThread("pg-turn-count", "dm", scope);
+  const { lease } = await s.acquireLease(session.id);
+  assert.ok(lease);
+  const turnsNow = async (): Promise<number> => {
+    const row = await raw.query("SELECT turns FROM sessions WHERE id = $1", [session.id]);
+    return Number(row.rows[0]!.turns ?? 0);
+  };
+
+  await s.appendTape(lease!, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "first ask" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "first ask" },
+  });
+  assert.equal(await turnsNow(), 1, "a stamped bare user row is a live turn");
+
+  await s.appendTape(lease!, {
+    kind: "annotation",
+    payload: { entry: { type: "user", payload: { text: "first ask" }, at: Date.now() } },
+    scopeLabel: scope,
+    entrySeq: 0,
+  });
+  assert.equal(await turnsNow(), 1, "a mirror of an already-counted entry adds nothing");
+
+  await s.appendTape(lease!, {
+    kind: "annotation",
+    payload: { entry: { type: "user", payload: { text: "back-filled ask" }, at: Date.now() } },
+    scopeLabel: scope,
+    entrySeq: 1,
+  });
+  assert.equal(await turnsNow(), 2, "a user mirror for a fresh seq counts once");
+  await raw.end();
+});
+
+test("pg clearSecurityTaint scrubs the tape rows and mirrors, not just the entries", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "taint-clear");
+  const session = await s.getOrCreateByThread("pg-taint-clear", "dm", scope);
+  const { lease } = await s.acquireLease(session.id);
+  assert.ok(lease);
+  await s.append(lease!, { type: "user", payload: { text: "archived", securityTainted: true }, scopeLabel: scope });
+  await s.appendTape(lease!, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "tainted ask" }] },
+    scopeLabel: scope,
+    entrySeq: 1,
+    meta: { bareText: "tainted ask", securityTainted: true },
+  });
+  await s.appendTape(lease!, {
+    kind: "annotation",
+    payload: { entry: { type: "user", payload: { text: "tainted ask", securityTainted: true }, at: Date.now() } },
+    scopeLabel: scope,
+    entrySeq: 1,
+  });
+
+  assert.equal(await s.clearSecurityTaint(session.id), true);
+  const rows = await s.getTape(session.id);
+  assert.equal(
+    rows.some((row) => row.meta?.securityTainted === true),
+    false,
+    "tape meta taint is cleared",
+  );
+  assert.doesNotMatch(JSON.stringify(rows.map((row) => row.payload)), /securityTainted/, "mirror taint is cleared");
+  assert.doesNotMatch(
+    JSON.stringify(await s.getEntries(session.id)),
+    /securityTainted/,
+    "archived entry taint is cleared",
+  );
+  assert.equal(await s.clearSecurityTaint(session.id), true, "clearing an already-clean session still succeeds");
+});
+
 test("pg latestEntrySeq, participant windows, and tape meta attachments round-trip", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "proj-reads");

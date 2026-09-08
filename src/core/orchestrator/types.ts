@@ -107,7 +107,6 @@ export interface OrchestratorDeps {
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
-  sessionTapeMode?: "shadow" | "serve";
   sessions: SessionStore;
   workspace: WorkspaceStore;
   files: FileArtifactStore;
