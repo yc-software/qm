@@ -1,13 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  base64ToBytes,
-  base64ToText,
-  bytesToBase64,
-  insertIntoDraft,
-  pasteChipLabel,
-  textToBase64,
-} from "../src/paste-text.ts";
+import { base64ToBytes, base64ToText, bytesToBase64, insertIntoDraft, textToBase64 } from "../src/paste-text.ts";
 
 test("text round-trips through base64, including multi-byte characters", () => {
   for (const text of ["plain ascii", "emoji 🎉 and accents éàü", "日本語のテキスト", "x".repeat(200_000)]) {
@@ -29,13 +22,6 @@ test("bytesToBase64 handles buffers larger than one chunk", () => {
 test("base64ToBytes strips a data-URL prefix", () => {
   const b64 = btoa("hi");
   assert.deepEqual(base64ToBytes(`data:text/plain;base64,${b64}`), base64ToBytes(b64));
-});
-
-test("pasteChipLabel formats character counts", () => {
-  assert.equal(pasteChipLabel(950), "Pasted text · 950 chars");
-  assert.equal(pasteChipLabel(4200), "Pasted text · 4.2k chars");
-  assert.equal(pasteChipLabel(9980), "Pasted text · 10k chars");
-  assert.equal(pasteChipLabel(123_456), "Pasted text · 123k chars");
 });
 
 test("insertIntoDraft appends to an empty draft without padding", () => {

@@ -4,14 +4,14 @@ import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, ty
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import {
+  AlignLeft,
   ArrowUp,
   Box,
   Brain,
   Check,
   ChevronDown,
   CornerDownRight,
-  FileText,
-  Paperclip,
+  Plus,
   SlidersHorizontal,
   Square,
   X,
@@ -64,7 +64,7 @@ import { modelSupportsFastMode, setFastModeModelIds } from "./pi-models";
 import type { ComposerSurface, ConvCtx } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
-import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
+import { base64ToText, bytesToBase64, insertIntoDraft } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
@@ -220,6 +220,43 @@ export function resyncModelSelection(): void {
   } catch {
     void 0;
   }
+}
+
+export function attachmentTile(
+  attachment: Attachment,
+  pasted: boolean,
+  onOpen: () => void,
+  onRemove: () => void,
+): TemplateResult {
+  const remove = html`<button
+    type="button"
+    class="chip-x"
+    aria-label="Remove attachment"
+    ${tip("Remove")}
+    @click=${onRemove}
+  >
+    ${icon(X, 12)}
+  </button>`;
+  if (!pasted) {
+    const dot = attachment.fileName.lastIndexOf(".");
+    const ext = dot > 0 ? attachment.fileName.slice(dot + 1).toLowerCase() : "";
+    return html`<span class="file-chip">
+      <span class="file-glyph" data-ext=${ext}>${ext.slice(0, 4) || "file"}</span>
+      <span dir="auto">${attachment.fileName}</span>
+      ${remove}
+    </span>`;
+  }
+  const text = attachment.extractedText ?? "";
+  return html`<article class="context-card">
+    <div class="context-card-head">
+      <button type="button" class="chip-open" aria-label="View pasted text" ${tip("View pasted text")} @click=${onOpen}>
+        ${icon(AlignLeft, 12)}<span>Pasted text</span>
+      </button>
+      <span class="context-card-size">${text.length.toLocaleString()} characters</span>
+      ${remove}
+    </div>
+    <p class="context-card-body" dir="auto">${text.replace(/\s+/g, " ").trim().slice(0, 240)}</p>
+  </article>`;
 }
 
 export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
@@ -385,7 +422,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       const selected =
         (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ??
         defaultModelValue(scopeKey());
-      return html`<div class="composer-wrap">
+      return html`<div class="composer-wrap composer-fallback">
         ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
         <p role="status">
           ${composerState.error || activeRuntimeConfig?.unavailableReason || "Selected model is unavailable. Choose a replacement to continue."}
@@ -515,7 +552,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           })}
         `;
     return html`
-      <form class="composer-wrap ${compact ? "compact" : ""}" @submit=${(e: Event) => submitComposer(e, agent)}>
+      <form class="composer-wrap" @submit=${(e: Event) => submitComposer(e, agent)}>
         ${header} ${slashMenu(agent)}
         ${
           activeRuntimeConfig?.upgradeAvailable
@@ -543,36 +580,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           composerState.attachments.length
             ? html`
                 <div class="attachment-strip">
-                  ${composerState.attachments.map(
-                    (a) => html`
-                      <span class="file-chip">
-                        ${
-                          pastedTextIds.has(a.id)
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="chip-open"
-                                  aria-label="View pasted text"
-                                  ${tip("View pasted text")}
-                                  @click=${() => openPasteView(a.id, agent)}
-                                >
-                                  ${icon(FileText, 14)}
-                                  <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
-                                </button>
-                              `
-                            : html`${icon(Paperclip, 14)}<span dir="auto">${a.fileName}</span>`
-                        }
-                        <button
-                          type="button"
-                          class="chip-x"
-                          aria-label="Remove attachment"
-                          ${tip("Remove")}
-                          @click=${() => removeAttachment(a.id, agent)}
-                        >
-                          ${icon(X, 13)}
-                        </button>
-                      </span>
-                    `,
+                  ${composerState.attachments.map((a) =>
+                    attachmentTile(
+                      a,
+                      pastedTextIds.has(a.id),
+                      () => openPasteView(a.id, agent),
+                      () => removeAttachment(a.id, agent),
+                    ),
                   )}
                 </div>
               `
@@ -614,7 +628,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               ?disabled=${attachingDisabled}
               @click=${() => pickFiles()}
             >
-              ${icon(Paperclip, 18)}
+              ${icon(Plus, 16)}
             </button>
             ${
               compact
@@ -758,7 +772,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const canQueue = Boolean(composerState.draft.trim() || composerState.attachments.length);
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
-        ${icon(Square, 16)}
+        ${icon(Square, 12)}
       </button>
       <button
         class="send-btn"
@@ -1051,9 +1065,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           ?disabled=${args.disabled}
           @click=${(e: Event) => toggleComposerMenu(e, args.kind)}
         >
-          ${args.glyph ? icon(args.glyph, 16) : nothing}
+          ${args.glyph ? icon(args.glyph, 14) : nothing}
           <span class="menu-label">${args.label}</span>
-          ${args.suffix ? html`<span class="menu-suffix">${args.suffix}</span>` : nothing} ${icon(ChevronDown, 14)}
+          ${args.suffix ? html`<span class="menu-suffix">${args.suffix}</span>` : nothing} ${icon(ChevronDown, 12)}
         </button>
         ${
           open && !args.disabled
@@ -1907,7 +1921,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       ta.style.height = "auto";
       const cap = parseFloat(getComputedStyle(ta).maxHeight) || 180;
       const content = ta.scrollHeight;
-      ta.style.height = `${Math.min(cap, Math.max(ctx.pane ? 0 : 48, content))}px`;
+      ta.style.height = `${Math.min(cap, content)}px`;
       if (wrap) wrap.style.height = wrapHeight;
       if (content > cap) {
         ta.style.overflowY = "auto";
