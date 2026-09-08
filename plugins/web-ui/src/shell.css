@@ -6926,29 +6926,24 @@ h3.ambient-field-label {
   margin-left: auto;
   border-radius: 5px;
   opacity: 0;
-  transition:
-    opacity 0.12s ease,
-    width 0.12s ease,
-    min-width 0.12s ease;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
 }
 
 .split-tab-close + .split-tab-close {
   margin-left: 2px;
 }
 
-.dv-tab:not(.dv-active-tab):not(:hover):not(:focus-within) .split-tab-close {
-  width: 0;
-  min-width: 0;
-}
-
 .dv-tab.dv-active-tab .split-tab-close {
   opacity: 0.55;
+  pointer-events: auto;
 }
 
 .dv-tab:hover .split-tab-close,
 .dv-tab:focus-within .split-tab-close,
 .split-tab-close:focus-visible {
   opacity: 0.8;
+  pointer-events: auto;
 }
 
 /* The old pane-header title — verbatim; tabs host it now. The title is the tab's only

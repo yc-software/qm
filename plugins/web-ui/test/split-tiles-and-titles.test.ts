@@ -93,9 +93,6 @@ test("the per-tab close floats to the end of the tab", () => {
   assert.match(close, /margin-left: auto;/);
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
   assert.match(css, /\.split-pane-title-text \{[^}]*margin-right: 6px;/);
-  const collapsed = css.match(/:not\(:hover\):not\(:focus-within\) \.split-tab-close \{[^}]*\}/)?.[0] ?? "";
-  assert.ok(collapsed, "the collapsed-slot rule not found");
-  assert.doesNotMatch(collapsed, /margin-left:/);
 });
 
 test("the tab overflow menu is lifted above the panes and styled", () => {
@@ -120,4 +117,20 @@ test("a pane tab carries the conversation's background chip, from the sidebar's 
   // Only the sidebar's chip opens the inspector; the tab's is a mark on a tab that is
   // itself the control, so the clickable affordance hangs off the clickable one.
   assert.match(css, /\.bg-chip\[role="button"\] \{[^}]*cursor: pointer;/);
+});
+
+test("tab actions reserve their space and only fade on hover or keyboard focus", () => {
+  const close = css.match(/^\.split-tab-close \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(close, /width: 18px;/);
+  assert.match(close, /min-width: 18px;/);
+  assert.match(close, /transition: opacity 0\.12s ease;/);
+  assert.match(close, /pointer-events: none;/);
+  const states = [...css.matchAll(/([^{}]*\.split-tab-close[^{}]*)\{([^{}]*)\}/g)].filter(([, selector]) =>
+    /:(?:not|hover|focus|focus-within|focus-visible)|\.dv-active-tab/.test(selector),
+  );
+  assert.ok(states.length > 0);
+  for (const [, selector, declarations] of states) {
+    assert.doesNotMatch(declarations, /(?:width|margin|padding|display|flex|gap)\s*:/, selector);
+    assert.match(declarations, /pointer-events: auto;/, selector);
+  }
 });
