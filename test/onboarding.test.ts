@@ -154,15 +154,15 @@ for (const isAdmin of [true, false]) {
       const apps = prompt.split("## Connected apps")[1]?.split("\n## ")[0] ?? "";
       if (configured) {
         assert.match(apps, /Available to connect: Google/);
-        assert.doesNotMatch(apps, /Offer to walk/);
+        assert.doesNotMatch(apps, /offer to walk/);
       } else {
-        assert.match(apps, /Do not suggest or offer any app connection/);
+        assert.match(apps, /Do not mint native OAuth consent links for unconfigured providers/);
         if (isAdmin) {
-          assert.match(apps, /Offer to walk.*OAuth app setup/);
+          assert.match(apps, /offer to walk.*OAuth app setup/);
           assert.match(apps, /https:\/\/qm\.example\/admin\/connectors/);
         } else {
           assert.match(apps, /an org admin needs to configure/);
-          assert.doesNotMatch(apps, /Offer to walk/);
+          assert.doesNotMatch(apps, /offer to walk/);
         }
       }
     });
@@ -184,5 +184,52 @@ test("automated turns do not inherit the admin OAuth setup path", async () => {
     origin: { kind: "automation" },
     text: "!sysprompt",
   } as TurnRequest);
-  assert.doesNotMatch(sys.reply ?? "", /## Acting for an org admin|Offer to walk.*OAuth app setup/);
+  assert.doesNotMatch(sys.reply ?? "", /## Acting for an org admin|offer to walk.*OAuth app setup/);
 });
+
+for (const isAdmin of [true, false]) {
+  for (const granted of [true, false]) {
+    test(`onboarding checks alternate sources for ${isAdmin ? "admin" : "member"}, grant=${granted}`, async () => {
+      const built = buildApp(
+        testConfig({
+          pluginSkillDirs: [onboardingSkillDir],
+          signingSecret: "onboarding-test-signing-secret-long-enough",
+          apiBaseUrl: "http://localhost:3000",
+          adminGrants: "admin-alice:org_admin",
+        }),
+      );
+      await waitForOnboardingSkill(built.skills);
+      const actorId = isAdmin ? "admin-alice" : "U1";
+      await built.serviceCreds.setServiceCredential("org:default-org", {
+        slug: "connector-hub",
+        name: "Composio",
+        secret: "source-fixture-secret",
+        host: "connectors.example",
+      });
+      await built.acl.grant({
+        ownerScopeId: "org:default-org",
+        ref: "service-cred:connector-hub",
+        granteeScopeId: granted ? scopeId("personal", actorId) : "personal:someone-else",
+        permission: "read",
+        grantedBy: "admin-alice",
+      });
+      const sys = await built.app.turn({
+        surface: "test",
+        actor: { externalId: actorId },
+        conversation: { kind: "dm", threadRef: `dm:sources:${actorId}:${granted}` },
+        origin: { kind: "human" },
+        text: "!sysprompt",
+      } as TurnRequest);
+      assert.equal(sys.status, "ok");
+      const prompt = sys.reply ?? "";
+      assert.equal(prompt.includes("`connector-hub` →"), granted, "only granted sources enter the live manifest");
+      assert.doesNotMatch(prompt, /source-fixture-secret/);
+      const apps = prompt.split("## Connected apps")[1]?.split("\n## ")[0] ?? "";
+      assert.match(apps, /native OAuth connections only/);
+      assert.match(apps, /other authorized sources/);
+      assert.match(apps, /account.*permissions/);
+      assert.doesNotMatch(apps, /Do not suggest or offer any app connection/);
+      assert.match(PROACTIVE_OPENER_PROMPT, /other authorized sources/);
+    });
+  }
+}

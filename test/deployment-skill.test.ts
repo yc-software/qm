@@ -100,7 +100,7 @@ test("the porter reference walks the dashboard steps an agent cannot skip", () =
   );
 });
 
-test("connector onboarding is governed by the live admin-configured list", () => {
+test("native OAuth onboarding is governed by its live admin-configured list", () => {
   const onboarding = read("plugins/onboarding/skills/onboarding/SKILL.md");
   const connectApps = read("skills-seed/connect-apps/SKILL.md");
   for (const skill of [onboarding, connectApps]) {
@@ -146,4 +146,19 @@ test("each provider has an independent agent-computer proof", () => {
   assert.match(aws, /## Agent-computer proof/);
   assert.match(aws, /deployment-owned S3 home\s+snapshot/);
   assert.match(aws, /workspace\/qm-computer-proof\.txt/);
+});
+
+test("onboarding discovers authorized sources without equating a key with account access", () => {
+  const onboarding = read("plugins/onboarding/skills/onboarding/SKILL.md");
+  assert.match(onboarding, /complete allowlist \*\*for native\nOAuth only\*\*/);
+  assert.match(onboarding, /Composio/);
+  assert.match(onboarding, /never infer availability/i);
+  assert.match(onboarding, /user's account, connected apps, permissions/);
+  assert.match(onboarding, /do not ask for duplicate OAuth setup/);
+  assert.match(onboarding, /Check only unmet needs when sources overlap/);
+  assert.match(onboarding, /access as unverified, not connected/);
+  assert.match(onboarding, /do not enumerate services or credentials outside this conversation's/);
+  assert.match(onboarding, /Do not send third-party connections to the native consent endpoint/);
+  assert.match(read("skills-seed/admin/SKILL.md"), /An empty native OAuth list\ndoes not mean app access is absent/);
+  assert.match(read("skills-seed/connect-apps/SKILL.md"), /native OAuth\nonly, not other authorized connector sources/);
 });

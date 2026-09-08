@@ -75,17 +75,22 @@ export function renderConnectedAppsBlock(
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
     .map(([name, e]) => `${connectorLabel(name)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
-  const lines = ["## Connected apps"];
+  const lines = [
+    "## Connected apps",
+    "This block covers native OAuth connections only. Check other authorized sources in the live credential/login manifests and their skills before offering setup or claiming access is unavailable. Verify the user account, app capabilities, and permissions through that source; a source key alone does not prove connected account access. Reuse adequate existing access rather than asking for duplicate connections.",
+  ];
   if (!availableProviders.length) {
-    lines.push("No app connections are enabled by the admin. Do not suggest or offer any app connection.");
+    lines.push(
+      "No native OAuth apps are enabled by the admin. Do not mint native OAuth consent links for unconfigured providers.",
+    );
     if (setup?.isOrgAdmin) {
       lines.push(
-        "This user is an org admin. Offer to walk them through org OAuth app setup during onboarding, using the admin skill. This configures connections for the organization; it does not link their personal account. Do not mint consent links until the chosen app is configured and enabled. If they defer setup, continue onboarding without connections.",
+        "This user is an org admin. If other authorized sources cannot meet their needs, offer to walk them through native OAuth app setup during onboarding using the admin skill. This configures native connections for the organization; it does not link their personal account. Do not mint native consent links until the chosen app is configured and enabled. If they defer setup, continue with whatever authorized access is available.",
       );
       if (setup.url) lines.push(`OAuth app setup page: ${setup.url}`);
     } else {
       lines.push(
-        "During onboarding, explain that an org admin needs to configure OAuth apps before accounts can be linked, and continue onboarding without connections. Do not ask this user to configure the organization.",
+        "If no authorized source can meet their needs, explain during onboarding that an org admin needs to configure a connection source; native OAuth is one option. Do not ask this user to configure the organization. Continue with available access, or without connections.",
       );
     }
     return lines.join("\n");
@@ -94,17 +99,19 @@ export function renderConnectedAppsBlock(
   const available = availableProviders.filter((name) => !connectedNames.has(name));
   if (available.length) {
     lines.push(
-      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only suggest or offer app connections in this admin-configured list.`,
+      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only use the native OAuth consent flow for this admin-configured list.`,
     );
   } else {
-    lines.push("Only suggest or offer app connections in the admin-configured list below.");
+    lines.push("Only use the native OAuth consent flow for the admin-configured list below.");
   }
   if (connectionsUrl) lines.push(`Connection page: ${connectionsUrl}`);
   if (connected.length) {
     lines.push(`Connected: ${connected.join(", ")}. Use them directly; their auth is wired.`);
   }
   if (reconnect.length) {
-    lines.push(`Needs reconnect: ${reconnect.join(", ")}. Do not use these apps until the user reconnects them.`);
+    lines.push(
+      `Needs reconnect: ${reconnect.join(", ")}. Do not use these native credentials until reconnected; another authorized source may still provide access.`,
+    );
   }
   return lines.join("\n");
 }

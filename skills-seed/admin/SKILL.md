@@ -42,13 +42,15 @@ GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin","scopeId":"or
 
 ## Guide org OAuth app setup
 
-Use this when an admin has no configured app connections. This is org configuration,
-not personal account linking. Verify admin status from the system prompt or
+Use this for unmet needs after checking other authorized sources and their account
+permissions (for example, a configured connector platform). An empty native OAuth list
+does not mean app access is absent. Do not duplicate access already provided elsewhere.
+This is native OAuth configuration, not personal account linking. Verify admin status from the system prompt or
 `GET /v1/admin/whoami`; never infer it from a title or being the first user.
 
-1. Explain that an OAuth app must be configured once for the organization before
-   people can connect their accounts. Ask whether they want to set it up now; if not,
-   continue onboarding without connections.
+1. Explain that native OAuth requires an app configured once for the organization;
+   other authorized sources may have their own setup and linking flows. Ask whether they want to set it up now; if not,
+   continue onboarding with available access, or without connections.
 2. Give them the **OAuth app setup page** link from the live Connected apps block, or direct
    them to the admin dashboard's **OAuth apps** section if no URL is provided. Do not
    invent a hostname. Choose **+ Add OAuth app**, then a provider from its selector.
@@ -61,7 +63,8 @@ not personal account linking. Verify admin status from the system prompt or
    org-wide; it does not connect anyone's personal account.
 5. Ask them to return after saving. On the next turn, verify the chosen provider is
    available in the live Connected apps block before offering a personal consent link
-   via the connect-apps skill. If unavailable, check the saved/enabled state first.
+   via the connect-apps skill, only if equivalent access is not already available from
+   another authorized source. If unavailable, check the saved/enabled state first.
 
 ## Finding the scope
 
