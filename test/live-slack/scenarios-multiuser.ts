@@ -136,7 +136,7 @@ export const multiUserScenarios: Scenario[] = [
         .mention(`actually — draft it ACCEPTING instead. again, just draft, don't send.`, root);
       const reply = await ch.waitForBotReply(root, { afterTs: flip });
       await ctx.judge(
-        `The latest instruction was to draft a reply ACCEPTING the meeting (overriding an earlier 'decline'). Does this reply draft an ACCEPTANCE (not a decline)?`,
+        "Does the proposed meeting reply accept the invitation? PASS if it contains an acceptance draft, even if surrounding commentary notes a conflict with an earlier decline request or says the draft has not been sent. FAIL if the draft declines, no acceptance is drafted, or it claims to have sent the invitation response.",
         reply.text ?? "",
       );
     },

@@ -92,3 +92,38 @@ for (const [name, includeChannel, expected, threadTs] of [
     assert.ok(ctx.timeline.botMessages().some((message) => message.ts === expected));
   });
 }
+
+test("history lookup waits beyond a progress message for the requested fact", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 10_000 });
+  const progress = { ts: "3", user: "BOT", text: "I'll look back through the channel history." };
+  const answer = { ts: "4", user: "BOT", text: "The launch name is Aurora-a1b2c3d4." };
+  let polls = 0;
+  const qa = {
+    replies: async () => [],
+    history: async () => (++polls > 4 ? [progress, answer] : [progress]),
+    getPermalink: async () => undefined,
+  };
+  const ctx = new Ctx(
+    { qa, botUserId: "BOT" } as unknown as Env,
+    {
+      name: "history",
+      lane: "parallel",
+      run: async () => {},
+    },
+    1,
+  );
+  const waiting = new ChannelHandle(ctx, "C1", "test-channel").waitForBotReply("2", {
+    includeChannel: true,
+    match: /Aurora-a1b2c3d4/i,
+    timeoutMs: 30_000,
+  });
+  for (let i = 0; i < 12; i++) {
+    for (let j = 0; j < 10; j++) await Promise.resolve();
+    t.mock.timers.tick(2500);
+  }
+  assert.equal((await waiting).ts, "4");
+  assert.deepEqual(
+    ctx.timeline.botMessages().map((message) => message.ts),
+    ["3", "4"],
+  );
+});

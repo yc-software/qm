@@ -254,7 +254,11 @@ export const scenarios: Scenario[] = [
       const root = await ch.mention(
         "What launch name did we agree on at this morning's standup, before the status updates?",
       );
-      const reply = await ch.waitForBotReply(root, { includeChannel: true, timeoutMs: SANDBOX_TIMEOUT - 30_000 });
+      const reply = await ch.waitForBotReply(root, {
+        includeChannel: true,
+        match: new RegExp(codename, "i"),
+        timeoutMs: SANDBOX_TIMEOUT - 30_000,
+      });
       assert.ok(
         reply.text?.toLowerCase().includes(codename.toLowerCase()),
         `reply missing the earlier launch name ${codename}: ${reply.text?.slice(0, 300)}`,
