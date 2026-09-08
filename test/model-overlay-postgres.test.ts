@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { randomUUID } from "node:crypto";
+import pg from "pg";
 import { test } from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
@@ -9,9 +11,10 @@ const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 const runtimePath = "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org";
 
-async function start() {
+async function start(databaseUrl: string) {
   const child = fork(new URL("./support/model-overlay-server.ts", import.meta.url), {
     stdio: ["ignore", "ignore", "ignore", "ipc"],
+    env: { ...process.env, MODEL_OVERLAY_TEST_DATABASE_URL: databaseUrl },
   });
   const timeout = setTimeout(() => child.kill(), 30_000);
   const message = await Promise.race([
@@ -33,23 +36,31 @@ async function stop(child: ChildProcess) {
 test(
   "Postgres persistence: two serving processes refresh add/update/delete, including a cold start",
   { skip: !databaseUrl, timeout: 90_000 },
-  async () => {
+  async (t) => {
     assert.ok(databaseUrl);
     assert.ok(
       ["127.0.0.1", "localhost"].includes(new URL(databaseUrl).hostname),
       "use a dedicated local test database",
     );
-    const factory = createPostgresMapFactory(databaseUrl);
-    const backing = factory.map<import("../src/model/model-overlay-store.ts").StoredModelOverlay>("model_registry");
-    await backing.delete("overlay-pg-model");
-    await backing.delete("overlay-race-model");
-    const customs = factory.map("custom_model_providers");
-    await customs.delete("race-gateway");
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const schema = `model_overlay_${randomUUID().replaceAll("-", "")}`;
+    t.after(async () => {
+      try {
+        await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      } finally {
+        await pool.end();
+      }
+    });
+    await pool.query(`CREATE SCHEMA ${schema}`);
+    const url = new URL(databaseUrl);
+    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+    const isolatedDatabaseUrl = url.toString();
+    const factory = createPostgresMapFactory(isolatedDatabaseUrl);
     const processes: ChildProcess[] = [];
     try {
-      const first = await start();
+      const first = await start(isolatedDatabaseUrl);
       processes.push(first.child);
-      const second = await start();
+      const second = await start(isolatedDatabaseUrl);
       processes.push(second.child);
       const read = async (base: string) => {
         const response = await fetch(base + runtimePath, { headers });
@@ -99,7 +110,7 @@ test(
       assert.deepEqual(raced.map((response) => response.status).sort(), [200, 400]);
       await read(first.base);
       await read(second.base);
-      const cold = await start();
+      const cold = await start(isolatedDatabaseUrl);
       processes.push(cold.child);
       const coldConfig = await read(cold.base);
       assert.equal(coldConfig.effective.modelId, "overlay-pg-model");
@@ -118,9 +129,6 @@ test(
       }
     } finally {
       await Promise.all(processes.map(stop));
-      await backing.delete("overlay-pg-model");
-      await backing.delete("overlay-race-model");
-      await customs.delete("race-gateway");
       await factory.pool.close();
     }
   },
