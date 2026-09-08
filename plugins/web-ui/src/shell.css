@@ -7747,8 +7747,7 @@ h3.ambient-field-label {
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
-.inbox-toolbar-spacer,
-.inbox-draft-spacer {
+.inbox-toolbar-spacer {
   flex: 1;
 }
 .inbox-chips {
@@ -8129,6 +8128,7 @@ h3.ambient-field-label {
   gap: 8px;
 }
 .inbox-draft-label {
+  margin-right: auto;
   font-size: 11px;
   color: var(--muted-foreground);
 }
@@ -8147,7 +8147,6 @@ h3.ambient-field-label {
   text-decoration: underline;
 }
 .inbox-session-link {
-  margin-left: auto;
   font-size: 11px;
 }
 .inbox-field {
@@ -8190,17 +8189,6 @@ h3.ambient-field-label {
 .inbox-draft-body:focus-visible {
   outline: none;
   border-color: var(--accent);
-}
-.inbox-draft-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.inbox-draft-actions .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
 }
 .inbox-chat {
   display: flex;
@@ -8319,7 +8307,53 @@ h3.ambient-field-label {
 }
 .inbox-chat-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.inbox-chat-suggest {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.inbox-chat-composer.has-text .inbox-chat-suggest {
+  visibility: hidden;
+}
+.inbox-suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+.inbox-suggest-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--foreground);
+}
+.inbox-suggest-chip.primary {
+  border-color: color-mix(in srgb, var(--cta) 45%, var(--border));
+  color: var(--cta);
+  background: color-mix(in srgb, var(--cta) 7%, transparent);
+}
+.inbox-suggest-chip.primary:hover:not(:disabled) {
+  border-color: var(--cta);
+  background: color-mix(in srgb, var(--cta) 14%, transparent);
+}
+.inbox-suggest-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .inbox-chat-send {
   display: inline-flex;
