@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { installDom } from "./dom-harness.ts";
 
 const source = [
   "| Flavor | Batches | Price |",
@@ -11,21 +11,7 @@ const source = [
 ].join("\n");
 
 test("a markdown table rendered through markdown() keeps its grid and alignment after sanitization", async () => {
-  const dom = new JSDOM('<!doctype html><div id="host"></div>', { url: "http://localhost/" });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    CustomEvent: dom.window.CustomEvent,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-  };
-  for (const [key, value] of Object.entries(globals))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  const dom = installDom('<!doctype html><div id="host"></div>');
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { render } = await import("lit");

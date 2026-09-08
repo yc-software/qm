@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
+import { installDom } from "./dom-harness.ts";
 
-const dom = new JSDOM(
+const dom = installDom(
   `<!doctype html><main>
     <section class="chat-scroll"><div class="message-stack">
       <p id="inside">Churn it first thing Saturday.</p>
@@ -12,17 +12,8 @@ const dom = new JSDOM(
     <textarea id="composer"></textarea>
   </main>`,
 );
-const { window } = dom;
-const { document } = window;
-Object.defineProperty(globalThis, "document", { configurable: true, value: document });
-Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: window.HTMLElement });
-Object.defineProperty(globalThis, "Event", { configurable: true, value: window.Event });
-Object.defineProperty(globalThis, "getComputedStyle", {
-  configurable: true,
-  value: window.getComputedStyle.bind(window),
-});
 const zeroRect = { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) };
-window.Range.prototype.getBoundingClientRect = () => zeroRect as DOMRect;
+dom.window.Range.prototype.getBoundingClientRect = () => zeroRect as DOMRect;
 
 const { registerSelectionActions } = await import("../src/selection-actions.ts");
 const inserted: string[] = [];

@@ -1,24 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import { installDom } from "./dom-harness.ts";
 
 test("the session topbar is a tab strip: ghost crumb, title pill, icon tools with count badges", async () => {
-  const dom = new JSDOM('<!doctype html><div id="host"></div>', { url: "http://localhost/" });
-  Object.assign(globalThis, {
-    window: dom.window,
-    document: dom.window.document,
-    HTMLElement: dom.window.HTMLElement,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-  });
+  installDom('<!doctype html><div id="host"></div>');
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { render } = await import("lit");
     const { sessionTopbarTpl } = (await vite.ssrLoadModule(
       "/src/session-scope.ts",
     )) as typeof import("../src/session-scope.ts");
-    const host = dom.window.document.getElementById("host")!;
+    const host = document.getElementById("host")!;
     const clicks: string[] = [];
     render(
       sessionTopbarTpl({
