@@ -433,6 +433,42 @@ test("a stamped trigger in an open span is searchable before the turn settles", 
   assert.equal((await sim.store.searchEntries(VIEWER, "approve this push")).length, 1);
 });
 
+test("a parked trigger in a channel with ambient traffic is searchable: overheard carriers advance the tail", async () => {
+  const sim = await simSession();
+  const at = Date.now();
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "[overheard] bystander chatter about lunch" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "bystander chatter about lunch", author: "Bea", overheard: true, entryCreatedAt: at },
+  });
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "please approve the channel push" }] },
+    scopeLabel: scope,
+    entrySeq: 1,
+    meta: { bareText: "please approve the channel push", author: "Alex", entryCreatedAt: at },
+  });
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "execute", arguments: { command: "git push" } }],
+      stopReason: "stop",
+    },
+    scopeLabel: scope,
+  });
+  const sync = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(sync.servable, true);
+  assert.equal(sync.indexed, 2);
+  assert.equal((await sim.store.searchEntries(VIEWER, "approve the channel push")).length, 1);
+  assert.equal((await sim.store.searchEntries(VIEWER, "bystander chatter")).length, 1);
+});
+
 test("open-tail indexing stops at a draft gap so a later settle still indexes the drafts", async () => {
   const sim = await simSession();
   const tape = (rec: Parameters<SessionStore["appendTape"]>[1]) => sim.store.appendTape(sim.lease, rec);

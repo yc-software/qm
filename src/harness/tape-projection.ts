@@ -557,32 +557,30 @@ const SEARCH_SYNC_ROW_CAP = 500;
 
 function stampedFinalEntries(sessionId: string, rows: readonly TapeRecord[]): SessionEntry[] {
   const finals: SessionEntry[] = [];
+  const pushFinal = (draft: DraftEntry): void => {
+    if (draft.exact === undefined) return;
+    finals.push({
+      sessionId,
+      seq: draft.exact,
+      parentSeq: draft.exact === 0 ? null : draft.exact - 1,
+      type: draft.type,
+      payload: draft.payload,
+      scopeLabel: draft.scopeLabel,
+      createdAt: draft.createdAt,
+    });
+  };
   for (const row of rows) {
     if (row.kind === "message") {
-      if (row.entrySeq === undefined || row.meta?.bareText === undefined || row.meta?.overheard) continue;
-      finals.push({
-        sessionId,
-        seq: row.entrySeq,
-        parentSeq: row.entrySeq === 0 ? null : row.entrySeq - 1,
-        type: "user",
-        payload: { text: row.meta.bareText, ...(row.meta.author ? { name: row.meta.author } : {}) },
-        scopeLabel: row.scopeLabel,
-        createdAt: row.meta.entryCreatedAt ?? row.createdAt,
-      });
+      if (row.entrySeq === undefined) continue;
+      const message = row.payload as TapeMessage | null;
+      if (!message || typeof message !== "object" || message.role !== "user") continue;
+      const draft = userDraft(row, true);
+      if (draft) pushFinal(draft);
       continue;
     }
     if (row.kind !== "annotation") continue;
     const mirror = entryMirror(row);
-    if (!mirror || mirror.exact === undefined) continue;
-    finals.push({
-      sessionId,
-      seq: mirror.exact,
-      parentSeq: mirror.exact === 0 ? null : mirror.exact - 1,
-      type: mirror.type,
-      payload: mirror.payload,
-      scopeLabel: mirror.scopeLabel,
-      createdAt: mirror.createdAt,
-    });
+    if (mirror) pushFinal(mirror);
   }
   return finals.sort((a, b) => a.seq - b.seq);
 }
