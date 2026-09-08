@@ -7710,13 +7710,14 @@ h3.ambient-field-label {
 .nav-badge {
   margin-left: auto;
   min-width: 18px;
-  padding: 1px 5px;
+  padding: 1px 5px 2px;
   border-radius: 9px;
   background: var(--accent);
   color: var(--accent-foreground, #fff);
   font-size: 11px;
   font-weight: 600;
-  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
   text-align: center;
 }
 .layout.sidebar-closed #sidebar-top .navrow .nav-badge {
@@ -7782,15 +7783,19 @@ h3.ambient-field-label {
   background: color-mix(in srgb, var(--foreground) 12%, transparent);
   border-color: transparent;
 }
+.inbox-chip:has(.inbox-chip-count) {
+  padding-right: 7px;
+}
 .inbox-chip-count {
   min-width: 16px;
-  padding: 0 4px;
+  padding: 0 4px 1px;
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 85%, var(--foreground) 0%);
   color: var(--accent-foreground, #fff);
   font-size: 11px;
   font-weight: 600;
-  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
   text-align: center;
 }
 .inbox-sync-line {
@@ -8488,13 +8493,14 @@ h3.ambient-field-label {
 }
 .pane-kind-count {
   min-width: 16px;
-  padding: 0 4px;
+  padding: 0 4px 1px;
   border-radius: 8px;
   background: var(--accent);
   color: var(--accent-foreground, #fff);
   font-size: 11px;
   font-weight: 600;
-  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
   text-align: center;
   margin-left: 5px;
 }
@@ -8515,6 +8521,9 @@ h3.ambient-field-label {
 .inbox-surface[data-density="min"] .inbox-item-side .inbox-avatars,
 .inbox-surface[data-density="min"] .inbox-chip-count {
   display: none;
+}
+.inbox-surface[data-density="min"] .inbox-chip:has(.inbox-chip-count) {
+  padding-right: 14px;
 }
 .draft-review-pane-host {
   overflow: hidden;
