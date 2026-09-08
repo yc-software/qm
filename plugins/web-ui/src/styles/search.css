@@ -1,0 +1,26 @@
+.chat-search-input::placeholder {
+  color: var(--ink-3);
+}
+.chat-search-meta time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.chat-search-searching {
+  background-image: linear-gradient(90deg, var(--ink-3) 35%, var(--ink) 50%, var(--ink-3) 65%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-text 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-search-row {
+    animation: none;
+    transition: none;
+  }
+  .chat-search-searching {
+    animation: none;
+    background-image: none;
+    color: var(--ink-3);
+  }
+}

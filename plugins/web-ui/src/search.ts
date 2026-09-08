@@ -1,10 +1,3 @@
-/** Chat search — a ⌘K palette over every conversation the viewer can see.
- *
- * Results come from the core's Postgres full-text index and are grouped by
- * session, newest first. Enter opens the selected conversation; ⌘/Ctrl+Enter
- * (or the pinned bottom row) pipes the query to QM as the prompt of a new
- * chat, so a fruitless search becomes a question.
- */
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CornerDownLeft, Search } from "lucide";
 import { api, userSendMessage, type CoreSession } from "./core-bridge";
@@ -39,7 +32,6 @@ const searchState = {
   hits: [] as ChatSearchHit[],
   failed: false,
   loading: false,
-  /** Selection over hits (0..hits.length-1) plus the trailing ask-QM row. */
   sel: 0,
 };
 
@@ -143,8 +135,6 @@ async function runSearch(q: string): Promise<void> {
   draw();
 }
 
-/** Cluster hits by session (sessions ordered by their newest hit) so a
- * conversation never fragments into repeated group headers. */
 function groupHitsBySession(hits: ChatSearchHit[]): ChatSearchHit[] {
   const order: string[] = [];
   const bySession = new Map<string, ChatSearchHit[]>();
@@ -261,7 +251,9 @@ function resultRows(): TemplateResult[] {
           <span class="chat-search-snippet" dir="auto">${highlight(hitSnippet(hit))}</span>
           <span class="chat-search-meta"
             ><bdi>${hit.entryType === "user" ? (hit.author ?? "you") : "agent"}</bdi> ·
-            ${new Date(hit.createdAt).toLocaleDateString()}</span
+            <time datetime=${new Date(hit.createdAt).toISOString()}
+              >${new Date(hit.createdAt).toLocaleDateString()}</time
+            ></span
           >
         </span>
       </button>
@@ -300,13 +292,13 @@ function paletteTpl(): TemplateResult {
   if (q.length < MIN_QUERY_LEN) {
     body = html`<div class="chat-search-empty">Search every chat you can see: messages, not just titles.</div>`;
   } else if (searchState.loading && !searchState.hits.length) {
-    body = html`<div class="chat-search-empty">Searching…</div>`;
+    body = html`<div class="chat-search-empty chat-search-searching">Searching…</div>`;
   } else if (searchState.failed) {
     body = html`<div class="chat-search-empty chat-search-failed">
       Search failed. Check the connection and try again.
     </div>`;
   } else if (!searchState.hits.length) {
-    body = html`<div class="chat-search-empty">No messages match “${q}”.</div>`;
+    body = html`<div class="chat-search-empty">No results for “${q}”</div>`;
   } else {
     body = html`${resultRows()}`;
   }
@@ -319,7 +311,7 @@ function paletteTpl(): TemplateResult {
     >
       <div class="chat-search-palette" role="dialog" aria-label="Search your chats" @keydown=${onPaletteKeydown}>
         <div class="chat-search-inputrow">
-          ${icon(Search, 16)}
+          ${icon(Search, 14)}
           <input
             class="chat-search-input"
             type="text"
