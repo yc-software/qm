@@ -7,6 +7,7 @@ const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
 const shellState = readFileSync(new URL("../src/shell-state.ts", import.meta.url), "utf8");
 const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+const settingsCss = readFileSync(new URL("../src/styles/settings.css", import.meta.url), "utf8");
 
 test("settings is a routable view, so /settings survives a reload and a shared link", () => {
   assert.match(shellState, /"settings",?\s*\] as const/);
@@ -91,6 +92,26 @@ test("the imported palette is painted as one style element that applyTheme owns 
   assert.match(apply, /classList\.toggle\("dark", tokens\.dark\)/, "the palette decides dark mode, not the OS");
   assert.match(apply, /styleEl\?\.remove\(\);/, "leaving custom must strip the injected palette");
   assert.match(css, /\.theme-swatch \{/);
+});
+
+test("settings rows live in titled inspector cards, with the radiogroups as segmented controls", () => {
+  assert.match(settings, /settingsCard\("Appearance", nothing, \[themeRow\(\), sidebarSurfaceRow\(\)\]\)/);
+  assert.match(settings, /settingsCard\("Account", signOutAction\(\)/);
+  assert.match(
+    settings,
+    /<section class="settings-group">\s*<div class="settings-group-head">\s*<h2 class="settings-group-title">/,
+  );
+  assert.match(settings, /class="settings-group-action"[^>]*@click=\$\{\(\) => void signOut\(\)\}/);
+  assert.doesNotMatch(settings, /class="btn settings-row-action"/, "row actions are ghost pills, not bordered buttons");
+  assert.match(css, /\.settings-group \{[^}]*border: 1px solid var\(--line\);[^}]*background: var\(--surface\);/);
+  assert.match(css, /\.settings-choice \{[^}]*grid-auto-columns: 1fr;[^}]*background: var\(--field\);/);
+  assert.match(css, /\.settings-choice-option\.selected \{[^}]*background: var\(--surface\);/);
+  assert.match(settingsCss, /\.settings-group-action \{[^}]*color: var\(--blue-ink\);/);
+  assert.match(
+    settingsCss,
+    /@media \(max-width: 560px\) \{\s*\.settings-choice,\s*\.settings-theme-controls \{\s*width: 100%;/,
+    "segmented controls span the phone width",
+  );
 });
 
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");

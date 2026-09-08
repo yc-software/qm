@@ -159,7 +159,7 @@ function themeRow(): TemplateResult {
       </div>
       <div class="settings-theme-controls">
         <div class="settings-choice" role="radiogroup" aria-label="Theme">
-          ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
+          ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 14)))}
           ${custom ? themeOption("custom", current, custom.name, themeSwatches(custom)) : nothing}
         </div>
         <div class="settings-theme-import">
@@ -171,7 +171,7 @@ function themeRow(): TemplateResult {
             @change=${(e: Event) => void onThemeFileChosen(e)}
           />
           <button
-            class="btn settings-row-action"
+            class="settings-row-action"
             type="button"
             @click=${(e: Event) =>
               (e.currentTarget as HTMLElement).parentElement
@@ -184,7 +184,7 @@ function themeRow(): TemplateResult {
             custom
               ? html`
                   <button
-                    class="btn settings-row-action"
+                    class="settings-row-action"
                     type="button"
                     aria-label="Remove imported theme"
                     @click=${() => removeCustomTheme()}
@@ -241,7 +241,7 @@ function adminRow(): TemplateResult {
         <div class="settings-row-title">Admin</div>
         <div class="settings-row-note">Org settings, people, and policy.</div>
       </div>
-      <a class="btn settings-row-action" href=${ADMIN_HOME_URL}>
+      <a class="settings-row-action" href=${ADMIN_HOME_URL}>
         ${icon(ShieldUser, 15)}<span>Open admin</span>${icon(ExternalLink, 14)}
       </a>
     </div>
@@ -257,7 +257,7 @@ function aboutRow(): TemplateResult {
           Why Y Combinator built this open-source agent harness, and how to run your own.
         </div>
       </div>
-      <a class="btn settings-row-action" href=${QM_ABOUT_URL} target="_blank" rel="noreferrer noopener">
+      <a class="settings-row-action" href=${QM_ABOUT_URL} target="_blank" rel="noreferrer noopener">
         ${icon(BookOpen, 15)}<span>Read the announcement</span>${icon(ExternalLink, 14)}
       </a>
     </div>
@@ -269,13 +269,34 @@ function accountRow(): TemplateResult {
   return html`
     <div class="settings-row">
       <div class="settings-row-copy">
-        <div class="settings-row-title">Account</div>
+        <div class="settings-row-title">Signed in as</div>
         <div class="settings-row-note">${me?.user ?? "Not signed in"}${me?.org ? ` · ${me.org}` : ""}</div>
       </div>
-      <button class="btn settings-row-action" type="button" @click=${() => void signOut()}>
-        ${icon(LogOut, 15)}<span>Sign out</span>
-      </button>
     </div>
+  `;
+}
+
+function signOutAction(): TemplateResult {
+  return html`
+    <button class="settings-group-action" type="button" @click=${() => void signOut()}>
+      ${icon(LogOut, 13)}<span>Sign out</span>
+    </button>
+  `;
+}
+
+function settingsCard(
+  title: string,
+  action: TemplateResult | typeof nothing,
+  rows: Array<TemplateResult | typeof nothing>,
+): TemplateResult {
+  return html`
+    <section class="settings-group">
+      <div class="settings-group-head">
+        <h2 class="settings-group-title">${title}</h2>
+        ${action}
+      </div>
+      ${rows}
+    </section>
   `;
 }
 
@@ -284,9 +305,8 @@ function settingsPane(): TemplateResult {
     <div class="list-page-head">
       <h1 class="pane-title">Settings</h1>
     </div>
-    <div class="settings-group">
-      ${themeRow()} ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${aboutRow()} ${accountRow()}
-    </div>
+    ${settingsCard("Appearance", nothing, [themeRow(), sidebarSurfaceRow()])}
+    ${settingsCard("Account", signOutAction(), [accountRow(), can("admin") ? adminRow() : nothing, aboutRow()])}
   `;
 }
 
