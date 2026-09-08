@@ -865,38 +865,40 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
           ? html`
               <details class="inbox-draft-headers">
                 <summary><span class="inbox-draft-headers-peek">${headerPeek(item, draft)}</span></summary>
-                <label class="inbox-field">
-                  <span>To</span>
-                  <input
-                    type="text"
-                    .value=${(draft.to ?? []).join(", ")}
-                    placeholder="who@example.com"
-                    @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
-                    @blur=${() => void persistDraft(item)}
-                  />
-                </label>
-                ${
-                  showCc
-                    ? html`<label class="inbox-field">
-                        <span>Cc</span>
-                        <input
-                          type="text"
-                          .value=${(draft.cc ?? []).join(", ")}
-                          @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
-                          @blur=${() => void persistDraft(item)}
-                        />
-                      </label>`
-                    : nothing
-                }
-                <label class="inbox-field">
-                  <span>Subject</span>
-                  <input
-                    type="text"
-                    .value=${draftSubject(item, draft)}
-                    @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
-                    @blur=${() => void persistDraft(item)}
-                  />
-                </label>
+                <div class="inbox-draft-headers-fields">
+                  <label class="inbox-field">
+                    <span>To</span>
+                    <input
+                      type="text"
+                      .value=${(draft.to ?? []).join(", ")}
+                      placeholder="who@example.com"
+                      @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                      @blur=${() => void persistDraft(item)}
+                    />
+                  </label>
+                  ${
+                    showCc
+                      ? html`<label class="inbox-field">
+                          <span>Cc</span>
+                          <input
+                            type="text"
+                            .value=${(draft.cc ?? []).join(", ")}
+                            @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                            @blur=${() => void persistDraft(item)}
+                          />
+                        </label>`
+                      : nothing
+                  }
+                  <label class="inbox-field">
+                    <span>Subject</span>
+                    <input
+                      type="text"
+                      .value=${draftSubject(item, draft)}
+                      @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
+                      @blur=${() => void persistDraft(item)}
+                    />
+                  </label>
+                </div>
               </details>
             `
           : nothing

@@ -8159,10 +8159,11 @@ h3.ambient-field-label {
   margin-left: auto;
   font-size: 11px;
 }
-.inbox-draft-headers {
+.inbox-draft-headers-fields {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding-top: 8px;
 }
 .inbox-draft-headers > summary {
   display: flex;
