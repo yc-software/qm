@@ -301,7 +301,7 @@ test("memoized output still reflects a mutated-then-replaced work correctly", ()
   assert.equal(items[1]?.kind, "tool");
 });
 
-test("a fold's capsule glyph follows its tools: a ring while live, red once any tool failed, green otherwise", () => {
+test("a fold's capsule glyph follows its tools: a ring while live, red once any tool failed, neutral when a call never answered, green otherwise", () => {
   const ok = [
     act(1, "tool_call", { tool: "execute", command: "ls" }),
     act(2, "tool_result", { tool: "execute", code: 0 }),
@@ -310,6 +310,7 @@ test("a fold's capsule glyph follows its tools: a ring while live, red once any 
     act(3, "tool_call", { tool: "execute", command: "make" }),
     act(4, "tool_result", { tool: "execute", code: 2 }),
   ];
+  const unanswered = [act(5, "tool_call", { tool: "execute", command: "sleep 99" })];
   const fold = (status: WorkBlock["status"], activity: ToolActivity[]) =>
     segmentStatus(buildTimeline({ status, activity }), status);
   assert.equal(fold("working", ok), "running");
@@ -317,4 +318,11 @@ test("a fold's capsule glyph follows its tools: a ring while live, red once any 
   assert.equal(fold("complete", [...ok, ...crashed]), "failed", "one non-zero exit turns the whole fold red");
   assert.equal(fold("failed", ok), "failed", "a failed turn marks its folds even when every tool returned");
   assert.equal(fold("complete", [act(1, "thinking", { thinking: "hm" })]), "ok");
+  assert.equal(fold("complete", [...ok, ...unanswered]), "stopped", "a call that never reported back is not a success");
+  assert.equal(
+    fold("complete", [...unanswered, ...crashed]),
+    "failed",
+    "a real failure still outranks an unanswered call",
+  );
+  assert.equal(fold("working", unanswered), "running", "mid-turn the same call is simply still running");
 });

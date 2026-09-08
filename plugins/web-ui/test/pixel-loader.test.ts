@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { elapsedLabel } from "../src/work-duration.ts";
 
@@ -26,10 +27,14 @@ test("pixelLoader renders a nine-cell grid that announces only when labelled", a
   assert.equal(labelled.getAttribute("role"), "status");
   assert.equal(labelled.getAttribute("aria-label"), "Loading");
   assert.equal(labelled.hasAttribute("aria-hidden"), false);
-  assert.deepEqual(
-    [...labelled.querySelectorAll("i")].map((cell) => cell.getAttribute("style")),
-    [90, 180, 270, 0, 90, 180, 90, 180, 270].map((ms) => `animation-delay:${ms}ms`),
-  );
+  assert.ok([...labelled.querySelectorAll("i")].every((cell) => !cell.hasAttribute("style")));
+
+  const css = readFileSync(new URL("../src/styles/loading.css", import.meta.url), "utf8");
+  const delayOf = (n: number): number =>
+    Number(
+      css.match(new RegExp(`\\.pixel-loader > i:nth-child\\(${n}\\)[^{]*\\{\\s*animation-delay: (\\d+)ms;`))?.[1] ?? 0,
+    );
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map(delayOf), [90, 180, 270, 0, 90, 180, 90, 180, 270]);
 
   render(pixelLoader(), host);
   const decorative = host.querySelector(".pixel-loader")!;

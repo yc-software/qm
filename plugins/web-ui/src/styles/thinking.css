@@ -39,10 +39,12 @@ details[data-task] .work-rows {
   color: var(--ink-2);
 }
 .work-glyph-ok,
-.work-glyph-failed {
+.work-glyph-failed,
+.work-glyph-stopped {
   width: 22px;
   height: 22px;
   margin: 1px;
+  box-sizing: border-box;
   border-radius: 999px;
   color: #fff;
 }
@@ -52,13 +54,19 @@ details[data-task] .work-rows {
 .work-glyph-failed {
   background: var(--red);
 }
-.work-glyph-ok svg,
-.work-glyph-failed svg {
+.work-glyph-stopped {
+  border: 2px solid var(--ink-3);
+  color: var(--ink-3);
+}
+.work-glyph > .icon,
+.thinking-summary > .tool-icon > .icon {
+  fill: currentColor;
+}
+.work-glyph-ok > .icon,
+.work-glyph-failed > .icon,
+.work-glyph-stopped > .icon {
   fill: none;
-  stroke: currentColor;
   stroke-width: 3.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .work-glyph-running svg {
   position: absolute;
@@ -115,10 +123,15 @@ details[data-task] .work-rows {
   background: var(--red-tint);
   color: var(--red);
 }
+.work-pill-stopped {
+  background: var(--field);
+  color: var(--ink-2);
+}
 .work-fold::details-content,
 .work-working::details-content,
 .thinking-row::details-content {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 0fr;
   opacity: 0;
   overflow: clip;
@@ -133,14 +146,11 @@ details[data-task] .work-rows {
   grid-template-rows: 1fr;
   opacity: 1;
 }
-[data-density="compact"] .work-meta,
 [data-density="compact"] .work-pill {
   display: none;
 }
 @media (prefers-reduced-motion: reduce) {
   details[data-task],
-  .work-head .icon,
-  .thinking-summary > .icon:last-child,
   .work-fold::details-content,
   .work-working::details-content,
   .thinking-row::details-content {

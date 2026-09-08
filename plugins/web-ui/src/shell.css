@@ -2264,6 +2264,12 @@ summary.work-head:hover {
 .thinking-row[open] > .thinking-summary > .icon:last-child {
   transform: rotate(90deg);
 }
+@media (prefers-reduced-motion: reduce) {
+  .work-head .icon,
+  .thinking-summary > .icon:last-child {
+    transition: none;
+  }
+}
 .thinking-body {
   min-height: 0;
   color: var(--ink-2);

@@ -23,6 +23,7 @@ import {
   GitFork,
   Lock,
   Maximize2,
+  Minus,
   Paperclip,
   Pause,
   Pencil,
@@ -32,6 +33,7 @@ import {
   Target,
   Rocket,
   ScrollText,
+  Sparkle,
   Terminal,
   Wrench,
   X,
@@ -1820,11 +1822,8 @@ export function createChatSurface(
     liveElapsedTimer = null;
     if (!(el instanceof HTMLElement)) return;
     const tick = (): void => {
-      if (!el.isConnected) {
-        syncLiveElapsed();
-        return;
-      }
       el.textContent = elapsedLabel(Date.now() - Number(el.dataset.since));
+      if (!el.isConnected) syncLiveElapsed();
     };
     tick();
     liveElapsedTimer = setInterval(tick, reduceMotion.matches ? 1000 : 100);
@@ -2169,7 +2168,16 @@ export function createChatSurface(
           <span class="live-work-label"
             >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
           >
-          ${since ? html`<span class="live-work-elapsed" data-since=${since} ${ref(syncLiveElapsed)}></span>` : nothing}
+          ${
+            since
+              ? html`<span
+                  class="live-work-elapsed"
+                  data-since=${since}
+                  aria-hidden="true"
+                  ${ref(syncLiveElapsed)}
+                ></span>`
+              : nothing
+          }
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
         </button>
@@ -2237,7 +2245,7 @@ export function createChatSurface(
     if (live && !timeline.length) {
       return html`<div class="work work-thinking">
         <div class="work-head">
-          <span class="work-glyph">${sparkle(16)}</span>
+          <span class="work-glyph">${icon(Sparkle, 16)}</span>
           <span class="work-title">${sheenLabel(workLabel(work), true)}</span>
         </div>
       </div>`;
@@ -2283,6 +2291,7 @@ export function createChatSurface(
       <span class="work-title">${label}</span>
       ${tools ? html`<span class="work-meta">${tools} tool call${tools === 1 ? "" : "s"}</span>` : nothing}
       ${status === "failed" ? html`<span class="work-pill work-pill-failed">Failed</span>` : nothing}
+      ${status === "stopped" ? html`<span class="work-pill work-pill-stopped">Stopped</span>` : nothing}
       ${status === "ok" && tools ? html`<span class="work-pill">Completed</span>` : nothing} ${icon(ChevronRight, 14)}
     </summary>`;
   }
@@ -2293,8 +2302,10 @@ export function createChatSurface(
     </div>`;
   }
 
+  const SEGMENT_MARK: Record<Exclude<SegmentStatus, "running">, IconNode> = { ok: Check, failed: X, stopped: Minus };
+
   function workGlyph(status: SegmentStatus, tools: number): TemplateResult {
-    if (!tools) return html`<span class="work-glyph">${sparkle(16)}</span>`;
+    if (!tools) return html`<span class="work-glyph">${icon(Sparkle, 16)}</span>`;
     if (status === "running") {
       return html`<span class="work-glyph work-glyph-running">
         <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
@@ -2304,17 +2315,7 @@ export function createChatSurface(
         <span class="work-count">${tools}</span>
       </span>`;
     }
-    return html`<span class="work-glyph work-glyph-${status}">
-      <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
-        <path d=${status === "ok" ? "M20 6L9 17l-5-5" : "M18 6L6 18M6 6l12 12"}></path>
-      </svg>
-    </span>`;
-  }
-
-  function sparkle(size: number): TemplateResult {
-    return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"></path>
-    </svg>`;
+    return html`<span class="work-glyph work-glyph-${status}">${icon(SEGMENT_MARK[status], 13)}</span>`;
   }
 
   function segmentToolCount(items: TimelineItem[]): number {
@@ -2380,21 +2381,21 @@ export function createChatSurface(
   }
 
   function thinkingRow(text: string, live = false): TemplateResult {
-    const preview = firstLine(text.replace(/\s+/g, " ").trim());
     return html`<details class="thinking-row">
       <summary class="thinking-summary">
-        <span class="tool-icon">${sparkle(13)}</span>
-        ${
-          live
-            ? html`<span class="tool-label">${sheenLabel("Thinking", true)}</span>`
-            : html`<span class="tool-label" title=${preview ? `Thinking: ${preview}` : "Thinking"}
-                >${preview || "Thinking"}</span
-              >`
-        }
+        <span class="tool-icon">${icon(Sparkle, 13)}</span>
+        ${live ? html`<span class="tool-label">${sheenLabel("Thinking", true)}</span>` : thinkingLabel(text)}
         ${icon(ChevronRight, 14)}
       </summary>
       <div class="thinking-body">${markdown(text)}</div>
     </details>`;
+  }
+
+  function thinkingLabel(text: string): TemplateResult {
+    const preview = firstLine(text.replace(/\s+/g, " ").trim());
+    return html`<span class="tool-label" title=${preview ? `Thinking: ${preview}` : "Thinking"}
+      >${preview || "Thinking"}</span
+    >`;
   }
 
   function messageRow(activity: ToolActivity): TemplateResult {

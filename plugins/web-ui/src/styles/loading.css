@@ -14,6 +14,20 @@
   opacity: 0.15;
   animation: pixel-on 650ms ease-in-out infinite;
 }
+.pixel-loader > i:nth-child(1),
+.pixel-loader > i:nth-child(5),
+.pixel-loader > i:nth-child(7) {
+  animation-delay: 90ms;
+}
+.pixel-loader > i:nth-child(2),
+.pixel-loader > i:nth-child(6),
+.pixel-loader > i:nth-child(8) {
+  animation-delay: 180ms;
+}
+.pixel-loader > i:nth-child(3),
+.pixel-loader > i:nth-child(9) {
+  animation-delay: 270ms;
+}
 .live-work-elapsed {
   flex: 0 0 auto;
   color: var(--ink-3);
