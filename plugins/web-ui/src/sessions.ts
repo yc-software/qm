@@ -64,7 +64,7 @@ import {
 } from "./session-list";
 import { tip } from "./tooltip";
 import { errMessage } from "../../chassis/src/errors";
-import { copyText, fieldSelect, icon, relTime, workingWave } from "./ui";
+import { copyText, icon, menuSelect, relTime, workingWave } from "./ui";
 import { listPageTpl } from "./list-page";
 import {
   contextsState,
@@ -601,18 +601,18 @@ export function drawChatsPage(): void {
           )}
         </div>
         <div class="list-select">
-          ${fieldSelect({
-            compact: true,
-            ariaLabel: "Filter by surface",
+          ${menuSelect({
             value: chatsPageSurface,
-            onChange: (value) => {
-              chatsPageSurface = value as typeof chatsPageSurface;
+            ariaLabel: "Filter by surface",
+            title: "Filter by surface",
+            onSelect: (value) => {
+              chatsPageSurface = (value ?? "all") as typeof chatsPageSurface;
               drawChatsPage();
             },
             options: [
-              html`<option value="all">All surfaces</option>`,
-              html`<option value="web">Web</option>`,
-              html`<option value="slack">Slack</option>`,
+              { value: "all", label: "All surfaces" },
+              { value: "web", label: "Web" },
+              { value: "slack", label: "Slack" },
             ],
           })}
         </div>

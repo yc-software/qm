@@ -62,3 +62,40 @@ test("the dropdown holds the caller's value against re-renders (live) and stale 
   assert.match(ui, /import \{ live \} from "lit\/directives\/live\.js"/);
   assert.match(ui, /\.value=\$\{props\.value === undefined \? nothing : live\(props\.value\)\}/);
 });
+
+const sessions = readFileSync(new URL("sessions.ts", srcDir), "utf8");
+const contexts = readFileSync(new URL("contexts.ts", srcDir), "utf8");
+
+test("the context and surface filters are the same control, built once", () => {
+  assert.match(ui, /export function menuSelect\(props: \{/);
+  for (const [name, source] of [
+    ["the context filter", contexts],
+    ["the surface filter", sessions],
+  ] as const) {
+    assert.match(source, /menuSelect\(\{/, `${name} should render through menuSelect`);
+    assert.doesNotMatch(
+      source.slice(source.indexOf("menuSelect({")),
+      /^\s*<div class="menu-control/m,
+      `${name} should not hand-roll the menu markup`,
+    );
+  }
+  assert.doesNotMatch(sessions, /fieldSelect/, "the surface filter no longer uses the native select");
+});
+
+test("the menu-backed filter wears the same box as the native select's resting state", () => {
+  const box = (rule: string): Record<string, string> => {
+    const start = css.indexOf(rule);
+    assert.ok(start >= 0, `${rule} should exist`);
+    const block = css.slice(start, css.indexOf("}", start));
+    return Object.fromEntries([...block.matchAll(/\n\s*([a-z-]+):\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]));
+  };
+  const select = box("\n.field-select > select {");
+  const menu = box("\n.field-menu .menu-button {");
+  for (const prop of ["border", "border-radius"]) {
+    assert.equal(menu[prop], select[prop], `${prop} must match the native select`);
+  }
+  assert.equal(menu["background"], "var(--background)");
+  assert.equal(menu["color"], "var(--foreground)");
+  assert.equal(menu["height"], "34px");
+  assert.equal(select["min-height"], "34px");
+});

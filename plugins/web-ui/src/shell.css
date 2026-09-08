@@ -4903,6 +4903,9 @@ a.chat-row-open {
 .list-select .field-select {
   min-width: 124px;
 }
+.list-select .field-menu .menu-button {
+  min-width: 124px;
+}
 .resource-tabs {
   width: min(960px, 100%);
   margin: 16px auto 0;
@@ -6409,12 +6412,29 @@ a.chat-row-open {
   white-space: nowrap;
 }
 
-.scope-filter .menu-button {
+.field-menu .menu-button {
   height: 34px;
+  max-width: min(260px, 50vw);
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 12px;
-  max-width: min(260px, 50vw);
+  background: var(--background);
+  color: var(--foreground);
+}
+.field-menu .menu-button > svg {
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+.field-menu .menu-button:hover:not(:disabled),
+.field-menu .menu-button[aria-expanded="true"] {
+  background: var(--background);
+  border-color: color-mix(in srgb, var(--foreground) 30%, var(--border));
+  color: var(--foreground);
+}
+.field-menu .menu-button:focus-visible {
+  border-color: var(--foreground);
+  outline: 2px solid color-mix(in srgb, var(--foreground) 65%, transparent);
+  outline-offset: 2px;
 }
 .scope-filter .menu-popover {
   top: calc(100% + 6px);
@@ -6423,12 +6443,12 @@ a.chat-row-open {
   right: 0;
   width: 248px;
 }
-.scope-option-label {
+.menu-select-option {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
-.scope-option-label svg {
+.menu-select-option svg {
   flex-shrink: 0;
   opacity: 0.85;
 }

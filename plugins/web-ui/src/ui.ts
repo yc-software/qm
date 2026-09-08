@@ -117,6 +117,63 @@ export function fieldSelect(props: {
   </span>`;
 }
 
+export interface MenuSelectOption {
+  value: string | null;
+  label: string;
+  glyph?: IconNode;
+}
+
+export function menuSelect(props: {
+  value: string | null;
+  options: MenuSelectOption[];
+  onSelect: (value: string | null) => void;
+  ariaLabel: string;
+  prefix?: string;
+  title?: string;
+  className?: string;
+}): TemplateResult {
+  const current = props.value ?? null;
+  const selected = props.options.find((o) => (o.value ?? null) === current) ?? props.options[0];
+  const option = (o: MenuSelectOption): TemplateResult => {
+    const active = (o.value ?? null) === current;
+    return html`
+      <button
+        class="menu-option ${active ? "active" : ""}"
+        type="button"
+        role="menuitemradio"
+        aria-checked=${active ? "true" : "false"}
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          closeFormMenus();
+          props.onSelect(o.value ?? null);
+        }}
+      >
+        <span class="menu-option-label menu-select-option"
+          >${o.glyph ? icon(o.glyph, 14) : nothing}<span>${o.label}</span></span
+        >
+        ${active ? icon(Check, 15) : nothing}
+      </button>
+    `;
+  };
+  return html`
+    <div class=${`menu-control form-menu-control field-menu${props.className ? ` ${props.className}` : ""}`}>
+      <button
+        class="menu-button"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-label=${props.ariaLabel}
+        @click=${toggleFormMenu}
+      >
+        <span class="menu-label">${props.prefix ?? ""}${selected?.label ?? ""}</span>${icon(ChevronDown, 14)}
+      </button>
+      <div class="menu-popover" role="menu" hidden>
+        ${props.title ? html`<div class="menu-title">${props.title}</div>` : nothing} ${props.options.map(option)}
+      </div>
+    </div>
+  `;
+}
+
 export function initials(s: string): string {
   const base = (s.split("@")[0] || s).trim();
   const parts = base.split(/[.\-_ ]+/).filter(Boolean);
