@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { searchRowsFromEntries, syncSearchIndex } from "../src/harness/tape-projection.ts";
+import { searchRowsFromEntries } from "../src/harness/tape-projection.ts";
 import { TAPE_RENDER_VERSION, type Lease, type SessionStore } from "../src/sessions/session-store.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 
@@ -117,12 +117,10 @@ async function secretTurn(sim: Sim): Promise<void> {
   });
 }
 
-test("turn-end sync indexes only conversational text — tool results and thinking stay unsearchable", async () => {
+test("message writes index only conversational text — tool results and thinking stay unsearchable", async () => {
   const sim = await simSession();
   await secretTurn(sim);
-  const sync = await syncSearchIndex(sim.store, sim.lease);
-  assert.ok(sync.servable);
-  assert.ok(sync.indexed >= 2);
+  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, TOOL_SECRET), []);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, THINKING_SECRET), []);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, "brokered credential"), []);
@@ -136,7 +134,6 @@ test("turn-end sync indexes only conversational text — tool results and thinki
 test("raw tape payloads are never indexed — the env footer stays unsearchable", async () => {
   const sim = await simSession();
   await secretTurn(sim);
-  await syncSearchIndex(sim.store, sim.lease);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, FOOTER_SECRET), []);
 });
 
@@ -171,81 +168,11 @@ test("searchRowsFromEntries drops every non-conversational entry type", () => {
   assert.ok(searchRowsFromEntries(entries, -1).every((r) => !r.text.includes(TOOL_SECRET)));
 });
 
-test("tape-index hits match the entries-index hits exactly", async () => {
+test("messages are searchable before a turn completes or tape can be projected", async () => {
   const sim = await simSession();
-  await simTurn(sim, { input: "where is the runbook", author: "Alex", reply: "The runbook lives in the wiki." });
-  await simTurn(sim, { input: "thanks a lot", reply: "Any time." });
-  const before = await sim.store.searchEntries(VIEWER, "runbook");
-  assert.equal(before.length, 2);
-  const sync = await syncSearchIndex(sim.store, sim.lease);
-  assert.ok(sync.servable);
-  assert.equal(await sim.store.searchIndexCoverage(sim.session.id), sync.coveredSeq);
-  const after = await sim.store.searchEntries(VIEWER, "runbook");
-  assert.deepEqual(after, before);
-});
-
-test("sessions not yet backfilled keep serving search from the entries index", async () => {
-  const sim = await simSession();
-  await simTurn(sim, { input: "unbackfilled question", reply: "unbackfilled answer" });
-  assert.equal(await sim.store.searchIndexCoverage(sim.session.id), -1);
-  const hits = await sim.store.searchEntries(VIEWER, "unbackfilled");
-  assert.equal(hits.length, 2);
-});
-
-test("syncSearchIndex is idempotent and advances the watermark", async () => {
-  const sim = await simSession();
-  await simTurn(sim, { input: "first question", reply: "first answer" });
-  const first = await syncSearchIndex(sim.store, sim.lease);
-  assert.ok(first.indexed > 0);
-  const again = await syncSearchIndex(sim.store, sim.lease);
-  assert.equal(again.indexed, 0);
-  await simTurn(sim, { input: "second question", reply: "second answer" });
-  const next = await syncSearchIndex(sim.store, sim.lease);
-  assert.ok(next.indexed > 0);
-  assert.equal(await sim.store.searchIndexCoverage(sim.session.id), next.coveredSeq);
-});
-
-test("an unservable projection leaves the index untouched and reports it", async () => {
-  const sim = await simSession();
-  await sim.store.append(sim.lease, { type: "user", payload: { text: "legacy body" }, scopeLabel: scope });
-  await sim.store.appendTape(sim.lease, {
-    kind: "context_event",
-    payload: { event: "legacy_import", messages: [{ role: "user", content: "legacy body" }], scopes: [scope] },
-    scopeLabel: scope,
-    coversEntrySeq: 0,
-  });
-  const sync = await syncSearchIndex(sim.store, sim.lease);
-  assert.equal(sync.servable, false);
-  assert.equal(await sim.store.searchIndexCoverage(sim.session.id), -1);
-  assert.equal((await sim.store.searchEntries(VIEWER, "legacy body")).length, 1);
-});
-
-test("a permanently unservable session is memoized: the next sync never re-reads the tape", async () => {
-  const sim = await simSession();
-  await sim.store.append(sim.lease, { type: "user", payload: { text: "legacy fork body" }, scopeLabel: scope });
-  await sim.store.appendTape(sim.lease, {
-    kind: "context_event",
-    payload: { event: "legacy_import", messages: [{ role: "user", content: "legacy fork body" }], scopes: [scope] },
-    scopeLabel: scope,
-    coversEntrySeq: 0,
-  });
-  const first = await syncSearchIndex(sim.store, sim.lease);
-  assert.equal(first.servable, false);
-  let tapeReads = 0;
-  const spy = {
-    ...sim.store,
-    getTape: (sessionId: string, opts?: { limit?: number; sinceSeq?: number }) => {
-      tapeReads++;
-      return sim.store.getTape(sessionId, opts);
-    },
-  } as SessionStore;
-  const second = await syncSearchIndex(spy, sim.lease);
-  assert.equal(second.servable, false);
-  assert.equal(tapeReads, 0, "the memoized unservable session is never re-read");
-  const other = await simSession("dm:search-index-memo-other");
-  await simTurn(other, { input: "unrelated question", reply: "unrelated answer" });
-  const otherSync = await syncSearchIndex(other.store, other.lease);
-  assert.ok(otherSync.servable, "the memo is per session, not global");
+  await sim.store.append(sim.lease, { type: "user", payload: { text: "legacy document" }, scopeLabel: scope });
+  assert.equal((await sim.store.searchEntries(VIEWER, "legacy document")).length, 1);
+  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
 });
 
 test("tenure windows filter tape-index hits the same as entries-index hits", async () => {
@@ -253,34 +180,9 @@ test("tenure windows filter tape-index hits the same as entries-index hits", asy
   await simTurn(sim, { input: "early private question", reply: "early answer" });
   await sim.store.addParticipant(sim.session.id, "latecomer");
   await simTurn(sim, { input: "late shared question", reply: "late answer" });
-  await syncSearchIndex(sim.store, sim.lease);
   assert.deepEqual(await sim.store.searchEntries("latecomer", "early private"), []);
   assert.equal((await sim.store.searchEntries("latecomer", "late shared")).length, 1);
   assert.equal((await sim.store.searchEntries(VIEWER, "early private")).length, 1);
-});
-
-test("a settled session's turn-end sync reads a bounded tape suffix, not the whole tape", async () => {
-  const sim = await simSession();
-  for (let i = 0; i < 100; i++) await simTurn(sim, { input: `question ${i}`, reply: `answer ${i}` });
-  await syncSearchIndex(sim.store, sim.lease);
-  await simTurn(sim, { input: "one more question", reply: "one more answer" });
-  const calls: Array<{ limit?: number } | undefined> = [];
-  const spy = {
-    ...sim.store,
-    getTape: (sessionId: string, opts?: { limit?: number; sinceSeq?: number }) => {
-      calls.push(opts);
-      return sim.store.getTape(sessionId, opts);
-    },
-  } as SessionStore;
-  const sync = await syncSearchIndex(spy, sim.lease);
-  assert.ok(sync.servable);
-  assert.equal(sync.indexed, 2);
-  assert.ok(calls.length > 0);
-  assert.ok(
-    calls.every((c) => c?.limit !== undefined),
-    "the settled hot path never reads the tape unbounded",
-  );
-  assert.equal((await sim.store.searchEntries(VIEWER, "one more question")).length, 1);
 });
 
 test("lastSearchableEntrySeq skips trailing tool output and empty replies", async () => {
@@ -334,9 +236,7 @@ test("a foreign-harness turn indexes its trigger and reply from the coarse proje
     scopeLabel: scope,
     entrySeq: finalEntry.seq,
   });
-  const sync = await syncSearchIndex(sim.store, sim.lease);
-  assert.ok(sync.servable);
-  assert.equal(sync.indexed, 2);
+  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, TOOL_SECRET), []);
   assert.equal((await sim.store.searchEntries(VIEWER, "codex please")).length, 1);
   assert.equal((await sim.store.searchEntries(VIEWER, "summary")).length, 1);

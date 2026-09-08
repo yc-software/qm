@@ -1,5 +1,5 @@
 import type { EntryType, ScopeId, SessionEntry } from "../types.ts";
-import type { GetEntriesOptions, Lease, NewSearchEntry, SessionStore, TapeRecord } from "../sessions/session-store.ts";
+import type { GetEntriesOptions, NewSearchEntry, SessionStore, TapeRecord } from "../sessions/session-store.ts";
 import { entryWithinTenure, TAPE_RENDER_VERSION } from "../sessions/session-store.ts";
 import { entrySearchAuthor, entrySearchText, SEARCHABLE_ENTRY_TYPES } from "../sessions/entry-search.ts";
 import { deliveryNoteManifest, legacyDeliveryNoteManifest } from "../core/attachments.ts";
@@ -497,12 +497,6 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
   };
 }
 
-export interface SearchIndexSync {
-  servable: boolean;
-  indexed: number;
-  coveredSeq: number;
-}
-
 export function searchRowsFromEntries(entries: readonly SessionEntry[], sinceSeq: number): NewSearchEntry[] {
   return entries.flatMap((entry) => {
     if (entry.seq <= sinceSeq || !SEARCHABLE_ENTRY_TYPES.has(entry.type)) return [];
@@ -519,33 +513,4 @@ export function searchRowsFromEntries(entries: readonly SessionEntry[], sinceSeq
       },
     ];
   });
-}
-
-const SEARCH_SYNC_ROW_CAP = 500;
-
-export async function syncSearchIndex(
-  sessions: Pick<SessionStore, "getTape" | "appendSearchEntries" | "searchIndexCoverage">,
-  lease: Lease,
-): Promise<SearchIndexSync> {
-  const watermark = await sessions.searchIndexCoverage(lease.sessionId);
-  if (unservableTapes.has(lease.sessionId)) return { servable: false, indexed: 0, coveredSeq: watermark };
-  let fullRows: TapeRecord[] | null = null;
-  const projection = await (async () => {
-    const suffix = await sessions.getTape(lease.sessionId, { limit: SEARCH_SYNC_ROW_CAP });
-    if (suffix.length < SEARCH_SYNC_ROW_CAP) {
-      fullRows = suffix;
-      return projectTapeEntries(lease.sessionId, suffix);
-    }
-    const anchored = projectTapeEntries(lease.sessionId, suffix, { anchored: true });
-    if (anchored && anchored.baseSeq <= watermark) return anchored;
-    fullRows = await sessions.getTape(lease.sessionId);
-    return projectTapeEntries(lease.sessionId, fullRows);
-  })();
-  if (!projection) {
-    if (fullRows !== null && tapeHasRenderBlockers(fullRows)) unservableTapes.remember(lease.sessionId);
-    return { servable: false, indexed: 0, coveredSeq: watermark };
-  }
-  const fresh = searchRowsFromEntries(projection.entries, watermark);
-  if (fresh.length) await sessions.appendSearchEntries(lease, fresh);
-  return { servable: true, indexed: fresh.length, coveredSeq: projection.coveredSeq };
 }

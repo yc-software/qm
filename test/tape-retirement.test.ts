@@ -6,7 +6,6 @@ import {
   projectTapeEntries,
   renderableTapeSlice,
   RENDER_IMPORT_EVENT,
-  syncSearchIndex,
 } from "../src/harness/tape-projection.ts";
 import { foldTape } from "../src/harness/tape-fold.ts";
 import { TAPE_RENDER_VERSION, type Lease, type SessionStore, type TapeRecord } from "../src/sessions/session-store.ts";
@@ -378,13 +377,10 @@ test("an uncovered tape gets a fold import before the render stamp", async () =>
   assert.deepEqual(projection!.entries, entries);
 });
 
-test("the search sync advances across a render import instead of wedging", async () => {
+test("search remains complete across a render import", async () => {
   const sim = await preCutoverSession();
   await importSession(sim);
-  const sync = await syncSearchIndex(sim.store, sim.lease);
-  assert.equal(sync.servable, true);
-  assert.ok(sync.indexed >= 2);
-  assert.equal(sync.coveredSeq, (await sim.store.getEntries(sim.session.id)).length - 1);
+  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
 });
 
 test("a tainted uncovered session is refused without a coverage claim", async () => {

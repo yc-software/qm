@@ -115,7 +115,7 @@ import {
   tapeNeedsInterruptHeal,
 } from "../harness/tape-fold.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
-import { createTranscriptSource, syncSearchIndex } from "../harness/tape-projection.ts";
+import { createTranscriptSource } from "../harness/tape-projection.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
@@ -3018,7 +3018,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
           }
           latchedCoverageSeq = lastSeq;
-          await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: sync", e));
         };
         if (
           input.addressed &&

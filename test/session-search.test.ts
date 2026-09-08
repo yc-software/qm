@@ -106,6 +106,12 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   await sessions.updateTitle(id, "Trip planning");
   await seed(sessions, "web:U2:other", "U2", ["zanzibar for U2 only"]);
 
+  sessions.listByParticipant = async () => {
+    throw new Error("search must not list every session");
+  };
+  sessions.getForParticipant = async () => {
+    throw new Error("search must not read legacy message activity");
+  };
   const hits = await app.searchSessions("U1", "zanzibar");
   assert.equal(hits.length, 2, "only U1's own conversation is searched");
   assert.ok(hits.every((h) => h.sessionId === id));

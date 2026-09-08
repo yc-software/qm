@@ -248,6 +248,13 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         createdAt: now(),
       };
       log.push(full);
+      const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
+      if (text?.trim()) {
+        const index = searchIndex.get(full.sessionId) ?? [];
+        const author = entrySearchAuthor(full);
+        index.push({ seq: full.seq, type: full.type, text, createdAt: full.createdAt, ...(author ? { author } : {}) });
+        searchIndex.set(full.sessionId, index);
+      }
       return full;
     },
 
@@ -498,33 +505,23 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         const win = windows.get(sessionId)?.get(principalId);
         if (!win) continue;
         const indexed = searchIndex.get(sessionId) ?? [];
-        const indexedSeqs = new Set(indexed.map((row) => row.seq));
+        const session = sessions.get(sessionId);
+        if (!session) continue;
         for (const row of indexed) {
           if (!entryWithinTenure(row, win)) continue;
           if (!matchesSearchTerms(row.text, terms)) continue;
           hits.push({
             sessionId,
+            scopeId: session.scopeId,
+            ...((win.title ?? session.title) != null ? { title: win.title ?? session.title } : {}),
+            ...(session.channelName ? { channelName: session.channelName } : {}),
+            ...(session.surface ? { surface: session.surface } : {}),
+            ...(win.archived ? { archived: true } : {}),
             seq: row.seq,
             type: row.type,
             ...(row.author ? { author: row.author } : {}),
             text: row.text,
             createdAt: row.createdAt,
-          });
-        }
-        for (const e of entries.get(sessionId) ?? []) {
-          if (!SEARCHABLE_ENTRY_TYPES.has(e.type)) continue;
-          if (indexedSeqs.has(e.seq)) continue;
-          if (!entryWithinTenure(e, win)) continue;
-          const text = entrySearchText(e.payload);
-          if (!text || !matchesSearchTerms(text, terms)) continue;
-          const author = entrySearchAuthor(e);
-          hits.push({
-            sessionId,
-            seq: e.seq,
-            type: e.type,
-            ...(author ? { author } : {}),
-            text,
-            createdAt: e.createdAt,
           });
         }
       }
@@ -552,6 +549,14 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async searchIndexCoverage(sessionId): Promise<number> {
       const index = searchIndex.get(sessionId);
       return index?.length ? index[index.length - 1]!.seq : -1;
+    },
+
+    async missingSearchEntries(sessionId): Promise<number> {
+      const indexed = new Set((searchIndex.get(sessionId) ?? []).map((row) => row.seq));
+      return (entries.get(sessionId) ?? []).filter(
+        (entry) =>
+          SEARCHABLE_ENTRY_TYPES.has(entry.type) && entrySearchText(entry.payload)?.trim() && !indexed.has(entry.seq),
+      ).length;
     },
 
     async lastSearchableEntrySeq(sessionId): Promise<number> {
