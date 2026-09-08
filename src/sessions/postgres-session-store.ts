@@ -504,17 +504,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       {
         id: "sessions/store/0015-search-backfill-v1",
         statements: [
-          `INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)
-           SELECT e.session_id, e.seq, e.type,
-                  CASE WHEN e.type = 'user' THEN
-                    (SELECT CASE WHEN json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
-                       FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) END,
-                  entry_search_text(e.payload), e.created_at
-             FROM session_entries e
-            WHERE e.type IN ('user', 'assistant', 'text')
-              AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
-              AND COALESCE(btrim(entry_search_text(e.payload)), '') <> ''
-            FOR SHARE OF e
+          `WITH missing AS MATERIALIZED (
+             SELECT e.session_id, e.seq, e.type,
+                    CASE WHEN e.type = 'user' THEN
+                      (SELECT CASE WHEN json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
+                         FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) END AS author,
+                    entry_search_text(e.payload) AS text, e.created_at
+               FROM session_entries e
+              WHERE e.type IN ('user', 'assistant', 'text')
+                AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
+              FOR SHARE OF e
+           )
+           INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)
+           SELECT session_id, seq, type, author, text, created_at FROM missing
+            WHERE COALESCE(btrim(text), '') <> ''
            ON CONFLICT (session_id, seq) DO NOTHING`,
         ],
       },
@@ -1217,10 +1220,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async missingSearchEntries(sessionId): Promise<number> {
       const rows = await q(
-        `SELECT COUNT(*) AS n FROM session_entries e
-          WHERE e.session_id = $1 AND e.type IN ('user', 'assistant', 'text')
-            AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
-            AND COALESCE(btrim(entry_search_text(e.payload)), '') <> ''`,
+        `WITH missing AS MATERIALIZED (
+           SELECT entry_search_text(e.payload) AS text FROM session_entries e
+            WHERE e.session_id = $1 AND e.type IN ('user', 'assistant', 'text')
+              AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
+         )
+         SELECT COUNT(*) AS n FROM missing WHERE COALESCE(btrim(text), '') <> ''`,
         [sessionId],
       );
       return Number(rows[0]?.n ?? 0);
