@@ -2428,6 +2428,10 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   assert.equal(riskyProvisioning.provisioned, 0);
   const flagged = (await risky.auditLog.events()).find((event) => event.action === "security_posture.flagged");
   assert.match(flagged?.detail ?? "", /"source"/);
+  assert.ok(
+    (await risky.sessions.searchIndexCoverage(blocked.sessionId!)) >= 0,
+    "the flagged trigger is indexed for search while parked on the input approval",
+  );
   assert.equal(
     risky.modelGateway.audit().some((call) => call.model === "mock"),
     false,

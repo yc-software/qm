@@ -235,6 +235,29 @@ const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
+async function syncSearchIndexAtTurnExit(deps: OrchestratorDeps, lease: Lease, scopeLabel: ScopeId): Promise<void> {
+  try {
+    const sync = await syncSearchIndex(deps.sessions, lease);
+    if (!sync.servable) {
+      deps.errors?.record({
+        category: "search",
+        code: "search_sync_unservable",
+        message: `search index sync skipped: the session tape does not project (index covers seq ${sync.coveredSeq})`,
+        scopeLabel,
+        sessionId: lease.sessionId,
+      });
+    }
+  } catch (e) {
+    deps.errors?.record({
+      category: "search",
+      code: "search_sync_failed",
+      message: errMessage(e),
+      scopeLabel,
+      sessionId: lease.sessionId,
+    });
+  }
+}
+
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   if (deps.sessions.leaseTtlMs < MIN_SESSION_LEASE_TTL_MS) {
     throw new Error(
@@ -906,6 +929,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           throw err;
         } finally {
+          await syncSearchIndexAtTurnExit(deps, lease, scopeId);
           await deps.sessions.releaseLease(lease);
         }
         return {
@@ -3398,7 +3422,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         if (input.background && finalResult.status !== "pending_approval") {
           tailOwnsCleanup = true;
-          await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: sync", e));
+          await syncSearchIndexAtTurnExit(deps, lease, scopeId);
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
           leaseReleased = true;
@@ -3537,7 +3561,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         stopLeaseKeepalive();
         if (!tailOwnsCleanup) await reclaimBox();
         if (!leaseReleased) {
-          await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: sync", e));
+          await syncSearchIndexAtTurnExit(deps, lease, scopeId);
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }
