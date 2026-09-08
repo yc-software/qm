@@ -1,0 +1,46 @@
+.tool-row .tool-summary:hover {
+  background: var(--hover-2);
+}
+.tool-name {
+  flex: 0 0 auto;
+  font-weight: 500;
+}
+.tool-label.tool-chip {
+  flex: 0 1 auto;
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  background: var(--field);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 20px;
+}
+.tool-row.tool-failed .tool-chip {
+  background: var(--red-tint);
+  color: var(--red);
+}
+.tool-row.tool-approval .tool-chip {
+  background: var(--orange-tint);
+  color: var(--orange);
+}
+.tool-row.tool-attempted,
+.tool-row.tool-attempted .tool-chip {
+  color: var(--ink-3);
+}
+.tool-spinner {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--line-strong);
+  border-top-color: var(--ink-2);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-spinner {
+    animation: none;
+  }
+}

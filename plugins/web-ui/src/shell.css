@@ -2226,22 +2226,29 @@ a.chat-row-open {
 .tool-row .tool-summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
+  min-height: 24px;
   font-size: 13px;
   line-height: 1.35;
-  color: color-mix(in srgb, var(--muted-foreground) 80%, var(--background));
-}
-.tool-row.tool-running {
-  color: var(--muted-foreground);
+  color: var(--ink);
 }
 .tool-row .tool-summary {
   cursor: pointer;
   min-height: 24px;
+  margin: 0 -3px;
+  padding: 1px 3px;
+  border-radius: var(--radius-sm);
+  transition: background-color 100ms;
 }
 .tool-icon {
   display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ink-3);
 }
 .tool-icon .icon {
   color: inherit;
@@ -2252,9 +2259,6 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.tool-detail {
-  color: color-mix(in srgb, var(--muted-foreground) 70%, var(--background));
 }
 .thinking-row {
   display: block;
@@ -2290,14 +2294,8 @@ a.chat-row-open {
   font-size: 13px;
   line-height: 1.55;
 }
-.tool-row.tool-approval {
-  color: var(--foreground);
-}
 .tool-row.tool-failed {
-  color: var(--destructive, #c0392b);
-}
-.tool-row.tool-failed .tool-detail {
-  color: color-mix(in srgb, var(--destructive, #c0392b) 75%, var(--background));
+  color: var(--red);
 }
 .approval-card {
   display: flex;
@@ -2485,31 +2483,30 @@ a.chat-row-open {
 .tool-disclosure {
   display: grid;
   gap: 6px;
-  margin: 5px 0 8px 19px;
+  margin: 4px 0 8px 24px;
 }
 .tool-payload-card {
   min-width: 0;
   overflow: hidden;
-  border-radius: 7px;
-  background: var(--secondary);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
 }
 .tool-payload-label {
-  padding: 7px 10px 3px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  padding: 6px 10px 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
 }
 .tool-payload-body {
   max-height: 320px;
   margin: 0;
-  padding: 3px 10px 9px;
+  padding: 4px 10px 8px;
   overflow: auto;
-  color: var(--foreground);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
