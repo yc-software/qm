@@ -135,15 +135,32 @@ test("unknown views still fall back to the default view", () => {
 });
 
 test("model registry verification makes charges and credential scope explicit", () => {
-  assert.match(html, /id="model-registry-save">Verify and enable/);
+  assert.match(html, /id="model-registry-save" disabled>Verify and enable/);
   const notice = slice('id="model-registry-verification-notice"', "</p>");
   assert.match(notice, /provider charge/);
   assert.match(notice, /personal-key access/);
   const save = slice('$("model-registry-save").onclick', "let customProvidersLoaded");
   assert.match(save, /verify: true/);
-  assert.match(save, /button.disabled = true/);
+  assert.match(save, /el.disabled = true/);
   assert.match(save, /Verifying…/);
   assert.match(save, /finally/);
-  assert.match(save, /button.disabled = false/);
+  assert.match(save, /el.disabled = disabled/);
   assert.match(html, /Verified with organization credentials/);
+});
+
+test("model setup starts with two inputs, separates missing fields and discards stale lookups", () => {
+  const form = slice(
+    '<label\n                  >Provider\n                  <select id="model-registry-provider">',
+    'id="model-registry-result"',
+  );
+  assert.match(form, /model-registry-id/);
+  assert.doesNotMatch(form, /model-registry-contextWindow|model-registry-input/);
+  assert.match(html, /<summary>Advanced overrides<\/summary>/);
+  assert.match(html, /id="model-registry-missing-fields"/);
+  const code = slice("let modelRegistryTemplates = []", "let customProvidersLoaded");
+  assert.match(code, /request !== modelRegistryLookupRequest/);
+  assert.match(code, /\$\("model-registry-id"\)\.oninput = resetRegistryLookup/);
+  assert.match(code, /JSON\.stringify\(identity\) !== JSON\.stringify\(lookup.identity\)/);
+  assert.match(code, /Choose a compatible template/);
+  assert.match(code, /source/);
 });

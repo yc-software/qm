@@ -17,3 +17,11 @@ Slow probes run outside the registry write lock. Before saving, the store rechec
 - A small probe does not certify prices, the maximum advertised context/output limits, image support, every reasoning level, or correct tool execution. Check provider documentation for those fields.
 - Configuring a model does not add support for a new protocol or native harness. Admin-managed API models remain Pi-only in normal use.
 - Live provider compatibility requires running the check against that provider. Development tests use local streaming provider fixtures.
+
+## Find a model before entering metadata
+
+Start with **Provider** and **Model ID**, then **Look up model**. Exact matches use the bundled, maintained model catalog, including models not currently offered in the picker. The result shows its source and catalog generation date when available. Existing models can be verified and added to the web picker without cloning them or changing the organization default. This uses existing built-in model policy; it does not create an admin-managed override or persistent overlay verification record.
+
+For a new ID, lookup requests that exact record from the selected provider using organization credentials and configured endpoints. Redirects are refused. Lookup is bounded to five seconds and 64 KiB. Available name and token-limit fields are imported; missing prices, limits, and the compatible protocol template are requested explicitly. Provider APIs do not consistently publish pricing or complete metadata. Unknown values are never replaced with values from a similar model, and no third-party pricing source is queried.
+
+The common path requires only the initial two inputs. New-model details that are already known remain under **Advanced overrides**, while missing fields are shown separately. All new or edited definitions still require **Verify and enable**. Metadata lookup is not a generation-access test and cannot certify a personal credential. Editing the provider or model ID clears a prior lookup result. The existing full-definition PUT remains supported.

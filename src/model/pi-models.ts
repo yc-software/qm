@@ -359,7 +359,7 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
   return model;
 }
 
-function resolveBuiltinModel(id: string): PiModel | undefined {
+export function resolveBuiltinModel(id: string): PiModel | undefined {
   if (id.startsWith(CODEX_SUBSCRIPTION_PREFIX)) {
     const m = getModel(CODEX_SUBSCRIPTION_PROVIDER, id.slice(CODEX_SUBSCRIPTION_PREFIX.length));
     // Keep the namespaced id: pi resolves the turn's model by this string,

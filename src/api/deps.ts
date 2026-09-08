@@ -1,3 +1,4 @@
+import type { ModelVerifier } from "../model/model-verification.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { SessionShareStore } from "../sessions/session-share.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
@@ -106,6 +107,7 @@ export interface ServerDeps {
   mcpToolService?: McpToolService;
   modelCredentialFetch?: typeof fetch;
   modelRegistry?: ModelOverlayStore;
+  modelVerifier?: ModelVerifier;
   refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;
