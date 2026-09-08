@@ -5062,8 +5062,15 @@
                   </label>
                 </details>
               </div>
+              <p class="muted" id="model-registry-verification-notice">
+                Verify and enable sends a synthetic connection check using the organization's serving credentials. It
+                may incur a small provider charge (up to 128 output tokens per request; an additional check with fast
+                mode; provider retries may apply). A successful check confirms access now, not pricing, maximum context,
+                every capability, or personal-key access. Failed checks do not save or enable the new definition.
+                Existing saved settings remain unchanged. A failed recheck of those settings removes their verification.
+              </p>
               <div class="foot">
-                <button class="primary" id="model-registry-save">Save model</button
+                <button class="primary" id="model-registry-save">Verify and enable</button
                 ><button id="model-registry-new">New model</button><span class="status" id="st-model-registry"></span>
               </div>
             </section>
@@ -9004,10 +9011,18 @@
         rows.replaceChildren();
         const enabled = response.data.models.filter((m) => !m.disabled);
         $("model-registry-empty").hidden = enabled.length > 0;
-        for (const { spec, unavailableReason } of enabled) {
+        for (const { spec, unavailableReason, verifiedAt } of enabled) {
           const row = document.createElement("tr");
           for (const value of [
-            (spec.name || spec.id) + " (" + spec.id + ")" + (unavailableReason ? " — " + unavailableReason : ""),
+            (spec.name || spec.id) +
+              " (" +
+              spec.id +
+              ")" +
+              (unavailableReason
+                ? " — " + unavailableReason
+                : verifiedAt
+                  ? " — Verified with organization credentials " + new Date(verifiedAt).toLocaleString()
+                  : " — Not verified"),
             spec.provider || "Unknown",
             spec.template || "Missing",
           ]) {
@@ -9064,15 +9079,25 @@
           for (const field of ["base", "webui", "auxiliary", "fastMode"])
             spec[field] = $("model-registry-" + field).checked;
           button.disabled = true;
-          const result = await api("PUT", "/api/model-registry/" + encodeURIComponent(spec.id), spec);
+          button.textContent = "Verifying…";
+          setStatus("st-model-registry", "Checking the model with organization credentials…", "");
+          const result = await api("PUT", "/api/model-registry/" + encodeURIComponent(spec.id), {
+            ...spec,
+            verify: true,
+          });
           if (!result.ok) throw new Error(result.data?.message || "Could not save model.");
           await loadOnboarding();
           editRegistryModel(spec);
-          setStatus("st-model-registry", "Model saved. New turns use this definition.", "ok");
+          setStatus(
+            "st-model-registry",
+            "Model verified and enabled with organization credentials. Personal-key access may differ.",
+            "ok",
+          );
         } catch (error) {
           setStatus("st-model-registry", error.message, "err");
         } finally {
           button.disabled = false;
+          button.textContent = "Verify and enable";
         }
       };
 

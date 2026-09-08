@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1217,6 +1218,44 @@ export async function oneShot(
     rmSync(cwd, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
   }
+}
+
+export async function probeModel(
+  model: Model<Api>,
+  keys: ProviderKeys,
+  signal: AbortSignal,
+  fastMode = false,
+  modelGateway?: ModelGatewayTransportConfig,
+): Promise<void> {
+  const runtime = await buildModelRuntime(keys, modelGateway);
+  signal.throwIfAborted();
+  const fastHeader = fastMode && !modelGateway?.models[model.id];
+  const candidate = fastHeader ? withFastModeHeaders(model) : model;
+  const response = await runtime
+    .streamSimple(
+      candidate,
+      {
+        systemPrompt: "This is a connection check. Reply OK. Do not call tools.",
+        messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
+        tools: [
+          {
+            name: "connection_check",
+            description: "A synthetic tool for verifying request compatibility. Do not call it.",
+            parameters: Type.Object({}),
+          },
+        ],
+      },
+      {
+        maxTokens: Math.min(128, model.maxTokens),
+        signal,
+        maxRetryDelayMs: 1,
+        onPayload: (payload) => applyFastSpeed(payload, fastMode, model.api),
+      },
+    )
+    .result();
+  signal.throwIfAborted();
+  if (response.stopReason !== "stop" || !response.content.some((part) => part.type === "text" && part.text.trim()))
+    throw new Error(response.errorMessage || "Model verification did not produce a completed text response");
 }
 
 const FAST_MODE_BETA = "fast-mode-2026-02-01";

@@ -133,3 +133,17 @@ test("?view=onboarding resolves to the onboarding view", () => {
 test("unknown views still fall back to the default view", () => {
   assert.equal(resolveView("/admin/no-such-view", ""), "history");
 });
+
+test("model registry verification makes charges and credential scope explicit", () => {
+  assert.match(html, /id="model-registry-save">Verify and enable/);
+  const notice = slice('id="model-registry-verification-notice"', "</p>");
+  assert.match(notice, /provider charge/);
+  assert.match(notice, /personal-key access/);
+  const save = slice('$("model-registry-save").onclick', "let customProvidersLoaded");
+  assert.match(save, /verify: true/);
+  assert.match(save, /button.disabled = true/);
+  assert.match(save, /Verifying…/);
+  assert.match(save, /finally/);
+  assert.match(save, /button.disabled = false/);
+  assert.match(html, /Verified with organization credentials/);
+});

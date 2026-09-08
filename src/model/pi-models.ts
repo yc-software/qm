@@ -227,7 +227,11 @@ export function validateModelOverlay(value: unknown): ModelOverlay {
   return spec;
 }
 
-export function setModelOverlays(specs: readonly unknown[], deleted: string[] = []): void {
+export function setModelOverlays(
+  specs: readonly unknown[],
+  deleted: string[] = [],
+  verificationFailures: ReadonlyMap<string, string> = new Map(),
+): void {
   const next = new Map<string, ModelOverlay>();
   const unavailable = new Map(deleted.map((id) => [id, "Model has been deleted; select another model"]));
   for (const value of specs) {
@@ -250,7 +254,8 @@ export function setModelOverlays(specs: readonly unknown[], deleted: string[] = 
         );
       } else if (isCustomModelId(id) || OPENROUTER_CATALOG_MODELS.has(id)) {
         unavailable.set(id, "Model id conflicts with another provider; ask an administrator to repair this model");
-      } else next.set(id, spec);
+      } else if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
+      else next.set(id, spec);
     } catch {
       unavailable.set(id, "Stored model definition is invalid; ask an administrator to repair this model");
     }
@@ -388,16 +393,21 @@ function resolveBaseModel(id: string): PiModel | undefined {
   if (builtin) return builtin;
   const overlay = overlays.get(id);
   if (overlay) {
-    const template = resolveBuiltinModel(overlay.template);
-    return template
-      ? cloneModel(template, id, overlay.name, {
-          contextWindow: overlay.contextWindow,
-          maxTokens: overlay.maxTokens,
-          cost: structuredClone(overlay.cost),
-        })
-      : undefined;
+    return modelFromOverlay(overlay, false);
   }
   return (resolveCustomModel(id) as unknown as PiModel | undefined) ?? OPENROUTER_CATALOG_MODELS.get(id);
+}
+
+export function modelFromOverlay(spec: ModelOverlay, useOrgEndpoints = true): PiModel | undefined {
+  const template = resolveBuiltinModel(spec.template);
+  if (!template || template.provider !== spec.provider) return undefined;
+  const model = cloneModel(template, spec.id, spec.name, {
+    contextWindow: spec.contextWindow,
+    maxTokens: spec.maxTokens,
+    cost: structuredClone(spec.cost),
+  });
+  const override = useOrgEndpoints ? providerBaseUrl(spec.provider) : undefined;
+  return override ? { ...model, baseUrl: override } : model;
 }
 
 export function resolveModel(id: string, useOrgEndpoints = true): PiModel | undefined {

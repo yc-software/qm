@@ -1,3 +1,5 @@
+import { createModelVerifier } from "./model/model-verification.ts";
+import type { probeModel } from "./harness/pi-harness.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
@@ -469,6 +471,7 @@ export function buildApp(
     securityScreener?: SecurityScreener;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
+    modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -992,7 +995,16 @@ export function buildApp(
     backing: artifactMap("custom_model_providers"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
   });
-  const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry);
+  const modelRegistry = createModelOverlayStore(
+    artifactMap("model_registry"),
+    writeModelRegistry,
+    createModelVerifier({
+      credentials: modelCredentials,
+      keyMaterial: config.connectorSecretKey ?? randomBytes(32),
+      modelGateway: config.modelGateway,
+      probe: overrides.modelVerificationProbe,
+    }),
+  );
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };

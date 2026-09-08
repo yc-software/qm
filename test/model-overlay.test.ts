@@ -13,7 +13,10 @@ const MODEL_ID = "overlay-future-model";
 test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
   assert.throws(() => getRequiredModel(MODEL_ID), /Unsupported model/);
   const config = testConfig({ harness: "pi" });
-  const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
+  const built = buildApp(config, {
+    modelCredentialFetch: async () => Response.json({ data: [] }),
+    modelVerificationProbe: async () => {},
+  });
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
@@ -40,7 +43,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
 
 import { afterEach } from "node:test";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createModelOverlayStore, type StoredModelOverlay } from "../src/model/model-overlay-store.ts";
+import { createModelOverlayStore as createStore, type StoredModelOverlay } from "../src/model/model-overlay-store.ts";
 import {
   setModelOverlays,
   validateModelOverlay,
@@ -56,6 +59,9 @@ import { setCustomProviders, validateCustomProviderSpec } from "../src/model/cus
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
+
+const createModelOverlayStore: typeof createStore = (backing, write) =>
+  createStore(backing, write, async () => ({ fingerprint: "fixture", probe: async () => {} }));
 
 const spec = {
   id: MODEL_ID,
@@ -203,12 +209,25 @@ test("collisions are rejected in both registration orders and OpenRouter failure
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
   const config = testConfig({ harness: "pi", openaiApiKey: "local-test-key" });
-  const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
+  const built = buildApp(config, {
+    modelCredentialFetch: async () => Response.json({ data: [] }),
+    modelVerificationProbe: async () => {},
+  });
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
-    fetch(`${base}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    fetch(`${base}${path}`, {
+      method,
+      headers,
+      ...(body === undefined
+        ? {}
+        : {
+            body: JSON.stringify(
+              method === "PUT" && path.includes("model-registry") ? { ...(body as object), verify: true } : body,
+            ),
+          }),
+    });
   const path = `/v1/admin/model-registry/${MODEL_ID}`;
   const runtime = {
     principalId: "admin-alice@default-org",
@@ -429,7 +448,10 @@ test("hydration isolates promoted builtins, incompatible providers, missing temp
 
 test("model refresh is limited to dependent routes and admin repair survives stale persisted definitions", async () => {
   const config = testConfig({ harness: "pi" });
-  const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
+  const built = buildApp(config, {
+    modelCredentialFetch: async () => Response.json({ data: [] }),
+    modelVerificationProbe: async () => {},
+  });
   const backing = createMemoryMap<StoredModelOverlay>();
   await backing.put("stale", {
     spec: { ...spec, id: "stale", template: "missing" },

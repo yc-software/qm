@@ -1,3 +1,4 @@
+import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import assert from "node:assert/strict";
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -11,10 +12,10 @@ const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 const runtimePath = "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org";
 
-async function start(databaseUrl: string) {
+async function start(databaseUrl: string, upstream: string) {
   const child = fork(new URL("./support/model-overlay-server.ts", import.meta.url), {
     stdio: ["ignore", "ignore", "ignore", "ipc"],
-    env: { ...process.env, MODEL_OVERLAY_TEST_DATABASE_URL: databaseUrl },
+    env: { ...process.env, MODEL_OVERLAY_TEST_DATABASE_URL: databaseUrl, MODEL_OVERLAY_TEST_UPSTREAM: upstream },
   });
   const timeout = setTimeout(() => child.kill(), 30_000);
   const message = await Promise.race([
@@ -42,6 +43,8 @@ test(
       ["127.0.0.1", "localhost"].includes(new URL(databaseUrl).hostname),
       "use a dedicated local test database",
     );
+    const upstream = await verificationUpstream();
+    t.after(() => upstream.close());
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const schema = `model_overlay_${randomUUID().replaceAll("-", "")}`;
     t.after(async () => {
@@ -58,9 +61,9 @@ test(
     const factory = createPostgresMapFactory(isolatedDatabaseUrl);
     const processes: ChildProcess[] = [];
     try {
-      const first = await start(isolatedDatabaseUrl);
+      const first = await start(isolatedDatabaseUrl, upstream.url);
       processes.push(first.child);
-      const second = await start(isolatedDatabaseUrl);
+      const second = await start(isolatedDatabaseUrl, upstream.url);
       processes.push(second.child);
       const read = async (base: string) => {
         const response = await fetch(base + runtimePath, { headers });
@@ -73,6 +76,7 @@ test(
       };
       assert.equal((await read(second.base)).modelCatalog["overlay-pg-model"], undefined);
       const spec = {
+        verify: true,
         name: "Future PG model",
         provider: "openai",
         template: "gpt-5.5",
@@ -107,10 +111,13 @@ test(
           }),
         }),
       ]);
-      assert.deepEqual(raced.map((response) => response.status).sort(), [200, 400]);
+      assert.deepEqual(
+        raced.map((response) => response.status),
+        raced[0]!.status === 200 ? [200, 400] : [409, 200],
+      );
       await read(first.base);
       await read(second.base);
-      const cold = await start(isolatedDatabaseUrl);
+      const cold = await start(isolatedDatabaseUrl, upstream.url);
       processes.push(cold.child);
       const coldConfig = await read(cold.base);
       assert.equal(coldConfig.effective.modelId, "overlay-pg-model");
