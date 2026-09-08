@@ -11,6 +11,7 @@ import {
   Expand,
   Files,
   KeyRound,
+  Link,
   Maximize2,
   MoreHorizontal,
   Plus,
@@ -903,6 +904,7 @@ export function notifyPanesChanged(): void {
 function refreshHeaders(): void {
   headerSignature = computeHeaderSignature();
   for (const t of paneTabs) t.draw();
+  for (const a of groupActions) a.draw();
   for (const c of paneContents.values()) c.syncTitle();
   syncDocumentTitle();
 }
@@ -1145,6 +1147,40 @@ class PaneContent implements IContentRenderer {
   }
 }
 
+function sessionActions(sessionId: string, inTab: boolean): TemplateResult {
+  const cls = inTab ? "split-tab-close" : "split-group-session-action";
+  return html`<button
+      type="button"
+      class="icon-btn subtle ${cls} split-tab-share"
+      ${tip("Share conversation")}
+      aria-label="Share conversation"
+      @pointerdown=${(e: Event) => {
+        if (inTab) e.stopPropagation();
+      }}
+      @click=${(e: Event) => {
+        if (inTab) e.stopPropagation();
+        void openSessionShare(sessionId);
+      }}
+    >
+      ${icon(Link, 13)}
+    </button>
+    <button
+      class="icon-btn subtle ${cls} split-tab-archive"
+      type="button"
+      title="Archive session"
+      aria-label="Archive session"
+      @pointerdown=${(e: Event) => {
+        if (inTab) e.stopPropagation();
+      }}
+      @click=${(e: Event) => {
+        if (inTab) e.stopPropagation();
+        archiveSessionById(sessionId);
+      }}
+    >
+      ${icon(Archive, 13)}
+    </button>`;
+}
+
 class PaneTab implements ITabRenderer {
   readonly element: HTMLElement;
   private panelId = "";
@@ -1228,39 +1264,7 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${
-          sessionId
-            ? html`<button
-                type="button"
-                class="session-share-button"
-                aria-label="Share conversation"
-                @pointerdown=${(e: Event) => e.stopPropagation()}
-                @click=${(e: Event) => {
-                  e.stopPropagation();
-                  void openSessionShare(sessionId);
-                }}
-              >
-                Share
-              </button>`
-            : nothing
-        }
-        ${
-          this.inStrip && sessionId
-            ? html`<button
-                class="icon-btn subtle split-tab-close split-tab-archive"
-                type="button"
-                title="Archive session"
-                aria-label="Archive session"
-                @pointerdown=${(e: Event) => e.stopPropagation()}
-                @click=${(e: Event) => {
-                  e.stopPropagation();
-                  archiveSessionById(sessionId);
-                }}
-              >
-                ${icon(Archive, 13)}
-              </button>`
-            : nothing
-        }
+        ${this.inStrip && sessionId ? sessionActions(sessionId, true) : nothing}
         ${
           this.inStrip
             ? html`<button
@@ -1346,7 +1350,8 @@ class GroupActions implements IHeaderActionsRenderer {
 
   private readonly onDocClick = (e: Event): void => {
     if (!this.menuOpen) return;
-    if (this.element.querySelector(".split-tools")?.contains(e.target as Node)) return;
+    const tools = this.element.querySelector(".split-tools");
+    if (tools && e.composedPath().includes(tools)) return;
     this.menuOpen = false;
     this.draw();
   };
@@ -1368,6 +1373,9 @@ class GroupActions implements IHeaderActionsRenderer {
       const g = dockApi?.groups.find((x) => x.id === props.group.id);
       return g?.activePanel ?? g?.panels[0] ?? null;
     };
+    const panel = activePanel();
+    const sessionId =
+      panel && !paneKindEntry(panelParams(panel)) ? (panelParams(panel).sessionId ?? paneSession(panel)?.id) : null;
     const maximized = props.api.isMaximized();
     const runTool = (tool: SessionTool): void => {
       this.menuOpen = false;
@@ -1454,6 +1462,7 @@ class GroupActions implements IHeaderActionsRenderer {
           </button>
           ${menu}
         </span>
+        ${sessionId ? sessionActions(sessionId, false) : nothing}
         ${buttons.map(
           (b) =>
             html`<button

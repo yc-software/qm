@@ -1,3 +1,4 @@
+import { openSessionShare } from "./session-share";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
@@ -729,15 +730,6 @@ function chatPageRow(s: CoreSession): TemplateResult {
               <button
                 class="icon-btn"
                 type="button"
-                ${tip("Copy link")}
-                aria-label=${`Copy link to ${sessionTitle(s)}`}
-                @click=${() => void copyText(sessionLink(location.origin, UI_BASE, s.id))}
-              >
-                ${icon(Link, 13.5)}
-              </button>
-              <button
-                class="icon-btn"
-                type="button"
                 ${tip(s.pinned ? "Unpin" : "Pin")}
                 aria-label=${`${s.pinned ? "Unpin" : "Pin"} ${sessionTitle(s)}`}
                 @click=${() => {
@@ -746,6 +738,15 @@ function chatPageRow(s: CoreSession): TemplateResult {
                 }}
               >
                 ${s.pinned ? icon(PinOff, 13.5) : icon(Pin, 13.5)}
+              </button>
+              <button
+                class="icon-btn"
+                type="button"
+                ${tip("Share conversation")}
+                aria-label=${`Share ${sessionTitle(s)}`}
+                @click=${() => void openSessionShare(s.id)}
+              >
+                ${icon(Link, 13.5)}
               </button>
               <button
                 class="icon-btn"
@@ -937,6 +938,18 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
       ${
         saved
           ? html`<div class="session-menu">
+              <button
+                class="session-menu-btn session-share-btn"
+                type="button"
+                ${tip("Share conversation")}
+                aria-label=${`Share ${sessionTitle(s)}`}
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  void openSessionShare(s.id);
+                }}
+              >
+                ${icon(Link, 13.5)}
+              </button>
               <button
                 class="session-menu-btn session-archive-btn"
                 type="button"

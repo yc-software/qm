@@ -13,15 +13,11 @@ const fn = (src: string, name: string): string => {
 };
 
 test("a tab offers an archive button beside close, for real sessions only", () => {
-  const btn = split.match(/this\.inStrip && sessionId[\s\S]*?split-tab-archive[\s\S]*?<\/button>`/)?.[0] ?? "";
-  assert.ok(btn, "archive button must render only in the tab strip and only when the pane shows a session");
-  assert.match(btn, /archiveSessionById\(sessionId\)/, "click archives the pane's session");
-  assert.match(btn, /e\.stopPropagation\(\)/, "click must not also activate the tab");
-  assert.match(
-    btn,
-    /@pointerdown=\$\{\(e: Event\) => e\.stopPropagation\(\)\}/,
-    "pointerdown must not activate an inactive tab before the archive click lands",
-  );
+  assert.match(split, /this\.inStrip && sessionId \? sessionActions\(sessionId, true\)/);
+  const btn = fn(split, "sessionActions");
+  assert.match(btn, /archiveSessionById\(sessionId\)/);
+  assert.match(btn, /@pointerdown=[\s\S]*?if \(inTab\) e\.stopPropagation\(\)/);
+  assert.match(btn, /@click=[\s\S]*?if \(inTab\) e\.stopPropagation\(\)/);
   const archiveAt = split.indexOf("split-tab-archive");
   assert.ok(
     archiveAt !== -1 && split.indexOf('tip("Close pane")', archiveAt) !== -1,
@@ -42,12 +38,9 @@ test("archiveSessionById routes through setArchived so surfaces close and Recent
   );
 });
 
-test("a lone tab keeps its archive button even though its close yields to the group header", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const hide = css.indexOf(".dv-single-tab .split-tab-close");
-  const keep = css.indexOf(".dv-single-tab .split-tab-archive");
-  assert.ok(hide !== -1 && keep !== -1, "both single-tab rules exist");
-  assert.ok(keep > hide, "the archive exemption must come after (and defeat) the hide rule");
-  const rule = css.slice(keep, css.indexOf("}", keep));
-  assert.match(rule, /display: inline-flex/);
+test("a lone session keeps archive in the group header instead of the tab", () => {
+  const css = read("shell.css");
+  assert.match(css, /\.dv-single-tab \.split-tab-close\s*\{\s*display: none/);
+  assert.match(css, /\.dv-single-tab \.split-group-session-action\s*\{\s*display: inline-flex/);
+  assert.match(split, /sessionId \? sessionActions\(sessionId, false\) : nothing/);
 });

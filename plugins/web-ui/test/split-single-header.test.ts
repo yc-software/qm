@@ -32,7 +32,7 @@ test("project tools live behind the header overflow menu, left of the split butt
 
 test("the tools menu closes on any click outside the \u22ef control \u2014 sibling buttons included", () => {
   const cls = split.slice(split.indexOf("class GroupActions"), split.indexOf("function notePaneSession"));
-  assert.match(cls, /querySelector\("\.split-tools"\)\?\.contains\(e\.target as Node\)/);
+  assert.match(cls, /e\.composedPath\(\)\.includes\(tools\)/);
   // the toggle must not swallow the click, or another pane's open menu never hears it
   const toggle = cls.slice(cls.indexOf('class="icon-btn subtle split-tools-btn'), cls.indexOf("MoreHorizontal"));
   assert.doesNotMatch(toggle, /stopPropagation/);

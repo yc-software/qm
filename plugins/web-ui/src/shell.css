@@ -498,7 +498,7 @@ a.chat-row-open {
 .session-row:hover .session,
 .session-row:focus-within .session,
 .session-row.menu-open .session {
-  padding-right: 62px;
+  padding-right: 90px;
 }
 .session:hover {
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
@@ -784,6 +784,7 @@ a.chat-row-open {
     color 0.12s ease;
 }
 .session-row:hover .session-menu-btn,
+.session-row:focus-within .session-menu-btn,
 .session-row.menu-open .session-menu-btn,
 .session-menu-btn:focus-visible {
   opacity: 1;
@@ -4558,7 +4559,7 @@ a.chat-row-open {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: 92px;
+    padding-right: 136px;
   }
   .session-menu {
     right: 0;
@@ -6819,9 +6820,11 @@ h3.ambient-field-label {
   display: none;
 }
 
-/* …but archive has no group-level counterpart (the header's X closes the pane, it doesn't
-   archive), so a lone tab keeps its archive button. */
-.dockview-theme-qm .dv-single-tab .split-tab-archive {
+.split-group-session-action {
+  display: none;
+}
+
+.dockview-theme-qm .dv-single-tab .split-group-session-action {
   display: inline-flex;
 }
 
@@ -6929,9 +6932,7 @@ h3.ambient-field-label {
     min-width 0.12s ease;
 }
 
-/* When the archive button is present it takes the auto margin; the close button that
-   follows sits snug beside it instead of splitting the leftover space. */
-.split-tab-archive + .split-tab-close {
+.split-tab-close + .split-tab-close {
   margin-left: 2px;
 }
 
@@ -6945,6 +6946,7 @@ h3.ambient-field-label {
 }
 
 .dv-tab:hover .split-tab-close,
+.dv-tab:focus-within .split-tab-close,
 .split-tab-close:focus-visible {
   opacity: 0.8;
 }
@@ -9501,6 +9503,7 @@ h3.ambient-field-label {
     margin-bottom: 0;
   }
 
+  .sidebar .session-share-btn,
   .sidebar .session-archive-btn {
     display: none;
   }
@@ -9731,16 +9734,6 @@ h3.ambient-field-label {
   }
 }
 
-.session-share-button {
-  flex-shrink: 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  padding: 4px 9px;
-  font-size: 12px;
-  cursor: pointer;
-}
 .session-share-dialog {
   width: min(480px, calc(var(--share-dialog-space, 100vw) - 40px));
 }
