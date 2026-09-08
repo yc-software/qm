@@ -129,22 +129,23 @@ test("a bottom-pinned stream follows growth instantly and coalesces frames", () 
 test("resizing a settled transcript updates the prompt expansion control", () => {
   const f = fixture();
   try {
-    f.prompt.innerHTML = '<div class="user-bubble" data-expanded="false"><markdown-block></markdown-block></div>';
+    f.prompt.innerHTML =
+      '<div class="user-bubble"><div class="pin-content"><markdown-block></markdown-block></div></div><button class="pin-toggle" hidden>Show more</button>';
     const bubble = f.prompt.querySelector<HTMLElement>(".user-bubble")!;
-    const body = bubble.querySelector("markdown-block")!;
     let availableHeight = 240;
-    Object.defineProperties(body, {
+    Object.defineProperties(bubble, {
       scrollHeight: { value: 240 },
       clientHeight: { get: () => availableHeight },
     });
+    f.viewport.sync(f.s);
     f.resize(30, 50);
-    assert.equal(bubble.dataset.clamped, "false");
+    assert.equal(f.prompt.classList.contains("pin-clamped"), false);
     availableHeight = 160;
     f.resize(30, 50);
-    assert.equal(bubble.dataset.clamped, "true");
+    assert.equal(f.prompt.classList.contains("pin-clamped"), true);
     availableHeight = 240;
     f.resize(30, 50);
-    assert.equal(bubble.dataset.clamped, "false");
+    assert.equal(f.prompt.classList.contains("pin-clamped"), false);
   } finally {
     f.close();
   }

@@ -128,7 +128,6 @@ import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
 import { tip } from "./tooltip";
 import { workSeconds, workedLabel } from "./work-duration";
-import { markClampedPrompts } from "./prompt-clamp";
 import { decorateTextCodeBlocks, normalizePlainTextFences } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
@@ -151,7 +150,6 @@ interface SettledRowKey {
   speakerLabel: string | undefined;
   edited: boolean;
   deleted: boolean;
-  expanded: boolean;
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
@@ -221,7 +219,6 @@ export function createChatSurface(
     inheritedLoaded: false,
     pins: [] as SessionPin[],
     pinsExpanded: false,
-    expandedPrompt: null as number | null,
     labelSpeakers: false,
   };
 
@@ -401,7 +398,6 @@ export function createChatSurface(
     chatState.earlierCount = 0;
     chatState.loadingEarlier = false;
     chatState.pins = [];
-    chatState.expandedPrompt = null;
     chatState.host = document.createElement("div");
     chatState.host.className = "custom-chat";
 
@@ -933,7 +929,6 @@ export function createChatSurface(
     if (!sameSession) {
       chatState.inheritedExpanded = false;
       chatState.pins = [];
-      chatState.expandedPrompt = null;
     }
     syncLocation();
 
@@ -1034,7 +1029,6 @@ export function createChatSurface(
       );
       requestAnimationFrame(() => {
         decorateTextCodeBlocks(host);
-        markClampedPrompts(host);
         if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
       });
     };
@@ -1071,12 +1065,6 @@ export function createChatSurface(
 
   function togglePins(): void {
     chatState.pinsExpanded = !chatState.pinsExpanded;
-    if (chatState.agent) drawActiveChat(chatState.agent);
-    else readonlyRedraw?.();
-  }
-
-  function togglePromptExpanded(index: number): void {
-    chatState.expandedPrompt = chatState.expandedPrompt === index ? null : index;
     if (chatState.agent) drawActiveChat(chatState.agent);
     else readonlyRedraw?.();
   }
@@ -1298,10 +1286,7 @@ export function createChatSurface(
       chatState.host,
     );
     decorateStreamingTail();
-    requestAnimationFrame(() => {
-      decorateTextCodeBlocks(chatState.host);
-      markClampedPrompts(chatState.host);
-    });
+    requestAnimationFrame(() => decorateTextCodeBlocks(chatState.host));
     ctx.composer.resizeComposer();
     scrollTranscript(opts.forceScroll);
     postCurrentPaneState();
@@ -1437,7 +1422,6 @@ export function createChatSurface(
     const speakerLabel = speakerLabelFor(message);
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
-    const expanded = chatState.expandedPrompt === index;
     const hit = settledRowCache.get(message as object);
     if (
       hit &&
@@ -1453,8 +1437,7 @@ export function createChatSurface(
       hit.forkable === forkable &&
       hit.speakerLabel === speakerLabel &&
       hit.edited === edited &&
-      hit.deleted === deleted &&
-      hit.expanded === expanded
+      hit.deleted === deleted
     ) {
       return hit.tpl;
     }
@@ -1473,7 +1456,6 @@ export function createChatSurface(
       speakerLabel,
       edited,
       deleted,
-      expanded,
       tpl,
     });
     return tpl;
@@ -1494,22 +1476,14 @@ export function createChatSurface(
         <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
-          <div
-            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
-            data-expanded=${chatState.expandedPrompt === index ? "true" : "false"}
-          >
-            ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
-            ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
-            ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
-            <button
-              class="prompt-toggle"
-              type="button"
-              aria-expanded=${chatState.expandedPrompt === index ? "true" : "false"}
-              @click=${() => togglePromptExpanded(index)}
-            >
-              ${chatState.expandedPrompt === index ? "Show less" : "Show more"}
-            </button>
+          <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
+            <div class="pin-content">
+              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+              ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
+              ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
+            </div>
           </div>
+          <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
           ${
             sendFailure
               ? html`<div class="send-failure">

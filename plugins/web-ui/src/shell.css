@@ -1618,7 +1618,7 @@ a.chat-row-open {
 .deleted-bubble {
   opacity: 0.6;
 }
-.deleted-bubble > :not(.revision-badge) {
+.deleted-bubble > .pin-content > :not(.revision-badge) {
   text-decoration: line-through;
 }
 
@@ -1772,51 +1772,35 @@ a.chat-row-open {
   color: var(--foreground);
   overflow-wrap: anywhere;
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble {
-  display: flex;
-  flex-direction: column;
-  max-height: 40cqh;
+.user-bubble > .pin-content {
+  display: flow-root;
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] {
-  max-height: none;
-}
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble > markdown-block,
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble > .slack-wire-text {
-  flex-shrink: 1000;
-  min-height: 0;
+.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble {
+  max-height: var(--pin-clamp, 320px);
   overflow: hidden;
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > markdown-block,
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > .slack-wire-text {
-  overflow: visible;
+.message-stack .user-row.pin-clamped:not(:has(~ .user-row)) .user-bubble {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble > .message-files {
-  min-height: 0;
-  max-height: 20cqh;
-  overflow-y: auto;
-}
-.prompt-toggle {
+.pin-toggle {
   display: none;
-  align-self: flex-start;
-  flex-shrink: 0;
-  margin-top: 6px;
-  padding: 0;
+  pointer-events: auto;
   border: 0;
-  background: transparent;
+  border-radius: 6px;
+  background: var(--background);
   color: var(--muted-foreground);
   font: inherit;
   font-size: 12px;
+  padding: 6px 8px;
   cursor: pointer;
 }
-.prompt-toggle:hover {
+.message-stack .user-row:not(:has(~ .user-row)) > .pin-toggle:not([hidden]) {
+  display: inline-flex;
+}
+.pin-toggle:hover {
   color: var(--foreground);
-  text-decoration: underline;
+  background: var(--secondary);
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-clamped="true"] > .prompt-toggle,
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > .prompt-toggle {
-  display: block;
-}
-
 .message-files,
 .attachment-strip {
   display: flex;
@@ -8965,7 +8949,7 @@ h3.ambient-field-label {
 .mini-convo-body .message-stack {
   width: 100%;
 }
-.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)) .user-bubble {
+.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble {
   max-height: 100px;
 }
 .mini-convo-missing {
