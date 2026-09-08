@@ -1,5 +1,5 @@
 .message-stack ::selection {
-  background: var(--selection, var(--blue-tint));
+  background: var(--selection, color-mix(in oklch, var(--blue) 28%, transparent));
 }
 .selection-toolbar {
   position: fixed;
@@ -82,7 +82,7 @@
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
-.chat-scroll:focus-visible {
+.chat-scroll[data-quiet-focus]:focus-visible {
   outline: none;
 }
 @media (prefers-reduced-motion: reduce) {

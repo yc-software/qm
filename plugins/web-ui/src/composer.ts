@@ -1263,15 +1263,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return scope ? scope.charAt(0).toUpperCase() + scope.slice(1) : "";
   }
 
-  function insertText(text: string, opts: { submit?: boolean } = {}): void {
+  function insertText(text: string): void {
     const agent = ctx.chat.state.agent;
     if (!agent) return;
     composerState.draft = insertIntoDraft(composerState.draft, text, null).draft;
     persistDraft();
     ctx.chat.drawActiveChat(agent);
     resizeComposer();
-    if (opts.submit) void sendPrompt(agent);
-    else focusComposerEnd();
+    focusComposerEnd();
   }
 
   function submitComposer(e: Event, agent: Agent): void {

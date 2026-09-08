@@ -106,6 +106,9 @@ document.addEventListener(
 );
 
 registerChatSearchHotkey();
-registerSelectionActions((stack) => allConversations().find((c) => c.state.host?.contains(stack))?.composer ?? null);
+registerSelectionActions((stack) => {
+  const conv = allConversations().find((c) => c.state.host?.contains(stack));
+  return conv?.state.agent ? conv.composer : null;
+});
 registerSessionJumpHotkeys();
 void bootSafely();

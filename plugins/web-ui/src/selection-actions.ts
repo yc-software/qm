@@ -4,11 +4,12 @@ import { ChevronRight, Copy, MessageCircleQuestionMark, Quote, Sparkle } from "l
 import { copyText, icon } from "./ui.ts";
 
 export interface SelectionComposer {
-  insertText(text: string, opts?: { submit?: boolean }): void;
+  insertText(text: string): void;
 }
 
 interface SelectedPassage {
   text: string;
+  anchor: Node | null;
   rect: DOMRect;
   stack: HTMLElement;
   composer: SelectionComposer;
@@ -22,6 +23,7 @@ const EDGE = 8;
 
 let host: HTMLDivElement | null = null;
 let shown: ShownSelection | null = null;
+let dismissed: Pick<SelectedPassage, "text" | "anchor"> | null = null;
 let prompt = "";
 let pointerDown = false;
 let composerFor: (stack: HTMLElement) => SelectionComposer | null = () => null;
@@ -34,6 +36,7 @@ export function registerSelectionActions(resolve: (stack: HTMLElement) => Select
   document.addEventListener("pointerdown", (e) => {
     if (insideToolbar(e.target)) return;
     pointerDown = true;
+    dismissed = null;
     hide();
   });
   for (const type of ["pointerup", "pointercancel"] as const) {
@@ -42,21 +45,15 @@ export function registerSelectionActions(resolve: (stack: HTMLElement) => Select
       if (!insideToolbar(e.target)) evaluate();
     });
   }
-  document.addEventListener("keyup", (e) => {
-    if (!insideToolbar(e.target)) evaluate();
-  });
   document.addEventListener("keydown", (e) => {
     if (!shown) return;
-    if (e.key === "Escape") hide();
-    else if (e.key === "Tab" && !e.shiftKey && !insideToolbar(document.activeElement)) {
-      e.preventDefault();
-      host?.querySelector<HTMLInputElement>(".selection-toolbar-input")?.focus();
-    }
+    if (e.key === "Escape") dismiss();
+    else if (e.key === "Tab") onTab(e, shown.stack);
   });
   document.addEventListener(
     "scroll",
     (e) => {
-      if (!insideToolbar(e.target)) hide();
+      if (shown && !insideToolbar(e.target) && !insideToolbar(document.activeElement)) evaluate();
     },
     { capture: true, passive: true },
   );
@@ -71,25 +68,44 @@ function stackOf(node: Node | null): HTMLElement | null {
   return el?.closest<HTMLElement>(".message-stack") ?? null;
 }
 
+function scrollerOf(stack: HTMLElement): HTMLElement | null {
+  return stack.closest<HTMLElement>(".chat-scroll");
+}
+
 function selectedPassage(): SelectedPassage | null {
   const sel = document.getSelection();
   if (!sel || sel.isCollapsed) return null;
   const text = sel.toString().trim();
   const stack = stackOf(sel.anchorNode);
-  if (!text || !stack || stack !== stackOf(sel.focusNode) || stack.closest(".readonly-chat")) return null;
+  if (!text || !stack || stack !== stackOf(sel.focusNode)) return null;
   const composer = composerFor(stack);
-  return composer ? { text, rect: sel.getRangeAt(0).getBoundingClientRect(), stack, composer } : null;
+  if (!composer) return null;
+  return { text, anchor: sel.anchorNode, rect: sel.getRangeAt(0).getBoundingClientRect(), stack, composer };
+}
+
+function offscreen({ rect, stack }: SelectedPassage): boolean {
+  const view = scrollerOf(stack)?.getBoundingClientRect();
+  const top = Math.max(0, view?.top ?? 0);
+  const bottom = Math.min(document.documentElement.clientHeight, view?.bottom ?? Infinity);
+  return rect.bottom < top || rect.top > bottom;
 }
 
 function evaluate(): void {
   const passage = selectedPassage();
-  if (!passage) {
+  if (passage && dismissed?.text === passage.text && dismissed.anchor === passage.anchor) return;
+  dismissed = null;
+  if (!passage || offscreen(passage)) {
     hide();
     return;
   }
   shown = { ...passage, returnFocus: shown?.returnFocus ?? (document.activeElement as HTMLElement | null) };
   draw();
   place();
+}
+
+function dismiss(): void {
+  if (shown) dismissed = { text: shown.text, anchor: shown.anchor };
+  hide();
 }
 
 function hide(): void {
@@ -102,14 +118,36 @@ function hide(): void {
 }
 
 function focusTranscript(stack: HTMLElement, previous: HTMLElement | null): void {
-  if (previous?.isConnected && previous !== document.body) {
+  const scroller = scrollerOf(stack);
+  if (previous?.isConnected && previous !== document.body && previous !== scroller) {
     previous.focus({ preventScroll: true });
     return;
   }
-  const scroller = stack.closest<HTMLElement>(".chat-scroll");
   if (!scroller) return;
   scroller.tabIndex = -1;
+  scroller.setAttribute("data-quiet-focus", "");
+  scroller.addEventListener("blur", () => scroller.removeAttribute("data-quiet-focus"), { once: true });
   scroller.focus({ preventScroll: true });
+}
+
+function visibleControls(): HTMLElement[] {
+  return [...ensureHost().querySelectorAll<HTMLElement>("input, button:not([disabled])")].filter(
+    (el) => getComputedStyle(el).display !== "none",
+  );
+}
+
+function onTab(e: KeyboardEvent, stack: HTMLElement): void {
+  const active = document.activeElement as HTMLElement | null;
+  const controls = visibleControls();
+  if (insideToolbar(active)) {
+    if (active !== (e.shiftKey ? controls[0] : controls.at(-1))) return;
+    e.preventDefault();
+    hide();
+    return;
+  }
+  if (e.shiftKey || (active !== document.body && active !== scrollerOf(stack))) return;
+  e.preventDefault();
+  controls[0]?.focus();
 }
 
 function ensureHost(): HTMLDivElement {
@@ -144,23 +182,23 @@ function quoted(text: string): string {
   return `> ${text.split("\n").join("\n> ")}\n\n`;
 }
 
-function handOff(text: string, submit: boolean): void {
+function handOff(text: string): void {
   if (!shown) return;
   const { composer } = shown;
-  hide();
-  composer.insertText(text, { submit });
+  dismiss();
+  composer.insertText(text);
 }
 
 function copySelection(): void {
   if (!shown) return;
   void copyText(shown.text);
-  hide();
+  dismiss();
 }
 
 function submitAsk(): void {
   const ask = prompt.trim();
   if (!ask || !shown) return;
-  handOff(`${quoted(shown.text)}${ask}`, true);
+  handOff(`${quoted(shown.text)}${ask}`);
 }
 
 function onPromptInput(e: Event): void {
@@ -188,19 +226,14 @@ function toolbarTpl(s: ShownSelection): TemplateResult {
       @keydown=${onPromptKeydown}
     />
     <span class="selection-toolbar-divider"></span>
-    <button
-      type="button"
-      class="selection-toolbar-btn"
-      data-action="quote"
-      @click=${() => handOff(quoted(s.text), false)}
-    >
+    <button type="button" class="selection-toolbar-btn" data-action="quote" @click=${() => handOff(quoted(s.text))}>
       ${icon(Quote, 13)}Quote
     </button>
     <button
       type="button"
       class="selection-toolbar-btn"
       data-action="explain"
-      @click=${() => handOff(`${quoted(s.text)}Explain this.`, true)}
+      @click=${() => handOff(`${quoted(s.text)}Explain this.`)}
     >
       ${icon(MessageCircleQuestionMark, 13)}Explain
     </button>
