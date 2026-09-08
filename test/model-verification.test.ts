@@ -431,3 +431,109 @@ test("the store deadline leaves a hanging provider unverified", { timeout: 25_00
     setProviderBaseUrls({});
   }
 });
+
+import { createHmac, scryptSync } from "node:crypto";
+
+test("verification fingerprints use a memory-hard credential-bound MAC key", async () => {
+  const built = buildApp(testConfig({ openaiApiKey: "fingerprint-test-key" }));
+  const keyMaterial = "deployment-fingerprint-test-key";
+  const candidate = parseModelOverlay(spec);
+  const verifier = createModelVerifier({ credentials: built.modelCredentials, keyMaterial });
+  const salt = createHmac("sha256", keyMaterial).update("qm:model-verification:credential:v2").digest();
+  const derived = scryptSync(JSON.stringify({ key: "fingerprint-test-key" }), salt, 32, {
+    N: 131_072,
+    r: 8,
+    p: 1,
+    maxmem: 256 * 1024 * 1024,
+  });
+  const expected = createHmac("sha256", derived)
+    .update(
+      JSON.stringify({
+        version: 2,
+        spec: candidate,
+        model: modelFromOverlay(candidate),
+        credentialRevision: (await built.modelCredentials.statuses()).find(
+          (status) => status.provider === candidate.provider,
+        ),
+      }),
+    )
+    .digest("hex");
+  assert.equal((await verifier(candidate)).fingerprint, expected);
+  const concurrent = await Promise.all(Array.from({ length: 8 }, () => verifier(candidate)));
+  assert.ok(concurrent.every((value) => value.fingerprint === expected));
+  const restarted = createModelVerifier({ credentials: built.modelCredentials, keyMaterial });
+  assert.equal((await restarted(candidate)).fingerprint, expected);
+  const differentDeployment = createModelVerifier({
+    credentials: built.modelCredentials,
+    keyMaterial: "other-deployment-key",
+  });
+  assert.notEqual((await differentDeployment(candidate)).fingerprint, expected);
+});
+
+test("environment and gateway credential changes invalidate cached fingerprints", async () => {
+  const fallback = { openai: "first-environment-test-key" };
+  const credentials = createModelCredentialStore({ backing: createMemoryMap(), keyMaterial: "test-key", fallback });
+  const candidate = parseModelOverlay(spec);
+  const modelGateway = {
+    url: "https://gateway.example.invalid/v1",
+    apiKey: "first-gateway-test-key",
+    apiKeyHeader: "x-gateway-key",
+    models: { [spec.id]: "target" },
+  };
+  const direct = createModelVerifier({ credentials, keyMaterial: "test-key" });
+  const gateway = createModelVerifier({ credentials, keyMaterial: "test-key", modelGateway });
+  const directOriginal = (await direct(candidate)).fingerprint;
+  const gatewayOriginal = (await gateway(candidate)).fingerprint;
+  fallback.openai = "changed-environment-test-key";
+  assert.notEqual((await direct(candidate)).fingerprint, directOriginal);
+  assert.equal((await gateway(candidate)).fingerprint, gatewayOriginal);
+  modelGateway.apiKey = "changed-gateway-test-key";
+  const rotatedGateway = (await gateway(candidate)).fingerprint;
+  assert.notEqual(rotatedGateway, gatewayOriginal);
+  modelGateway.apiKeyHeader = "x-new-gateway-key";
+  assert.notEqual((await gateway(candidate)).fingerprint, rotatedGateway);
+});
+
+import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
+
+test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
+  const built = buildApp(testConfig({ openaiApiKey: "test-key" }));
+  const candidate = parseModelOverlay(spec);
+  const keyMaterial = "stable-test-key";
+  const fingerprint = createHmac("sha256", keyMaterial)
+    .update(
+      JSON.stringify({
+        version: 1,
+        spec: candidate,
+        model: modelFromOverlay(candidate),
+        key: "test-key",
+        credentialRevision: (await built.modelCredentials.statuses()).find((status) => status.provider === "openai"),
+      }),
+    )
+    .digest("hex");
+  const backing = createMemoryMap<StoredModelOverlay>();
+  await backing.put(spec.id, {
+    spec: candidate,
+    disabled: false,
+    updatedAt: 1,
+    updatedBy: "admin",
+    verification: { fingerprint, verifiedAt: 1, revision: "old-proof" },
+  });
+  let probes = 0;
+  const verifier = createModelVerifier({
+    credentials: built.modelCredentials,
+    keyMaterial,
+    probe: async () => {
+      probes++;
+    },
+  });
+  const store = createModelOverlayStore(backing, undefined, verifier);
+  await store.refresh();
+  assert.equal(probes, 0);
+  assert.equal(resolveModel(spec.id), undefined);
+  assert.match(modelUnavailableReason(spec.id)!, /verify.*again/i);
+  await store.upsert(candidate, "admin");
+  await store.refresh();
+  assert.equal(probes, 1);
+  assert.ok(resolveModel(spec.id));
+});
