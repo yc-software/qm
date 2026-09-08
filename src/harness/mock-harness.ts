@@ -11,7 +11,12 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
-import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
+import {
+  commandProvenance,
+  SECURITY_SCREEN_STEP,
+  SECURITY_SCREEN_SYSTEM_PROMPT,
+  type ToolResultScreen,
+} from "../security/security-posture.ts";
 
 const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
@@ -390,9 +395,16 @@ export function createMockHarness(): Harness {
           const result = await turn.tools.execute(command);
           const output = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
           const screen = turn.screenToolResult
-            ? await turn.screenToolResult("execute", output, false).catch(() => "unscreened" as const)
-            : true;
-          if (screen === false || screen === "quarantine_pending") {
+            ? await turn
+                .screenToolResult({
+                  tool: "execute",
+                  result: output,
+                  unscreenable: false,
+                  provenance: commandProvenance(command),
+                })
+                .catch((): ToolResultScreen => ({ outcome: "unscreened" }))
+            : ({ outcome: "allow" } as ToolResultScreen);
+          if (screen.outcome === "quarantine") {
             const stub = "[tool output quarantined by Auto security posture]";
             await turn.emit({
               type: "tool_result",

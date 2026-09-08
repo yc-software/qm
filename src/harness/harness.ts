@@ -13,7 +13,11 @@ export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
-import type { SecurityScreenVerdict } from "../security/security-posture.ts";
+import type {
+  SecurityScreenVerdict,
+  ToolResultScreen,
+  ToolResultScreenInput,
+} from "../security/security-posture.ts";
 
 export interface RuntimeChoice {
   harnessId: HarnessId;
@@ -93,11 +97,6 @@ export interface HarnessTurnInput {
   tools: ToolContext;
   credentialExecServices?: readonly { service: string; binary: string }[];
   commandCredentialHandles?: readonly string[];
-  screenExternalContent?(input: {
-    content: string;
-    tool: string;
-    source: string;
-  }): Promise<SecurityScreenVerdict | undefined>;
   toolApprovalGate?(tool: string): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;
   tape?(rec: NewTapeRecord): Promise<unknown>;
@@ -116,11 +115,7 @@ export interface HarnessTurnInput {
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
   onTextBlockStart?(): void;
-  screenToolResult?(
-    tool: string,
-    result: string,
-    unscreenable: boolean,
-  ): Promise<boolean | "unscreened" | "quarantine_pending">;
+  screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
 }
 
 export interface HarnessTurnResult {

@@ -140,6 +140,7 @@ export class CommandDenied extends Error {
 interface ReadResult {
   content: string | null;
   sourceScopeId: ScopeId | null;
+  shared?: true;
 }
 
 export interface ShareDirective {
@@ -795,7 +796,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           : await deps.workspace.readBytes(granted.ownerScopeId, granted.ownerPath);
         if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
         const asText = tryDecodeUtf8(bytes);
-        if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId };
+        if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId, shared: true };
         const handle = await deps.provision();
         const name = granted.handlePath.split(/[\\/]/).pop() ?? granted.handlePath;
         const materializedPath = deps.sharedMaterializeDir
@@ -807,6 +808,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             `[binary file materialized into the sandbox at ${materializedPath} (${bytes.length} bytes) — ` +
             `to send it, attach it to a message: name \`${materializedPath}\` in the surface \`post\` action's \`files\`]`,
           sourceScopeId: granted.ownerScopeId,
+          shared: true,
         };
       }
       const skillDir = skillTreeDirFor(path);

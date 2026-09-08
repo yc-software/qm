@@ -27,6 +27,7 @@ export interface BackgroundStartResult {
 
 export interface BackgroundPollResult {
   processId: string;
+  command: string;
   chunks: string;
   cursor: number;
   status: ProcessState;
@@ -153,7 +154,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         waitMs: opts?.waitMs ?? 0,
       });
       if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
-      return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
+      return { processId, command: rec.command, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 
     async write(handle, processId, data): Promise<BackgroundWriteResult> {

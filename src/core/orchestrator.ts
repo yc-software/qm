@@ -82,6 +82,8 @@ import {
   securityScreenPayload,
   UNSCREENED_REASON,
   unscreenedNotice,
+  type ToolResultScreen,
+  type ToolResultScreenInput,
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
@@ -2718,12 +2720,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(effectiveTurnWallClockMs !== undefined ? { turnWallClockMs: effectiveTurnWallClockMs } : {}),
             ...(securityPolicy.inboundScreening === "external"
               ? {
-                  screenToolResult: async (
-                    tool: string,
-                    result: string,
-                    unscreenable: boolean,
-                  ): Promise<boolean | "unscreened" | "quarantine_pending"> => {
+                  screenToolResult: async ({
+                    tool,
+                    result,
+                    unscreenable,
+                    provenance,
+                    source,
+                  }: ToolResultScreenInput): Promise<ToolResultScreen> => {
+                    if (provenance !== "external") return { outcome: "allow" };
                     const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
+                    const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
                     if (authorizeCommand(`quarantine:${toolLabel}`, `quarantine:${toolLabel}`)) {
                       deps.auditLog.record({
                         at: Date.now(),
@@ -2734,17 +2740,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         status: "allowed",
                         detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
                       });
-                      return "unscreened";
+                      return { outcome: "unscreened" };
                     }
                     const bounded = unscreenable
                       ? null
                       : securityScreenPayload({
-                          surface: `tool_result:${toolLabel}`,
+                          surface: `tool_result:${toolLabel}${sourceLabel}`,
                           text: "",
                           triggered: true,
                           securityScreenData: result,
                         });
-                    if (!unscreenable && bounded === null) return true;
+                    if (!unscreenable && bounded === null) return { outcome: "allow" };
                     const verdict =
                       bounded && !bounded.truncated
                         ? await classifySecurityData(bounded.content, actor.id, scopeId, recordScreenRequest, {
@@ -2753,7 +2759,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                             origin: input.origin.kind,
                           })
                         : undefined;
-                    if (verdict?.decision === "auto" && !verdict.unscreened) return true;
+                    if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };
                     if (verdict?.decision === "strict") {
                       const releaseKey = `security-screen-release:${toolLabel}`;
                       if (authorizeCommand(releaseKey)) {
@@ -2766,7 +2772,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           status: "allowed",
                           detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
                         });
-                        return true;
+                        return { outcome: "allow" };
                       }
                       deps.auditLog.record({
                         at: Date.now(),
@@ -2775,7 +2781,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         resource: input.surface ?? "unknown",
                         scopeLabel: scopeId,
                         status: "refused",
-                        detail: JSON.stringify({ reason: "screen_verdict", tool: toolLabel }),
+                        detail: JSON.stringify({
+                          reason: "screen_verdict",
+                          tool: toolLabel,
+                          ...(source ? { source } : {}),
+                          ...(verdict.reason ? { verdict: verdict.reason } : {}),
+                        }),
                       });
                       if (!quarantineReleaseApprovals.some((qa) => qa.approvalKey === releaseKey)) {
                         quarantineReleaseApprovals.push({
@@ -2790,7 +2801,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           grantModes: { session: false, always: false },
                         });
                       }
-                      return "quarantine_pending";
+                      return { outcome: "quarantine", ...(verdict.reason ? { reason: verdict.reason } : {}) };
                     }
                     deps.auditLog.record({
                       at: Date.now(),
@@ -2803,7 +2814,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         reason: unscreenable || bounded?.truncated ? "unscreenable_payload" : UNSCREENED_REASON,
                       }),
                     });
-                    return "unscreened";
+                    return { outcome: "unscreened" };
                   },
                 }
               : {}),
@@ -2814,31 +2825,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tools,
             ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
-            ...(securityPolicy.inboundScreening === "external" &&
-            (deps.securityScreener || deps.harness.models.screenSecurity)
-              ? {
-                  screenExternalContent: ({ content, tool }: { content: string; tool: string; source: string }) => {
-                    const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
-                    if (authorizeCommand(`quarantine:${toolLabel}`, `quarantine:${toolLabel}`)) {
-                      deps.auditLog.record({
-                        at: Date.now(),
-                        principalId: actor.id,
-                        action: "security_posture.tool_result_released",
-                        resource: input.surface ?? "unknown",
-                        scopeLabel: scopeId,
-                        status: "allowed",
-                        detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                      });
-                      return Promise.resolve({ decision: "auto" as const, unscreened: true });
-                    }
-                    return classifySecurityData(content, actor.id, scopeId, undefined, {
-                      hook: "tool_response",
-                      surface: tool,
-                      origin: input.origin.kind,
-                    });
-                  },
-                }
-              : {}),
             ...(selectedTape
               ? {
                   tapeRows: selectedTape.rows,

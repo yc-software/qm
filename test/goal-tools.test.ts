@@ -128,9 +128,9 @@ test("update_goal with no active goal errors cleanly", async () => {
 
 test("goal tool results are core-authored, so the security classifier never sees or quarantines them", async () => {
   const screened: string[] = [];
-  const { create, get, update, by } = toolbox(async (tool) => {
+  const { create, get, update, by } = toolbox(async ({ tool }) => {
     screened.push(tool);
-    return false;
+    return { outcome: "quarantine" };
   });
   const created = await create.execute("c1", { objective: "ship the fix" });
   const read = await get.execute("g1", {});

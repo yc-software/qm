@@ -14,7 +14,15 @@ import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, goalFloorMeter, goalReport, type GoalRecord } from "./goal.ts";
-import { unscreenedNotice, UNSCREENED_PREFIX, type SecurityScreenVerdict } from "../security/security-posture.ts";
+import {
+  commandProvenance,
+  toolResultProvenance,
+  unscreenedNotice,
+  UNSCREENED_PREFIX,
+  type ToolResultProvenance,
+  type ToolResultScreen,
+  type ToolResultScreenInput,
+} from "../security/security-posture.ts";
 import { CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
 import { CRON_FIRE_NOTE_MAX_CHARS } from "../api/control-service.ts";
 import { utcMinute } from "../util/time.ts";
@@ -76,16 +84,7 @@ export interface ToolContextRef {
   goalLastBlockedRound?: number;
 
   goalMeter?: import("./grind.ts").GrindMeter;
-  screenToolResult?: (
-    tool: string,
-    result: string,
-    unscreenable: boolean,
-  ) => Promise<boolean | "unscreened" | "quarantine_pending">;
-  screenExternalContent?: (input: {
-    content: string;
-    tool: string;
-    source: string;
-  }) => Promise<SecurityScreenVerdict | undefined>;
+  screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string) => boolean;
 }
 
@@ -391,6 +390,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     sourceScopeId?: ScopeId | null,
     coreAuthored = false,
     display?: Record<string, unknown>,
+    screenAs?: { provenance: ToolResultProvenance; source?: string },
   ): Promise<T> => {
     const t = ret.content
       .filter((c) => c.type === "text")
@@ -405,6 +405,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         .filter((c, i) => c.type !== "text" || i === firstText);
     }
     let persistedSummary = summary;
+    const tool = String(summary.tool ?? "");
+    const provenance = screenAs?.provenance ?? toolResultProvenance(tool);
     const screenExempt =
       isPolicyNotice(summary) ||
       coreAuthored ||
@@ -412,16 +414,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         summary.ok === true &&
         result === "[sent]" &&
         ret.content.every((c) => c.type === "text"));
-    if (ref.screenToolResult && !screenExempt) {
+    if (ref.screenToolResult && !screenExempt && result.trim()) {
       const screen = await ref
-        .screenToolResult(
-          String(summary.tool ?? ""),
+        .screenToolResult({
+          tool,
           result,
-          ret.content.some((c) => c.type !== "text"),
-        )
-        .catch(() => "unscreened" as const);
-      if (screen === false || screen === "quarantine_pending") {
-        const releaseRequested = screen === "quarantine_pending" && !!ref.pendingApprovals;
+          unscreenable: ret.content.some((c) => c.type !== "text"),
+          provenance,
+          ...(screenAs?.source ? { source: screenAs.source } : {}),
+        })
+        .catch((): ToolResultScreen => ({ outcome: "unscreened" }));
+      if (screen.outcome === "quarantine") {
+        const releaseRequested = !!ref.pendingApprovals;
         result = releaseRequested
           ? "[tool output quarantined by Auto security posture — release requested, awaiting human approval]"
           : "[tool output quarantined by Auto security posture]";
@@ -429,12 +433,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { type: "text", text: result },
         ];
         (ret as { details?: unknown }).details = {};
-        persistedSummary = { tool: summary.tool, quarantined: true, quarantineReason: "screen_verdict" };
+        persistedSummary = {
+          tool: summary.tool,
+          quarantined: true,
+          quarantineReason: "screen_verdict",
+          ...(screen.reason ? { securityReason: screen.reason } : {}),
+        };
         isError = true;
         if (releaseRequested) {
-          const toolLabel = String(summary.tool ?? "").replace(/[^A-Za-z0-9_-]/g, "_");
+          const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
           ref.pendingApprovals!.push({
-            command: String(summary.tool ?? ""),
+            command: tool,
             reason: "Security screen quarantined this tool's output — release it to the agent?",
             kind: "approval",
             approvalKey: `quarantine:${toolLabel}`,
@@ -442,7 +451,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ref.pausedOnApproval = true;
           (ret as { terminate?: boolean }).terminate = true;
         }
-      } else if (screen === "unscreened") {
+      } else if (screen.outcome === "unscreened") {
         if (!result.startsWith(UNSCREENED_PREFIX)) {
           result = `${unscreenedNotice("tool output")}\n${result}`;
           (ret as { content: Array<{ type: string; text?: string }>; details?: unknown }).content = [
@@ -479,59 +488,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     callId: string,
     summary: Record<string, unknown>,
     ret: T,
-    tool: string,
     source: string,
     sourceScopeId?: ScopeId | null,
-  ): Promise<T> => {
-    const content = ret.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text ?? "")
-      .join("\n");
-    if (!content.trim() || !ref.screenExternalContent) return recordResult(callId, summary, ret, false, sourceScopeId);
-    const verdict = await ref.screenExternalContent({ content, tool, source });
-    if (verdict?.decision === "auto") {
-      if (!verdict.unscreened) return recordResult(callId, summary, ret, false, sourceScopeId);
-      const bannered: T = {
-        ...ret,
-        content: [
-          { type: "text", text: `${unscreenedNotice(`untrusted ${source}`)}\n${content}` },
-          ...ret.content.filter((part) => part.type !== "text"),
-        ] as T["content"],
-      };
-      return recordResult(callId, { ...summary, unscreened: true }, bannered, false, sourceScopeId);
-    }
-    const safeSummary = { ...summary };
-    for (const key of ["stdout", "stderr", "content", "output", "result"]) delete safeSummary[key];
-    const releaseRequested = !!ref.pendingApprovals;
-    const reason = verdict?.reason ?? "security screen unavailable";
-    const blocked: T = {
-      ...ret,
-      content: text(
-        releaseRequested
-          ? `[blocked untrusted ${source}: ${reason} — release requested, awaiting human approval]`
-          : `[blocked untrusted ${source}: ${reason}]`,
-      ).content,
-      details: {},
-      ...(releaseRequested ? { terminate: true } : {}),
-    };
-    if (releaseRequested) {
-      const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
-      ref.pendingApprovals!.push({
-        command: tool,
-        reason: "Security screen quarantined this tool's output — release it to the agent?",
-        kind: "approval",
-        approvalKey: `quarantine:${toolLabel}`,
-      });
-      ref.pausedOnApproval = true;
-    }
-    return recordResult(
-      callId,
-      { ...safeSummary, securityBlocked: true, ...(verdict?.reason ? { securityReason: verdict.reason } : {}) },
-      blocked,
-      true,
-      sourceScopeId,
-    );
-  };
+  ): Promise<T> =>
+    recordResult(callId, summary, ret, false, sourceScopeId, false, undefined, { provenance: "external", source });
 
   const EXECUTE_TIMEOUT_GUIDANCE =
     `Each command has a wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s) — set \`timeout_seconds\` ` +
@@ -730,6 +690,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ],
           details: r,
         },
+        false,
+        undefined,
+        false,
+        undefined,
+        r.reached ? { provenance: "external", source: "reached room" } : { provenance: commandProvenance(params.command) },
       );
     } catch (e) {
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
@@ -917,7 +882,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       await recordCall(callId, { tool: "read", path: params.path });
-      const { content, sourceScopeId } = await tc.read(params.path);
+      const { content, sourceScopeId, shared } = await tc.read(params.path);
       return recordResult(
         callId,
         {
@@ -929,6 +894,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         text(content ?? `[no such file: ${params.path}]`),
         content === null,
         sourceScopeId,
+        false,
+        undefined,
+        shared ? { provenance: "external", source: "shared file" } : undefined,
       );
     },
   });
@@ -1439,6 +1407,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 ],
                 details: r,
               },
+              false,
+              undefined,
+              false,
+              undefined,
+              { provenance: commandProvenance(params.command) },
             );
           }
           case "poll": {
@@ -1463,6 +1436,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 ],
                 details: r,
               },
+              false,
+              undefined,
+              false,
+              undefined,
+              { provenance: commandProvenance(r.command) },
             );
           }
           case "stop": {
@@ -1511,6 +1489,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                     content: [{ type: "text" as const, text: result }],
                     details: r,
                   },
+                  false,
+                  undefined,
+                  false,
+                  undefined,
+                  { provenance: "external", source: "finished job output" },
                 );
               }
               const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
@@ -2698,7 +2681,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             callId,
             { tool: surfaceName, action: "read_thread", ok: true, count: messages.length },
             text(messages.length ? JSON.stringify(messages, null, 2) : "[no messages in this thread]"),
-            surfaceName,
             "surface thread",
           );
         }
@@ -2783,7 +2765,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(r.source ? { source: r.source } : {}),
             },
             text(body),
-            surfaceName,
             "surface search",
           );
         }
@@ -2829,7 +2810,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
               },
               text(r.content),
-              surfaceName,
               "surface file",
             );
           }
@@ -3309,7 +3289,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               callId,
               { tool: d.name, mcpServer: d.serverId },
               text(out || "[empty result]"),
-              d.name,
               `mcp server ${d.serverId}`,
             );
           } catch (error) {
