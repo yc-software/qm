@@ -8159,6 +8159,48 @@ h3.ambient-field-label {
   margin-left: auto;
   font-size: 11px;
 }
+.inbox-draft-headers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.inbox-draft-headers > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.inbox-draft-headers > summary::-webkit-details-marker {
+  display: none;
+}
+.inbox-draft-headers > summary::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.12s ease;
+}
+.inbox-draft-headers[open] > summary::before {
+  transform: rotate(45deg);
+}
+.inbox-draft-headers > summary:hover {
+  color: var(--foreground);
+}
+.inbox-draft-headers-peek {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .inbox-field {
   display: flex;
   align-items: center;

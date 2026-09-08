@@ -387,6 +387,17 @@ function notify(msg: string | null): void {
   }
 }
 
+function draftSubject(item: InboxItem, draft: InboxDraft): string {
+  if (draft.subject !== undefined) return draft.subject;
+  return item.gmail?.subject ? `Re: ${item.gmail.subject.replace(/^re:\s*/i, "")}` : "";
+}
+
+function headerPeek(item: InboxItem, draft: InboxDraft): string {
+  const to = (draft.to ?? []).join(", ");
+  const subject = draftSubject(item, draft);
+  return [to, subject].filter(Boolean).join(" · ") || "Recipients and subject";
+}
+
 function effectiveDraft(item: InboxItem): InboxDraft {
   const edited = draftEdits.get(item.id);
   if (edited) {
@@ -852,38 +863,41 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
       ${
         gmail
           ? html`
-              <label class="inbox-field">
-                <span>To</span>
-                <input
-                  type="text"
-                  .value=${(draft.to ?? []).join(", ")}
-                  placeholder="who@example.com"
-                  @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
-                  @blur=${() => void persistDraft(item)}
-                />
-              </label>
-              ${
-                showCc
-                  ? html`<label class="inbox-field">
-                      <span>Cc</span>
-                      <input
-                        type="text"
-                        .value=${(draft.cc ?? []).join(", ")}
-                        @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
-                        @blur=${() => void persistDraft(item)}
-                      />
-                    </label>`
-                  : nothing
-              }
-              <label class="inbox-field">
-                <span>Subject</span>
-                <input
-                  type="text"
-                  .value=${draft.subject ?? (item.gmail?.subject ? `Re: ${item.gmail.subject.replace(/^re:\s*/i, "")}` : "")}
-                  @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
-                  @blur=${() => void persistDraft(item)}
-                />
-              </label>
+              <details class="inbox-draft-headers">
+                <summary><span class="inbox-draft-headers-peek">${headerPeek(item, draft)}</span></summary>
+                <label class="inbox-field">
+                  <span>To</span>
+                  <input
+                    type="text"
+                    .value=${(draft.to ?? []).join(", ")}
+                    placeholder="who@example.com"
+                    @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                    @blur=${() => void persistDraft(item)}
+                  />
+                </label>
+                ${
+                  showCc
+                    ? html`<label class="inbox-field">
+                        <span>Cc</span>
+                        <input
+                          type="text"
+                          .value=${(draft.cc ?? []).join(", ")}
+                          @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                          @blur=${() => void persistDraft(item)}
+                        />
+                      </label>`
+                    : nothing
+                }
+                <label class="inbox-field">
+                  <span>Subject</span>
+                  <input
+                    type="text"
+                    .value=${draftSubject(item, draft)}
+                    @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
+                    @blur=${() => void persistDraft(item)}
+                  />
+                </label>
+              </details>
             `
           : nothing
       }
