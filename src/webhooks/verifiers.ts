@@ -120,9 +120,16 @@ const linear: Verifier = {
     try {
       body = JSON.parse(rawBody);
     } catch {
-      return true;
+      return false;
     }
-    if (!isObj(body) || typeof body.webhookTimestamp !== "number") return true;
+    if (
+      !isObj(body) ||
+      Array.isArray(body) ||
+      typeof body.webhookTimestamp !== "number" ||
+      !Number.isFinite(body.webhookTimestamp)
+    ) {
+      return false;
+    }
     return Math.abs(Date.now() - body.webhookTimestamp) <= LINEAR_TS_TOLERANCE_MS;
   },
   deliveryId({ rawBody }) {

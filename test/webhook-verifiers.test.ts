@@ -138,12 +138,38 @@ test("linear verifier accepts a valid linear-signature and rejects a forged one"
   assert.equal(v.verify({ ...good, headers: {} }), false);
 });
 
-test("linear verifier rejects a correctly signed payload whose webhookTimestamp is stale", () => {
+test("linear verifier rejects signed payloads without a finite numeric timestamp", () => {
   const v = getVerifier("linear")!;
-  const stale = JSON.stringify({ action: "create", type: "Issue", webhookTimestamp: Date.now() - 2 * 60 * 1000 });
-  assert.equal(v.verify({ secret: SECRET, headers: { "linear-signature": hmac(stale) }, rawBody: stale }), false);
-  const untimed = JSON.stringify({ action: "create", type: "Issue" });
-  assert.equal(v.verify({ secret: SECRET, headers: { "linear-signature": hmac(untimed) }, rawBody: untimed }), true);
+  for (const rawBody of [
+    "not json",
+    "null",
+    "[]",
+    "42",
+    '"text"',
+    JSON.stringify({ action: "create" }),
+    JSON.stringify({ webhookTimestamp: String(Date.now()) }),
+    JSON.stringify({ webhookTimestamp: null }),
+    JSON.stringify({ webhookTimestamp: true }),
+    JSON.stringify({ webhookTimestamp: {} }),
+    JSON.stringify({ webhookTimestamp: [] }),
+    '{"webhookTimestamp":1e400}',
+  ]) {
+    assert.equal(v.verify({ secret: SECRET, headers: { "linear-signature": hmac(rawBody) }, rawBody }), false, rawBody);
+  }
+});
+
+test("linear verifier enforces the one-minute window in both directions", (t) => {
+  const now = 1_800_000_000_000;
+  t.mock.method(Date, "now", () => now);
+  const v = getVerifier("linear")!;
+  for (const offset of [0, -60_000, 60_000, -60_001, 60_001]) {
+    const rawBody = JSON.stringify({ webhookTimestamp: now + offset });
+    assert.equal(
+      v.verify({ secret: SECRET, headers: { "linear-signature": hmac(rawBody) }, rawBody }),
+      Math.abs(offset) <= 60_000,
+      `offset ${offset}`,
+    );
+  }
 });
 
 test("linear dedup key is the signed body, ignoring the unsigned linear-delivery header", () => {
