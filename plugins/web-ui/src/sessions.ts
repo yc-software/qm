@@ -371,6 +371,7 @@ export function renderList(): void {
 
 const NEW_CHAT_TOOLTIP = "Start a new chat";
 const PROJECT_OPTIONS_TOOLTIP = "Project options";
+const CHAT_OPTIONS_TOOLTIP = "Chat options";
 
 function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
@@ -933,6 +934,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
               <button
                 class="session-menu-btn session-archive-btn"
                 type="button"
+                ${tip(s.archived ? "Unarchive" : "Archive")}
                 aria-label=${`${s.archived ? "Unarchive" : "Archive"} ${sessionTitle(s)}`}
                 @click=${(e: Event) => {
                   e.stopPropagation();
@@ -945,6 +947,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
                 class="session-menu-btn"
                 data-menu-id=${s.id}
                 type="button"
+                ${tip(CHAT_OPTIONS_TOOLTIP)}
                 aria-label=${`Options for ${sessionTitle(s)}`}
                 aria-haspopup="menu"
                 aria-expanded=${menuOpen ? "true" : "false"}
@@ -1205,7 +1208,7 @@ export function sessionSelectionBar(): TemplateResult | null {
         <button
           class="icon-btn"
           type="button"
-          title="Clear selection (Esc)"
+          ${tip("Clear selection (Esc)")}
           aria-label="Clear selection"
           @click=${() => clearSessionSelection()}
         >
@@ -1217,7 +1220,7 @@ export function sessionSelectionBar(): TemplateResult | null {
         <button
           class="icon-btn"
           type="button"
-          title=${allPinned ? "Unpin selected" : "Pin selected"}
+          ${tip(allPinned ? "Unpin selected" : "Pin selected")}
           aria-label=${allPinned ? "Unpin selected conversations" : "Pin selected conversations"}
           @click=${() => void bulkPatch({ pinned: !allPinned })}
         >
@@ -1227,7 +1230,7 @@ export function sessionSelectionBar(): TemplateResult | null {
           <button
             class="icon-btn"
             type="button"
-            title="Color selected"
+            ${tip("Color selected")}
             aria-label="Color selected conversations"
             aria-haspopup="true"
             aria-expanded=${selectColorOpen ? "true" : "false"}
@@ -1243,7 +1246,7 @@ export function sessionSelectionBar(): TemplateResult | null {
         <button
           class="icon-btn"
           type="button"
-          title=${allArchived ? "Unarchive selected" : "Archive selected"}
+          ${tip(allArchived ? "Unarchive selected" : "Archive selected")}
           aria-label=${allArchived ? "Unarchive selected conversations" : "Archive selected conversations"}
           @click=${() => void bulkPatch({ archived: !allArchived })}
         >
@@ -1276,7 +1279,7 @@ function colorPopover(): TemplateResult {
               class="color-swatch"
               type="button"
               style=${`--swatch:${c}`}
-              title=${`Color selected ${c}`}
+              ${tip(`Color selected ${c}`)}
               aria-label=${`Color selected conversations ${c}`}
               @click=${() => void bulkPatch({ color: c })}
             ></button>
@@ -1285,7 +1288,7 @@ function colorPopover(): TemplateResult {
         <button
           class="color-swatch clear"
           type="button"
-          title="Clear color"
+          ${tip("Clear color")}
           aria-label="Clear color on selected conversations"
           @click=${() => void bulkPatch({ color: null })}
         >
