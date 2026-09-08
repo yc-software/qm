@@ -1275,10 +1275,7 @@ function drawFull(): void {
         ? itemPageTpl(openItem)
         : html`
             <div class="pane-head">
-              <div>
-                <h1 class="pane-title">Inbox</h1>
-                <div class="pane-subtitle">Everything waiting on a reply from you, drafted and ready to send.</div>
-              </div>
+              <h1 class="pane-title">Inbox</h1>
               <div class="pane-head-actions">${syncLineTpl()}</div>
             </div>
             ${surfaceTpl(surface)}
