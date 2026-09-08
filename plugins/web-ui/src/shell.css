@@ -13,7 +13,7 @@
   --composer-inset: 13px;
   /* Height reserved at the bottom of every chat message for its own hover footer; it doubles
      as the rhythm between message blocks. */
-  --meta-lane: 18px;
+  --meta-lane: 24px;
   --brand-accent: #4f46e5;
   --dev-accent: #8a5a00;
   --brand-mark: none;
@@ -1596,7 +1596,7 @@ a.chat-row-open {
   z-index: 4;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   height: var(--meta-lane);
   padding: 0 2px;
   border-radius: 6px;
@@ -7207,7 +7207,7 @@ h3.ambient-field-label {
   padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
 }
 [data-density="compact"] .message-row {
-  --meta-lane: 16px;
+  --meta-lane: 20px;
 }
 [data-density="compact"] .message-stack {
   gap: 0;
