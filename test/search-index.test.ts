@@ -469,6 +469,40 @@ test("a parked trigger in a channel with ambient traffic is searchable: overhear
   assert.equal((await sim.store.searchEntries(VIEWER, "bystander chatter")).length, 1);
 });
 
+test("a parked coarse-harness trigger is searchable: nested-role carriers are indexed by the tail", async () => {
+  const at = Date.now();
+  const claude = await simSession("dm:search-index-park-claude");
+  await claude.store.appendTape(claude.lease, {
+    kind: "message",
+    harness: "claude",
+    payload: {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "please approve the claude push" }] },
+    },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "please approve the claude push", entryCreatedAt: at },
+  });
+  const claudeSync = await syncSearchIndex(claude.store, claude.lease);
+  assert.equal(claudeSync.servable, true);
+  assert.equal(claudeSync.indexed, 1);
+  assert.equal((await claude.store.searchEntries(VIEWER, "approve the claude push")).length, 1);
+
+  const opencode = await simSession("dm:search-index-park-opencode");
+  await opencode.store.appendTape(opencode.lease, {
+    kind: "message",
+    harness: "opencode",
+    payload: { info: { role: "user" }, parts: [{ type: "text", text: "please approve the opencode push" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "please approve the opencode push", entryCreatedAt: at },
+  });
+  const opencodeSync = await syncSearchIndex(opencode.store, opencode.lease);
+  assert.equal(opencodeSync.servable, true);
+  assert.equal(opencodeSync.indexed, 1);
+  assert.equal((await opencode.store.searchEntries(VIEWER, "approve the opencode push")).length, 1);
+});
+
 test("open-tail indexing stops at a draft gap so a later settle still indexes the drafts", async () => {
   const sim = await simSession();
   const tape = (rec: Parameters<SessionStore["appendTape"]>[1]) => sim.store.appendTape(sim.lease, rec);

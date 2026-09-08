@@ -572,6 +572,13 @@ function stampedFinalEntries(sessionId: string, rows: readonly TapeRecord[]): Se
   for (const row of rows) {
     if (row.kind === "message") {
       if (row.entrySeq === undefined) continue;
+      if (row.harness !== undefined && row.harness !== "pi") {
+        if (row.meta?.bareText !== undefined || row.meta?.overheard) {
+          const draft = userDraft(row, true);
+          if (draft) pushFinal(draft);
+        }
+        continue;
+      }
       const message = row.payload as TapeMessage | null;
       if (!message || typeof message !== "object" || message.role !== "user") continue;
       const draft = userDraft(row, true);
