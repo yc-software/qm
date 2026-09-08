@@ -22,9 +22,14 @@ function start(modelCredentialFetch: typeof fetch = async () => new Response(nul
   built: BuiltApp;
   close: () => Promise<void>;
 } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "custom-provider-route-")) }), {
-    modelCredentialFetch,
-  });
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "custom-provider-route-")),
+      openaiApiKey: undefined,
+      openrouterApiKey: undefined,
+    }),
+    { modelCredentialFetch },
+  );
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
@@ -92,6 +97,47 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     });
     assert.equal(del.status, 200);
     assert.equal(resolveModel("acme-large"), undefined);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a custom model the picker offers is accepted on web turns when no allowlist is set", async () => {
+  const srv = start(async () => new Response(null, { status: 200 }));
+  try {
+    const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ ...BODY, validate: false }),
+    });
+    assert.equal(put.status, 200);
+
+    const surface = await fetch(`${srv.base}/v1/surface-config`);
+    assert.equal(surface.status, 200);
+    const surfaceBody = (await surface.json()) as { webuiModels: string[] };
+    assert.ok(surfaceBody.webuiModels.includes("acme-large"), "picker offers the custom model");
+
+    const accepted = await srv.built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:custom-no-allowlist" },
+      text: "hello",
+      model: "acme-large",
+      async: true,
+    });
+    assert.equal(accepted.status, "queued", JSON.stringify(accepted));
+
+    srv.built.config.setWebuiModels("org:default-org", ["claude-opus-4-8"]);
+    const refused = await srv.built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:custom-allowlist-miss" },
+      text: "hello",
+      model: "acme-large",
+      async: true,
+    });
+    assert.equal(refused.status, "refused");
+    assert.equal(refused.reason, "that model is not enabled for the web UI");
   } finally {
     await srv.close();
   }
