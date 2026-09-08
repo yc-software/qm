@@ -22,6 +22,7 @@
   --cta-foreground: oklch(0.99 0 0);
   --success: #1a7f37;
   --warning: #a66700;
+  --scrim: oklch(0.145 0 0);
 }
 
 .dark {
@@ -30,6 +31,7 @@
   --cta-foreground: oklch(0.99 0 0);
   --success: #3fb950;
   --warning: #d29922;
+  --scrim: oklch(0.11 0.03 250);
 
   --background: oklch(0.165 0.022 250);
   --foreground: oklch(0.975 0.005 250);
@@ -4131,7 +4133,7 @@ a.chat-row-open {
   justify-content: center;
   width: auto;
   padding: 24px;
-  background: color-mix(in srgb, #000 42%, transparent);
+  background: color-mix(in srgb, var(--scrim) 42%, transparent);
 }
 .kc-confirm {
   width: min(430px, 100%);
@@ -4533,7 +4535,7 @@ a.chat-row-open {
     padding: 0;
     border: 0;
     border-radius: 0;
-    background: color-mix(in srgb, var(--foreground) 24%, transparent);
+    background: color-mix(in srgb, var(--scrim) 24%, transparent);
   }
   .layout.sidebar-closed .sidebar-scrim {
     display: none;
@@ -5505,10 +5507,10 @@ a.chat-row-open {
   justify-content: center;
   padding: var(--dialog-pad-top) var(--dialog-pad-right) var(--dialog-pad-bottom) var(--dialog-pad-left);
   box-sizing: border-box;
-  background: color-mix(in srgb, var(--foreground) 28%, transparent);
+  background: color-mix(in srgb, var(--scrim) 28%, transparent);
 }
 .project-dialog::backdrop {
-  background: color-mix(in srgb, var(--foreground) 28%, transparent);
+  background: color-mix(in srgb, var(--scrim) 28%, transparent);
 }
 .project-dialog {
   /* Tailwind's preflight zeroes every margin, which strips the UA centering from
@@ -7471,7 +7473,7 @@ h3.ambient-field-label {
   justify-content: center;
   align-items: flex-start;
   padding-top: clamp(48px, 12vh, 120px);
-  background: color-mix(in srgb, var(--foreground) 32%, transparent);
+  background: color-mix(in srgb, var(--scrim) 32%, transparent);
 }
 .chat-search-palette {
   display: flex;
@@ -9990,7 +9992,7 @@ h3.ambient-field-label {
 .mc-overlay {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--foreground) 24%, transparent);
+  background: color-mix(in srgb, var(--scrim) 24%, transparent);
   z-index: 1000;
   display: flex;
   align-items: center;

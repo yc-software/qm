@@ -365,6 +365,7 @@ export function themeTokens(palette: Palette): ThemeTokens {
     "--success": readable(green ?? action),
     "--warning": readable(ansiOrBright(ANSI.yellow) ?? action),
     "--selection": palette.selection ?? mix(bg, action, 0.35),
+    "--scrim": mix(bg, BLACK, 0.82),
     "--working-dot": readable(ansiOrBright(ANSI.blue) ?? action),
     "--awaiting-dot": readable(ansiOrBright(ANSI.yellow) ?? action),
     "--syntax-keyword": syntax("keyword", ansiOrBright(ANSI.magenta), fg),
