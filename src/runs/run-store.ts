@@ -64,7 +64,12 @@ export interface RunStore {
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 
-  fail(runId: string, leaseToken: string, error: string, opts?: { retry?: boolean }): Promise<{ requeued: boolean }>;
+  fail(
+    runId: string,
+    leaseToken: string,
+    error: string,
+    opts?: { retry?: boolean; retryAfterMs?: number },
+  ): Promise<{ requeued: boolean }>;
 
   setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean>;
 

@@ -34,7 +34,7 @@ export function createPostgresNotifyBus<T>(
     if (closed || connecting || listenClient || local.size() === 0) return;
     connecting = true;
     void (async () => {
-      const client = await (await pg.pool()).connect();
+      const client = await (await pg.pool("session")).connect();
       client.on("notification", (msg) => {
         if (msg.channel !== channel || !msg.payload) return;
         try {

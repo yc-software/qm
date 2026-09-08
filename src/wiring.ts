@@ -59,7 +59,7 @@ import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPoolLimits } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -478,6 +478,7 @@ export function buildApp(
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
+  configurePgPoolLimits({ query: config.pgQueryPoolMax, session: config.pgSessionPoolMax });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),

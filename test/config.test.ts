@@ -657,3 +657,15 @@ test("retired brain environment does not configure a runtime integration and war
   assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
   assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
 });
+
+test("Postgres query and session budgets are bounded independently", () => {
+  const defaults = loadConfig({});
+  assert.equal(defaults.pgQueryPoolMax, 8);
+  assert.equal(defaults.pgSessionPoolMax, 8);
+  const custom = loadConfig({ PG_QUERY_POOL_MAX: "3", PG_SESSION_POOL_MAX: "5" });
+  assert.equal(custom.pgQueryPoolMax, 3);
+  assert.equal(custom.pgSessionPoolMax, 5);
+  for (const key of ["PG_QUERY_POOL_MAX", "PG_SESSION_POOL_MAX"]) {
+    for (const value of ["0", "-1", "1.5", "NaN", "Infinity"]) assert.throws(() => loadConfig({ [key]: value }));
+  }
+});

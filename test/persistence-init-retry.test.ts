@@ -92,3 +92,30 @@ test("pg pool: a timeoutMs query gives the connection back usable, not poisoned"
   assert.equal(row!.statement_timeout, "0", "the budget does not leak onto the next borrower of the connection");
   await pg.close();
 });
+
+test("pg pool: failed schema initialization does not close another store's pool", { skip }, async () => {
+  const healthy = createPgPool(URL!);
+  const failing = createPgPool(URL!, "test/retry/bad-schema/0001", ["SELECT * FROM missing_shared_pool_table"]);
+  try {
+    const instance = await healthy.pool();
+    await assert.rejects(failing.pool(), /does not exist/);
+    await failing.close();
+    assert.equal(instance.ending, false);
+    assert.deepEqual(await healthy.q("SELECT 1 AS one"), [{ one: 1 }]);
+  } finally {
+    await Promise.all([healthy.close(), failing.close()]);
+  }
+});
+
+test("pg pool: saturating session connections leaves query capacity available", { skip }, async () => {
+  const store = createPgPool(URL!);
+  const clients = [];
+  try {
+    const sessions = await store.pool("session");
+    for (let i = 0; i < sessions.options.max!; i++) clients.push(await sessions.connect());
+    assert.deepEqual(await store.q("SELECT 1 AS one", [], { timeoutMs: 500 }), [{ one: 1 }]);
+  } finally {
+    clients.forEach((client) => client.release());
+    await store.close();
+  }
+});

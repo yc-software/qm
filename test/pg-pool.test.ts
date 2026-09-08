@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   createPgPool,
+  configurePgPoolLimits,
   assertOneStatement,
   concurrentIndexName,
   definePgMigration,
@@ -103,3 +104,67 @@ test("concurrentIndexName recognizes retryable concurrent index creation", () =>
 function pathToUrl(p: string): string {
   return new URL(`file://${p}`).href;
 }
+
+test("stores using one database share a bounded pool without sharing close ownership", async () => {
+  const stores = Array.from({ length: 32 }, () => createPgPool("postgres://unused@127.0.0.1:1/shared"));
+  try {
+    const pools = await Promise.all(stores.map((store) => store.pool()));
+    assert.equal(new Set(pools).size, 1);
+    await stores[0]!.close();
+    assert.equal(await stores[1]!.pool(), pools[0]);
+    assert.equal(pools[0]!.ending, false);
+  } finally {
+    await Promise.all(stores.map((store) => store.close()));
+  }
+});
+
+test("query and session budgets are separate, shared by purpose, and release once", async () => {
+  const url = "postgres://unused@127.0.0.1:1/budgets";
+  const a = createPgPool(url);
+  const b = createPgPool(url);
+  const other = createPgPool(url + "-other");
+  try {
+    const query = await a.pool();
+    const session = await a.pool("session");
+    assert.notEqual(query, session);
+    assert.equal(await b.pool("session"), session);
+    assert.notEqual(await other.pool(), query);
+    assert.equal(query.options.max, 8);
+    assert.equal(session.options.max, 8);
+    assert.equal(query.options.connectionTimeoutMillis, 5_000);
+    await Promise.all([a.close(), a.close()]);
+    assert.equal(query.ending, false);
+    assert.equal(session.ending, false);
+    await b.close();
+    assert.equal(query.ended, true);
+    assert.equal(session.ended, true);
+    await assert.rejects(a.pool(), /closed/);
+    const replacement = createPgPool(url);
+    try {
+      assert.notEqual(await replacement.pool(), query);
+    } finally {
+      await replacement.close();
+    }
+  } finally {
+    await Promise.all([a.close(), b.close(), other.close()]);
+  }
+});
+
+test("pool budgets reject invalid limits instead of creating unbounded pools", async () => {
+  try {
+    for (const limit of [0, -1, 1.5, NaN, Infinity]) {
+      assert.throws(() => configurePgPoolLimits({ query: limit, session: 8 }), /positive integers/);
+      assert.throws(() => configurePgPoolLimits({ query: 8, session: limit }), /positive integers/);
+    }
+    configurePgPoolLimits({ query: 2, session: 3 });
+    const store = createPgPool("postgres://unused@127.0.0.1:1/valid");
+    try {
+      assert.equal((await store.pool()).options.max, 2);
+      assert.equal((await store.pool("session")).options.max, 3);
+    } finally {
+      await store.close();
+    }
+  } finally {
+    configurePgPoolLimits({ query: 8, session: 8 });
+  }
+});

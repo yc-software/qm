@@ -65,7 +65,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     if (closed || connecting || listenClient || listeners.size === 0) return;
     connecting = true;
     void (async () => {
-      const client = await (await pg.pool()).connect();
+      const client = await (await pg.pool("session")).connect();
       client.on("notification", (msg) => {
         if (msg.channel === CHANNEL && msg.payload) ring(msg.payload);
       });
@@ -76,7 +76,12 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
           for (const runId of listeners.keys()) ring(runId);
         }, RECONNECT_DELAY_MS).unref?.();
       });
-      await client.query(`LISTEN ${CHANNEL}`);
+      try {
+        await client.query(`LISTEN ${CHANNEL}`);
+      } catch (error) {
+        client.release(true);
+        throw error;
+      }
       listenClient = client;
     })()
       .catch(swallowAs("run-signals: listen connect", undefined))

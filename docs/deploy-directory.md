@@ -182,3 +182,11 @@ rules. Deployment preflight verifies the exact paths, target-group attachments
 and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
+
+### Postgres connection budgets
+
+Core stores share one query pool per database connection string and TLS configuration in each process. `PG_QUERY_POOL_MAX` caps that pool (default **8**); `PG_SESSION_POOL_MAX` separately caps long-held LISTEN and advisory-lock connections (default **8**). Both must be positive integers. These are non-secret core environment settings. Closing a store releases its ownership; the last owner closes the underlying pool. Acquiring a connection times out after five seconds rather than waiting indefinitely.
+
+Budget for **all concurrent processes**, including old and new replicas during blue-green rollouts. Also reserve capacity for the scheduler's separate pool (up to five query connections plus its notification connections), migrations, other services, and operator access. Lower worker concurrency reduces demand but does not replace a connection budget. Keep session capacity above the number of permanent listeners and leader connections, leaving room for advisory locks. Session connections require a direct or session-pooled database endpoint, not transaction pooling.
+
+Temporary Postgres connection failures requeue a run with a durable deadline: roughly 15 seconds after the first error, 30 after the second, then up to 60 seconds, with jitter. All workers and direct claims respect the deadline; later turns in that session wait while unrelated sessions can proceed. Existing error/claim limits still apply, and permanent failures are not delayed. Deploy the new run-store migration before relying on this behavior across workers; older binaries do not honor retry deadlines during a mixed-version rollout.

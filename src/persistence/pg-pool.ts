@@ -30,7 +30,7 @@ export interface PgQueryOptions {
 }
 
 export interface PgPool {
-  pool(): Promise<Pool>;
+  pool(kind?: "query" | "session"): Promise<Pool>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
@@ -199,6 +199,56 @@ export function pgCaOptions(): { ssl?: { ca: string } } {
   return installedCaTrust;
 }
 
+interface SharedPool {
+  instance: Promise<Pool>;
+  refs: number;
+}
+
+const sharedPools = new Map<string, SharedPool>();
+
+let poolLimits = { query: 8, session: 8 };
+
+export function configurePgPoolLimits(limits: { query: number; session: number }): void {
+  for (const limit of Object.values(limits)) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Postgres pool limits must be positive integers");
+  }
+  poolLimits = { ...limits };
+}
+
+function acquirePool(
+  connectionString: string,
+  kind: "query" | "session",
+): { instance: Promise<Pool>; release(): Promise<void> } {
+  const ssl = pgCaOptions();
+  const max = poolLimits[kind];
+  const key = JSON.stringify([connectionString, ssl, kind, max]);
+  let shared = sharedPools.get(key);
+  if (!shared) {
+    shared = {
+      refs: 0,
+      instance: import("pg").then(({ default: pg }) => {
+        const pool = new pg.Pool({ connectionString, ...ssl, max, connectionTimeoutMillis: 5_000 });
+        pool.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
+        return pool;
+      }),
+    };
+    sharedPools.set(key, shared);
+  }
+  const entry = shared;
+  entry.refs++;
+  let released = false;
+  return {
+    instance: entry.instance,
+    async release() {
+      if (released) return;
+      released = true;
+      if (--entry.refs !== 0) return;
+      sharedPools.delete(key);
+      await (await entry.instance).end();
+    },
+  };
+}
+
 const registeredMigrations = new Map<string, Map<string, PgMigration>>();
 const registeredPreMigrationMaintenance = new Map<string, Map<string, PgMigration>>();
 
@@ -303,21 +353,33 @@ export function createPgPool(
     .filter((definition) => !definition.beforeMigrations)
     .map((definition) => definePgMigration(definition.id, definition.statements));
   let poolP: Promise<Pool> | null = null;
-  function pool(): Promise<Pool> {
+  let queryLease: ReturnType<typeof acquirePool> | null = null;
+  let sessionLease: ReturnType<typeof acquirePool> | null = null;
+  let closing: Promise<void> | null = null;
+  let closed = false;
+  async function pool(kind: "query" | "session" = "query"): Promise<Pool> {
+    if (closed) throw new Error("Postgres store is closed");
+    if (kind === "session") {
+      await pool();
+      if (closed) throw new Error("Postgres store is closed");
+      sessionLease ??= acquirePool(connectionString, "session");
+      return sessionLease.instance;
+    }
     if (!poolP) {
       poolP = (async () => {
-        const pg = (await import("pg")).default;
-        const instance = new pg.Pool({ connectionString, ...pgCaOptions() });
-        instance.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
+        const lease = acquirePool(connectionString, "query");
+        queryLease = lease;
         try {
+          const instance = await lease.instance;
           await applyPgMaintenance(instance, preMigrationMaintenance);
           await applyPgMigrations(instance, migrations);
           await applyPgMaintenance(instance, postMigrationMaintenance);
+          return instance;
         } catch (error) {
-          await instance.end().catch(swallowAs("pg-pool: close after schema failure", undefined));
+          queryLease = null;
+          await lease.release().catch(swallowAs("pg-pool: release after schema failure", undefined));
           throw error;
         }
-        return instance;
       })().catch((error) => {
         poolP = null;
         throw error;
@@ -396,8 +458,13 @@ export function createPgPool(
   async function q(text: string, params: unknown[] = [], options?: PgQueryOptions): Promise<Rows> {
     return (await query(text, params, options)).rows;
   }
-  async function close(): Promise<void> {
-    if (poolP) await (await poolP).end();
+  function close(): Promise<void> {
+    closed = true;
+    closing ??= (async () => {
+      await poolP?.catch(() => {});
+      await Promise.all([queryLease?.release(), sessionLease?.release()]);
+    })();
+    return closing;
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
     const migration = definePgMigration(
