@@ -1349,13 +1349,16 @@ function syncItemUrl(itemId: string | null, push = false): void {
   else history.replaceState(null, "", next);
 }
 
-function closeInboxItem(): void {
+export function resetActiveInboxItem(): void {
   const open = fullSurface?.selectedId;
-  if (open) {
-    const item = inboxState.items.find((i) => i.id === open);
-    if (item) void persistDraft(item);
-  }
-  if (fullSurface) fullSurface.selectedId = null;
+  if (!open || !fullSurface) return;
+  const item = inboxState.items.find((i) => i.id === open);
+  if (item) void persistDraft(item);
+  fullSurface.selectedId = null;
+}
+
+function closeInboxItem(): void {
+  resetActiveInboxItem();
   syncItemUrl(null);
   drawAll();
 }
