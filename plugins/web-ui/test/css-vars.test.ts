@@ -33,11 +33,7 @@ test("every drop zone the canvas renders has a positioning rule in shell.css", (
 });
 
 test("only the elevated chat surfaces paint a shadow", () => {
-  const elevated = [
-    ".pinned-strip",
-    ".message-stack .user-row.stuck > .user-bubble",
-    ".composer-wrap",
-  ];
+  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble", ".composer-wrap"];
   const rules = shellCss.replace(/\/\*[\s\S]*?\*\//g, "");
   const painted = [...rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
     [...rule[2].matchAll(/(box|text)-shadow\s*:\s*([^;}]+)/g)]
