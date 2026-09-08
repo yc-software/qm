@@ -46,6 +46,10 @@ test("forking copies the transcript into a fresh independent web session", async
     (await sessions.tapeCoverage(fork.session.id)) >= fork.entries.at(-1)!.seq,
     "the fork is born tape-covered — its first turn needs no heal import",
   );
+  assert.ok(
+    (await sessions.searchEntries("U1", "rollbacks")).some((hit) => hit.sessionId === fork.session.id),
+    "the copied history is searchable at fork time, not at the fork's first turn",
+  );
   const forkRows = await sessions.getTape(fork.session.id);
   assert.equal(
     forkRows.filter(

@@ -3,8 +3,9 @@ import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
-import { createTranscriptSource } from "../harness/tape-projection.ts";
+import { createTranscriptSource, syncSearchIndex } from "../harness/tape-projection.ts";
 import { coverageImportViable } from "../harness/replay.ts";
+import { swallow } from "../util/errors.ts";
 import { appendRenderImport, nativeForkTapeRows } from "../harness/tape-import.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
@@ -783,6 +784,7 @@ export function createSessionMethods(
               );
               forkBoundarySeq = renumbered[renumbered.length - 1]!.seq;
             }
+            await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: fork sync", e));
           }
         } finally {
           await deps.sessions.releaseLease(lease);
