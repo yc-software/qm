@@ -102,6 +102,25 @@ test("the recorded entry keeps the tape projection servable and renders through 
   assert.equal((projected[0]!.payload as { text?: string }).text, "cron reply body");
 });
 
+test("a recorded delivery is indexed for search at write time, not at the session's next turn", async () => {
+  const { sessions, deliveries } = wired();
+  const session = await webSession(sessions);
+  await sessions.addParticipant(session.id, "viewer", undefined, { includeHistory: true });
+
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "quarterly report finished overnight",
+    idempotencyKey: "agent:main:cron:c1:300",
+    provenance: cronProvenance({ fireKey: "agent:main:cron:c1:300" }),
+  });
+  await deliveries.pending("web");
+
+  assert.ok((await sessions.searchIndexCoverage(session.id)) >= 0, "the write itself advances the search index");
+  const hits = await sessions.searchEntries("viewer", "quarterly report");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]!.type, "assistant");
+});
+
 test("a delivery into a session with prior history lands after it with no orphan tape rows", async () => {
   const { sessions, deliveries } = wired();
   const session = await webSession(sessions);

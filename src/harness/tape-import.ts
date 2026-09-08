@@ -7,9 +7,16 @@ import {
   tapeEntryMirrorRecord,
   type TranscriptAppendSessions,
 } from "../sessions/session-store.ts";
-import { projectedSessionHistory, projectTapeEntries, RENDER_IMPORT_EVENT } from "./tape-projection.ts";
+import {
+  projectedSessionHistory,
+  projectTapeEntries,
+  RENDER_IMPORT_EVENT,
+  syncSearchIndex,
+} from "./tape-projection.ts";
 import { appendCoverageImport } from "./replay.ts";
 import { canonicalJson } from "../util/objects.ts";
+import { SEARCHABLE_ENTRY_TYPES } from "../sessions/entry-search.ts";
+import { swallow } from "../util/errors.ts";
 
 export async function appendRenderImport(
   store: Pick<SessionStore, "appendTape">,
@@ -120,6 +127,9 @@ export async function appendEntryOutsideTurn(
       scopeLabel: entry.scopeLabel,
       meta: { entryCreatedAt: appended.createdAt },
     });
+  }
+  if (SEARCHABLE_ENTRY_TYPES.has(entry.type)) {
+    await syncSearchIndex(sessions, lease).catch((e) => swallow("tape-search: outside-turn sync", e));
   }
   return appended;
 }

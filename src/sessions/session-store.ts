@@ -236,7 +236,10 @@ export function tapeTaintMarkers(rows: readonly TapeRecord[]): TapeTaintMarkers 
   return out;
 }
 
-export type TranscriptAppendSessions = Pick<SessionStore, "appendTape" | "getTape" | "getEntries" | "latestEntrySeq">;
+export type TranscriptAppendSessions = Pick<
+  SessionStore,
+  "appendTape" | "getTape" | "getEntries" | "latestEntrySeq" | "appendSearchEntries" | "searchIndexCoverage"
+>;
 
 export function createEntryAllocator(
   sessionId: string,
