@@ -22,7 +22,7 @@ test("every new-chat affordance follows the shared placement rule", () => {
   const placed = fn(split, "startNewChatInCanvas");
   assert.match(placed, /dockApi\.panels\.length >= MAX_PANES/);
   assert.match(placed, /dockApi\.removePanel\(target\)/);
-  assert.match(placed, /dockApi\.groups\.length > 1 && dockApi\.groups\.length < MAX_TILES/);
+  assert.match(placed, /dockApi\.groups\.length === 2/);
   const start = fn(sessions, "startNewChat");
   assert.match(start, /if \(splitState\.active\) return startNewChatInCanvas/);
   assert.match(start, /addPendingSession\(conv\.newChat/);

@@ -620,7 +620,7 @@ export function startNewChatInCanvas(scopeId?: string, threadRef?: string): Conv
   const target = dockApi.activePanel ?? dockApi.panels[0];
   if (!target) return null;
   const replace = dockApi.panels.length === 1 || dockApi.panels.length >= MAX_PANES;
-  const tile = !replace && dockApi.groups.length > 1 && dockApi.groups.length < MAX_TILES;
+  const tile = !replace && dockApi.groups.length === 2;
   const { width, height } = target.group.element.getBoundingClientRect();
   const direction = width >= height ? "right" : "below";
   const fresh = addPane(
