@@ -7734,7 +7734,7 @@ h3.ambient-field-label {
   color: var(--accent-foreground, #fff);
   font-size: 11px;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
   line-height: 14px;
   text-align: center;
 }
@@ -7812,7 +7812,7 @@ h3.ambient-field-label {
   color: var(--accent-foreground, #fff);
   font-size: 11px;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
   line-height: 14px;
   text-align: center;
 }
@@ -8086,12 +8086,9 @@ h3.ambient-field-label {
     min-height: 0;
     max-height: none;
   }
-  .inbox-item-aside .inbox-chat-cta {
+  .inbox-item-aside .inbox-chat-empty {
     flex: 1;
     min-height: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
   .inbox-item-aside .inbox-chat-composer {
     flex: none;
@@ -8298,6 +8295,37 @@ h3.ambient-field-label {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 14px;
+}
+.inbox-chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.inbox-chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.inbox-chat-suggestion {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.inbox-chat-suggestion:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  color: var(--foreground);
+}
+.inbox-chat-suggestion:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .inbox-chat-cta {
   margin: 0;
@@ -8586,7 +8614,7 @@ h3.ambient-field-label {
   color: var(--accent-foreground, #fff);
   font-size: 11px;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
   line-height: 14px;
   text-align: center;
   margin-left: 5px;

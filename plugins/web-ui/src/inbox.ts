@@ -130,6 +130,7 @@ export const inboxState = {
   syncBusy: false,
 };
 
+const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove the salutations"];
 const ASIDE_MIN_HEIGHT = 320;
 const ASIDE_MAX_HEIGHT = 1100;
 const CHAT_INPUT_MAX_HEIGHT = 200;
@@ -806,7 +807,22 @@ export function chatTpl(item: InboxItem): TemplateResult {
     <div class="inbox-chat">
       ${
         empty
-          ? html`<h2 class="inbox-chat-cta">What should I change?</h2>`
+          ? html`<div class="inbox-chat-empty">
+              <h2 class="inbox-chat-cta">What should I change?</h2>
+              <div class="inbox-chat-suggestions">
+                ${DRAFT_SUGGESTIONS.map(
+                  (prompt) =>
+                    html`<button
+                      class="inbox-chat-suggestion"
+                      type="button"
+                      ?disabled=${busy}
+                      @click=${() => void askAgent(item, prompt)}
+                    >
+                      ${prompt}
+                    </button>`,
+                )}
+              </div>
+            </div>`
           : html`<div class="inbox-chat-log">
               ${item.thread.map(
                 (m) =>
