@@ -1,6 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, Pencil, RotateCcw, X } from "lucide";
+import { Archive, ArrowUpRight, Check, Copy, Pencil, RotateCcw, X } from "lucide";
 import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, icon, relTime } from "./ui";
@@ -266,7 +266,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
             <div class="deploy-detail-url">/d/${deploymentSlug(d)}/</div>
           </div>
           <div class="actions">
-            ${running && d.webUrl ? html`<a class="btn primary" href=${withBase(d.webUrl)} target="_blank" rel="noreferrer">Open app ${icon(ExternalLink, 14)}</a>` : nothing}
+            ${running && d.webUrl ? html`<a class="btn primary" href=${withBase(d.webUrl)} target="_blank" rel="noreferrer">Open app ${icon(ArrowUpRight, 14)}</a>` : nothing}
             ${running && canManage(d) ? html`<button class="btn" type="button" @click=${(event: Event) => void openLiveEdit(d, event.currentTarget as HTMLButtonElement)}>${icon(Pencil, 14)}<span>Edit live</span></button>` : nothing}
             ${d.webUrl ? html`<button class="btn" type="button" @click=${(event: Event) => void copyText(new URL(withBase(d.webUrl!), window.location.href).href, event.currentTarget as HTMLButtonElement)}>${icon(Copy, 14)}<span>Copy URL</span></button>` : nothing}
           </div>

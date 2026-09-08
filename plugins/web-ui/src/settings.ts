@@ -1,5 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, Trash2, Upload, type IconNode } from "lucide";
+import { ArrowUpRight, BookOpen, LogOut, Monitor, Moon, ShieldUser, Sun, Trash2, Upload, type IconNode } from "lucide";
 import { icon } from "./ui";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
@@ -242,7 +242,7 @@ function adminRow(): TemplateResult {
         <div class="settings-row-note">Org settings, people, and policy.</div>
       </div>
       <a class="btn settings-row-action" href=${ADMIN_HOME_URL}>
-        ${icon(ShieldUser, 15)}<span>Open admin</span>${icon(ExternalLink, 14)}
+        ${icon(ShieldUser, 15)}<span>Open admin</span>${icon(ArrowUpRight, 14)}
       </a>
     </div>
   `;
@@ -258,7 +258,7 @@ function aboutRow(): TemplateResult {
         </div>
       </div>
       <a class="btn settings-row-action" href=${QM_ABOUT_URL} target="_blank" rel="noreferrer noopener">
-        ${icon(BookOpen, 15)}<span>Read the announcement</span>${icon(ExternalLink, 14)}
+        ${icon(BookOpen, 15)}<span>Read the announcement</span>${icon(ArrowUpRight, 14)}
       </a>
     </div>
   `;
