@@ -245,20 +245,19 @@ export const scenarios: Scenario[] = [
     timeoutMs: SANDBOX_TIMEOUT,
     async run(ctx) {
       const ch = await ctx.freshChannel();
-      const secret = ctx.marker("codename");
-      await ctx.env.qa.post(ch.id, `For the record: the launch codename is ${secret}. Keep this handy.`);
+      const codename = `Aurora-${crypto.randomUUID().slice(0, 8)}`;
+      await ctx.env.qa.post(ch.id, `We agreed on ${codename} as the launch name at this morning's standup.`);
       for (let i = 1; i <= 24; i++) {
-        await ctx.env.qa.post(ch.id, `(filler ${i}/24 — routine standup noise, nothing to act on)`);
+        await ctx.env.qa.post(ch.id, `Standup update ${i}: the scheduled checks completed with no blockers.`);
         await sleep(400);
       }
       const root = await ch.mention(
-        "Earlier in this channel (before the recent chatter) I posted the launch codename. " +
-          "Check this channel's earlier history and reply with the codename exactly.",
+        "What launch name did we agree on at this morning's standup, before the status updates?",
       );
-      const reply = await ch.waitForBotReply(root, { match: new RegExp(secret), timeoutMs: SANDBOX_TIMEOUT - 30_000 });
+      const reply = await ch.waitForBotReply(root, { includeChannel: true, timeoutMs: SANDBOX_TIMEOUT - 30_000 });
       assert.ok(
-        reply.text?.includes(secret),
-        `reply missing the buried codename ${secret}: ${reply.text?.slice(0, 300)}`,
+        reply.text?.toLowerCase().includes(codename.toLowerCase()),
+        `reply missing the earlier launch name ${codename}: ${reply.text?.slice(0, 300)}`,
       );
     },
   },
