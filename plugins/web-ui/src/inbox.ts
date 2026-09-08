@@ -130,6 +130,8 @@ export const inboxState = {
   syncBusy: false,
 };
 
+const expandedThreads = new Set<string>();
+const clampedThreads = new Set<string>();
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const sending = new Set<string>();
 const acting = new Set<string>();
@@ -174,6 +176,7 @@ export function resetInboxState(): void {
   inboxState.fetchedAt = 0;
   inboxState.notice = null;
   inboxState.syncBusy = false;
+  expandedThreads.clear();
   draftEdits.clear();
   sending.clear();
   acting.clear();
@@ -741,26 +744,43 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   const rows = item.context ?? [];
   if (!rows.length) return nothing;
-  return html`<div class="inbox-context">
-    ${rows.map((m, i) => {
-      const name = participantName(m.author) || m.author;
-      return html`
-        <div class="inbox-context-msg">
-          <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
-            >${initials(name)}</span
-          >
-          <div class="inbox-context-body">
-            <div class="inbox-context-head">
-              <span class="inbox-context-author">${name}</span>
-              ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
+  const expanded = expandedThreads.has(item.id);
+  return html`<div class="inbox-context" data-expanded=${String(expanded)}>
+      ${rows.map((m, i) => {
+        const name = participantName(m.author) || m.author;
+        return html`
+          <div class="inbox-context-msg">
+            <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
+              >${initials(name)}</span
+            >
+            <div class="inbox-context-body">
+              <div class="inbox-context-head">
+                <span class="inbox-context-author">${name}</span>
+                ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
+              </div>
+              <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
+              ${itemImagesTpl(item, m.images, i)}
             </div>
-            <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
-            ${itemImagesTpl(item, m.images, i)}
           </div>
-        </div>
-      `;
-    })}
-  </div>`;
+        `;
+      })}
+    </div>
+    ${threadMoreTpl(item, expanded)}`;
+}
+
+function threadMoreTpl(item: InboxItem, expanded: boolean): TemplateResult | typeof nothing {
+  if (!clampedThreads.has(item.id) && !expanded) return nothing;
+  return html`<button
+    class="inbox-thread-more"
+    type="button"
+    @click=${() => {
+      if (expanded) expandedThreads.delete(item.id);
+      else expandedThreads.add(item.id);
+      drawAll();
+    }}
+  >
+    ${expanded ? "Show less" : "Show the whole thread"}
+  </button>`;
 }
 
 function sendLabel(item: InboxItem, busy: boolean): string {
@@ -1262,6 +1282,33 @@ function drawFull(): void {
       host,
     ),
   );
+  markClampedThread(host, openItem?.id ?? null);
+  sizeAside(host);
+}
+
+/**
+ * The thread caps its height, so the toggle only earns its place when there is
+ * more thread than the cap shows. Measured after the render that drew it.
+ */
+function markClampedThread(host: HTMLElement, itemId: string | null): void {
+  if (!itemId) return;
+  const context = host.querySelector<HTMLElement>(".inbox-item-surface .inbox-context");
+  if (!context) return;
+  const clamped = context.scrollHeight - context.clientHeight > 1;
+  const was = clampedThreads.has(itemId);
+  if (clamped) clampedThreads.add(itemId);
+  else if (!expandedThreads.has(itemId)) clampedThreads.delete(itemId);
+  if (clamped !== was && !expandedThreads.has(itemId)) drawFull();
+}
+
+/**
+ * The assistant sticks to the top of a page that now scrolls, so its height is
+ * the viewport below wherever it starts rather than a share of a fixed frame.
+ */
+function sizeAside(host: HTMLElement): void {
+  if (!host.querySelector(".inbox-item-aside")) return;
+  const padTop = Number.parseFloat(getComputedStyle(host).paddingTop) || 0;
+  host.style.setProperty("--inbox-aside-height", `${Math.max(320, host.clientHeight - padTop - 8)}px`);
 }
 
 function syncItemUrl(itemId: string | null, push = false): void {

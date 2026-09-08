@@ -8029,10 +8029,9 @@ h3.ambient-field-label {
     display: grid;
 
     grid-template-columns: minmax(0, 960px) minmax(0, 330px);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
     column-gap: 18px;
     justify-content: center;
-    overflow: hidden;
   }
   .inbox-page:has(.inbox-item-aside) .pane-head,
   .inbox-page:has(.inbox-item-aside) .inbox-item-surface {
@@ -8046,16 +8045,18 @@ h3.ambient-field-label {
   }
   .inbox-page:has(.inbox-item-aside) .inbox-item-surface {
     grid-area: 2 / 1;
-    min-height: 0;
+    height: auto;
   }
   .inbox-item-thread {
-    min-height: 0;
-    overflow-y: auto;
-    padding-right: 4px;
+    flex: none;
+    overflow: visible;
   }
   .inbox-item-aside {
     grid-area: 1 / 2 / span 2;
-    min-height: 0;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: var(--inbox-aside-height, 70vh);
   }
   .inbox-item-aside .inbox-chat {
     flex: 1;
@@ -8078,7 +8079,24 @@ h3.ambient-field-label {
   }
 }
 .inbox-item-surface .inbox-context {
+  max-height: 480px;
+  overflow: hidden;
+}
+.inbox-item-surface .inbox-context[data-expanded="true"] {
   max-height: none;
+}
+.inbox-thread-more {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.inbox-thread-more:hover {
+  color: var(--foreground);
 }
 .inbox-item-surface .inbox-draft-body {
   min-height: 200px;
