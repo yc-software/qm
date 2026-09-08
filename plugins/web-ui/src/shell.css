@@ -2112,16 +2112,6 @@ a.chat-row-open {
   background: var(--hover-2);
   color: var(--ink);
 }
-.thinking {
-  border-left: 2px solid var(--border);
-  padding-left: 10px;
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-.thinking summary {
-  cursor: pointer;
-  font-weight: 600;
-}
 .thinking-placeholder {
   display: flex;
   align-items: center;
@@ -2139,7 +2129,7 @@ a.chat-row-open {
   margin: 10px 0;
 }
 .work-fold {
-  margin: 2px 0;
+  margin: 4px 0;
 }
 .work-message {
   color: color-mix(in srgb, var(--muted-foreground) 85%, var(--foreground));
@@ -2182,29 +2172,36 @@ a.chat-row-open {
 .work-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 15px;
+  gap: 10px;
+  width: fit-content;
+  max-width: 100%;
+  height: 36px;
+  padding-right: 6px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
   line-height: 1.4;
-  font-weight: 400;
-  color: var(--muted-foreground);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+summary.work-head:hover {
+  background: var(--hover-2);
 }
 .work-head .icon {
-  color: var(--muted-foreground);
-  transition: transform 140ms ease;
+  flex: 0 0 auto;
+  color: var(--ink-3);
+  transition: transform 300ms var(--ease-out-strong);
 }
 .work[open] > summary.work-head .icon,
 .work-fold[open] > summary.work-head .icon {
   transform: rotate(90deg);
 }
-.work-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 8px 0 10px;
-}
 .work-rows {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  margin: 0 0 4px 11px;
+  padding-left: 22px;
+  border-left: 1px solid var(--line);
 }
 
 .tool-row,
@@ -2257,27 +2254,35 @@ a.chat-row-open {
   min-width: 0;
   list-style: none;
   cursor: pointer;
-  color: color-mix(in srgb, var(--muted-foreground) 80%, var(--background));
+  color: var(--ink-2);
   font-size: 13px;
   line-height: 1.35;
+}
+.thinking-summary:hover {
+  color: var(--ink);
 }
 .thinking-summary::-webkit-details-marker {
   display: none;
 }
 .thinking-summary > .icon:last-child {
   flex: 0 0 auto;
-  transition: transform 140ms ease;
+  color: var(--ink-3);
+  transition: transform 300ms var(--ease-out-strong);
 }
 .thinking-row[open] > .thinking-summary > .icon:last-child {
   transform: rotate(90deg);
 }
 .thinking-body {
-  margin: 5px 0 8px 19px;
-  padding-left: 10px;
-  border-left: 2px solid var(--border);
-  color: var(--muted-foreground);
+  min-height: 0;
+  color: var(--ink-2);
   font-size: 13px;
   line-height: 1.55;
+}
+.thinking-body > markdown-block {
+  display: block;
+  margin: 4px 0 6px 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
 }
 .tool-row.tool-failed {
   color: var(--red);

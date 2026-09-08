@@ -34,7 +34,7 @@ test("the fold chevron rotates when a work-fold is open", () => {
 });
 
 test("expanded tool activity uses a compact log rhythm", () => {
-  assert.match(css, /\.work-divider \{[\s\S]{0,120}?margin: 8px 0 10px;/);
+  assert.match(css, /\.work-rows \{[\s\S]{0,120}?border-left: 1px solid var\(--line\);/);
   assert.match(css, /\.work-rows \{[\s\S]{0,120}?gap: 5px;/);
   assert.match(css, /\.tool-row,[\s\S]{0,220}?font-size: 13px;[\s\S]{0,80}?line-height: 1\.35;/);
   assert.match(css, /\.tool-row \.tool-summary \{[\s\S]{0,80}?min-height: 24px;/);

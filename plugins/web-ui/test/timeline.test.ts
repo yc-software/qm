@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolActivity, WorkBlock } from "../src/core-bridge.ts";
-import { buildTimeline, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
+import { buildTimeline, segmentStatus, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
 
 function act(seq: number, type: ToolActivity["type"], payload: unknown): ToolActivity {
   return { seq, parentSeq: null, type, payload, createdAt: seq };
@@ -299,4 +299,22 @@ test("memoized output still reflects a mutated-then-replaced work correctly", ()
   const items = buildTimeline(work);
   assert.equal(items.length, 2);
   assert.equal(items[1]?.kind, "tool");
+});
+
+test("a fold's capsule glyph follows its tools: a ring while live, red once any tool failed, green otherwise", () => {
+  const ok = [
+    act(1, "tool_call", { tool: "execute", command: "ls" }),
+    act(2, "tool_result", { tool: "execute", code: 0 }),
+  ];
+  const crashed = [
+    act(3, "tool_call", { tool: "execute", command: "make" }),
+    act(4, "tool_result", { tool: "execute", code: 2 }),
+  ];
+  const fold = (status: WorkBlock["status"], activity: ToolActivity[]) =>
+    segmentStatus(buildTimeline({ status, activity }), status);
+  assert.equal(fold("working", ok), "running");
+  assert.equal(fold("complete", ok), "ok");
+  assert.equal(fold("complete", [...ok, ...crashed]), "failed", "one non-zero exit turns the whole fold red");
+  assert.equal(fold("failed", ok), "failed", "a failed turn marks its folds even when every tool returned");
+  assert.equal(fold("complete", [act(1, "thinking", { thinking: "hm" })]), "ok");
 });

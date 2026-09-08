@@ -1,0 +1,152 @@
+details[data-task] {
+  padding: 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 19px;
+  transition:
+    border-radius 300ms var(--ease-out-strong),
+    background-color 300ms var(--ease-out-strong);
+}
+details[data-task][open] {
+  border-radius: 12px;
+}
+details[data-task]:hover {
+  background: var(--inset);
+}
+details[data-task] > .work-head {
+  width: auto;
+  padding-right: 0;
+  border-radius: 0;
+  color: var(--ink);
+}
+details[data-task] > summary.work-head:hover {
+  background: none;
+}
+details[data-task] .work-rows {
+  margin-bottom: 10px;
+}
+.work-body {
+  min-height: 0;
+}
+.work-glyph {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--ink-2);
+}
+.work-glyph-ok,
+.work-glyph-failed {
+  width: 22px;
+  height: 22px;
+  margin: 1px;
+  border-radius: 999px;
+  color: #fff;
+}
+.work-glyph-ok {
+  background: var(--green);
+}
+.work-glyph-failed {
+  background: var(--red);
+}
+.work-glyph-ok svg,
+.work-glyph-failed svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.work-glyph-running svg {
+  position: absolute;
+  inset: 0;
+  animation: spin 1.1s linear infinite;
+}
+.work-ring-track,
+.work-ring-arc {
+  fill: none;
+  stroke-width: 2;
+}
+.work-ring-track {
+  stroke: var(--line);
+}
+.work-ring-arc {
+  stroke: var(--ink-3);
+  stroke-linecap: round;
+  stroke-dasharray: 19.35 49.76;
+}
+.work-count {
+  position: relative;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.work-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-meta {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+.work-pill {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--green-tint);
+  color: var(--green);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.work-pill-failed {
+  background: var(--red-tint);
+  color: var(--red);
+}
+.work-fold::details-content,
+.work-working::details-content,
+.thinking-row::details-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  overflow: clip;
+  transition:
+    grid-template-rows 400ms var(--ease-out-strong),
+    opacity 400ms var(--ease-out-strong),
+    content-visibility 400ms allow-discrete;
+}
+.work-fold[open]::details-content,
+.work-working[open]::details-content,
+.thinking-row[open]::details-content {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+[data-density="compact"] .work-meta,
+[data-density="compact"] .work-pill {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  details[data-task],
+  .work-head .icon,
+  .thinking-summary > .icon:last-child,
+  .work-fold::details-content,
+  .work-working::details-content,
+  .thinking-row::details-content {
+    transition: none;
+  }
+  .work-glyph-running svg {
+    animation: none;
+  }
+}

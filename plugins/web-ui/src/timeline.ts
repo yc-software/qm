@@ -60,6 +60,14 @@ export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): Too
   return failed ? "failed" : "ok";
 }
 
+export type SegmentStatus = "running" | "ok" | "failed";
+
+export function segmentStatus(items: TimelineItem[], status: WorkBlock["status"]): SegmentStatus {
+  if (!isTerminalWorkStatus(status)) return "running";
+  if (status === "failed") return "failed";
+  return items.some((it) => it.kind === "tool" && toolRowKind(it.row, status) === "failed") ? "failed" : "ok";
+}
+
 function callIdOf(a: ToolActivity): string | undefined {
   const id = (a.payload as { callId?: unknown } | null)?.callId;
   return typeof id === "string" && id ? id : undefined;

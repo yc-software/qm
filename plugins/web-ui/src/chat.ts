@@ -84,7 +84,9 @@ import {
 } from "./core-bridge";
 import {
   buildTimeline,
+  segmentStatus,
   toolRowKind,
+  type SegmentStatus,
   type TimelineItem,
   type ToolPayload,
   type ToolRowKind,
@@ -1750,14 +1752,7 @@ export function createChatSurface(
           );
         for (const link of links) parts.push(connectorWidget(link));
       }
-      if (chunk.type === "thinking" && chunk.thinking.trim()) {
-        parts.push(
-          html`<details class="thinking">
-            <summary>${sheenLabel("Thinking", isStreaming)}</summary>
-            ${markdown(chunk.thinking)}
-          </details>`,
-        );
-      }
+      if (chunk.type === "thinking" && chunk.thinking.trim()) parts.push(thinkingRow(chunk.thinking, isStreaming));
     }
     if (
       parts.length === 0 &&
@@ -2237,22 +2232,20 @@ export function createChatSurface(
   }
 
   function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
-    if (work.status === "thinking" && !work.activity.length) {
+    const live = isStreaming || work.status === "working" || work.status === "thinking";
+    const timeline = buildTimeline(work);
+    if (live && !timeline.length) {
       return html`<div class="work work-thinking">
-        <div class="work-head">${sheenLabel(workLabel(work), isStreaming)}</div>
+        <div class="work-head">
+          <span class="work-glyph">${sparkle(16)}</span>
+          <span class="work-title">${sheenLabel(workLabel(work), true)}</span>
+        </div>
       </div>`;
     }
-    const timeline = buildTimeline(work);
-    const rows = timeline.length
-      ? html`<div class="work-rows">${timeline.map((it) => renderTimelineItem(it, work))}</div>`
-      : nothing;
-    const body = html`<div class="work-divider"></div>
-      ${rows}`;
-    if (isStreaming || work.status === "working" || work.status === "thinking") {
-      return html`<div class="work work-working">
-        <div class="work-head">${sheenLabel(workLabel(work), isStreaming)}</div>
-        ${body}
-      </div>`;
+    if (live) {
+      return html`<details class="work work-working" ?data-task=${segmentToolCount(timeline) > 0} open>
+        ${workHead(timeline, work, sheenLabel(workLabel(work), true))} ${workRows(timeline, work)}
+      </details>`;
     }
     const openFolds = !!work.pendingApprovals?.length;
     const parts: TemplateResult[] = [];
@@ -2262,18 +2255,13 @@ export function createChatSurface(
       const items = seg;
       seg = [];
       parts.push(
-        html`<details class="work-fold" ?open=${openFolds}>
-          <summary class="work-head">${segmentSummaryLabel(items, work)}${icon(ChevronRight, 14)}</summary>
-          <div class="work-divider"></div>
-          <div class="work-rows">${items.map((it) => renderTimelineItem(it, work))}</div>
+        html`<details class="work-fold" ?data-task=${segmentToolCount(items) > 0} ?open=${openFolds}>
+          ${workHead(items, work, segmentSummaryLabel(items, work))} ${workRows(items, work)}
         </details>`,
       );
     };
     for (const it of timeline) {
       const demoted = it.kind === "text" && (it.activity.payload as { demoted?: boolean } | null)?.demoted === true;
-      // Closing self-logs after a successful surface post are bookkeeping, not
-      // another piece of visible work. Keeping them in the transcript is useful
-      // for audit/replay, but rendering them creates an empty "Worked" fold.
       if (demoted) continue;
       if (it.kind === "text") {
         flushSeg();
@@ -2287,12 +2275,56 @@ export function createChatSurface(
     return parts.length ? html`<div class="work work-${work.status}">${parts}</div>` : html``;
   }
 
+  function workHead(items: TimelineItem[], work: WorkBlock, label: string | TemplateResult): TemplateResult {
+    const tools = segmentToolCount(items);
+    const status = segmentStatus(items, work.status);
+    return html`<summary class="work-head">
+      ${workGlyph(status, tools)}
+      <span class="work-title">${label}</span>
+      ${tools ? html`<span class="work-meta">${tools} tool call${tools === 1 ? "" : "s"}</span>` : nothing}
+      ${status === "failed" ? html`<span class="work-pill work-pill-failed">Failed</span>` : nothing}
+      ${status === "ok" && tools ? html`<span class="work-pill">Completed</span>` : nothing} ${icon(ChevronRight, 14)}
+    </summary>`;
+  }
+
+  function workRows(items: TimelineItem[], work: WorkBlock): TemplateResult {
+    return html`<div class="work-body">
+      <div class="work-rows">${items.map((it) => renderTimelineItem(it, work))}</div>
+    </div>`;
+  }
+
+  function workGlyph(status: SegmentStatus, tools: number): TemplateResult {
+    if (!tools) return html`<span class="work-glyph">${sparkle(16)}</span>`;
+    if (status === "running") {
+      return html`<span class="work-glyph work-glyph-running">
+        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="work-ring-track" cx="12" cy="12" r="11"></circle>
+          <circle class="work-ring-arc" cx="12" cy="12" r="11"></circle>
+        </svg>
+        <span class="work-count">${tools}</span>
+      </span>`;
+    }
+    return html`<span class="work-glyph work-glyph-${status}">
+      <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
+        <path d=${status === "ok" ? "M20 6L9 17l-5-5" : "M18 6L6 18M6 6l12 12"}></path>
+      </svg>
+    </span>`;
+  }
+
+  function sparkle(size: number): TemplateResult {
+    return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"></path>
+    </svg>`;
+  }
+
+  function segmentToolCount(items: TimelineItem[]): number {
+    return items.filter((it) => it.kind === "tool").length;
+  }
+
   function segmentSummaryLabel(items: TimelineItem[], work: WorkBlock): string {
-    const tools = items.filter((it) => it.kind === "tool").length;
-    if (tools > 0) return `${tools} tool call${tools === 1 ? "" : "s"}`;
     const secs = workSeconds(work);
-    if (work.status === "failed") return secs > 0 ? `Failed after ${secs}s` : "Failed";
-    return workedLabel("Worked", secs);
+    if (segmentStatus(items, work.status) === "failed") return secs > 0 ? `Failed after ${secs}s` : "Failed";
+    return workedLabel(segmentToolCount(items) ? "Worked" : "Thought", secs);
   }
 
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
@@ -2340,19 +2372,25 @@ export function createChatSurface(
   function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {
     const status = work.status;
     const stale = work.stale === true;
-    if (item.kind === "thinking") return thinkingRow(item.activity);
+    if (item.kind === "thinking")
+      return thinkingRow((item.activity.payload as { thinking?: string } | null)?.thinking ?? "");
     if (item.kind === "text") return messageRow(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
-  function thinkingRow(activity: ToolActivity): TemplateResult {
-    const text = (activity.payload as { thinking?: string } | null)?.thinking ?? "";
+  function thinkingRow(text: string, live = false): TemplateResult {
     const preview = firstLine(text.replace(/\s+/g, " ").trim());
     return html`<details class="thinking-row">
       <summary class="thinking-summary">
-        <span class="tool-icon">${icon(Brain, 13)}</span>
-        <span class="tool-label" title=${preview ? `Thinking: ${preview}` : "Thinking"}>${preview || "Thinking"}</span>
+        <span class="tool-icon">${sparkle(13)}</span>
+        ${
+          live
+            ? html`<span class="tool-label">${sheenLabel("Thinking", true)}</span>`
+            : html`<span class="tool-label" title=${preview ? `Thinking: ${preview}` : "Thinking"}
+                >${preview || "Thinking"}</span
+              >`
+        }
         ${icon(ChevronRight, 14)}
       </summary>
       <div class="thinking-body">${markdown(text)}</div>
