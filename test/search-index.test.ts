@@ -348,13 +348,13 @@ test("turn-end sync indexes a tape-only turn: only conversational text, never ra
 
 test("syncSearchIndex is idempotent and advances the watermark across tape-only turns", async () => {
   const sim = await simSession();
-  let base = await tapeOnlyTurn(sim, { input: "first question", reply: "first answer" }, 0);
+  const base = await tapeOnlyTurn(sim, { input: "first question", reply: "first answer" }, 0);
   const first = await syncSearchIndex(sim.store, sim.lease);
   assert.equal(first.servable, true);
   assert.ok(first.indexed > 0);
   const again = await syncSearchIndex(sim.store, sim.lease);
   assert.equal(again.indexed, 0);
-  base = await tapeOnlyTurn(sim, { input: "second question", reply: "second answer" }, base);
+  await tapeOnlyTurn(sim, { input: "second question", reply: "second answer" }, base);
   const next = await syncSearchIndex(sim.store, sim.lease);
   assert.ok(next.indexed > 0);
   assert.equal(await sim.store.searchIndexCoverage(sim.session.id), next.coveredSeq);
@@ -485,7 +485,7 @@ test("a settled session's turn-end sync reads a bounded tape suffix, not the who
   let base = 0;
   for (let i = 0; i < 100; i++) base = await tapeOnlyTurn(sim, { input: `question ${i}`, reply: `answer ${i}` }, base);
   await syncSearchIndex(sim.store, sim.lease);
-  base = await tapeOnlyTurn(sim, { input: "one more question", reply: "one more answer" }, base);
+  await tapeOnlyTurn(sim, { input: "one more question", reply: "one more answer" }, base);
   const calls: Array<{ limit?: number } | undefined> = [];
   const spy = {
     ...sim.store,
