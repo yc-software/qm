@@ -26,7 +26,6 @@ import {
   Pause,
   Pencil,
   Pin,
-  Plug,
   Radar,
   RefreshCw,
   Target,
@@ -84,6 +83,7 @@ import {
 } from "./core-bridge";
 import { buildTimeline, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline";
 import { CONNECTOR_NAMES, connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
+import { connectorLogo } from "./connectors";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -189,6 +189,25 @@ export function markConnectorConnected(provider: string): void {
   if (!provider) return;
   connectedConnectors.add(provider);
   for (const hook of redrawHooks) hook();
+}
+
+export function connectorCard(link: ConnectorLink, connected: boolean, href: string): TemplateResult {
+  const name = CONNECTOR_NAMES[link.provider] ?? link.provider;
+  const chip = html`<span class="connector-widget-chip">${connectorLogo(link.provider)}<span>${name}</span></span>`;
+  if (connected)
+    return html`<div class="connector-widget connected" role="status">
+      <span class="connector-widget-title">${name} is connected</span>
+      <p class="connector-widget-body">${chip} is authorized. Its tools work here now.</p>
+      <div class="connector-widget-foot"><span class="connector-widget-state">Connected</span></div>
+    </div>`;
+  return html`<div class="connector-widget">
+    <span class="connector-widget-title">Connect ${name}</span>
+    <p class="connector-widget-body">Authorize ${chip} in a new tab. Its tools work here once you return.</p>
+    <div class="connector-widget-foot">
+      <span class="connector-widget-state">Needs setup</span>
+      <a class="connector-widget-btn primary" href=${href} target="_blank" rel="noreferrer">Connect</a>
+    </div>
+  </div>`;
 }
 
 export function createChatSurface(
@@ -1660,24 +1679,7 @@ export function createChatSurface(
   }
 
   function connectorWidget(link: ConnectorLink): TemplateResult {
-    const name =
-      CONNECTOR_NAMES[link.provider] ??
-      (link.provider ? link.provider[0]!.toUpperCase() + link.provider.slice(1) : "your account");
-    if (link.provider && connectedConnectors.has(link.provider)) {
-      return html`<div class="connector-widget connected" role="status">
-        <span class="connector-widget-icon">${icon(Check, 18)}</span>
-        <span class="connector-widget-text"
-          ><strong>Connected ${name}</strong><small>Authorized. Its tools work here now</small></span
-        >
-      </div>`;
-    }
-    return html`<a class="connector-widget" href=${withReturnTo(link.url)} target="_blank" rel="noreferrer">
-      <span class="connector-widget-icon">${icon(Plug, 18)}</span>
-      <span class="connector-widget-text"
-        ><strong>Connect ${name}</strong><small>Authorize access in a new tab</small></span
-      >
-      ${icon(ChevronRight, 16)}
-    </a>`;
+    return connectorCard(link, connectedConnectors.has(link.provider), withReturnTo(link.url));
   }
 
   function playgroundCard(playground: PlaygroundArtifact): TemplateResult {

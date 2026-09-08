@@ -3036,40 +3036,97 @@ a.chat-row-open {
   gap: 7px;
   min-width: 0;
 }
-.runtime-upgrade {
+.runtime-upgrade,
+.connector-widget {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 8px 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.runtime-upgrade {
   margin: 0 0 9px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 14%, var(--background));
-  color: var(--muted-foreground);
-  font-size: 12px;
 }
 .runtime-upgrade span {
-  flex: 1;
+  flex: 1 1 100%;
+}
+.connector-widget {
+  max-width: 400px;
+  margin: 8px 0;
+}
+.connector-widget > * {
+  flex: 1 1 100%;
+  min-width: 0;
 }
 .runtime-upgrade button,
-.runtime-default-btn {
+.runtime-default-btn,
+.connector-widget-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 8px;
-  padding: 6px 8px;
-  background: transparent;
-  color: var(--muted-foreground);
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
   white-space: nowrap;
+  text-decoration: none;
+  user-select: none;
   cursor: pointer;
+  transition:
+    transform 150ms ease-out,
+    background-color 150ms ease-out,
+    opacity 150ms ease-out;
 }
 .runtime-upgrade button:hover,
-.runtime-default-btn:hover {
-  background: var(--secondary);
-  color: var(--foreground);
+.runtime-default-btn:hover,
+.connector-widget-btn:hover {
+  background: var(--hover-2);
+}
+.runtime-upgrade button:active,
+.runtime-default-btn:active,
+.connector-widget-btn:active {
+  transform: scale(0.96);
+}
+.runtime-upgrade button:focus-visible,
+.runtime-default-btn:focus-visible,
+.connector-widget-btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.runtime-upgrade button:first-of-type,
+.connector-widget-btn.primary {
+  padding: 0 12px;
+  background: var(--blue);
+  color: #fff;
+}
+.runtime-upgrade button:first-of-type:hover,
+.connector-widget-btn.primary:hover {
+  background: var(--blue-ink);
 }
 .runtime-default-btn:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .runtime-upgrade button,
+  .runtime-default-btn,
+  .connector-widget-btn {
+    transition: none;
+  }
 }
 .menu-control {
   position: relative;
@@ -3454,16 +3511,17 @@ a.chat-row-open {
 .readonly-banner {
   width: min(var(--content-w), calc(100% - 32px));
   margin: 14px auto 0;
-  padding: 9px 13px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--muted-foreground);
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  color: var(--ink-2);
   font-size: 13px;
-  background: var(--secondary);
+  line-height: 1.5;
+  background: var(--surface);
   box-sizing: border-box;
 }
 .readonly-banner-link {
-  color: var(--foreground);
+  color: var(--ink);
   font-weight: 500;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -3691,59 +3749,6 @@ a.chat-row-open {
   word-break: break-word;
 }
 
-.connector-widget {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 360px;
-
-  margin: 8px 10px 8px 0;
-  padding: 12px 18px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--secondary);
-  color: var(--foreground);
-  text-decoration: none;
-  transition:
-    border-color 140ms ease,
-    background 140ms ease;
-}
-.connector-widget:hover {
-  border-color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--secondary) 70%, var(--foreground) 6%);
-}
-
-.connector-widget.connected {
-  cursor: default;
-  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
-  background: color-mix(in srgb, var(--success) 8%, var(--secondary));
-}
-.connector-widget.connected .connector-widget-icon {
-  color: var(--success);
-}
-.connector-widget-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-}
-.connector-widget-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: 1.3;
-}
-.connector-widget-text strong {
-  font-size: 14px;
-  font-weight: 600;
-}
-.connector-widget-text small {
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.connector-widget .icon:last-child {
-  margin-left: auto;
-  color: var(--muted-foreground);
-}
 .connector-desc {
   margin: 2px 0 0;
   font-size: 13px;
@@ -4799,9 +4804,9 @@ a.chat-row-open {
     flex-wrap: wrap;
     justify-content: flex-end;
   }
-  .runtime-upgrade {
-    align-items: flex-start;
-    flex-wrap: wrap;
+  .runtime-upgrade button,
+  .connector-widget-btn {
+    min-height: 44px;
   }
   .harness-control,
   .model-control {
