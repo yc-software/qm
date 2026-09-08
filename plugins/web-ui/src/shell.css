@@ -8057,7 +8057,7 @@ h3.ambient-field-label {
     position: sticky;
     top: 0;
     align-self: start;
-    height: var(--inbox-aside-height, 70vh);
+    height: var(--inbox-aside-height, clamp(320px, 70vh, 1100px));
   }
   .inbox-item-aside .inbox-chat {
     flex: 1;
@@ -8383,7 +8383,7 @@ h3.ambient-field-label {
   resize: none;
   overflow-x: hidden;
   min-height: 44px;
-  max-height: 160px;
+  max-height: min(200px, calc(var(--inbox-aside-height, 400px) * 0.45));
   border: 0;
   background: transparent;
   color: inherit;

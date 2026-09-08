@@ -130,6 +130,10 @@ export const inboxState = {
   syncBusy: false,
 };
 
+const ASIDE_MIN_HEIGHT = 320;
+const ASIDE_MAX_HEIGHT = 1100;
+const ASIDE_BOTTOM_GAP = 8;
+const CHAT_INPUT_MAX_HEIGHT = 200;
 const expandedThreads = new Set<string>();
 const clampedThreads = new Set<string>();
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
@@ -788,17 +792,14 @@ function sendLabel(item: InboxItem, busy: boolean): string {
   return item.source === "gmail" ? "Send reply" : "Send to Slack";
 }
 
-function syncAskEnabled(box: HTMLTextAreaElement): void {
-  const send = box.closest(".inbox-chat-composer")?.querySelector<HTMLButtonElement>(".inbox-chat-send");
-  if (send) send.disabled = !box.value.trim();
-}
-
 export function chatTpl(item: InboxItem): TemplateResult {
   const busy = chatting.has(item.id);
   const pending = chatDrafts.get(item.id) ?? "";
   const submit = (el: HTMLTextAreaElement): void => {
+    if (busy) return;
     const text = el.value;
     el.value = "";
+    autosizeChatInput(el);
     void askAgent(item, text);
   };
   const empty = item.thread.length === 0;
@@ -823,11 +824,12 @@ export function chatTpl(item: InboxItem): TemplateResult {
           rows="1"
           placeholder=${`Ask ${brandName()} for something`}
           .value=${pending}
-          ?disabled=${busy}
           @input=${(e: Event) => {
             const box = e.currentTarget as HTMLTextAreaElement;
+            const had = Boolean((chatDrafts.get(item.id) ?? "").trim());
             chatDrafts.set(item.id, box.value);
-            syncAskEnabled(box);
+            autosizeChatInput(box);
+            if (had !== Boolean(box.value.trim())) drawAll();
           }}
           @keydown=${(e: KeyboardEvent) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -1234,6 +1236,7 @@ function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
 function drawSurface(surface: InboxSurface): void {
   if (!surface.host.isConnected && surface.pane) return;
   keepingChatLogsPinned(surface.host, () => render(surfaceTpl(surface), surface.host));
+  sizeChatInputs(surface.host);
 }
 
 let fullSurface: InboxSurface | null = null;
@@ -1254,6 +1257,7 @@ function drawFull(): void {
       showHandled: fullSurface?.showHandled ?? false,
     };
     appState.mainEl.replaceChildren(host);
+    observeAsideSize(host);
   }
   fullSurface.viewId = fullViewId;
   if (pendingItemId) {
@@ -1284,6 +1288,7 @@ function drawFull(): void {
   );
   markClampedThread(host, openItem?.id ?? null);
   sizeAside(host);
+  sizeChatInputs(host);
 }
 
 /**
@@ -1308,7 +1313,31 @@ function markClampedThread(host: HTMLElement, itemId: string | null): void {
 function sizeAside(host: HTMLElement): void {
   if (!host.querySelector(".inbox-item-aside")) return;
   const padTop = Number.parseFloat(getComputedStyle(host).paddingTop) || 0;
-  host.style.setProperty("--inbox-aside-height", `${Math.max(320, host.clientHeight - padTop - 8)}px`);
+  const available = host.clientHeight - padTop - ASIDE_BOTTOM_GAP;
+  const height = Math.min(ASIDE_MAX_HEIGHT, Math.max(ASIDE_MIN_HEIGHT, available));
+  const next = `${height}px`;
+  if (host.style.getPropertyValue("--inbox-aside-height") === next) return;
+  host.style.setProperty("--inbox-aside-height", next);
+}
+
+function observeAsideSize(host: HTMLElement): void {
+  if (typeof ResizeObserver === "undefined") return;
+  new ResizeObserver(() => {
+    sizeAside(host);
+    sizeChatInputs(host);
+  }).observe(host);
+}
+
+function autosizeChatInput(box: HTMLTextAreaElement): void {
+  box.style.height = "auto";
+  const cap = Number.parseFloat(getComputedStyle(box).maxHeight) || CHAT_INPUT_MAX_HEIGHT;
+  const content = box.scrollHeight;
+  box.style.height = `${Math.min(cap, content)}px`;
+  box.style.overflowY = content > cap ? "auto" : "hidden";
+}
+
+function sizeChatInputs(host: HTMLElement): void {
+  for (const box of host.querySelectorAll<HTMLTextAreaElement>(".inbox-chat-input")) autosizeChatInput(box);
 }
 
 function syncItemUrl(itemId: string | null, push = false): void {
