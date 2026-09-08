@@ -236,6 +236,7 @@ import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
+import { projectedSessionHistory } from "./harness/tape-projection.ts";
 import { createOpenCodeHarness, openCodeHarnessConfigOptions } from "./harness/opencode-harness.ts";
 import { createCodexHarness, codexHarnessConfigOptions } from "./harness/codex-harness.ts";
 import { keychainCodexAuthStore } from "./harness/codex-auth-store.ts";
@@ -697,9 +698,10 @@ export function buildApp(
   const baseMemory: MemoryService = createConfiguredMemoryService({
     defaultMemory,
     config: config.memoryProviderConfig,
-    sessionEntries: (sessionId) => {
+    sessionEntries: async (sessionId) => {
       if (!memorySessions.store) throw new Error("session store is not ready");
-      return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+      const view = await projectedSessionHistory(memorySessions.store, sessionId);
+      return view.entries.slice(-MEMORY_CAPTURE_ENTRY_WINDOW);
     },
   });
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
