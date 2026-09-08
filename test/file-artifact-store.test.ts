@@ -1,3 +1,4 @@
+import { assertDocumentListing } from "./support/file-document-listing.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
@@ -210,4 +211,20 @@ test("delete removes the ROW only — bytes shared with another row stay openabl
   assert.equal(await store.get("out"), null, "row gone");
   const back = await drain(store, "in");
   assert.deepEqual(back, PNG, "the surviving row's bytes are intact (no inline byte delete)");
+});
+
+test("document listing groups authorized copies before pagination", async () => {
+  await assertDocumentListing(createMemoryFileArtifactStore(createMemoryDurableByteStore()));
+});
+
+test("document listing keeps unknown hashes separate and picks deterministic representatives", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  for (const id of ["b", "a", "unknown-1", "unknown-2"]) {
+    const { artifact } = await store.put(put({ id, path: id, createdAt: 100 }));
+    if (id.startsWith("unknown")) artifact.sha256 = null;
+  }
+  assert.deepEqual(
+    (await store.listDocuments([owner], [])).files.map((f) => f.id),
+    ["unknown-2", "unknown-1", "a"],
+  );
 });

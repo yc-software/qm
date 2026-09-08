@@ -5,6 +5,7 @@ import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entr
 import type { Principal } from "../types.ts";
 import { collectBytes } from "../util/bytes.ts";
 import type { App, AppDeps } from "./app-types.ts";
+import type { AppHelpers } from "./app-helpers.ts";
 
 function conversationBackend(app: App): SearchBackend {
   return createIntersectionBackend({
@@ -36,15 +37,30 @@ function searchableFile(mimetype: string, name: string): boolean {
     /\.(?:txt|md|markdown|json|jsonl|csv|tsv|xml|ya?ml)$/i.test(name)
   );
 }
-function fileBackend(app: App): SearchBackend {
+function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBackend {
   return {
     name: "files",
     async search(request) {
-      const libraries = await Promise.all(request.principals.map((p) => app.listFilesForViewer(p.id, { limit: 200 })));
+      const libraries = await Promise.all(
+        request.principals.map(async (p) => {
+          const scopes = await helpers.currentResourceScopesForViewer(p.id);
+          const [owned, handles] = await Promise.all([
+            deps.files.listOwnedByScopes(scopes, { limit: 200 }),
+            deps.acl.handlesFor(scopes),
+          ]);
+          const shared = await deps.files.resolveByOwnerPaths(
+            handles.map((h) => ({ ownerScopeId: h.ownerScopeId, path: h.ownerPath })),
+          );
+          return [
+            ...owned.files,
+            ...shared.filter((f) => !scopes.includes(f.ownerScopeId)).sort((a, b) => b.updatedAt - a.updatedAt),
+          ];
+        }),
+      );
       const [first, ...rest] = libraries;
       if (!first) return [];
-      const common = rest.map((page) => new Set([...page.owned, ...page.shared].map((file) => file.id)));
-      const files = [...first.owned, ...first.shared].filter((file) => common.every((ids) => ids.has(file.id)));
+      const common = rest.map((files) => new Set(files.map((file) => file.id)));
+      const files = first.filter((file) => common.every((ids) => ids.has(file.id)));
       const terms = searchTerms(request.query);
       const hits: BackendSearchHit[] = [];
       for (const file of files) {
@@ -110,15 +126,18 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
     },
   };
 }
-export function createSearchMethods(deps: AppDeps, app: App): Pick<App, "search"> {
+export function createSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers): Pick<App, "search"> {
   const slack = slackBackend(deps, app);
-  const core = createCoreSearch([conversationBackend(app), ...(slack ? [slack] : []), fileBackend(app)], {
-    onBackendError: (backend, error) =>
-      console.error(
-        "%s",
-        `[search] backend ${backend} failed:`,
-        error instanceof Error ? error.message : String(error),
-      ),
-  });
+  const core = createCoreSearch(
+    [conversationBackend(app), ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
+    {
+      onBackendError: (backend, error) =>
+        console.error(
+          "%s",
+          `[search] backend ${backend} failed:`,
+          error instanceof Error ? error.message : String(error),
+        ),
+    },
+  );
   return { search: (query, principals, limit) => core.search({ query, principals, limit }) };
 }

@@ -6,6 +6,7 @@ import {
   decodeCursor,
   encodeCursor,
   type FileArtifact,
+  type FileArtifactRef,
   type FileArtifactStore,
   type FileDirection,
   type FilePage,
@@ -71,6 +72,59 @@ export function createPostgresFileArtifactStore(
     return rows.length ? rowToArtifact(rows[0]!) : null;
   }
 
+  async function listFiles(
+    scopes: readonly ScopeId[],
+    opts?: ListOwnedOptions,
+    sharedRefs?: readonly FileArtifactRef[],
+  ): Promise<FilePage> {
+    if (scopes.length === 0 && !sharedRefs?.length) return { files: [] };
+    const limit = clampLimit(opts?.limit);
+    const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
+    const params: unknown[] = [scopes as string[]];
+    let access = "owner_scope_id = ANY($1::text[])";
+    if (sharedRefs !== undefined) {
+      params.push(
+        sharedRefs.map((r) => r.ownerScopeId),
+        sharedRefs.map((r) => r.path),
+      );
+      access = `(${access} OR (enabled = TRUE AND (owner_scope_id, path) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
+    }
+    const filters = [access];
+    if (!opts?.includeDisabled) filters.push("enabled = TRUE");
+    if (opts?.createdInScope != null) {
+      params.push(opts.createdInScope);
+      filters.push(`created_in_scope = $${params.length}::text`);
+    }
+    if (opts?.nameQuery != null) {
+      params.push(`%${opts.nameQuery.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+      filters.push(`name ILIKE $${params.length}::text`);
+    }
+    const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
+    const documents =
+      sharedRefs === undefined
+        ? visible
+        : `
+      SELECT DISTINCT ON (COALESCE(created_in_scope, owner_scope_id), COALESCE(sha256, 'id:' || id)) *
+      FROM (${visible}) visible
+      ORDER BY COALESCE(created_in_scope, owner_scope_id), COALESCE(sha256, 'id:' || id),
+               (owner_scope_id = ANY($1::text[])) DESC, created_at ASC, id ASC`;
+    let pageFilter = "";
+    if (cursor) {
+      params.push(cursor.createdAt, cursor.id);
+      pageFilter = `WHERE (created_at, id) < ($${params.length - 1}::bigint, $${params.length}::text)`;
+    }
+    params.push(limit + 1);
+    const rows = await q(
+      `SELECT * FROM (${documents}) documents ${pageFilter}
+      ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
+      params,
+    );
+    const all = rows.map(rowToArtifact);
+    const files = all.slice(0, limit);
+    const nextCursor = all.length > limit && files.length > 0 ? encodeCursor(files[files.length - 1]!) : undefined;
+    return { files, ...(nextCursor ? { nextCursor } : {}) };
+  }
+
   return {
     async put(input) {
       const existing = await getRow(input.id);
@@ -121,38 +175,9 @@ export function createPostgresFileArtifactStore(
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },
 
-    async listOwnedByScopes(scopes: readonly ScopeId[], opts?: ListOwnedOptions): Promise<FilePage> {
-      if (scopes.length === 0) return { files: [] };
-      const limit = clampLimit(opts?.limit);
-      const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
-      const params: unknown[] = [scopes as string[]];
-      const filters = ["owner_scope_id = ANY($1::text[])"];
-      if (!opts?.includeDisabled) filters.push("enabled = TRUE");
-      if (opts?.createdInScope != null) {
-        params.push(opts.createdInScope);
-        filters.push(`created_in_scope = $${params.length}::text`);
-      }
-      if (opts?.nameQuery != null) {
-        params.push(`%${opts.nameQuery.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-        filters.push(`name ILIKE $${params.length}::text`);
-      }
-      if (cursor) {
-        params.push(cursor.createdAt, cursor.id);
-        filters.push(`(created_at, id) < ($${params.length - 1}::bigint, $${params.length}::text)`);
-      }
-      params.push(limit + 1);
-      const rows = await q(
-        `SELECT * FROM file_artifacts
-           WHERE ${filters.join(" AND ")}
-           ORDER BY created_at DESC, id DESC
-           LIMIT $${params.length}`,
-        params,
-      );
-      const all = rows.map(rowToArtifact);
-      const page = all.slice(0, limit);
-      const nextCursor = all.length > limit && page.length > 0 ? encodeCursor(page[page.length - 1]!) : undefined;
-      return { files: page, ...(nextCursor ? { nextCursor } : {}) };
-    },
+    listOwnedByScopes: (scopes, opts) => listFiles(scopes, opts),
+
+    listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),
 
     async resolveByOwnerPaths(refs) {
       if (refs.length === 0) return [];

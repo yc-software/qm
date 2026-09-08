@@ -669,7 +669,14 @@ export function createSessionMethods(
         deps.deploy.listDeployments(),
         deps.skills.list(),
       ]);
-      const files = [...page.owned, ...page.shared].sort((a, b) => b.createdAt - a.createdAt);
+      const files = [...page.owned, ...page.shared];
+      let cursor = page.nextCursor;
+      while (cursor) {
+        const next = await filesForViewer(principalId, { limit: 200, cursor }, scope);
+        files.push(...next.owned, ...next.shared);
+        cursor = next.nextCursor;
+      }
+      files.sort((a, b) => b.createdAt - a.createdAt);
       const deployments = (
         await Promise.all(
           allDeployments

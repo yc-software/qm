@@ -336,20 +336,19 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     inScope?: ScopeId,
   ): Promise<FileListPage> {
     const myScopes = await currentResourceScopesForViewer(principalId);
-    const owned = await deps.files.listOwnedByScopes(myScopes, {
-      ...opts,
-      ...(inScope ? { createdInScope: inScope } : {}),
-    });
     const handles = await deps.acl.handlesFor(myScopes);
-    const refs = handles.map((h) => ({ ownerScopeId: h.ownerScopeId, path: h.ownerPath }));
-    const sharedRows = await deps.files.resolveByOwnerPaths(refs);
-    const shared = sharedRows
-      .filter((f) => !myScopes.includes(f.ownerScopeId) && (!inScope || f.createdInScope === inScope))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const page = await deps.files.listDocuments(
+      myScopes,
+      handles.map((h) => ({ ownerScopeId: h.ownerScopeId, path: h.ownerPath })),
+      {
+        ...opts,
+        ...(inScope ? { createdInScope: inScope } : {}),
+      },
+    );
     return {
-      owned: owned.files.map(toFileItem),
-      shared: shared.map(toFileItem),
-      ...(owned.nextCursor ? { nextCursor: owned.nextCursor } : {}),
+      owned: page.files.filter((f) => myScopes.includes(f.ownerScopeId)).map(toFileItem),
+      shared: page.files.filter((f) => !myScopes.includes(f.ownerScopeId)).map(toFileItem),
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     };
   }
 

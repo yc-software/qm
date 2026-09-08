@@ -1,3 +1,4 @@
+import { assertDocumentListing } from "./support/file-document-listing.ts";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -183,3 +184,29 @@ test("pg rows survive across store instances (no per-process cache to diverge)",
   const reader = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
   assert.ok(await reader.get("across"));
 });
+
+test("pg document listing groups authorized copies before pagination", { skip }, async () => {
+  await assertDocumentListing(createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore()));
+});
+
+test(
+  "pg document listing keeps unknown hashes separate and picks deterministic representatives",
+  { skip },
+  async () => {
+    const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+    for (const id of ["b", "a", "unknown-1", "unknown-2"]) await store.put(put({ id, path: id, createdAt: 100 }));
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    try {
+      await raw.query("UPDATE file_artifacts SET sha256 = NULL WHERE id = ANY($1::text[])", [
+        ["unknown-1", "unknown-2"],
+      ]);
+      assert.deepEqual(
+        (await store.listDocuments([owner], [])).files.map((f) => f.id),
+        ["unknown-2", "unknown-1", "a"],
+      );
+    } finally {
+      await raw.end();
+    }
+  },
+);

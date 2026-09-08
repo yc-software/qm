@@ -57,6 +57,8 @@ export interface ListOwnedOptions {
   nameQuery?: string;
 }
 
+export type FileArtifactRef = Pick<FileArtifact, "ownerScopeId" | "path">;
+
 export interface FileArtifactStore {
   put(input: PutFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
 
@@ -66,7 +68,13 @@ export interface FileArtifactStore {
 
   listOwnedByScopes(scopes: readonly ScopeId[], opts?: ListOwnedOptions): Promise<FilePage>;
 
-  resolveByOwnerPaths(refs: ReadonlyArray<{ ownerScopeId: ScopeId; path: string }>): Promise<FileArtifact[]>;
+  listDocuments(
+    scopes: readonly ScopeId[],
+    sharedRefs: readonly FileArtifactRef[],
+    opts?: ListOwnedOptions,
+  ): Promise<FilePage>;
+
+  resolveByOwnerPaths(refs: readonly FileArtifactRef[]): Promise<FileArtifact[]>;
 
   setEnabled(id: string, enabled: boolean): Promise<void>;
 
@@ -120,6 +128,46 @@ export function clampLimit(limit?: number): number {
 export function createMemoryFileArtifactStore(byteStore: DurableByteStore): FileArtifactStore {
   const rows = new Map<string, FileArtifact>();
 
+  async function listFiles(
+    scopes: readonly ScopeId[],
+    opts?: ListOwnedOptions,
+    sharedRefs?: readonly FileArtifactRef[],
+  ): Promise<FilePage> {
+    const owners = new Set(scopes);
+    const shared = new Set(sharedRefs?.map((r) => JSON.stringify([r.ownerScopeId, r.path])));
+    const limit = clampLimit(opts?.limit);
+    const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
+    const nameQuery = opts?.nameQuery?.toLowerCase();
+    let all = [...rows.values()]
+      .filter(
+        (r) =>
+          (owners.has(r.ownerScopeId) && (opts?.includeDisabled || r.enabled)) ||
+          (r.enabled && shared.has(JSON.stringify([r.ownerScopeId, r.path]))),
+      )
+      .filter((r) => opts?.createdInScope == null || r.createdInScope === opts.createdInScope)
+      .filter((r) => nameQuery == null || r.name.toLowerCase().includes(nameQuery));
+    if (sharedRefs !== undefined) {
+      all.sort(
+        (a, b) =>
+          Number(owners.has(b.ownerScopeId)) - Number(owners.has(a.ownerScopeId)) ||
+          a.createdAt - b.createdAt ||
+          idOrderDesc(b.id, a.id),
+      );
+      const documents = new Map<string, FileArtifact>();
+      for (const row of all) {
+        const key = JSON.stringify([row.createdInScope ?? row.ownerScopeId, row.sha256 ?? "id:" + row.id]);
+        if (!documents.has(key)) documents.set(key, row);
+      }
+      all = [...documents.values()];
+    }
+    all = all
+      .filter((r) => !cursor || afterCursor(r, cursor))
+      .sort((a, b) => b.createdAt - a.createdAt || idOrderDesc(a.id, b.id));
+    const files = all.slice(0, limit);
+    const nextCursor = all.length > limit && files.length > 0 ? encodeCursor(files[files.length - 1]!) : undefined;
+    return { files, ...(nextCursor ? { nextCursor } : {}) };
+  }
+
   return {
     async put(input) {
       const existing = rows.get(input.id);
@@ -165,21 +213,9 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },
 
-    async listOwnedByScopes(scopes, opts) {
-      const set = new Set(scopes);
-      const limit = clampLimit(opts?.limit);
-      const cursor = opts?.cursor ? decodeCursor(opts.cursor) : null;
-      const nameQuery = opts?.nameQuery?.toLowerCase();
-      const all = [...rows.values()]
-        .filter((r) => set.has(r.ownerScopeId) && (opts?.includeDisabled || r.enabled))
-        .filter((r) => opts?.createdInScope == null || r.createdInScope === opts.createdInScope)
-        .filter((r) => nameQuery == null || r.name.toLowerCase().includes(nameQuery))
-        .filter((r) => (cursor ? afterCursor(r, cursor) : true))
-        .sort((a, b) => b.createdAt - a.createdAt || idOrderDesc(a.id, b.id));
-      const page = all.slice(0, limit);
-      const nextCursor = all.length > limit && page.length > 0 ? encodeCursor(page[page.length - 1]!) : undefined;
-      return { files: page, ...(nextCursor ? { nextCursor } : {}) };
-    },
+    listOwnedByScopes: (scopes, opts) => listFiles(scopes, opts),
+
+    listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),
 
     async resolveByOwnerPaths(refs) {
       if (refs.length === 0) return [];

@@ -24,5 +24,5 @@ export function createApp(deps: AppDeps): App {
     ...createSkillMethods(deps, helpers),
   };
   Object.assign(app, methods);
-  return Object.assign(app, createSearchMethods(deps, app));
+  return Object.assign(app, createSearchMethods(deps, app, helpers));
 }
