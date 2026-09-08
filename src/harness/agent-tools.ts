@@ -15,7 +15,6 @@ import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, goalFloorMeter, goalReport, type GoalRecord } from "./goal.ts";
 import {
-  egressProvenance,
   quarantineReleaseKey,
   toolResultProvenance,
   unscreenedNotice,
@@ -696,7 +695,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         undefined,
         false,
         undefined,
-        r.reached ? { provenance: "external", source: "reached room" } : { provenance: egressProvenance(r.egressed) },
+        r.reached ? { provenance: "external", source: "reached room" } : undefined,
       );
     } catch (e) {
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
@@ -1413,7 +1412,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               undefined,
               false,
               undefined,
-              { provenance: egressProvenance(r.egressed) },
+              { provenance: "external" },
             );
           }
           case "poll": {
@@ -1442,7 +1441,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               undefined,
               false,
               undefined,
-              { provenance: egressProvenance(r.egressed) },
+              { provenance: "external" },
             );
           }
           case "stop": {

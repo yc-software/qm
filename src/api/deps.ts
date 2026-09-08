@@ -14,7 +14,6 @@ import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
-import type { EgressStampStore } from "../admin/egress-stamp-store.ts";
 import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
 import type { AdminService } from "../admin/admin-service.ts";
@@ -95,7 +94,6 @@ export interface ServerDeps {
   deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
   egressAudit?: EgressAuditSink;
-  egressStamps?: EgressStampStore;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
   baseModelDefault?: string;

@@ -1,8 +1,5 @@
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
-import { forceThroughProxyEnv } from "../sandbox/sandbox-env.ts";
-import type { EgressStampStore } from "../admin/egress-stamp-store.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { ROUTE_CACHE_TTL_MS, type SandboxBackendName } from "../sandbox/sandbox-routing.ts";
@@ -199,7 +196,7 @@ export interface ToolContext extends SurfaceToolDeps {
       signal?: AbortSignal;
       credentials?: string[];
     },
-  ): Promise<ExecResult & { reached?: ReachedProvenance; egressed?: boolean }>;
+  ): Promise<ExecResult & { reached?: ReachedProvenance }>;
   computerStatus(): Promise<ComputerStatus>;
   restartComputer(): Promise<void>;
   migrateComputer(to: string): Promise<{ from: string; to: string }>;
@@ -215,14 +212,11 @@ export interface ToolContext extends SurfaceToolDeps {
   historyOpen(seq: number): Promise<string | null>;
   mcpToolDefs(): McpToolDescriptor[];
   callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
-  backgroundStart(
-    command: string,
-    opts?: { ttlSeconds?: number },
-  ): Promise<BackgroundStartResult & { egressed?: boolean }>;
+  backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult>;
   backgroundPoll(
     processId: string,
     opts?: { sinceCursor?: number; maxBytes?: number; waitSeconds?: number },
-  ): Promise<BackgroundPollResult & { egressed?: boolean }>;
+  ): Promise<BackgroundPollResult>;
   backgroundStop(processId: string, signal?: string): Promise<BackgroundStopResult>;
   backgroundWrite(processId: string, data: string): Promise<BackgroundWriteResult>;
   backgroundList(): Promise<BackgroundJobSummary[]>;
@@ -472,7 +466,6 @@ export interface ToolContextDeps {
   ledger?: ToolLedger;
   runId?: string;
   attempt?: number;
-  egress?: { tokenFor(execId: string): Promise<string>; stamps: Pick<EgressStampStore, "has"> };
   backgroundBroker?: BackgroundExecBroker;
   monitorBroker?: MonitorBroker;
   persistWritesToStore?: { excludeDirs: readonly string[] };
@@ -506,14 +499,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         void error;
       }
     }
-  }
-
-  async function perExecEgress(handle: SandboxHandle): Promise<{ execId: string; env: Record<string, string> } | null> {
-    const proxy = handle.env?.HTTPS_PROXY ?? handle.env?.https_proxy;
-    if (!deps.egress || !proxy) return null;
-    const u = new URL(proxy);
-    const execId = randomUUID();
-    return { execId, env: forceThroughProxyEnv(`${u.protocol}//${u.host}`, await deps.egress.tokenFor(execId)) };
   }
 
   async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
@@ -671,7 +656,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         signal?: AbortSignal;
         credentials?: string[];
       },
-    ): Promise<ExecResult & { reached?: ReachedProvenance; egressed?: boolean }> {
+    ): Promise<ExecResult & { reached?: ReachedProvenance }> {
       const scratch = execOpts?.scratch === true;
       const ownerAuth = execOpts?.ownerAuth === true;
       const requestedCredentials = execOpts?.credentials ?? [];
@@ -774,16 +759,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const sandboxCommand = ownerAuth
             ? (deps.ownerAuthCommand?.(command) ?? command)
             : (deps.scopedCommand?.(command) ?? command);
-          const egress = await perExecEgress(handle);
-          const env = { ...commandEnv, ...egress?.env };
-          const commandHandle = Object.keys(env).length ? { ...handle, env: { ...handle.env, ...env } } : handle;
+          const commandHandle = Object.keys(commandEnv).length
+            ? { ...handle, env: { ...handle.env, ...commandEnv } }
+            : handle;
           const r = await deps.sandbox.run(commandHandle, sandboxCommand, opts);
-          const egressed = egress ? await deps.egress!.stamps.has(egress.execId) : undefined;
-          return {
-            ...r,
-            ...(reached ? { reached } : {}),
-            ...(egressed !== undefined ? { egressed } : {}),
-          };
+          return reached ? { ...r, reached } : r;
         });
       });
     },
@@ -1100,10 +1080,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.mcp.call(name, args, deps.createdBy);
     },
 
-    async backgroundStart(
-      command: string,
-      opts?: { ttlSeconds?: number },
-    ): Promise<BackgroundStartResult & { egressed?: boolean }> {
+    async backgroundStart(command: string, opts?: { ttlSeconds?: number }): Promise<BackgroundStartResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = await deps.provision();
       const { decision, reason, matched, approvalKey } = evaluateCommandWithLayer(
@@ -1118,33 +1095,30 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (deps.ensureSkillTree) {
         for (const skillDir of skillTreeDirsInCommand(command)) await deps.ensureSkillTree(skillDir);
       }
-      return once(async () => {
-        const egress = await perExecEgress(handle);
-        const processHandle = egress ? { ...handle, env: { ...handle.env, ...egress.env } } : handle;
-        const r = await deps.backgroundBroker!.start(processHandle, deps.scopedCommand?.(command) ?? command, {
-          ...(opts?.ttlSeconds ? { ttlMs: opts.ttlSeconds * 1000 } : {}),
-          ...(egress ? { egressId: egress.execId } : {}),
-        });
-        return egress ? { ...r, egressed: await deps.egress!.stamps.has(egress.execId) } : r;
-      });
+      return once(
+        () =>
+          deps.backgroundBroker!.start(
+            handle,
+            deps.scopedCommand?.(command) ?? command,
+            opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
+          ),
+        () => true,
+      );
     },
 
     async backgroundPoll(
       processId: string,
       opts?: { sinceCursor?: number; maxBytes?: number; waitSeconds?: number },
-    ): Promise<BackgroundPollResult & { egressed?: boolean }> {
+    ): Promise<BackgroundPollResult> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const handle = await deps.provision();
       return once(
-        async () => {
-          const r = await deps.backgroundBroker!.poll(handle, processId, {
+        () =>
+          deps.backgroundBroker!.poll(handle, processId, {
             ...(opts?.sinceCursor !== undefined ? { sinceCursor: opts.sinceCursor } : {}),
             ...(opts?.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
             ...(opts?.waitSeconds !== undefined ? { waitMs: opts.waitSeconds * 1000 } : {}),
-          });
-          if (!deps.egress || !r.egressId) return r;
-          return { ...r, egressed: await deps.egress.stamps.has(r.egressId) };
-        },
+          }),
         (r) => r.status.state === "exited",
       );
     },

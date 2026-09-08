@@ -112,10 +112,6 @@ export function toolResultProvenance(tool: string): ToolResultProvenance {
   return "external";
 }
 
-export function egressProvenance(egressed: boolean | undefined): ToolResultProvenance {
-  return egressed === false ? "workspace" : "external";
-}
-
 export const UNSCREENED_REASON = "screen_unavailable";
 export const UNSCREENED_PREFIX = "[NOT security-screened";
 

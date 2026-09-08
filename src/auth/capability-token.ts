@@ -38,7 +38,6 @@ export interface CapabilityClaims {
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
   liveActor?: boolean;
   runId?: string;
-  execId?: string;
   deployment?: string;
   botActor?: boolean;
   liveAuthor?: boolean;

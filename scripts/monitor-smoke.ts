@@ -119,7 +119,7 @@ try {
   await sb.writeFile(h, "diffusion.py", DIFFUSION_PY);
 
   console.log(`[${ts()}] background-start the diffusion job (ttl 60min) …`);
-  const s = await broker.start(h, "bash job.sh", { ttlMs: 60 * 60_000 });
+  const s = await broker.start(h, "bash job.sh", 60 * 60_000);
   ok(!!s.processId && s.status.state === "running", `job ${s.processId} is running`);
   console.log("    early output:", JSON.stringify(s.output.trim().split("\n").slice(0, 2)));
 

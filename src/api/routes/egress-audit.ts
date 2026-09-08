@@ -53,25 +53,6 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { accepted, rejected: records.length - accepted });
 }
 
-async function ingestEgressStamp(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  if (!deps.egressStamps)
-    return sendJson(res, 501, { error: "not_configured", message: "no egress stamp store wired" });
-  const r = (body ?? {}) as Record<string, unknown>;
-  const execId = str(r.execId);
-  const host = str(r.host);
-  if (!execId || !host) {
-    return sendJson(res, 400, { error: "bad_request", message: "execId and host are required" });
-  }
-  await deps.egressStamps.stamp(execId, {
-    host,
-    scopeLabel: (str(r.scopeLabel) ?? "unknown") as EgressAuditRecord["scopeLabel"],
-    principalId: str(r.principalId) ?? "unknown",
-  });
-  return sendJson(res, 200, { ok: true });
-}
-
 export const egressAuditRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/egress-audit", auth: "source", handle: ingestEgressAudit },
-  { method: "POST", path: "/v1/egress-stamp", auth: "source", handle: ingestEgressStamp },
 ];

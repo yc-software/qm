@@ -388,7 +388,7 @@ test("TTL clamp: a requested lifetime above the max is clamped (mirrors PR C's c
   const ttlMaxMs = 60 * 60_000;
   const { broker, registry } = build({ ttlMs: 30 * 60_000, ttlMaxMs });
   const before = Date.now();
-  const r = await broker.start(handle, "huge-job", { ttlMs: 10 * 60 * 60_000 });
+  const r = await broker.start(handle, "huge-job", 10 * 60 * 60_000);
   const row = await registry.get(r.processId);
   assert.ok(row);
   assert.ok(row!.expiresAt <= before + ttlMaxMs + 1000);

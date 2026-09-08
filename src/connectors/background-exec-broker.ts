@@ -27,7 +27,6 @@ export interface BackgroundStartResult {
 
 export interface BackgroundPollResult {
   processId: string;
-  egressId?: string;
   chunks: string;
   cursor: number;
   status: ProcessState;
@@ -54,11 +53,7 @@ export interface BackgroundWriteResult {
 }
 
 export interface BackgroundExecBroker {
-  start(
-    handle: SandboxHandle,
-    command: string,
-    opts?: { ttlMs?: number; egressId?: string },
-  ): Promise<BackgroundStartResult>;
+  start(handle: SandboxHandle, command: string, ttlMs?: number): Promise<BackgroundStartResult>;
   poll(
     handle: SandboxHandle,
     processId: string,
@@ -88,8 +83,8 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
   return {
-    async start(handle, command, opts): Promise<BackgroundStartResult> {
-      const ttl = Math.min(opts?.ttlMs ?? defaultTtlMs, maxTtlMs);
+    async start(handle, command, ttlMs): Promise<BackgroundStartResult> {
+      const ttl = Math.min(ttlMs ?? defaultTtlMs, maxTtlMs);
 
       const normalized = `bg: ${command.replace(/\s+/g, " ").trim()}`;
       const redacted = redactCommand(normalized, handle.env);
@@ -140,7 +135,6 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         command: redacted,
         ttlMs: ttl,
         ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
-        ...(opts?.egressId ? { egressId: opts.egressId } : {}),
       });
 
       const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, { deadlineMs: POLL_MS });
@@ -159,13 +153,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         waitMs: opts?.waitMs ?? 0,
       });
       if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
-      return {
-        processId,
-        ...(rec.egressId ? { egressId: rec.egressId } : {}),
-        chunks: read.chunks,
-        cursor: read.cursor,
-        status: read.status,
-      };
+      return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 
     async write(handle, processId, data): Promise<BackgroundWriteResult> {

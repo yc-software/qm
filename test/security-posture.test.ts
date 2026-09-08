@@ -9,7 +9,6 @@ import {
 } from "../src/resolution/config-store.ts";
 import {
   composeSecurityPosture,
-  egressProvenance,
   parseSecurityPosture,
   toolResultProvenance,
   parseSecurityScreenVerdict,
@@ -245,12 +244,6 @@ test("tool results carry a provenance class and only external content reaches th
   for (const tool of ["slack", "credential_exec", "some_mcp_tool", "execute", "memory", "history"]) {
     assert.equal(toolResultProvenance(tool), "external", `${tool} can carry content from outside`);
   }
-});
-
-test("command output is workspace only when the egress proxy stamped no connection for that execution", () => {
-  assert.equal(egressProvenance(false), "workspace", "the proxy saw no connection, so the bytes came from the sandbox");
-  assert.equal(egressProvenance(true), "external", "the proxy stamped a connection during the command");
-  assert.equal(egressProvenance(undefined), "external", "no egress accounting at all fails closed");
 });
 
 test("chunks overlap so an instruction straddling a boundary appears whole in one of them", () => {

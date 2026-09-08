@@ -20,7 +20,6 @@ export interface ProcessRecord {
   status: ProcessStatus;
   sessionRef?: string;
   runId?: string;
-  egressId?: string;
 }
 
 interface NewProcessRecord {
@@ -31,7 +30,6 @@ interface NewProcessRecord {
   ttlMs: number;
   sessionRef?: string;
   runId?: string;
-  egressId?: string;
 }
 
 export interface ProcessRegistry {
@@ -58,7 +56,6 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
     status: "running",
     ...(rec.sessionRef ? { sessionRef: rec.sessionRef } : {}),
     ...(rec.runId ? { runId: rec.runId } : {}),
-    ...(rec.egressId ? { egressId: rec.egressId } : {}),
   };
 }
 
@@ -111,7 +108,6 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
     status: r.status as ProcessStatus,
     ...(r.session_ref ? { sessionRef: r.session_ref as string } : {}),
     ...(r.run_id ? { runId: r.run_id as string } : {}),
-    ...(r.egress_id ? { egressId: r.egress_id as string } : {}),
   };
 }
 
@@ -124,7 +120,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       )`,
     `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
     `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
-    `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS egress_id TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
   ]);
 
@@ -132,8 +127,8 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, egress_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           row.processId,
           row.scopeId,
@@ -144,7 +139,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.status,
           row.sessionRef ?? null,
           row.runId ?? null,
-          row.egressId ?? null,
         ],
       );
       return row;

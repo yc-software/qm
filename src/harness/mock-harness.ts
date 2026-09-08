@@ -12,7 +12,6 @@ import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
-  egressProvenance,
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
   type ToolResultScreen,
@@ -400,7 +399,7 @@ export function createMockHarness(): Harness {
                   tool: "execute",
                   result: output,
                   unscreenable: false,
-                  provenance: egressProvenance(result.egressed),
+                  provenance: "external",
                 })
                 .catch((): ToolResultScreen => ({ outcome: "unscreened" }))
             : ({ outcome: "allow" } as ToolResultScreen);
