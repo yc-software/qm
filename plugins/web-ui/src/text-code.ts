@@ -63,24 +63,27 @@ function numberCodeLines(block: HTMLElement): void {
   const pre = block.querySelector("pre");
   const code = pre?.querySelector("code");
   if (!pre || !code) return;
+  const language = block.getAttribute("language") ?? "";
+  const existing = pre.querySelector<HTMLElement>(":scope > .code-gutter");
+  if (existing?.dataset.lang === language && !block.closest(".assistant-row.streaming")) return;
   const lines = (code.textContent ?? "").replace(/\n$/u, "").split("\n");
   if (lines.length < 2) return;
-  const existing = pre.querySelector<HTMLElement>(":scope > .code-gutter");
-  if (existing?.childElementCount === lines.length) return;
-  const diff = /^(?:diff|patch)$/u.test(block.getAttribute("language") ?? "");
+  const diff = /^(?:diff|patch)$/u.test(language);
   const gutter = existing ?? pre.insertBefore(block.ownerDocument.createElement("span"), code);
-  gutter.className = "code-gutter";
-  gutter.setAttribute("aria-hidden", "true");
-  gutter.replaceChildren(
-    ...lines.map((line, i) => {
-      const cell = block.ownerDocument.createElement("span");
-      const mark = diff ? diffMark(line) : "";
-      cell.textContent = diff ? mark || " " : String(i + 1);
-      if (mark === "+") cell.className = "code-line-add";
-      if (mark === "-") cell.className = "code-line-del";
-      return cell;
-    }),
-  );
+  if (gutter.dataset.lang !== language) {
+    gutter.className = "code-gutter";
+    gutter.setAttribute("aria-hidden", "true");
+    gutter.dataset.lang = language;
+    gutter.replaceChildren();
+  }
+  const cells = gutter.children;
+  while (cells.length > lines.length) gutter.lastElementChild?.remove();
+  for (let i = diff ? Math.max(0, cells.length - 1) : cells.length; i < lines.length; i++) {
+    const cell = cells[i] ?? gutter.appendChild(block.ownerDocument.createElement("span"));
+    const mark = diff ? diffMark(lines[i] ?? "") : "";
+    cell.textContent = diff ? mark || " " : String(i + 1);
+    cell.className = mark === "+" ? "code-line-add" : mark === "-" ? "code-line-del" : "";
+  }
 }
 
 function diffMark(line: string): string {

@@ -327,6 +327,9 @@ export function themeTokens(palette: Palette): ThemeTokens {
     readable(palette.syntax?.[role] ?? fallback ?? last);
   const green = ansiOrBright(ANSI.green);
   const red = ansiOrBright(ANSI.red);
+  const yellow = ansiOrBright(ANSI.yellow);
+  const success = readable(green ?? action);
+  const warning = readable(yellow ?? action);
   const border = palette.border ?? step(0.12, 0.1);
   const mutedForeground = mix(fg, bg, 0.32);
   const comment = syntax("comment", ansi(ANSI.brightBlack), mutedForeground);
@@ -362,8 +365,8 @@ export function themeTokens(palette: Palette): ThemeTokens {
     "--cta": action,
     "--cta-hover": mix(action, fg, 0.15),
     "--cta-foreground": textOn(action),
-    "--success": readable(green ?? action),
-    "--warning": readable(ansiOrBright(ANSI.yellow) ?? action),
+    "--success": success,
+    "--warning": warning,
     "--page": bg,
     "--canvas": step(0.03, 0.02),
     "--surface": step(0.05, 0.025),
@@ -382,10 +385,10 @@ export function themeTokens(palette: Palette): ThemeTokens {
     "--blue": action,
     "--blue-ink": link,
     "--blue-tint": mix(bg, action, 0.15),
-    "--green": readable(green ?? action),
+    "--green": success,
     "--green-tint": mix(bg, green ?? action, 0.14),
-    "--orange": readable(ansiOrBright(ANSI.yellow) ?? action),
-    "--orange-tint": mix(bg, ansiOrBright(ANSI.yellow) ?? action, 0.14),
+    "--orange": warning,
+    "--orange-tint": mix(bg, yellow ?? action, 0.14),
     "--red": destructive,
     "--red-tint": mix(bg, destructive, 0.14),
     "--tooltip-bg": dark ? mix(bg, { r: 0, g: 0, b: 0 }, 0.25) : mix(fg, bg, 0.1),
@@ -394,16 +397,16 @@ export function themeTokens(palette: Palette): ThemeTokens {
     "--tooltip-border": dark ? border : mix(fg, bg, 0.25),
     "--selection": palette.selection ?? mix(bg, action, 0.35),
     "--working-dot": readable(ansiOrBright(ANSI.blue) ?? action),
-    "--awaiting-dot": readable(ansiOrBright(ANSI.yellow) ?? action),
+    "--awaiting-dot": warning,
     "--syntax-keyword": syntax("keyword", ansiOrBright(ANSI.magenta), fg),
     "--syntax-entity": syntax("entity", ansiOrBright(ANSI.blue), fg),
     "--syntax-constant": syntax("constant", ansiOrBright(ANSI.cyan), fg),
     "--syntax-string": syntax("string", green, fg),
-    "--syntax-variable": syntax("variable", ansiOrBright(ANSI.yellow), fg),
+    "--syntax-variable": syntax("variable", yellow, fg),
     "--syntax-comment": comment,
     "--syntax-tag": syntax("tag", red, fg),
     "--syntax-heading": syntax("heading", ansiOrBright(ANSI.blue), fg),
-    "--syntax-list": syntax("list", ansiOrBright(ANSI.yellow), fg),
+    "--syntax-list": syntax("list", yellow, fg),
     "--syntax-addition-fg": readable(green ?? fg),
     "--syntax-addition-bg": mix(bg, green ?? fg, 0.15),
     "--syntax-deletion-fg": readable(red ?? fg),

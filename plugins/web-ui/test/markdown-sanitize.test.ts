@@ -64,6 +64,13 @@ test("shared Markdown preserves formatting without media or private file links",
   assert.equal(/<img|(?:src|href)=|secret\.txt|api\/files/.test(result), false);
 });
 
+test("shared Markdown drops table-cell attributes that fetch or paint", () => {
+  const cell = '<table><tr><td background="https://x" bgcolor="red" align="right">12</td></tr></table>';
+  const result = DOMPurify.sanitize(cell, SHARED_MARKDOWN_SANITIZE_CONFIG) as string;
+  assert.ok(result.includes('<td align="right">12</td>'));
+  assert.equal(/background|bgcolor/.test(result), false);
+});
+
 test("turns sandbox workspace links into real file-library downloads", () => {
   const out = render("[download](sandbox:/home/sprite/workspace/reports/interview-list.csv)");
   assert.match(out, /href="\/api\/files\/by-name\/content\?name=interview-list\.csv"/);

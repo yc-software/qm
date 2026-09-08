@@ -10,7 +10,7 @@ export const MARKDOWN_SANITIZE_CONFIG: Config = {
 export const SHARED_MARKDOWN_SANITIZE_CONFIG: Config = {
   ...MARKDOWN_SANITIZE_CONFIG,
   FORBID_TAGS: ["img", "video", "audio", "source", "iframe", "object", "embed", "style", "form"],
-  FORBID_ATTR: ["href", "xlink:href", "src", "srcset", "poster", "style", "action"],
+  FORBID_ATTR: ["href", "xlink:href", "src", "srcset", "poster", "style", "action", "background", "bgcolor"],
 };
 
 const SANDBOX_WORKSPACE_LINK = /\shref=(["'])sandbox:\/home\/sprite\/workspace\/([^"']+)\1/gi;

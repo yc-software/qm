@@ -91,3 +91,67 @@ const b = 2;
   assert.equal(single!.querySelector(".code-gutter"), null);
   assert.equal(root.querySelector(".text-code-toggle"), null);
 });
+
+const TS_FENCE = `<code-block language="ts"><div><div><span>ts</span><copy-button></copy-button></div><div><pre><code>const a = 1;
+const b = 2;
+</code></pre></div></div></code-block>`;
+
+test("a settled fence keeps its gutter as-is while a streaming fence grows in place", () => {
+  const dom = new JSDOM(`<main>
+    <article class="message-row assistant-row">${TS_FENCE}</article>
+    <article class="message-row assistant-row streaming">${TS_FENCE}</article>
+  </main>`);
+  const root = dom.window.document.querySelector("main")!;
+  const [settled, streaming] = Array.from(root.querySelectorAll<HTMLElement>("code-block"));
+  const cells = (block: HTMLElement) => Array.from(block.querySelectorAll(".code-gutter > span"));
+
+  decorateTextCodeBlocks(root);
+  const streamingCells = cells(streaming!);
+  for (const block of [settled!, streaming!]) block.querySelector("code")!.textContent += "const c = 3;\n";
+  decorateTextCodeBlocks(root);
+
+  assert.deepEqual(cells(settled!).map((cell) => cell.textContent), ["1", "2"]);
+  const grown = cells(streaming!);
+  assert.deepEqual(grown.map((cell) => cell.textContent), ["1", "2", "3"]);
+  assert.deepEqual(grown.slice(0, 2), streamingCells);
+
+  settled!.setAttribute("language", "diff");
+  decorateTextCodeBlocks(root);
+
+  assert.deepEqual(cells(settled!).map((cell) => cell.textContent), [" ", " ", " "]);
+  assert.equal(settled!.querySelectorAll(".code-gutter").length, 1);
+});
+
+test("a streaming diff fence refreshes its last gutter mark once the line settles", () => {
+  const dom = new JSDOM(`<main><article class="message-row assistant-row streaming">
+    <code-block language="diff"><div><div><span>diff</span><copy-button></copy-button></div><div><pre><code> same
+
+</code></pre></div></div></code-block>
+  </article></main>`);
+  const root = dom.window.document.querySelector("main")!;
+  const code = root.querySelector("code")!;
+  const cells = () => Array.from(root.querySelectorAll(".code-gutter > span"), (cell) => [cell.className, cell.textContent]);
+
+  decorateTextCodeBlocks(root);
+  assert.deepEqual(cells(), [
+    ["", " "],
+    ["", " "],
+  ]);
+  const first = root.querySelector(".code-gutter > span");
+
+  code.textContent = " same\n-old\n";
+  decorateTextCodeBlocks(root);
+  assert.deepEqual(cells(), [
+    ["", " "],
+    ["code-line-del", "-"],
+  ]);
+
+  code.textContent = " same\n-old\n+new\n";
+  decorateTextCodeBlocks(root);
+  assert.deepEqual(cells(), [
+    ["", " "],
+    ["code-line-del", "-"],
+    ["code-line-add", "+"],
+  ]);
+  assert.equal(root.querySelector(".code-gutter > span"), first);
+});

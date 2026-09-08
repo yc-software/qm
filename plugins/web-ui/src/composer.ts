@@ -255,7 +255,7 @@ export function attachmentTile(
       <span class="context-card-size">${text.length.toLocaleString()} characters</span>
       ${remove}
     </div>
-    <p class="context-card-body" dir="auto">${text.replace(/\s+/g, " ").trim().slice(0, 240)}</p>
+    <p class="context-card-body" dir="auto">${text.slice(0, 2000).replace(/\s+/g, " ").trim().slice(0, 240)}</p>
   </article>`;
 }
 
@@ -324,6 +324,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return composerState.fastMode ?? orgFastModeDefault;
   }
   let fastModeChargeTimer: ReturnType<typeof setTimeout> | null = null;
+  let approvalPage = 0;
 
   function resetComposer(): void {
     composerState.draft = "";
@@ -335,6 +336,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     composerState.openMenu = null;
     slashActiveIndex = 0;
     composerState.slashDismissed = false;
+    approvalPage = 0;
   }
 
   function scopeKey(): string | null {
@@ -829,8 +831,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       </div>
     `;
   }
-
-  let approvalPage = 0;
 
   function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult | typeof nothing {
     if (!approvals.length) return nothing;

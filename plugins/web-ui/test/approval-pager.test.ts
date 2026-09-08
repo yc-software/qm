@@ -117,6 +117,12 @@ test("the composer pages through pending approvals one card at a time", async ()
     assert.deepEqual(shown(), ["npm publish"]);
     assert.equal(pagerButton("Next approval").disabled, true);
     assert.equal(panel().querySelectorAll(".approval-btn").length, 4);
+
+    const remounted = entriesToMessages(entries, transcriptModel());
+    attachPendingApprovals(remounted, pending, transcriptModel());
+    conv.mountContinuable(row.threadRef, row.id, row.scopeId, remounted);
+    await until(() => host.querySelector(".approval-pager-count")?.textContent?.trim() === "1/3");
+    assert.deepEqual(shown(), ["rm -rf build"]);
   } finally {
     conv?.state.agent?.abort();
     await conv?.state.agent?.waitForIdle();
