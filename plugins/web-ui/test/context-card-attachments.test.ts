@@ -73,11 +73,19 @@ test("pasted text stages as a context card and files as typed source chips", asy
 
     const huge = "a\n".repeat(100_000);
     render(
-      attachmentTile({ ...paste, id: "paste_2", size: huge.length, extractedText: huge }, true, () => {}, () => {}),
+      attachmentTile(
+        { ...paste, id: "paste_2", size: huge.length, extractedText: huge },
+        true,
+        () => {},
+        () => {},
+      ),
       cardHost,
     );
     const hugeCard = cardHost.querySelector<HTMLElement>(".context-card")!;
-    assert.equal(hugeCard.querySelector(".context-card-size")?.textContent, `${huge.length.toLocaleString()} characters`);
+    assert.equal(
+      hugeCard.querySelector(".context-card-size")?.textContent,
+      `${huge.length.toLocaleString()} characters`,
+    );
     assert.equal(hugeCard.querySelector(".context-card-body")?.textContent, "a ".repeat(120));
   } finally {
     await vite.close();

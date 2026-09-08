@@ -110,15 +110,24 @@ test("a settled fence keeps its gutter as-is while a streaming fence grows in pl
   for (const block of [settled!, streaming!]) block.querySelector("code")!.textContent += "const c = 3;\n";
   decorateTextCodeBlocks(root);
 
-  assert.deepEqual(cells(settled!).map((cell) => cell.textContent), ["1", "2"]);
+  assert.deepEqual(
+    cells(settled!).map((cell) => cell.textContent),
+    ["1", "2"],
+  );
   const grown = cells(streaming!);
-  assert.deepEqual(grown.map((cell) => cell.textContent), ["1", "2", "3"]);
+  assert.deepEqual(
+    grown.map((cell) => cell.textContent),
+    ["1", "2", "3"],
+  );
   assert.deepEqual(grown.slice(0, 2), streamingCells);
 
   settled!.setAttribute("language", "diff");
   decorateTextCodeBlocks(root);
 
-  assert.deepEqual(cells(settled!).map((cell) => cell.textContent), [" ", " ", " "]);
+  assert.deepEqual(
+    cells(settled!).map((cell) => cell.textContent),
+    [" ", " ", " "],
+  );
   assert.equal(settled!.querySelectorAll(".code-gutter").length, 1);
 });
 
@@ -130,7 +139,8 @@ test("a streaming diff fence refreshes its last gutter mark once the line settle
   </article></main>`);
   const root = dom.window.document.querySelector("main")!;
   const code = root.querySelector("code")!;
-  const cells = () => Array.from(root.querySelectorAll(".code-gutter > span"), (cell) => [cell.className, cell.textContent]);
+  const cells = () =>
+    Array.from(root.querySelectorAll(".code-gutter > span"), (cell) => [cell.className, cell.textContent]);
 
   decorateTextCodeBlocks(root);
   assert.deepEqual(cells(), [
