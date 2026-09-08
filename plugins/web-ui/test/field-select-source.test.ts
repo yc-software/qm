@@ -82,6 +82,24 @@ test("the context and surface filters are the same control, built once", () => {
   assert.doesNotMatch(sessions, /fieldSelect/, "the surface filter no longer uses the native select");
 });
 
+test("a filter menu opens straight onto its options, with no header restating the button", () => {
+  const menu = ui.match(/export function menuSelect\(props: \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.doesNotMatch(menu, /menu-title/, "the header only ever repeated the label already on the button");
+  assert.doesNotMatch(menu, /title\?: string;/);
+  for (const [name, source] of [
+    ["the context filter", contexts],
+    ["the surface filter", sessions],
+  ] as const) {
+    const call = source.slice(source.indexOf("menuSelect({"));
+    assert.doesNotMatch(call.slice(0, call.indexOf("})")), /title:/, `${name} still passes a menu header`);
+    assert.match(
+      call.slice(0, call.indexOf("})")),
+      /ariaLabel:/,
+      `${name} must keep naming itself for a screen reader`,
+    );
+  }
+});
+
 test("the menu-backed filter wears the same box as the native select's resting state", () => {
   const box = (rule: string): Record<string, string> => {
     const start = css.indexOf(rule);

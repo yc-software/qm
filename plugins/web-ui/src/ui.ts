@@ -129,7 +129,6 @@ export function menuSelect(props: {
   onSelect: (value: string | null) => void;
   ariaLabel: string;
   prefix?: string;
-  title?: string;
   className?: string;
 }): TemplateResult {
   const current = props.value ?? null;
@@ -170,9 +169,7 @@ export function menuSelect(props: {
       >
         <span class="menu-label">${props.prefix ?? ""}${selected?.label ?? ""}</span>${icon(ChevronDown, 14)}
       </button>
-      <div class="menu-popover" role="menu" hidden>
-        ${props.title ? html`<div class="menu-title">${props.title}</div>` : nothing} ${props.options.map(option)}
-      </div>
+      <div class="menu-popover" role="menu" hidden>${props.options.map(option)}</div>
     </div>
   `;
 }

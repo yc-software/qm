@@ -604,7 +604,6 @@ export function drawChatsPage(): void {
           ${menuSelect({
             value: chatsPageSurface,
             ariaLabel: "Filter by surface",
-            title: "Filter by surface",
             onSelect: (value) => {
               chatsPageSurface = (value ?? "all") as typeof chatsPageSurface;
               drawChatsPage();

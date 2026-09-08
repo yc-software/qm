@@ -276,7 +276,6 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
     value: current,
     prefix: "Filter by: ",
     ariaLabel: "Filter by context",
-    title: "Filter by context",
     className: "scope-filter",
     onSelect,
     options: [
