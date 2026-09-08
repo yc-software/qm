@@ -4,7 +4,7 @@ import test from "node:test";
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
-test("live thinking and tool activity belong to the transcript, not the composer dock", () => {
+test("live thinking and tool activity stay above the composer and background tasks", () => {
   const draw = chat.slice(
     chat.indexOf("  function drawActiveChat("),
     chat.indexOf("  function decorateStreamingTail("),
@@ -14,14 +14,15 @@ test("live thinking and tool activity belong to the transcript, not the composer
     draw.indexOf('<div class="chat-bottom-dock">'),
   );
   const dock = draw.slice(draw.indexOf('<div class="chat-bottom-dock">'));
-  assert.match(transcript, /\$\{liveWorkStatus\(agent\)\}/);
-  assert.doesNotMatch(dock, /liveWork(?:Dock|Status)\(agent\)/);
+  assert.doesNotMatch(transcript, /liveWorkStatus\(agent\)/);
+  assert.match(dock, /\$\{liveWorkStatus\(agent\)\}/);
+  assert.ok(dock.indexOf("liveWorkStatus(agent)") < dock.indexOf("composerForm(agent, backgroundActivityStrip())"));
   assert.match(dock, /composerForm\(agent, backgroundActivityStrip\(\)\)/);
 });
 
-test("the live-work row aligns with the message column rather than composer gutters", () => {
+test("the live-work row uses the floating composer column", () => {
   const rule = css.match(/\.live-work-status \{[^}]*\}/)?.[0] ?? "";
-  assert.match(rule, /width: 100%;/);
-  assert.match(rule, /margin: 8px 0 0;/);
+  assert.match(rule, /width: min\(var\(--content-w\), calc\(100% - 32px\)\);/);
+  assert.match(rule, /margin: 0 auto 8px;/);
   assert.doesNotMatch(css, /live-work-dock/);
 });

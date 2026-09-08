@@ -1273,12 +1273,12 @@ export function createChatSurface(
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing} ${liveWorkStatus(agent)}
+              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${liveWorkStatus(agent)}
             ${ctx.composer.composerForm(agent, backgroundActivityStrip())}
           </div>
         </div>
