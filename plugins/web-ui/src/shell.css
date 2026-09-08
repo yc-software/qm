@@ -968,6 +968,10 @@ a.chat-row-open {
 .settings-row:last-child {
   border-bottom: 0;
 }
+.settings-row-copy {
+  flex: 1 1 260px;
+  min-width: 0;
+}
 .settings-row-title {
   font-size: 14px;
 }
@@ -1015,14 +1019,28 @@ a.chat-row-open {
 }
 .settings-theme-controls {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+  gap: 7px;
 }
 .settings-theme-import {
   display: inline-flex;
-  gap: 6px;
+  gap: 12px;
+}
+.settings-theme-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.settings-theme-link:hover {
+  color: var(--foreground);
 }
 .settings-row-error {
   color: var(--destructive, #c0392b);
