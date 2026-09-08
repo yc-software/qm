@@ -8029,7 +8029,7 @@ h3.ambient-field-label {
     display: grid;
 
     grid-template-columns: minmax(0, 960px) minmax(0, 330px);
-    grid-template-rows: auto auto;
+    grid-template-rows: auto 1fr;
     column-gap: 18px;
     justify-content: center;
   }
@@ -8042,6 +8042,7 @@ h3.ambient-field-label {
   }
   .inbox-page:has(.inbox-item-aside) .pane-head {
     grid-area: 1 / 1;
+    align-self: start;
   }
   .inbox-page:has(.inbox-item-aside) .inbox-item-surface {
     grid-area: 2 / 1;
