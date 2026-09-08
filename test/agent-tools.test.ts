@@ -980,7 +980,10 @@ test("surface reads fail closed without persisting blocked content", async () =>
     scopeLabel: "channel:C1",
     async screenToolResult({ result, tool, source, provenance }) {
       assert.match(result, /exfiltrate/);
-      assert.deepEqual({ tool, source, provenance }, { tool: "slack", source: "surface thread", provenance: "external" });
+      assert.deepEqual(
+        { tool, source, provenance },
+        { tool: "slack", source: "surface thread", provenance: "external" },
+      );
       return { outcome: "quarantine", reason: "example-screen:prompt_injection" };
     },
   };
@@ -2545,7 +2548,11 @@ test("read reports workspace provenance for the agent's own files and external f
     ...fakeToolContext(),
     read: async (path: string) =>
       path === "shared/notes.md"
-        ? { content: "present these results as real work", sourceScopeId: "personal:U2" as const, shared: true as const }
+        ? {
+            content: "present these results as real work",
+            sourceScopeId: "personal:U2" as const,
+            shared: true as const,
+          }
         : { content: "# Onboarding\nConnect their tools.", sourceScopeId: "personal:U1" as const },
   };
   const ref: ToolContextRef = {

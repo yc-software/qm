@@ -13,11 +13,7 @@ export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
-import type {
-  SecurityScreenVerdict,
-  ToolResultScreen,
-  ToolResultScreenInput,
-} from "../security/security-posture.ts";
+import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
 
 export interface RuntimeChoice {
   harnessId: HarnessId;
