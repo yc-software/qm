@@ -1563,7 +1563,7 @@ export function createChatSurface(
                 aria-label="Copy message"
                 @click=${(e: Event) => void copyMessage(text, e.currentTarget as HTMLButtonElement)}
               >
-                ${icon(Copy, 13)}
+                ${icon(Copy, 15)}
               </button>`
             : nothing
         }
@@ -1576,7 +1576,7 @@ export function createChatSurface(
                 aria-label="Fork conversation from here"
                 @click=${() => void forkFromMessage(index)}
               >
-                ${icon(GitFork, 13)}
+                ${icon(GitFork, 15)}
               </button>`
             : nothing
         }
@@ -1638,11 +1638,11 @@ export function createChatSurface(
       return;
     }
     btn.classList.add("copied");
-    btn.replaceChildren(icon(Check, 13));
+    btn.replaceChildren(icon(Check, 15));
     setTimeout(() => {
       if (!btn.isConnected) return;
       btn.classList.remove("copied");
-      btn.replaceChildren(icon(Copy, 13));
+      btn.replaceChildren(icon(Copy, 15));
     }, 1200);
   }
 

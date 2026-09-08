@@ -102,9 +102,7 @@
   --chat-pad: 16px;
   --composer-inset: 13px;
   --chat-surface-shadow: 0 0 0 1px var(--line-strong), 0 1px 2px rgb(0 0 0 / 0.06);
-  /* Height reserved at the bottom of every chat message for its own hover footer; it doubles
-     as the rhythm between message blocks. */
-  --meta-lane: 18px;
+  --meta-lane: 24px;
   --brand-accent: #4f46e5;
   --dev-accent: #8a5a00;
   --brand-mark: none;
@@ -1639,9 +1637,6 @@ a.chat-row-open {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-
-  /* The space between blocks lives in each row's reserved meta lane (see .message-row), so the
-     stack adds none of its own — a hover footer can never overhang the block below. */
   gap: 0;
 }
 .empty-stack {
@@ -1682,10 +1677,6 @@ a.chat-row-open {
   display: flex;
   min-width: 0;
   position: relative;
-  /* A lane at the bottom of every row that belongs to that row's own hover footer. It doubles
-     as the rhythm between blocks, so reserving it costs almost no height — and because the
-     footer paints inside its own row, it can never overlay the block below (most visibly a
-     collapsed 'Worked for Ns' header). Revealing the footer still changes no layout. */
   padding-bottom: var(--meta-lane);
 }
 .user-row {
@@ -1723,33 +1714,26 @@ a.chat-row-open {
   }
 }
 
-.assistant-row + .user-row {
-  margin-top: 10px;
-}
-
-.steer-label {
-  font-size: 11px;
-  color: var(--muted-foreground);
-  margin: 2px 4px 3px 0;
+.steer-label,
+.speaker-label,
+.revision-badge {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--ink-3);
   user-select: none;
+}
+.steer-label,
+.speaker-label {
+  margin: 0 4px 4px 0;
+}
+.speaker-label {
+  font-weight: 500;
 }
 .steered-row .user-bubble {
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--line-strong);
 }
-
-.speaker-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted-foreground);
-  margin: 2px 4px 3px 0;
-  user-select: none;
-}
-
 .revision-badge {
-  font-size: 11px;
-  color: var(--muted-foreground);
   margin-left: 6px;
-  user-select: none;
 }
 
 .deleted-bubble {
@@ -1764,7 +1748,8 @@ a.chat-row-open {
 }
 .system-note {
   font-size: 12px;
-  color: var(--muted-foreground);
+  line-height: 1.3;
+  color: var(--ink-3);
   text-align: center;
   padding: 2px 10px;
 }
@@ -1772,11 +1757,6 @@ a.chat-row-open {
   font-style: italic;
 }
 
-/* The hover footer (timestamp + copy/fork) sits in its row's reserved bottom lane: out of flow,
-   so revealing it never reflows, but inside the row's own box, so it never paints over the next
-   block and needs no opaque backing. The lane is part of the row, so no hover bridge is needed
-   to reach it either. pointer-events (not visibility) gates interaction, so the buttons stay
-   keyboard-focusable while hidden — that is what lets :focus-within reveal the footer. */
 .message-meta {
   position: absolute;
   bottom: 0;
@@ -1784,31 +1764,27 @@ a.chat-row-open {
   z-index: 4;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   height: var(--meta-lane);
-  padding: 0 2px;
-  border-radius: 6px;
-  color: var(--muted-foreground);
-  font-size: 11px;
+  padding: 0;
+  color: var(--ink-3);
+  font-size: 12px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease;
+  transition: opacity 120ms ease;
 }
 .user-row .message-meta {
   left: auto;
   right: 0;
 }
 .assistant-body .message-meta {
-  margin-left: -2px;
+  margin-left: -4px;
 }
 .message-row:hover .message-meta,
 .message-meta:focus-within {
   opacity: 1;
   pointer-events: auto;
 }
-
-/* Hoverless (touch) devices can't reveal the footer, and a tap can't focus a control that
-   ignores pointer events — so there it simply stays visible in its lane. */
 @media (hover: none) {
   .message-meta {
     opacity: 1;
@@ -1816,8 +1792,10 @@ a.chat-row-open {
   }
 }
 .message-time {
+  padding: 0 4px;
   white-space: nowrap;
-  letter-spacing: 0.01em;
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .msg-copy {
@@ -1828,20 +1806,24 @@ a.chat-row-open {
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-chip);
   background: transparent;
-  color: var(--muted-foreground);
+  color: var(--ink-3);
   cursor: pointer;
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
 }
 .msg-copy:hover {
-  background: var(--secondary);
-  color: var(--foreground);
+  background: var(--hover-2);
+  color: var(--ink-2);
 }
 .msg-copy.copied {
-  color: var(--foreground);
+  color: var(--green);
 }
 @media (prefers-reduced-motion: reduce) {
-  .message-meta {
+  .message-meta,
+  .msg-copy {
     transition: none;
   }
 }
@@ -1850,9 +1832,9 @@ a.chat-row-open {
 }
 .assistant-body {
   min-width: 0;
-  color: var(--foreground);
-  font-size: 15px;
-  line-height: 1.65;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
 }
 .assistant-body markdown-block,
 .user-bubble markdown-block {
@@ -1862,17 +1844,7 @@ a.chat-row-open {
   position: relative;
 }
 .streaming-text .tok-in {
-  animation: tok-in 0.42s ease-out both;
-}
-@keyframes tok-in {
-  from {
-    opacity: 0;
-    filter: blur(1.5px);
-  }
-  to {
-    opacity: 1;
-    filter: blur(0);
-  }
+  animation: fade-in 240ms var(--ease-out-strong) both;
 }
 @media (prefers-reduced-motion: reduce) {
   .streaming-text .tok-in {
@@ -1887,9 +1859,6 @@ a.chat-row-open {
 .user-bubble markdown-block > *:last-child {
   margin-bottom: 0;
 }
-/* A streaming reply renders as two stacked blocks (committed prefix + live tail). Restore the
-   paragraph gap at their seam that the edge-trim rules above would otherwise remove; `revert`
-   is the UA-default margin, which is what an uncut paragraph boundary gets. */
 .assistant-body .streaming-text markdown-block:not(:first-of-type) > *:first-child {
   margin-top: revert;
 }
@@ -1898,15 +1867,15 @@ a.chat-row-open {
 }
 .message-bubble {
   min-width: 0;
-  max-width: min(72%, 620px);
+  max-width: min(75%, 620px);
   padding: 10px 14px;
-  border-radius: 18px;
-  font-size: 15px;
-  line-height: 1.55;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  line-height: 1.5;
 }
 .user-bubble {
-  background: color-mix(in srgb, var(--secondary) 76%, var(--background));
-  color: var(--foreground);
+  background: var(--field);
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
 .message-stack .user-row:not(:has(~ .user-row)) .user-bubble {
@@ -2864,11 +2833,11 @@ a.chat-row-open {
 
 .assistant-body markdown-block :not(pre) > code,
 .user-bubble markdown-block :not(pre) > code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.92em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
   padding: 1px 5px;
-  border-radius: 5px;
-  background: var(--secondary);
+  border-radius: 4px;
+  background: var(--field);
 }
 .assistant-body markdown-block pre,
 .user-bubble markdown-block pre {
@@ -7392,7 +7361,7 @@ h3.ambient-field-label {
   padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
 }
 [data-density="compact"] .message-row {
-  --meta-lane: 16px;
+  --meta-lane: 20px;
 }
 [data-density="compact"] .message-stack {
   gap: 0;
