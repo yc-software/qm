@@ -88,11 +88,15 @@ test("tabs share the strip evenly down to a legible floor", () => {
   assert.match(multi, /max-width: 220px;/);
 });
 
-test("the per-tab close floats to the end of the tab", () => {
-  const close = css.match(/^\.split-tab-close \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(close, /margin-left: auto;/);
+test("tab actions overlay the title instead of reserving title space", () => {
+  const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(actions, /position: absolute;/);
+  assert.match(actions, /right: 0;/);
+  assert.match(actions, /background: linear-gradient\([^;]*96%/);
+  assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*position: relative;/);
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
-  assert.match(css, /\.split-pane-title-text \{[^}]*margin-right: 6px;/);
+  const draw = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));
+  assert.equal((draw.match(/class="split-tab-actions"/g) ?? []).length, 2);
 });
 
 test("the tab overflow menu is lifted above the panes and styled", () => {
@@ -119,18 +123,17 @@ test("a pane tab carries the conversation's background chip, from the sidebar's 
   assert.match(css, /\.bg-chip\[role="button"\] \{[^}]*cursor: pointer;/);
 });
 
-test("tab actions reserve their space and only fade on hover or keyboard focus", () => {
-  const close = css.match(/^\.split-tab-close \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(close, /width: 18px;/);
-  assert.match(close, /min-width: 18px;/);
-  assert.match(close, /transition: opacity 0\.12s ease;/);
-  assert.match(close, /pointer-events: none;/);
-  const states = [...css.matchAll(/([^{}]*\.split-tab-close[^{}]*)\{([^{}]*)\}/g)].filter(([, selector]) =>
+test("tab action overlays only fade on hover or keyboard focus", () => {
+  const actions = css.match(/^\.split-tab-actions \{[^}]*\}/m)?.[0] ?? "";
+  assert.match(actions, /transition: opacity 0\.12s ease;/);
+  assert.match(actions, /opacity: 0;/);
+  assert.match(actions, /pointer-events: none;/);
+  const states = [...css.matchAll(/([^{}]*\.split-tab-(?:actions|close)[^{}]*)\{([^{}]*)\}/g)].filter(([, selector]) =>
     /:(?:not|hover|focus|focus-within|focus-visible)|\.dv-active-tab/.test(selector),
   );
   assert.ok(states.length > 0);
   for (const [, selector, declarations] of states) {
     assert.doesNotMatch(declarations, /(?:width|margin|padding|display|flex|gap)\s*:/, selector);
-    assert.match(declarations, /pointer-events: auto;/, selector);
   }
+  assert.match(css, /\.dv-tab:focus-within \.split-tab-actions \{[^}]*pointer-events: auto;/);
 });

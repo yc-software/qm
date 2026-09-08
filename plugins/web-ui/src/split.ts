@@ -1219,18 +1219,20 @@ class PaneTab implements ITabRenderer {
           ${count > 0 ? html`<span class="pane-kind-count" title=${`${count} waiting on you`}>${count}</span>` : nothing}
           ${
             this.inStrip
-              ? html`<button
-                  class="icon-btn subtle split-tab-close"
-                  type="button"
-                  ${tip("Close pane")}
-                  aria-label="Close pane"
-                  @click=${(e: Event) => {
-                    e.stopPropagation();
-                    closePanels([panel]);
-                  }}
-                >
-                  ${icon(X, 13)}
-                </button>`
+              ? html`<span class="split-tab-actions"
+                  ><button
+                    class="icon-btn subtle split-tab-close"
+                    type="button"
+                    ${tip("Close pane")}
+                    aria-label="Close pane"
+                    @click=${(e: Event) => {
+                      e.stopPropagation();
+                      closePanels([panel]);
+                    }}
+                  >
+                    ${icon(X, 13)}
+                  </button></span
+                >`
               : nothing
           }
         `,
@@ -1264,21 +1266,23 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${this.inStrip && sessionId ? sessionActions(sessionId, true) : nothing}
         ${
           this.inStrip
-            ? html`<button
-                class="icon-btn subtle split-tab-close"
-                type="button"
-                ${tip("Close pane")}
-                aria-label="Close pane"
-                @click=${(e: Event) => {
-                  e.stopPropagation();
-                  closePanels([panel]);
-                }}
-              >
-                ${icon(X, 13)}
-              </button>`
+            ? html`<span class="split-tab-actions">
+                ${sessionId ? sessionActions(sessionId, true) : nothing}
+                <button
+                  class="icon-btn subtle split-tab-close"
+                  type="button"
+                  ${tip("Close pane")}
+                  aria-label="Close pane"
+                  @click=${(e: Event) => {
+                    e.stopPropagation();
+                    closePanels([panel]);
+                  }}
+                >
+                  ${icon(X, 13)}
+                </button></span
+              >`
             : nothing
         }
       `,
