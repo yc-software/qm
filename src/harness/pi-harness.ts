@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -88,6 +88,7 @@ import {
 import { assistantDroppedAtReplay, ELIDED_IMAGE_TEXT, planTapeSeed } from "./tape-fold.ts";
 import { compactTranscript, deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
+import { hashId } from "../util/crypto.ts";
 import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_STEP,
@@ -1060,8 +1061,17 @@ export function wallClockTurnFailure(
   return !cancelAborted || wallClock === "abandoned";
 }
 
-async function createIsolatedResources(prefix: string, systemPrompt: string): Promise<IsolatedResources> {
-  const cwd = mkdtempSync(join(tmpdir(), `${prefix}-cwd-`));
+export function isolatedCwdPath(prefix: string, sessionId: string): string {
+  return join(tmpdir(), `${prefix}-cwd-${hashId([sessionId], 16)}`);
+}
+
+async function createIsolatedResources(
+  prefix: string,
+  systemPrompt: string,
+  sessionId?: string,
+): Promise<IsolatedResources> {
+  const cwd = sessionId ? isolatedCwdPath(prefix, sessionId) : mkdtempSync(join(tmpdir(), `${prefix}-cwd-`));
+  if (sessionId) mkdirSync(cwd, { recursive: true });
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
   const resourceLoader = new DefaultResourceLoader({
     cwd,
@@ -1500,7 +1510,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       systemCacheSplit ? "long" : undefined,
     );
     const ref: ToolContextRef = { current: null };
-    const { resourceLoader, cwd, agentDir } = await createIsolatedResources(tempDirPrefix, composedPrompt);
+    const { resourceLoader, cwd, agentDir } = await createIsolatedResources(tempDirPrefix, composedPrompt, sessionId);
     const compileMs = Date.now() - compileStart;
 
     let session: AgentSession;

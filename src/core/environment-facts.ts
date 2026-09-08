@@ -69,7 +69,9 @@ export function renderConnectedAppsBlock(
   connectionsUrl?: string,
 ): string {
   const allowed = new Set(availableProviders);
-  const entries = Object.entries(record?.providers ?? {}).filter(([name]) => allowed.has(name));
+  const entries = Object.entries(record?.providers ?? {})
+    .filter(([name]) => allowed.has(name))
+    .sort(([a], [b]) => a.localeCompare(b));
   const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)

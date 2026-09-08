@@ -128,3 +128,17 @@ test("connected-apps block: reconnect-needed apps are named separately", () => {
   assert.match(out, /Needs reconnect: GitHub \(refresh failed: revoked by provider\)/);
   assert.match(out, /Do not use these apps until the user reconnects them/);
 });
+
+test("connected-apps block is byte-identical regardless of provider insertion order", () => {
+  const a: ConnectorStatusRecord = {
+    principalId: "U1",
+    checkedAt: 1,
+    providers: { google: { connected: true }, slack: { connected: true } },
+  };
+  const b: ConnectorStatusRecord = {
+    principalId: "U1",
+    checkedAt: 2,
+    providers: { slack: { connected: true }, google: { connected: true } },
+  };
+  assert.equal(renderConnectedAppsBlock(a, ["google", "slack"]), renderConnectedAppsBlock(b, ["slack", "google"]));
+});

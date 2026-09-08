@@ -3,8 +3,14 @@ import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { countTokens } from "../src/util/tokens.ts";
-import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { createPiHarness, isolatedCwdPath } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+
+test("a session's isolated cwd path is stable across turns, so pi's cwd line never moves the cache", () => {
+  assert.equal(isolatedCwdPath("pi", "session-a"), isolatedCwdPath("pi", "session-a"));
+  assert.notEqual(isolatedCwdPath("pi", "session-a"), isolatedCwdPath("pi", "session-b"));
+  assert.ok(isolatedCwdPath("pi", "session-a").startsWith(tmpdir()));
+});
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
