@@ -2884,10 +2884,11 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return found.route.handle({ req, res, url, user, params: found.params });
   }
 
-  if (method === "GET" && path.startsWith("/deployments/")) {
+  const deploymentPrefix = ["/deployments/", "/d/"].find((prefix) => path.startsWith(prefix));
+  if (method === "GET" && deploymentPrefix) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
-    const rest = path.slice("/deployments/".length);
+    const rest = path.slice(deploymentPrefix.length);
     const slash = rest.indexOf("/");
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
     const subPath = slash === -1 ? "/" : rest.slice(slash);
