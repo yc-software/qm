@@ -2320,9 +2320,7 @@ export function createChatSurface(
   }
 
   function approvalMarker(a: PendingApproval): TemplateResult {
-    return html`<div class="approval-card inline-approval-marker">
-      <div class="approval-text">${approvalSummaryView(a)}</div>
-    </div>`;
+    return html`<div class="approval-card inline-approval-marker">${approvalSummaryView(a)}</div>`;
   }
 
   function sheenLabel(label: string, active: boolean): TemplateResult {
