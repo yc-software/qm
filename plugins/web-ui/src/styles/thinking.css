@@ -46,7 +46,7 @@ details[data-task] .work-rows {
   margin: 1px;
   box-sizing: border-box;
   border-radius: 999px;
-  color: #fff;
+  color: var(--surface);
 }
 .work-glyph-ok {
   background: var(--green);
@@ -115,13 +115,13 @@ details[data-task] .work-rows {
   padding: 0 8px;
   border-radius: 999px;
   background: var(--green-tint);
-  color: var(--green);
+  color: var(--green-ink);
   font-size: 11.5px;
   font-weight: 500;
 }
 .work-pill-failed {
   background: var(--red-tint);
-  color: var(--red);
+  color: var(--red-ink);
 }
 .work-pill-stopped {
   background: var(--field);

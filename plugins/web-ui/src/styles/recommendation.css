@@ -49,7 +49,7 @@
   border: 1px solid color-mix(in oklch, var(--orange) 28%, transparent);
   border-radius: 999px;
   background: var(--orange-tint);
-  color: var(--orange);
+  color: var(--orange-ink);
   font-size: 11.5px;
   font-weight: 500;
   white-space: nowrap;
@@ -57,5 +57,5 @@
 .connector-widget.connected .connector-widget-state {
   border-color: color-mix(in oklch, var(--green) 28%, transparent);
   background: var(--green-tint);
-  color: var(--green);
+  color: var(--green-ink);
 }

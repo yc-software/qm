@@ -64,13 +64,13 @@
 }
 .file-chip .file-glyph[data-ext="pdf"] {
   background: var(--red);
-  color: #fff;
+  color: var(--surface);
 }
 .file-chip .file-glyph[data-ext="csv"],
 .file-chip .file-glyph[data-ext="xls"],
 .file-chip .file-glyph[data-ext="xlsx"] {
   background: var(--green);
-  color: #fff;
+  color: var(--surface);
 }
 .file-chip .chip-x {
   margin-inline-end: -4px;

@@ -82,9 +82,11 @@ function numberCodeLines(block: HTMLElement): void {
     const cell = cells[i] ?? gutter.appendChild(block.ownerDocument.createElement("span"));
     const mark = diff ? diffMark(lines[i] ?? "") : "";
     cell.textContent = diff ? mark || " " : String(i + 1);
-    cell.className = mark === "+" ? "code-line-add" : mark === "-" ? "code-line-del" : "";
+    cell.className = MARK_CLASS[mark] ?? "";
   }
 }
+
+const MARK_CLASS: Record<string, string> = { "+": "code-line-add", "-": "code-line-del" };
 
 function diffMark(line: string): string {
   if (/^(?:\+\+\+|---)/u.test(line)) return "";

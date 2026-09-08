@@ -38,7 +38,7 @@
   --hover-2: oklch(93.3% 0.003 247.86);
   --ink: oklch(24.7% 0.006 258.361);
   --ink-2: oklch(50.6% 0.01 264.477);
-  --ink-3: oklch(69.5% 0.009 264.505);
+  --ink-3: oklch(55% 0.01 264.505);
   --line: oklch(94.6% 0.003 264.542);
   --line-strong: oklch(91.2% 0.005 258.326);
   --line-soft: oklch(96.6% 0.002 264.542);
@@ -50,10 +50,13 @@
   --blue-tint: oklch(96% 0.019 252.878);
   --green: oklch(60.3% 0.155 150.883);
   --green-tint: oklch(95.8% 0.017 159.118);
+  --green-ink: oklch(48% 0.155 150.883);
   --orange: oklch(68.9% 0.179 49.902);
   --orange-tint: oklch(96.4% 0.021 67.581);
+  --orange-ink: oklch(48% 0.179 49.902);
   --red: oklch(62.1% 0.192 23.042);
   --red-tint: oklch(95.6% 0.017 17.462);
+  --red-ink: oklch(48% 0.192 23.042);
   --tooltip-bg: oklch(27.2% 0.008 264.435);
   --tooltip-fg: oklch(97.6% 0.002 247.839);
   --tooltip-muted: oklch(73.1% 0.008 260.731);
@@ -122,7 +125,7 @@
   --hover-2: oklch(31.8% 0.007 274.747);
   --ink: oklch(96.4% 0.002 247.839);
   --ink-2: oklch(73.1% 0.008 260.731);
-  --ink-3: oklch(54.1% 0.01 264.484);
+  --ink-3: oklch(66% 0.01 264.484);
   --line: oklch(30.8% 0.006 258.354);
   --line-strong: oklch(35.6% 0.007 264.474);
   --line-soft: oklch(27.8% 0.006 258.354);
@@ -134,10 +137,13 @@
   --blue-tint: oklch(68% 0.173 253.301 / 0.16);
   --green: oklch(70.5% 0.154 153.814);
   --green-tint: oklch(70.5% 0.154 153.814 / 0.14);
+  --green-ink: oklch(80% 0.154 153.814);
   --orange: oklch(74.6% 0.156 55.642);
   --orange-tint: oklch(74.6% 0.156 55.642 / 0.14);
+  --orange-ink: oklch(80% 0.156 55.642);
   --red: oklch(66.6% 0.18 21.433);
   --red-tint: oklch(66.6% 0.18 21.433 / 0.14);
+  --red-ink: oklch(80% 0.18 21.433);
   --tooltip-bg: oklch(18.2% 0.004 264.459);
   --tooltip-fg: oklch(96.4% 0.002 247.839);
   --tooltip-muted: oklch(73.1% 0.008 260.731);
@@ -1203,7 +1209,7 @@ a.chat-row-open {
   gap: 6px;
 }
 .settings-row-error {
-  color: var(--red);
+  color: var(--red-ink);
 }
 .theme-swatches {
   display: inline-flex;
@@ -1804,7 +1810,7 @@ a.chat-row-open {
   color: var(--ink-2);
 }
 .msg-copy.copied {
-  color: var(--green);
+  color: var(--green-ink);
 }
 @media (prefers-reduced-motion: reduce) {
   .message-meta,
@@ -2283,7 +2289,7 @@ summary.work-head:hover {
   border-left: 1px solid var(--line);
 }
 .tool-row.tool-failed {
-  color: var(--red);
+  color: var(--red-ink);
 }
 .approval-card {
   display: flex;
@@ -2337,7 +2343,7 @@ summary.work-head:hover {
   padding: 1px 8px;
   border-radius: 999px;
   background: var(--red-tint);
-  color: var(--red);
+  color: var(--red-ink);
 }
 .approval-why,
 .approval-summary-line {
@@ -2447,7 +2453,7 @@ summary.work-head:hover {
   background: var(--blue-ink);
 }
 .approval-btn.deny:hover:not(:disabled) {
-  color: var(--red);
+  color: var(--red-ink);
 }
 .approval-btn:disabled {
   opacity: 0.5;
@@ -6105,7 +6111,7 @@ summary.work-head:hover {
 .loop-item-shipped {
   border-color: color-mix(in srgb, var(--green) 34%, var(--surface));
   background: var(--green-tint);
-  color: var(--green);
+  color: var(--green-ink);
 }
 .deploy-status.deploying,
 .loop-item-in_progress {
@@ -6116,12 +6122,12 @@ summary.work-head:hover {
 .kc-state.warning {
   border-color: color-mix(in srgb, var(--orange) 34%, var(--surface));
   background: var(--orange-tint);
-  color: var(--orange);
+  color: var(--orange-ink);
 }
 .loop-item-failed {
   border-color: color-mix(in srgb, var(--red) 34%, var(--surface));
   background: var(--red-tint);
-  color: var(--red);
+  color: var(--red-ink);
 }
 .deploy-permission {
   display: inline-flex;
@@ -7809,7 +7815,7 @@ h3.ambient-field-label {
   opacity: 0.65;
 }
 .chat-search-failed {
-  color: var(--red);
+  color: var(--red-ink);
 }
 
 .nav-badge {

@@ -20,11 +20,11 @@
 }
 .tool-row.tool-failed .tool-chip {
   background: var(--red-tint);
-  color: var(--red);
+  color: var(--red-ink);
 }
 .tool-row.tool-approval .tool-chip {
   background: var(--orange-tint);
-  color: var(--orange);
+  color: var(--orange-ink);
 }
 .tool-row.tool-attempted,
 .tool-row.tool-attempted .tool-chip {

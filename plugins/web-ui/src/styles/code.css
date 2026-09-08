@@ -2,15 +2,15 @@
   --syntax-keyword: var(--blue-ink);
   --syntax-entity: var(--ink);
   --syntax-constant: var(--ink);
-  --syntax-string: var(--orange);
+  --syntax-string: var(--orange-ink);
   --syntax-variable: var(--ink-2);
   --syntax-comment: var(--ink-3);
   --syntax-tag: var(--blue-ink);
   --syntax-heading: var(--ink);
   --syntax-list: var(--ink-2);
-  --syntax-addition-fg: var(--green);
+  --syntax-addition-fg: var(--green-ink);
   --syntax-addition-bg: var(--green-tint);
-  --syntax-deletion-fg: var(--red);
+  --syntax-deletion-fg: var(--red-ink);
   --syntax-deletion-bg: var(--red-tint);
 }
 
@@ -131,11 +131,11 @@ markdown-block code-block:not([language="text"]) pre code {
 }
 .code-gutter > .code-line-add {
   background: var(--green-tint);
-  color: var(--green);
+  color: var(--green-ink);
 }
 .code-gutter > .code-line-del {
   background: var(--red-tint);
-  color: var(--red);
+  color: var(--red-ink);
 }
 markdown-block code-block:not([language="text"]) pre code .hljs-addition,
 markdown-block code-block:not([language="text"]) pre code .hljs-deletion {
@@ -153,8 +153,8 @@ markdown-block code-block:not([language="text"]) pre code .hljs-deletion {
   font-variant-numeric: tabular-nums;
 }
 .code-card-exit.exit-ok {
-  color: var(--green);
+  color: var(--green-ink);
 }
 .code-card-exit.exit-err {
-  color: var(--red);
+  color: var(--red-ink);
 }
