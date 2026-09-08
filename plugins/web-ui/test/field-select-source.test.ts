@@ -48,6 +48,13 @@ test("list dropdowns share enough width to show their selected value", () => {
   assert.match(css, /\.list-select \.field-select \{\s*min-width: 124px;/);
 });
 
+test("the list caption's weight stays on the caption and off the control it labels", () => {
+  const start = css.indexOf(".list-select {");
+  const block = css.slice(start, css.indexOf("}", start));
+  assert.doesNotMatch(block, /font-weight/, "a weight on .list-select reaches the select through font: inherit");
+  assert.match(css, /\.list-select > span:not\(\.field-select\) \{\s*font-size: 11px;\s*font-weight: 600;/);
+});
+
 test("the dropdown holds the caller's value against re-renders (live) and stale DOM state", () => {
   // .value on a <select> commits before its <option> children exist on first render,
   // and lit's default dirty-check skips re-asserting it when the DOM has drifted —
