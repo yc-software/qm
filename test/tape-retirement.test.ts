@@ -696,4 +696,12 @@ test("limitedSessionParity exercises the bounded read path and detects fallback"
   assert.equal(limited.status, "projected");
   assert.ok(limited.status === "projected");
   assert.deepEqual(limited.report.real, []);
+
+  const staleEntries = await sim.store.getEntries(sim.session.id);
+  const staleRows = await sim.store.getTape(sim.session.id);
+  await simLiveTurn(sim, { input: "one more thing", ts: "1720000000.000300", reply: "Done." });
+  const raced = await limitedSessionParity(sim.store, sim.session.id, staleEntries, staleRows, 3);
+  assert.equal(raced.status, "projected");
+  assert.ok(raced.status === "projected");
+  assert.deepEqual(raced.report.real, [], "a turn landing between the snapshot and the serving read is not a mismatch");
 });
