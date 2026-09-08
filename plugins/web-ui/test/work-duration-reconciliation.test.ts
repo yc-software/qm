@@ -89,7 +89,7 @@ test("live and historical rendering consume the same duration helper (source-lev
   const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
   assert.match(
     chat,
-    /import \{ workSeconds, workedLabel \} from "\.\/work-duration"/,
+    /import \{ elapsedLabel, workSeconds, workStartedAt, workedLabel \} from "\.\/work-duration"/,
     "chat renders via the shared helper",
   );
 

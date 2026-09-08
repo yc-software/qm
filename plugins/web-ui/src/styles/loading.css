@@ -1,0 +1,30 @@
+.pixel-loader {
+  display: grid;
+  grid-template-columns: repeat(3, 4px);
+  gap: 1.5px;
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+.pixel-loader > i {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.15;
+  animation: pixel-on 650ms ease-in-out infinite;
+}
+.live-work-elapsed {
+  flex: 0 0 auto;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pixel-loader > i {
+    animation: none;
+    opacity: 0.5;
+  }
+}

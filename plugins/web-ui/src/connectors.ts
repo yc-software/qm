@@ -2,7 +2,7 @@ import { html, render, type TemplateResult } from "lit";
 import { KeyRound, Link, Plug } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { icon, pixelLoader } from "./ui";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
@@ -413,7 +413,7 @@ export function noteConnectorResult(provider: string, status: string): void {
 }
 
 function loadingPlaceholder(label: string): TemplateResult {
-  return html`<div class="kc-loading"><span class="spinner"></span>${label}</div>`;
+  return html`<div class="kc-loading">${pixelLoader()}${label}</div>`;
 }
 
 function drawConnectors(): void {

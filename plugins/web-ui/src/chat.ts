@@ -6,6 +6,7 @@ import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
 import { html, nothing, render, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import {
   Activity,
   Ban,
@@ -98,7 +99,7 @@ import {
   harnessSupportsEffort,
   harnessSupportsFastMode,
 } from "./model-options";
-import { browserRenderableImage, chipBadge, formatBytes, icon, relTime, waveLoader } from "./ui";
+import { browserRenderableImage, chipBadge, formatBytes, icon, pixelLoader, relTime } from "./ui";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -127,7 +128,7 @@ import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
 import { tip } from "./tooltip";
-import { workSeconds, workedLabel } from "./work-duration";
+import { elapsedLabel, workSeconds, workStartedAt, workedLabel } from "./work-duration";
 import { decorateTextCodeBlocks, normalizePlainTextFences } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
@@ -136,6 +137,11 @@ installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+interface LiveWorkSummary {
+  label: string;
+  detail: string;
+  since: number | null;
+}
 interface SettledRowKey {
   index: number;
   activity: WorkBlock["activity"] | undefined;
@@ -268,6 +274,7 @@ export function createChatSurface(
   let ctaThreadRef: string | null | undefined;
   let ctaText = CHAT_CTAS[0]!;
   let workTicker: ReturnType<typeof setInterval> | null = null;
+  let liveElapsedTimer: ReturnType<typeof setInterval> | null = null;
   let revealedTailLen = 0;
   let liveWorkExpanded = false;
 
@@ -893,7 +900,7 @@ export function createChatSurface(
     host.className = "custom-chat";
     render(
       html`<div class="custom-chat-shell">
-        <div class="chat-loading">${waveLoader()}</div>
+        <div class="chat-loading">${pixelLoader("Loading")}</div>
       </div>`,
       host,
     );
@@ -1800,9 +1807,22 @@ export function createChatSurface(
   }
 
   function typingRow(): TemplateResult {
-    return html`<div class="thinking-placeholder">
-      ${waveLoader({ width: 14.1, label: "Thinking" })}${sheenLabel("Thinking", true)}
-    </div>`;
+    return html`<div class="thinking-placeholder">${pixelLoader()}${sheenLabel("Thinking", true)}</div>`;
+  }
+
+  function syncLiveElapsed(el?: Element): void {
+    if (liveElapsedTimer) clearInterval(liveElapsedTimer);
+    liveElapsedTimer = null;
+    if (!(el instanceof HTMLElement)) return;
+    const tick = (): void => {
+      if (!el.isConnected) {
+        syncLiveElapsed();
+        return;
+      }
+      el.textContent = elapsedLabel(Date.now() - Number(el.dataset.since));
+    };
+    tick();
+    liveElapsedTimer = setInterval(tick, reduceMotion.matches ? 1000 : 100);
   }
 
   function syncWorkTicker(): void {
@@ -2125,6 +2145,7 @@ export function createChatSurface(
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     const summary = liveWorkSummary(work);
+    const since = summary ? summary.since : workStartedAt(work);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
     let title = "";
@@ -2139,10 +2160,11 @@ export function createChatSurface(
           ${tip(title)}
           @click=${toggleLiveWorkExpanded}
         >
-          ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
+          ${pixelLoader()}
           <span class="live-work-label"
             >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
           >
+          ${since ? html`<span class="live-work-elapsed" data-since=${since} ${ref(syncLiveElapsed)}></span>` : nothing}
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
         </button>
@@ -2155,16 +2177,16 @@ export function createChatSurface(
     drawActiveChat();
   }
 
-  function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; detail: string } | null {
+  function liveWorkSummary(work: WorkBlock): LiveWorkSummary | null {
     if (work.stale) {
       const active = activeToolRow(work);
       const call = (active?.call?.payload ?? {}) as ToolPayload;
       const tool = call.tool ?? "";
       const verb = active ? (TOOL_META[tool] ?? UNKNOWN_TOOL).active : null;
       return {
-        icon: RefreshCw,
         label: verb ? `${verb} interrupted, resuming…` : "Interrupted, resuming…",
         detail: active ? toolDetail(tool, call, (active.result?.payload ?? {}) as ToolPayload) : "",
+        since: active?.call?.createdAt || workStartedAt(work),
       };
     }
     const active = activeToolRow(work);
@@ -2180,22 +2202,16 @@ export function createChatSurface(
     return null;
   }
 
-  function activeToolSummary(row: ToolRowModel, work: WorkBlock): { icon: IconNode; label: string; detail: string } {
+  function activeToolSummary(row: ToolRowModel, work: WorkBlock): LiveWorkSummary {
     const call = (row.call?.payload ?? {}) as ToolPayload;
     const result = (row.result?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? result.tool ?? "unknown";
     const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
-    const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
     return {
-      icon: meta.icon,
-      label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
+      label: meta.active,
       detail: toolDetail(tool, call, result),
+      since: row.call?.createdAt || workStartedAt(work),
     };
-  }
-
-  function elapsedSeconds(startedAt: number | null | undefined): number {
-    if (typeof startedAt !== "number" || startedAt <= 0) return 0;
-    return Math.max(0, Math.round((Date.now() - startedAt) / 1000));
   }
 
   function usedToolsSuffix(work: WorkBlock): string {
@@ -2310,9 +2326,7 @@ export function createChatSurface(
   }
 
   function sheenLabel(label: string, active: boolean): TemplateResult {
-    return html`<span class="sheen-label ${active ? "thinking-sheen" : ""}" data-sheen=${active ? label : ""}
-      >${label}</span
-    >`;
+    return html`<span class="sheen-label ${active ? "thinking-sheen" : ""}">${label}</span>`;
   }
 
   function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {

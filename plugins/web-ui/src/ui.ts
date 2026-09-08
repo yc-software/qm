@@ -36,6 +36,18 @@ export function waveLoader(
   </svg>`;
 }
 
+const PIXEL_DELAYS = [90, 180, 270, 0, 90, 180, 90, 180, 270];
+
+export function pixelLoader(label?: string): TemplateResult {
+  return html`<span
+    class="pixel-loader"
+    role=${label ? "status" : nothing}
+    aria-label=${label ?? nothing}
+    aria-hidden=${label ? nothing : "true"}
+    >${PIXEL_DELAYS.map((ms) => html`<i style="animation-delay:${ms}ms"></i>`)}</span
+  >`;
+}
+
 export function workingWave(): TemplateResult {
   return waveLoader({
     width: 13.6,

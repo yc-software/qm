@@ -2115,15 +2115,12 @@ a.chat-row-open {
 .thinking-placeholder {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   min-height: 24px;
-  color: var(--muted-foreground);
+  color: var(--ink-2);
   font-size: 13px;
+  font-weight: 500;
   line-height: 1.65;
-}
-.thinking-placeholder .wl-swell {
-  flex: 0 0 auto;
-  color: inherit;
 }
 .work-said {
   color: var(--foreground);
@@ -2140,49 +2137,22 @@ a.chat-row-open {
   line-height: 1.6;
 }
 .sheen-label {
-  position: relative;
   display: inline-block;
   color: inherit;
 }
-.sheen-label.thinking-sheen::after {
-  content: attr(data-sheen);
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
+.sheen-label.thinking-sheen {
   color: transparent;
-  background-image: linear-gradient(
-    100deg,
-    transparent 0%,
-    transparent 38%,
-    color-mix(in srgb, var(--background) 66%, var(--muted-foreground)) 50%,
-    transparent 62%,
-    transparent 100%
-  );
-  background-size: 46px 100%;
-  background-position: -56px 0;
-  background-repeat: no-repeat;
+  background-image: linear-gradient(90deg, var(--ink-3) 35%, var(--ink) 50%, var(--ink-3) 65%);
+  background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
-  font: inherit;
-  letter-spacing: inherit;
-  animation: thinking-sheen 2.55s linear infinite;
-  will-change: background-position;
-}
-@keyframes thinking-sheen {
-  0% {
-    background-position: -56px 0;
-  }
-  46% {
-    background-position: calc(100% + 56px) 0;
-  }
-  100% {
-    background-position: calc(100% + 56px) 0;
-  }
+  animation: shimmer-text 1.4s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .sheen-label.thinking-sheen::after {
+  .sheen-label.thinking-sheen {
     animation: none;
-    opacity: 0;
+    background: none;
+    color: inherit;
   }
 }
 
@@ -2601,7 +2571,7 @@ a.chat-row-open {
 .bg-activity {
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto 8px;
-  color: var(--muted-foreground);
+  color: var(--ink-2);
   font-size: 12.5px;
 }
 .composer-wrap > .bg-activity {
@@ -2614,7 +2584,7 @@ a.chat-row-open {
   border-radius: inherit;
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--secondary) 40%, var(--background));
 }
 .readonly-chat .bg-activity {
@@ -2625,19 +2595,26 @@ a.chat-row-open {
   -webkit-appearance: none;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   margin: 0;
-  padding: 2px 0;
+  padding: 3px 6px;
   border: none;
+  border-radius: var(--radius-sm);
   background: none;
   color: inherit;
   font: inherit;
+  font-size: 13px;
+  font-weight: 500;
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
 }
 .bg-activity-strip:hover {
-  color: var(--foreground);
+  background: var(--hover-2);
+  color: var(--ink);
 }
 .bg-activity-label {
   min-width: 0;
@@ -2648,6 +2625,7 @@ a.chat-row-open {
 .bg-activity-toggle {
   flex: 0 0 auto;
   display: inline-flex;
+  color: var(--ink-3);
   transition: transform 0.12s ease;
 }
 .bg-activity.expanded .bg-activity-toggle {
@@ -2656,18 +2634,20 @@ a.chat-row-open {
 
 .bg-panel {
   margin-top: 6px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   padding: 4px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   max-height: 42vh;
   overflow-y: auto;
+  background: var(--surface);
 }
 .bg-panel-note {
   padding: 6px 8px;
-  font-size: 12px;
+  font-size: 12.5px;
+  color: var(--ink-3);
 }
 .bg-row-head {
   text-decoration: none;
@@ -2675,22 +2655,25 @@ a.chat-row-open {
   -webkit-appearance: none;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   width: 100%;
   margin: 0;
   padding: 5px 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: none;
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
 }
 .bg-row-head:hover {
-  background: color-mix(in srgb, var(--muted-foreground) 10%, transparent);
-  color: var(--foreground);
+  background: var(--hover-2);
+  color: var(--ink);
 }
 .bg-row-head.static {
   cursor: default;
@@ -2704,27 +2687,29 @@ a.chat-row-open {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 .bg-row.watch .bg-row-cmd {
   font-family: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .bg-row-meta {
   flex: 0 0 auto;
   margin-left: auto;
   white-space: nowrap;
-  font-size: 11px;
-  opacity: 0.85;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .bg-row-meta code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 .bg-row-toggle {
   flex: 0 0 auto;
   display: inline-flex;
+  color: var(--ink-3);
   transition: transform 0.12s ease;
 }
 .bg-row.open .bg-row-toggle {
@@ -2733,10 +2718,12 @@ a.chat-row-open {
 .bg-row-output {
   margin: 2px 8px 6px;
   padding: 8px 10px;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--muted-foreground) 8%, transparent);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2748,31 +2735,36 @@ a.chat-row-open {
   width: 100%;
   min-width: 0;
   margin: 8px 0 0;
-  color: var(--muted-foreground);
+  color: var(--ink-2);
 }
 .live-work-line {
   appearance: none;
   -webkit-appearance: none;
-  margin: 0;
-  padding: 2px 0;
+  margin: 0 -8px;
+  padding: 3px 8px;
   border: none;
   background: none;
   color: inherit;
   font: inherit;
   text-align: left;
-  width: 100%;
+  width: calc(100% + 16px);
   min-height: 24px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  font-size: 15px;
+  font-size: 13px;
+  font-weight: 500;
   line-height: 1.4;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
 }
 .live-work-line:not(.static):hover {
-  color: var(--foreground);
+  background: var(--hover-2);
+  color: var(--ink);
 }
 .live-work-line.static,
 .live-work-line:disabled {
@@ -2781,10 +2773,6 @@ a.chat-row-open {
 .live-work-line:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--brand-accent) 60%, transparent);
   outline-offset: 2px;
-}
-.live-work-line .tool-icon {
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--muted-foreground) 86%, var(--background));
 }
 .live-work-label {
   flex: 0 1 auto;
@@ -2799,14 +2787,16 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: color-mix(in srgb, var(--muted-foreground) 72%, var(--background));
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 400;
 }
 .live-work-toggle {
   flex: 0 0 auto;
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  color: color-mix(in srgb, var(--muted-foreground) 70%, var(--background));
+  color: var(--ink-3);
   transition: transform 0.15s ease;
 }
 
@@ -4166,21 +4156,9 @@ a.chat-row-open {
   align-items: center;
   gap: 10px;
   padding: 24px;
-  color: var(--muted-foreground);
-  font-size: 14px;
-}
-.kc-loading .spinner {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--muted-foreground) 30%, transparent);
-  border-top-color: var(--muted-foreground);
-  animation: chat-spin 0.7s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .kc-loading .spinner {
-    animation: none;
-  }
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
 }
 .kc-empty {
   display: flex;
