@@ -22,12 +22,31 @@ import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 
+const FAKE_EGRESS_PROXY = "http://egress.test:48080";
+
 function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    spritesSandbox: { token: "test-token", egressProxyUrl: FAKE_EGRESS_PROXY },
     ...overrides,
   });
-  return buildApp(config, securityScreener ? { securityScreener } : {});
+  const built = buildApp(config, securityScreener ? { securityScreener } : {});
+  const run = built.sandbox.run.bind(built.sandbox);
+  built.sandbox.run = async (handle, command, opts) => {
+    const proxy = handle.env?.HTTPS_PROXY;
+    if (proxy && /https?:\/\//.test(command)) {
+      const claims = await verifyCapabilityToken(new URL(proxy).password, TEST_CAPABILITY_SECRET);
+      if (claims?.execId) {
+        await built.egressStamps.stamp(claims.execId, {
+          scopeLabel: claims.scopeId,
+          principalId: claims.actorId,
+          host: "example.invalid",
+        });
+      }
+    }
+    return run(handle, command, opts);
+  };
+  return built;
 }
 
 function spyProvisioning(sandbox: Sandbox) {

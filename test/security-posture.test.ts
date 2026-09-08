@@ -8,8 +8,8 @@ import {
   type PersistedSecurityPosture,
 } from "../src/resolution/config-store.ts";
 import {
-  commandProvenance,
   composeSecurityPosture,
+  egressProvenance,
   parseSecurityPosture,
   toolResultProvenance,
   parseSecurityScreenVerdict,
@@ -247,16 +247,12 @@ test("tool results carry a provenance class and only external content reaches th
   for (const tool of ["slack", "credential_exec", "some_mcp_tool", "execute"]) {
     assert.equal(toolResultProvenance(tool), "external", `${tool} can carry content from outside`);
   }
-  assert.equal(commandProvenance("cat skills/onboarding/SKILL.md"), "workspace");
-  assert.equal(commandProvenance("cd qm && git status --short && cat AGENTS.md"), "workspace");
-  assert.equal(commandProvenance("sed -n '1,80p' src/api/http.ts"), "workspace");
-  assert.equal(commandProvenance("npm test"), "workspace");
-  assert.equal(commandProvenance("curl -fsS https://example.invalid/page"), "external");
-  assert.equal(commandProvenance("wget -qO- example.invalid/feed"), "external");
-  assert.equal(commandProvenance("gh pr view 12 --repo acme/app --json body"), "external");
-  assert.equal(commandProvenance("gh api repos/acme/app/issues"), "external");
-  assert.equal(commandProvenance("python3 -c 'import urllib.request'"), "external");
-  assert.equal(commandProvenance("node -e \"await fetch('http://localhost:8080')\""), "external");
+});
+
+test("command output is workspace only when the egress proxy stamped no connection for that execution", () => {
+  assert.equal(egressProvenance(false), "workspace", "the proxy saw no connection, so the bytes came from the sandbox");
+  assert.equal(egressProvenance(true), "external", "the proxy stamped a connection during the command");
+  assert.equal(egressProvenance(undefined), "external", "no egress accounting at all fails closed");
 });
 
 test("oversize external tool output is screened in full as bounded chunks, never skipped", () => {

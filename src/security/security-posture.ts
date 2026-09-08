@@ -114,21 +114,8 @@ export function toolResultProvenance(tool: string): ToolResultProvenance {
   return "external";
 }
 
-const NETWORK_COMMAND = new RegExp(
-  [
-    String.raw`[a-z][a-z0-9+.-]*://`,
-    String.raw`\b(curl|wget|gh|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|socat|aws|gcloud|az|fly|flyctl|psql|mysql|mongosh|redis-cli)\b`,
-    String.raw`\bgit\s+(clone|fetch|pull|ls-remote|submodule)\b`,
-    String.raw`\b(npm|npx|pnpm|yarn|bun|pip3?|uv|pipx|cargo|go)\s+(install|add|i|exec|x|dlx|get)\b`,
-    String.raw`\bopenssl\s+s_client\b`,
-    String.raw`\bfetch\(|\burllib\b|\brequests\.|\bhttpx\b|\bhttp\.client\b|\baiohttp\b`,
-    String.raw`\brequire\(['"](https?|net|dns|tls)['"]\)|\bfrom\s+['"]node:(https?|net|tls)['"]`,
-  ].join("|"),
-  "i",
-);
-
-export function commandProvenance(command: string): ToolResultProvenance {
-  return NETWORK_COMMAND.test(command) ? "external" : "workspace";
+export function egressProvenance(egressed: boolean | undefined): ToolResultProvenance {
+  return egressed === false ? "workspace" : "external";
 }
 
 export const UNSCREENED_REASON = "screen_unavailable";

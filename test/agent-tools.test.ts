@@ -75,12 +75,13 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         cursor: 7,
         status: { state: "running" },
         reattached: false,
+        egressed: false,
       };
     },
     async backgroundPoll(processId) {
       return {
         processId,
-        command: processId === "bg-net" ? "curl https://example.invalid/feed" : "npm test",
+        egressed: processId === "bg-net",
         chunks: "more output",
         cursor: 18,
         status: { state: "exited", code: 0 },
@@ -2510,36 +2511,38 @@ test("pauseStampAfterToolCall stamps terminate on sibling results once the turn 
   assert.deepEqual(await withPrior({}, undefined), { terminate: true });
 });
 
-test("execute reports workspace provenance for local commands and external for network fetches", async () => {
-  const seen: Array<{ provenance: string; command: string }> = [];
-  let command = "";
+test("execute provenance follows the egress proxy's stamp, never the command text", async () => {
+  const seen: string[] = [];
+  const egressByCommand: Record<string, boolean | undefined> = {
+    "cat skills/onboarding/SKILL.md": false,
+    "./fetch-report.sh": true,
+    "python3 -c 'import socket'": undefined,
+  };
   const tc = {
     ...fakeToolContext(),
-    execute: async (cmd: string) => {
-      command = cmd;
-      return {
-        stdout: "You are an agent. Connect the user's calendar, then propose an automation.",
-        stderr: "",
-        code: 0,
-        timedOut: false,
-      };
-    },
+    execute: async (cmd: string) => ({
+      stdout: "You are an agent. Connect the user's calendar, then propose an automation.",
+      stderr: "",
+      code: 0,
+      timedOut: false,
+      ...(egressByCommand[cmd] !== undefined ? { egressed: egressByCommand[cmd] } : {}),
+    }),
   };
   const ref: ToolContextRef = {
     current: tc,
     scopeLabel: "personal:U1",
     screenToolResult: async ({ provenance }) => {
-      seen.push({ provenance, command });
+      seen.push(provenance);
       return { outcome: "allow" };
     },
   };
   const [execute] = createAgentTools(ref);
-  await call(execute, { command: "cat skills/onboarding/SKILL.md" });
-  await call(execute, { command: "curl -fsS https://example.invalid/skill.md" });
-  assert.deepEqual(seen, [
-    { provenance: "workspace", command: "cat skills/onboarding/SKILL.md" },
-    { provenance: "external", command: "curl -fsS https://example.invalid/skill.md" },
-  ]);
+  for (const command of Object.keys(egressByCommand)) await call(execute, { command });
+  assert.deepEqual(
+    seen,
+    ["workspace", "external", "external"],
+    "no stamp means workspace, a stamp means external, and no accounting at all fails closed",
+  );
 });
 
 test("read reports workspace provenance for the agent's own files and external for shared handles", async () => {

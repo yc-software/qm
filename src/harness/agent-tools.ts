@@ -10,13 +10,12 @@ import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
-import { REDACTED_COMMAND_MAX_CHARS } from "../sandbox/exec-process-session.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, goalFloorMeter, goalReport, type GoalRecord } from "./goal.ts";
 import {
-  commandProvenance,
+  egressProvenance,
   toolResultProvenance,
   unscreenedNotice,
   UNSCREENED_PREFIX,
@@ -695,9 +694,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         undefined,
         false,
         undefined,
-        r.reached
-          ? { provenance: "external", source: "reached room" }
-          : { provenance: commandProvenance(params.command) },
+        r.reached ? { provenance: "external", source: "reached room" } : { provenance: egressProvenance(r.egressed) },
       );
     } catch (e) {
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
@@ -1414,7 +1411,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               undefined,
               false,
               undefined,
-              { provenance: commandProvenance(params.command) },
+              { provenance: egressProvenance(r.egressed) },
             );
           }
           case "poll": {
@@ -1443,9 +1440,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               undefined,
               false,
               undefined,
-              {
-                provenance: r.command.length >= REDACTED_COMMAND_MAX_CHARS ? "external" : commandProvenance(r.command),
-              },
+              { provenance: egressProvenance(r.egressed) },
             );
           }
           case "stop": {

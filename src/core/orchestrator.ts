@@ -1438,20 +1438,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
+      let egressTokenFor: ((execId: string) => Promise<string>) | undefined;
       if (!strictReadOnly && egressSecret) {
-        egressTokenForTurn = await mintCapabilityToken(
-          {
-            ...scopeAttestation,
-            aud: EGRESS_PROXY_AUD,
-            egress: egressClaimAllowingControlPlane(
-              resolution.egress,
-              deps.apiBaseUrl ?? "",
-              securityPolicy.inboundScreening === "external",
-            ),
-            exp: Date.now() + CAPABILITY_TTL_MS,
-          },
-          egressSecret,
-        );
+        const egressClaims = {
+          ...scopeAttestation,
+          aud: EGRESS_PROXY_AUD,
+          egress: egressClaimAllowingControlPlane(
+            resolution.egress,
+            deps.apiBaseUrl ?? "",
+            securityPolicy.inboundScreening === "external",
+          ),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        };
+        egressTokenForTurn = await mintCapabilityToken(egressClaims, egressSecret);
+        egressTokenFor = (execId) => mintCapabilityToken({ ...egressClaims, execId }, egressSecret);
       }
       if (!strictReadOnly && actor.type === "internal") {
         for (const tool of brokeredTools) {
@@ -2096,6 +2096,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
+          ...(egressTokenFor && deps.egressStamps
+            ? { egress: { tokenFor: egressTokenFor, stamps: deps.egressStamps } }
+            : {}),
           ...(() => {
             const available =
               strictReadOnly || actor.type !== "internal"

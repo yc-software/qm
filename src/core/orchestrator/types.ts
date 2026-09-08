@@ -30,6 +30,7 @@ import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../.
 import type { DeviceFlowCutoverStore } from "../../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
+import type { EgressStampStore } from "../../admin/egress-stamp-store.ts";
 import type { LivenessCache } from "../../credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../../credentials/connector-status.ts";
 import type { ModelGateway } from "../../model/model-gateway.ts";
@@ -168,6 +169,7 @@ export interface OrchestratorDeps {
   deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
   credentialUsage?: CredentialUsageSink;
+  egressStamps?: EgressStampStore;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;

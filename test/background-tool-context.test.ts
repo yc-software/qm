@@ -21,7 +21,6 @@ function recordingBroker() {
       calls.poll += 1;
       return {
         processId,
-        command: "sleep 5",
         chunks: pollState === "exited" ? "final" : "partial",
         cursor: 10,
         status: pollState === "exited" ? { state: "exited", code: 0 } : { state: "running" },
