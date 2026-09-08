@@ -39,7 +39,7 @@ export function createForkOriginController<T>(options: {
       refreshGeneration++;
     },
     isCurrentRefresh(generation: number) {
-      return generation === refreshGeneration && options.current();
+      return generation === refreshGeneration;
     },
     applyRefresh(generation: number, messages: T[] | null) {
       if (generation !== refreshGeneration || !options.current()) return false;

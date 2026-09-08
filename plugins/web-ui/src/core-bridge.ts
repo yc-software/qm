@@ -1370,10 +1370,8 @@ export function subscribeDeliveries(
   const es = new EventSource(withBase("/api/deliveries/events"));
   let everOpened = false;
   es.onopen = (): void => {
-    if (everOpened) {
-      onResync?.();
-      onInboxResync?.();
-    }
+    onResync?.();
+    if (everOpened) onInboxResync?.();
     everOpened = true;
   };
   es.addEventListener("session_state_resync", () => onResync?.());

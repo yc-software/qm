@@ -100,8 +100,12 @@ export function ensureDeliveryStream(): void {
       // message from another surface). Attach the open view instead of waiting for a
       // visibilitychange, so the new turn — and its triggering message — show up live.
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
+      else for (const conv of live) conv.onDelivery(event.threadRef);
     },
-    () => void refreshSessions({ silent: true }),
+    () => {
+      void refreshSessions({ silent: true });
+      for (const conv of live) conv.resumeIfIdle();
+    },
     (event) => inboxItemHandler?.(event),
     () => inboxResyncHandler?.(),
   );

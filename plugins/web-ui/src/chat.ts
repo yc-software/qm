@@ -553,9 +553,10 @@ export function createChatSurface(
   function onDelivery(threadRef: string): void {
     const ro = readOnlyView;
     if (ro && threadRef === ro.threadRef) {
+      const generation = forkOriginController.beginRefresh();
       void fetchTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })
         .then((page) => {
-          if (readOnlyView?.id !== ro.id) return;
+          if (readOnlyView !== ro || !forkOriginController.isCurrentRefresh(generation)) return;
           const split = inheritedTranscript(ro.session, page.entries ?? []);
           const rawEarlier = page.earlierEntries ?? 0;
           const earlier = currentEarlierCount(ro.session, rawEarlier);
@@ -595,10 +596,13 @@ export function createChatSurface(
   }
 
   function resumeIfIdle(): void {
+    if (readOnlyView) return onDelivery(readOnlyView.threadRef);
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming || !chatState.threadRef || !chatState.normalStreamFn || !chatState.onWork)
       return;
-    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork);
+    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork).then((resumed) => {
+      if (!resumed) void refreshTranscriptFromEntries(agent);
+    });
   }
 
   function syncLocation(): void {
@@ -781,7 +785,24 @@ export function createChatSurface(
     }
   }
 
+  const trackedResumes = new WeakMap<Agent, Promise<boolean>>();
+
   async function resumeTrackedRun(
+    agent: Agent,
+    threadRef: string,
+    normalStreamFn: Agent["streamFn"],
+    onWork: (work: WorkBlock) => void,
+  ): Promise<boolean> {
+    const existing = trackedResumes.get(agent);
+    if (existing) return existing;
+    const pending = discoverTrackedRun(agent, threadRef, normalStreamFn, onWork).finally(() => {
+      trackedResumes.delete(agent);
+    });
+    trackedResumes.set(agent, pending);
+    return pending;
+  }
+
+  async function discoverTrackedRun(
     agent: Agent,
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
