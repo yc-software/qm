@@ -213,3 +213,9 @@ test("suggested draft actions yield to typed instructions without reflow", () =>
   assert.match(css, /\.inbox-chat-composer\.has-text \.inbox-chat-suggest \{\s*visibility: hidden;/);
   assert.doesNotMatch(inbox, /inbox-draft-actions|function sendLabel/);
 });
+
+test("conversation messages use the containing view's scroll instead of clipping the latest message", () => {
+  const context = css.match(/\.inbox-context \{[^}]*\}/)?.[0] ?? "";
+  assert.match(context, /flex: none;/);
+  assert.doesNotMatch(context, /max-height:|overflow-y:/);
+});

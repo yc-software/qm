@@ -15,7 +15,6 @@ import {
   persistDraft,
   refreshInbox,
   selectInboxView,
-  slackTextTpl,
   type InboxItem,
 } from "./inbox";
 import { openSessionInto, refreshSessions, sessionsReady, sessionsState } from "./sessions";
@@ -250,10 +249,6 @@ function detailTpl(surface: ReviewSurface, item: InboxItem | null): TemplateResu
     <div class="rv-detail-head">
       <span class="rv-detail-title">${gmail ? item.title : (item.slack?.channelLabel ?? item.title)}</span>
       <span class="rv-detail-from">${item.from}${item.fromDetail ? ` · ${item.fromDetail}` : ""}</span>
-    </div>
-    <div class="rv-orig">
-      <div class="rv-orig-head">${item.from} · ${relTime(item.receivedAt)}</div>
-      <div class="rv-orig-text">${slackTextTpl(item, item.snippet)}</div>
     </div>
     ${contextTpl(item)} ${item.status === "open" ? draftEditorTpl(item) : handledNoteTpl(item)}
     ${item.status === "open" ? steerTpl(surface, item) : nothing}

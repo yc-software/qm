@@ -728,10 +728,12 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
 }
 
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
-  const rows = item.context ?? [];
-  if (!rows.length) return nothing;
+  const rows = [
+    ...(item.context ?? []).map((message, index) => ({ ...message, imageIndex: index })),
+    { author: item.from, at: item.receivedAt, text: item.snippet, images: item.images, imageIndex: -1 },
+  ];
   return html`<div class="inbox-context">
-    ${rows.map((m, i) => {
+    ${rows.map((m) => {
       const name = participantName(m.author) || m.author;
       return html`
         <div class="inbox-context-msg">
@@ -744,7 +746,7 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
               ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
             </div>
             <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
-            ${itemImagesTpl(item, m.images, i)}
+            ${itemImagesTpl(item, m.images, m.imageIndex)}
           </div>
         </div>
       `;
@@ -1024,8 +1026,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
-              ${contextTpl(item)} ${itemImagesTpl(item, item.images, -1)}
-              ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}
+              ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}
             </div>`
           : nothing
       }
@@ -1189,8 +1190,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
-        ${contextTpl(item)} ${itemImagesTpl(item, item.images, -1)}
-        ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}
+        ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}
       </div>
     </div>
     <aside class="inbox-item-aside">${chatTpl(item)}</aside>
