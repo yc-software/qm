@@ -132,7 +132,6 @@ export const inboxState = {
 
 const ASIDE_MIN_HEIGHT = 320;
 const ASIDE_MAX_HEIGHT = 1100;
-const ASIDE_BOTTOM_GAP = 8;
 const CHAT_INPUT_MAX_HEIGHT = 200;
 const expandedThreads = new Set<string>();
 const clampedThreads = new Set<string>();
@@ -1312,8 +1311,10 @@ function markClampedThread(host: HTMLElement, itemId: string | null): void {
  */
 function sizeAside(host: HTMLElement): void {
   if (!host.querySelector(".inbox-item-aside")) return;
-  const padTop = Number.parseFloat(getComputedStyle(host).paddingTop) || 0;
-  const available = host.clientHeight - padTop - ASIDE_BOTTOM_GAP;
+  const pad = getComputedStyle(host);
+  const padTop = Number.parseFloat(pad.paddingTop) || 0;
+  const padBottom = Number.parseFloat(pad.paddingBottom) || 0;
+  const available = host.clientHeight - padTop - padBottom;
   const height = Math.min(ASIDE_MAX_HEIGHT, Math.max(ASIDE_MIN_HEIGHT, available));
   const next = `${height}px`;
   if (host.style.getPropertyValue("--inbox-aside-height") === next) return;
