@@ -67,6 +67,7 @@ export default defineConfig({
       { find: "hljs-real-bash", replacement: here("node_modules/highlight.js/lib/languages/bash.js") },
       { find: "hljs-real-sql", replacement: here("node_modules/highlight.js/lib/languages/sql.js") },
       { find: "hljs-real-markdown", replacement: here("node_modules/highlight.js/lib/languages/markdown.js") },
+      { find: "hljs-real-diff", replacement: here("node_modules/highlight.js/lib/languages/diff.js") },
       { find: "hljs-real", replacement: here("node_modules/highlight.js/lib/core.js") },
       { find: /^highlight\.js\/lib\/languages\/.*$/, replacement: here("src/hljs-lang-stub.ts") },
     ],

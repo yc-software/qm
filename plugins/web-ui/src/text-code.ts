@@ -31,25 +31,59 @@ export function normalizePlainTextFences(text: string): string {
 
 export function decorateTextCodeBlocks(root: ParentNode | null): void {
   if (!root) return;
-  for (const block of root.querySelectorAll<HTMLElement>('code-block[language="text"]')) {
-    const body = block.querySelector<HTMLElement>(":scope > div > div:last-child");
-    const footer = block.querySelector<HTMLElement>(":scope > div > div:first-child");
-    const pre = body?.querySelector("pre");
-    if (!body || !footer || !pre) continue;
-    body.classList.add("text-code-body");
-    footer.classList.add("text-code-footer");
-    if (footer.querySelector(".text-code-toggle") || pre.scrollHeight <= 76) continue;
-    const button = block.ownerDocument.createElement("button");
-    button.type = "button";
-    button.className = "text-code-toggle";
-    const update = (expanded: boolean) => {
-      block.dataset.expanded = String(expanded);
-      button.textContent = expanded ? "Show less" : "Show more";
-      button.setAttribute("aria-expanded", String(expanded));
-    };
-    button.addEventListener("click", () => update(block.dataset.expanded !== "true"));
-    footer.insertBefore(button, footer.lastElementChild);
-    block.classList.add("text-code-collapsible");
-    update(block.dataset.expanded === "true");
+  for (const block of root.querySelectorAll<HTMLElement>("code-block")) {
+    if (block.getAttribute("language") === "text") collapsePlainTextBlock(block);
+    else numberCodeLines(block);
   }
+}
+
+function collapsePlainTextBlock(block: HTMLElement): void {
+  const body = block.querySelector<HTMLElement>(":scope > div > div:last-child");
+  const footer = block.querySelector<HTMLElement>(":scope > div > div:first-child");
+  const pre = body?.querySelector("pre");
+  if (!body || !footer || !pre) return;
+  body.classList.add("text-code-body");
+  footer.classList.add("text-code-footer");
+  if (footer.querySelector(".text-code-toggle") || pre.scrollHeight <= 76) return;
+  const button = block.ownerDocument.createElement("button");
+  button.type = "button";
+  button.className = "text-code-toggle";
+  const update = (expanded: boolean) => {
+    block.dataset.expanded = String(expanded);
+    button.textContent = expanded ? "Show less" : "Show more";
+    button.setAttribute("aria-expanded", String(expanded));
+  };
+  button.addEventListener("click", () => update(block.dataset.expanded !== "true"));
+  footer.insertBefore(button, footer.lastElementChild);
+  block.classList.add("text-code-collapsible");
+  update(block.dataset.expanded === "true");
+}
+
+function numberCodeLines(block: HTMLElement): void {
+  const pre = block.querySelector("pre");
+  const code = pre?.querySelector("code");
+  if (!pre || !code) return;
+  const lines = (code.textContent ?? "").replace(/\n$/u, "").split("\n");
+  if (lines.length < 2) return;
+  const existing = pre.querySelector<HTMLElement>(":scope > .code-gutter");
+  if (existing?.childElementCount === lines.length) return;
+  const diff = /^(?:diff|patch)$/u.test(block.getAttribute("language") ?? "");
+  const gutter = existing ?? pre.insertBefore(block.ownerDocument.createElement("span"), code);
+  gutter.className = "code-gutter";
+  gutter.setAttribute("aria-hidden", "true");
+  gutter.replaceChildren(
+    ...lines.map((line, i) => {
+      const cell = block.ownerDocument.createElement("span");
+      const mark = diff ? diffMark(line) : "";
+      cell.textContent = diff ? mark || " " : String(i + 1);
+      if (mark === "+") cell.className = "code-line-add";
+      if (mark === "-") cell.className = "code-line-del";
+      return cell;
+    }),
+  );
+}
+
+function diffMark(line: string): string {
+  if (/^(?:\+\+\+|---)/u.test(line)) return "";
+  return line[0] === "+" || line[0] === "-" ? line[0] : "";
 }

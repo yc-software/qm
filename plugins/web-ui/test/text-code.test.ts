@@ -48,3 +48,46 @@ test("text-block expansion is local and preserves rendered code nodes", () => {
   assert.equal(firstButton.textContent, "Show less");
   assert.equal(firstButton.getAttribute("aria-expanded"), "true");
 });
+
+test("source fences get a line gutter and diff fences mark changed rows without touching rendered code", () => {
+  const dom = new JSDOM(`<main>
+    <code-block language="ts"><div><div><span>ts</span><copy-button></copy-button></div><div><pre><code class="hljs">const a = 1;
+const b = 2;
+<!--lit-marker--></code></pre></div></div></code-block>
+    <code-block language="diff"><div><div><span>diff</span><copy-button></copy-button></div><div><pre><code>--- a
++++ b
+ same
+-old
++new
+</code></pre></div></div></code-block>
+    <code-block language="ts"><div><div><span>ts</span><copy-button></copy-button></div><div><pre><code>one</code></pre></div></div></code-block>
+  </main>`);
+  const root = dom.window.document.querySelector("main")!;
+  const [source, diff, single] = Array.from(root.querySelectorAll<HTMLElement>("code-block"));
+  const renderedCode = source!.querySelector("code")!.innerHTML;
+
+  decorateTextCodeBlocks(root);
+  decorateTextCodeBlocks(root);
+
+  const gutters = source!.querySelectorAll(".code-gutter");
+  assert.equal(gutters.length, 1);
+  assert.equal(gutters[0]!.getAttribute("aria-hidden"), "true");
+  assert.equal(source!.querySelector("pre")!.firstElementChild, gutters[0]);
+  assert.deepEqual(
+    Array.from(gutters[0]!.children, (cell) => cell.textContent),
+    ["1", "2"],
+  );
+  assert.equal(source!.querySelector("code")!.innerHTML, renderedCode);
+  assert.deepEqual(
+    Array.from(diff!.querySelectorAll(".code-gutter > span"), (cell) => [cell.className, cell.textContent]),
+    [
+      ["", " "],
+      ["", " "],
+      ["", " "],
+      ["code-line-del", "-"],
+      ["code-line-add", "+"],
+    ],
+  );
+  assert.equal(single!.querySelector(".code-gutter"), null);
+  assert.equal(root.querySelector(".text-code-toggle"), null);
+});

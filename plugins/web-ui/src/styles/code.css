@@ -1,0 +1,167 @@
+:root {
+  --syntax-keyword: var(--blue-ink);
+  --syntax-entity: var(--ink);
+  --syntax-constant: var(--ink);
+  --syntax-string: var(--orange);
+  --syntax-variable: var(--ink-2);
+  --syntax-comment: var(--ink-3);
+  --syntax-tag: var(--blue-ink);
+  --syntax-heading: var(--ink);
+  --syntax-list: var(--ink-2);
+  --syntax-addition-fg: var(--green);
+  --syntax-addition-bg: var(--green-tint);
+  --syntax-deletion-fg: var(--red);
+  --syntax-deletion-bg: var(--red-tint);
+}
+
+markdown-block code-block[language] > div {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+markdown-block code-block[language] pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+markdown-block code-block[language] .hljs-title {
+  font-weight: 500;
+}
+
+markdown-block code-block:not([language="text"]) > div > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+markdown-block code-block:not([language="text"]) > div > div:first-child::before {
+  content: "";
+  flex: none;
+  width: 15px;
+  height: 15px;
+  background: var(--ink-3);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+markdown-block code-block:not([language="text"]) > div > div:first-child > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--ink);
+}
+markdown-block code-block:not([language="text"]) copy-button {
+  display: inline-flex;
+  margin-left: auto;
+}
+markdown-block code-block:not([language="text"]) copy-button button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--ink-3);
+  font: 500 11.5px/1 var(--app-font);
+  cursor: pointer;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
+}
+markdown-block code-block:not([language="text"]) copy-button button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+markdown-block code-block:not([language="text"]) copy-button button svg {
+  width: 11px;
+  height: 11px;
+}
+markdown-block code-block:not([language="text"]) copy-button button::after {
+  content: "Copy";
+}
+markdown-block code-block:not([language="text"]) copy-button button:has(span)::after {
+  content: none;
+}
+
+markdown-block code-block:not([language="text"]) pre {
+  display: flex;
+  align-items: flex-start;
+  padding: 0;
+}
+markdown-block code-block:not([language="text"]) pre code {
+  display: block;
+  flex: 1 0 auto;
+  min-width: 0;
+  padding: 10px 14px 10px 10px;
+}
+.code-gutter {
+  flex: none;
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  width: 32px;
+  padding: 10px 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.code-gutter > span {
+  display: block;
+  padding-right: 6px;
+}
+.code-gutter > .code-line-add {
+  background: var(--green-tint);
+  color: var(--green);
+}
+.code-gutter > .code-line-del {
+  background: var(--red-tint);
+  color: var(--red);
+}
+markdown-block code-block:not([language="text"]) pre code .hljs-addition,
+markdown-block code-block:not([language="text"]) pre code .hljs-deletion {
+  display: inline-block;
+  min-width: 100%;
+  margin: 0 -14px 0 -10px;
+  padding: 0 14px 0 10px;
+  color: inherit;
+}
+
+.code-card-head .icon {
+  flex: none;
+}
+.code-card-exit {
+  font-variant-numeric: tabular-nums;
+}
+.code-card-exit.exit-ok {
+  color: var(--green);
+}
+.code-card-exit.exit-err {
+  color: var(--red);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  markdown-block code-block[language] copy-button button,
+  .show-full-btn {
+    transition: none;
+  }
+}

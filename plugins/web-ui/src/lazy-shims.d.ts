@@ -42,3 +42,7 @@ declare module "hljs-real-markdown" {
   const lang: unknown;
   export default lang;
 }
+declare module "hljs-real-diff" {
+  const lang: unknown;
+  export default lang;
+}

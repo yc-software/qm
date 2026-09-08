@@ -2560,11 +2560,14 @@ export function createChatSurface(
 
   function execOutputCard(result: ToolPayload, work: WorkBlock, activity: ToolActivity | null): TemplateResult {
     const out = [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
+    const exitCode = result.code ?? 0;
     return html`<div class="code-card">
-      <div class="code-card-head"><span class="code-card-lang">bash</span></div>
+      <div class="code-card-head">${icon(Terminal, 13)}<span class="code-card-lang">bash</span></div>
       <pre class="code-card-body">${out}</pre>
       <div class="code-card-foot">
-        exit ${result.code ?? 0}${result.timedOut ? " · timed out" : ""}
+        <span class="code-card-exit ${exitCode === 0 && !result.timedOut ? "exit-ok" : "exit-err"}">
+          exit ${exitCode}${result.timedOut ? " · timed out" : ""}
+        </span>
         ${
           activity?.truncated
             ? html`<button class="show-full-btn" type="button" @click=${() => void loadFullEntry(work, activity)}>
