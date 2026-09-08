@@ -5335,8 +5335,10 @@
                   <div class="body">
                     <div class="governance-capability" id="egress-capability" role="status">
                       <div>
-                        <strong>Egress policy unavailable</strong
-                        ><span>The deployment backend cannot enforce outbound host policy.</span>
+                        <strong>Agent computer egress policy unavailable</strong
+                        ><span
+                          >The agent computer provider cannot enforce host restrictions on all outbound traffic.</span
+                        >
                       </div>
                     </div>
                     <div class="egress-empty-state">
@@ -7646,13 +7648,15 @@
         );
         const capability = $("egress-capability");
         capability.classList.toggle("hidden", !!enforcement.active);
-        let enforcementTitle = "Egress policy unavailable";
+        let enforcementTitle = "Agent computer egress policy unavailable";
         if (enforcement.reason === "control_plane_unconfigured") enforcementTitle = "Enforcement is not activated";
         capability.querySelector("strong").textContent = enforcementTitle;
         let enforcementSummary =
-          "This deployment’s " + titleCase(enforcement.backend) + " backend cannot enforce outbound host policy.";
+          "Agent computers use " +
+          titleCase(enforcement.backend) +
+          ", which cannot enforce host restrictions on all outbound traffic. A configured egress proxy still applies policy to traffic sent through it.";
         if (enforcement.reason === "control_plane_unconfigured") {
-          enforcementSummary = "Egress enforcement has not been activated for this deployment.";
+          enforcementSummary = "Egress enforcement has not been activated for agent computers.";
         }
         capability.querySelector("span").textContent = enforcementSummary;
         const egressCard = $("card-egress");
