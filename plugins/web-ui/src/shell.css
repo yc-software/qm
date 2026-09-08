@@ -1328,6 +1328,11 @@ a.chat-row-open {
 .icon-btn.subtle {
   color: var(--muted-foreground);
 }
+.icon-btn.compact {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+}
 .chat-scroll {
   isolation: isolate;
   --chat-scroll-pad-top: 28px;
@@ -6353,11 +6358,6 @@ a.chat-row-open {
     opacity: 1;
     pointer-events: auto;
   }
-}
-.cron-action-btn {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
 }
 .cron-disabled-toggle {
   margin-top: 6px;

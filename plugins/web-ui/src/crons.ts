@@ -362,7 +362,7 @@ function cronPageRow(c: CronView, mine: boolean): TemplateResult {
 function cronRowActions(c: CronView): TemplateResult {
   let stateAction = html`
     <button
-      class="icon-btn subtle cron-action-btn"
+      class="icon-btn subtle compact"
       type="button"
       ${tip("Enable")}
       aria-label="Enable cron"
@@ -374,7 +374,7 @@ function cronRowActions(c: CronView): TemplateResult {
   if (c.archived) {
     stateAction = html`
       <button
-        class="icon-btn subtle cron-action-btn"
+        class="icon-btn subtle compact"
         type="button"
         ${tip("Unarchive")}
         aria-label="Unarchive cron"
@@ -386,7 +386,7 @@ function cronRowActions(c: CronView): TemplateResult {
   } else if (c.enabled) {
     stateAction = html`
       <button
-        class="icon-btn subtle cron-action-btn"
+        class="icon-btn subtle compact"
         type="button"
         ${tip("Disable")}
         aria-label="Disable cron"
@@ -399,7 +399,7 @@ function cronRowActions(c: CronView): TemplateResult {
   return html`
     <div class="cron-row-actions" aria-label="Cron actions">
       <button
-        class="icon-btn subtle cron-action-btn"
+        class="icon-btn subtle compact"
         type="button"
         ${tip("Edit")}
         aria-label="Edit cron"
@@ -416,7 +416,7 @@ function cronRowActions(c: CronView): TemplateResult {
           ? nothing
           : html`
               <button
-                class="icon-btn subtle cron-action-btn"
+                class="icon-btn subtle compact"
                 type="button"
                 ${tip("Archive")}
                 aria-label="Archive cron"

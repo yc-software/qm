@@ -1070,25 +1070,25 @@ function syncLineTpl(): TemplateResult {
     return html`<button
       class="btn inbox-sync-setup"
       type="button"
+      ${tip("Create the inbox loop and the personal cron that scans your connected apps and drafts replies")}
       ?disabled=${inboxState.syncBusy}
       @click=${() => void setUpSync()}
-      title="Create the inbox loop and the personal cron that scans your connected apps and drafts replies"
     >
       ${icon(RefreshCw, 13)}<span>${inboxState.syncBusy ? "Setting up…" : "Set up sync"}</span>
     </button>`;
   }
   return html`<span class="inbox-sync-line">
     <button
-      class="icon-btn subtle"
+      class="icon-btn subtle compact"
       type="button"
-      title="Sync now"
+      ${tip("Sync now")}
       aria-label="Sync now"
       ?disabled=${inboxState.syncBusy}
       @click=${() => void syncNow()}
     >
-      ${icon(RefreshCw, 13)}
+      ${icon(RefreshCw, 14)}
     </button>
-    <span title=${cron.enabled ? "The sync cron is on" : "The sync cron is paused. Manage it under Crons"}>
+    <span ${tip(cron.enabled ? "The sync cron is on" : "The sync cron is paused. Manage it under Crons")}>
       ${syncStatusLabel(cron)}
     </span>
   </span>`;
