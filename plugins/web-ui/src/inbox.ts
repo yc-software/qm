@@ -27,7 +27,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { beginPaneKindDrag, endPaneDrag, exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, icon, initials, relTime, slackMark } from "./ui";
+import { brandName, icon, initials, relTime, slackMark, workingWave } from "./ui";
 
 export type InboxSource = "gmail" | "slack";
 
@@ -816,7 +816,7 @@ export function chatTpl(item: InboxItem): TemplateResult {
               )}
             </div>`
       }
-      ${busy ? html`<div class="inbox-chat-working">Thinking…</div>` : nothing}
+      ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
       <div class="inbox-chat-composer">
         <textarea
           class="inbox-chat-input"

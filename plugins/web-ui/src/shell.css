@@ -8354,8 +8354,15 @@ h3.ambient-field-label {
   font-style: italic;
 }
 .inbox-chat-working {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--muted-foreground);
   font-size: 12px;
+}
+.inbox-chat-working .working-wave {
+  flex: 0 0 auto;
+  color: var(--working-dot, #2f81f7);
 }
 
 .inbox-chat-composer {
