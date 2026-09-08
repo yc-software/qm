@@ -1320,7 +1320,7 @@ a.chat-row-open {
   scrollbar-gutter: stable;
 
   padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 .fork-origin-row {
@@ -1393,7 +1393,7 @@ a.chat-row-open {
 }
 .pinned-strip.expanded {
   padding: 6px 10px;
-  max-height: min(38vh, 240px);
+  max-height: min(38cqh, 240px);
   overflow-y: auto;
 }
 .pinned-strip-head {
@@ -1530,7 +1530,7 @@ a.chat-row-open {
 }
 .message-stack .user-row:not(:has(~ .user-row)) {
   position: sticky;
-  top: calc(-1 * var(--chat-scroll-pad-top, 0px));
+  top: var(--chat-sticky-top, 0px);
   z-index: 3;
   padding-top: 14px;
   margin-top: -14px;
@@ -1539,9 +1539,24 @@ a.chat-row-open {
   pointer-events: none;
 }
 
+.message-stack .user-row.sticky-disabled {
+  position: relative;
+  top: auto;
+}
+
 .message-stack .user-row:not(:has(~ .user-row)) > .user-bubble {
   pointer-events: auto;
+  transition: box-shadow 120ms ease;
+}
+
+.message-stack .user-row.stuck > .user-bubble {
   box-shadow: var(--chat-surface-shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-stack .user-row > .user-bubble {
+    transition: none;
+  }
 }
 
 .assistant-row + .user-row {

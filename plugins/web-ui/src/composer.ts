@@ -1869,10 +1869,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       }
       if (ta.value === autosizedValue) return;
       autosizedValue = ta.value;
+      const wrap = ta.closest<HTMLElement>(".composer-wrap");
+      const wrapHeight = wrap?.style.height ?? "";
+      if (wrap) wrap.style.height = `${wrap.getBoundingClientRect().height}px`;
       ta.style.height = "auto";
       const cap = parseFloat(getComputedStyle(ta).maxHeight) || 180;
       const content = ta.scrollHeight;
       ta.style.height = `${Math.min(cap, Math.max(ctx.pane ? 0 : 48, content))}px`;
+      if (wrap) wrap.style.height = wrapHeight;
       if (content > cap) {
         ta.style.overflowY = "auto";
       } else {

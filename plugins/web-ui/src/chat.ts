@@ -130,6 +130,8 @@ import { tip } from "./tooltip";
 import { workSeconds, workedLabel } from "./work-duration";
 import { decorateTextCodeBlocks, normalizePlainTextFences } from "./text-code";
 
+import { createTranscriptViewport } from "./transcript-viewport";
+
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
@@ -188,6 +190,7 @@ export function createChatSurface(
   dependencies: { fetchTranscript?: typeof fetchTranscript; openSession?: typeof openSession } = {},
 ): ChatSurface {
   const runSlot = createRunSlot();
+  const transcriptViewport = createTranscriptViewport();
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
@@ -281,6 +284,7 @@ export function createChatSurface(
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
 
   function teardownActiveChat(): void {
+    transcriptViewport.dispose();
     forkOriginController.invalidateRefresh();
     readOnlyView = null;
     preserveOutgoingWorkingDot(null);
@@ -467,7 +471,6 @@ export function createChatSurface(
       });
     });
 
-    stickToBottom = true;
     container.replaceChildren(chatState.host);
     const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
     drawActiveChat(agent, { forceScroll: true });
@@ -1024,7 +1027,10 @@ export function createChatSurface(
         `,
         host,
       );
-      requestAnimationFrame(() => decorateTextCodeBlocks(host));
+      requestAnimationFrame(() => {
+        decorateTextCodeBlocks(host);
+        if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
+      });
     };
     readonlyRedraw = draw;
     draw();
@@ -1263,7 +1269,7 @@ export function createChatSurface(
           }
           ${glanceTier || ctx.pane ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
-          <section class="chat-scroll" @scroll=${onTranscriptScroll}>
+          <section class="chat-scroll">
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
@@ -2657,34 +2663,13 @@ export function createChatSurface(
     return fileChip(file.name, file.sizeBytes, href);
   }
 
-  let stickToBottom = true;
-
-  function onTranscriptScroll(e: Event): void {
-    const s = e.currentTarget as HTMLElement;
-    stickToBottom = s.scrollHeight - s.scrollTop - s.clientHeight <= 120;
-  }
-
   function scrollToBottom(): void {
-    stickToBottom = true;
     scrollTranscript(true);
   }
 
   function scrollTranscript(force = false): void {
-    const scroller = ctx.container()?.querySelector<HTMLElement>(".chat-scroll");
-    if (!scroller) return;
-    if (!force && !stickToBottom) return;
-    requestAnimationFrame(() => {
-      if (force) {
-        const prev = scroller.style.scrollBehavior;
-        scroller.style.scrollBehavior = "auto";
-        scroller.scrollTop = scroller.scrollHeight;
-        requestAnimationFrame(() => {
-          scroller.style.scrollBehavior = prev;
-        });
-        return;
-      }
-      scroller.scrollTop = scroller.scrollHeight;
-    });
+    transcriptViewport.sync(ctx.container()?.querySelector<HTMLElement>(".chat-scroll") ?? null);
+    transcriptViewport.follow(force);
   }
 
   redrawHooks.add(redrawForConnector);
