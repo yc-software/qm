@@ -338,6 +338,7 @@ export async function limitedSessionParity(
   if (fellBack) return { status: "fallback" };
   const covered = projectTapeEntries(sessionId, rows)?.coveredSeq ?? -1;
   const snapshotLatest = entries.length ? entries[entries.length - 1]!.seq : -1;
+  if (covered < snapshotLatest) return { status: "fallback" };
   const served = servedRead.filter((e) => e.seq <= snapshotLatest);
   const floor = served[0]?.seq ?? Number.MAX_SAFE_INTEGER;
   const expected = entries.filter((e) => e.seq >= floor && e.seq <= covered);
