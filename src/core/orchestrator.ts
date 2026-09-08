@@ -3016,7 +3016,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
           }
           latchedCoverageSeq = lastSeq;
-          await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: sync", e));
         };
         if (
           input.addressed &&
@@ -3399,6 +3398,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         if (input.background && finalResult.status !== "pending_approval") {
           tailOwnsCleanup = true;
+          await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: sync", e));
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
           leaseReleased = true;
@@ -3537,6 +3537,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         stopLeaseKeepalive();
         if (!tailOwnsCleanup) await reclaimBox();
         if (!leaseReleased) {
+          await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: sync", e));
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }

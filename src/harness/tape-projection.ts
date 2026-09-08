@@ -555,6 +555,38 @@ export interface SearchIndexSync {
 
 const SEARCH_SYNC_ROW_CAP = 500;
 
+function stampedFinalEntries(sessionId: string, rows: readonly TapeRecord[]): SessionEntry[] {
+  const finals: SessionEntry[] = [];
+  for (const row of rows) {
+    if (row.kind === "message") {
+      if (row.entrySeq === undefined || row.meta?.bareText === undefined || row.meta?.overheard) continue;
+      finals.push({
+        sessionId,
+        seq: row.entrySeq,
+        parentSeq: row.entrySeq === 0 ? null : row.entrySeq - 1,
+        type: "user",
+        payload: { text: row.meta.bareText, ...(row.meta.author ? { name: row.meta.author } : {}) },
+        scopeLabel: row.scopeLabel,
+        createdAt: row.meta.entryCreatedAt ?? row.createdAt,
+      });
+      continue;
+    }
+    if (row.kind !== "annotation") continue;
+    const mirror = entryMirror(row);
+    if (!mirror || mirror.exact === undefined) continue;
+    finals.push({
+      sessionId,
+      seq: mirror.exact,
+      parentSeq: mirror.exact === 0 ? null : mirror.exact - 1,
+      type: mirror.type,
+      payload: mirror.payload,
+      scopeLabel: mirror.scopeLabel,
+      createdAt: mirror.createdAt,
+    });
+  }
+  return finals.sort((a, b) => a.seq - b.seq);
+}
+
 export async function syncSearchIndex(
   sessions: Pick<SessionStore, "getTape" | "appendSearchEntries" | "searchIndexCoverage">,
   lease: Lease,
@@ -562,8 +594,10 @@ export async function syncSearchIndex(
   const watermark = await sessions.searchIndexCoverage(lease.sessionId);
   if (unservableTapes.has(lease.sessionId)) return { servable: false, indexed: 0, coveredSeq: watermark };
   let fullRows: TapeRecord[] | null = null;
+  let readRows: TapeRecord[] = [];
   const projection = await (async () => {
     const suffix = await sessions.getTape(lease.sessionId, { limit: SEARCH_SYNC_ROW_CAP });
+    readRows = suffix;
     if (suffix.length < SEARCH_SYNC_ROW_CAP) {
       fullRows = suffix;
       return projectTapeEntries(lease.sessionId, suffix);
@@ -571,6 +605,7 @@ export async function syncSearchIndex(
     const anchored = projectTapeEntries(lease.sessionId, suffix, { anchored: true });
     if (anchored && anchored.baseSeq <= watermark) return anchored;
     fullRows = await sessions.getTape(lease.sessionId);
+    readRows = fullRows;
     return projectTapeEntries(lease.sessionId, fullRows);
   })();
   if (!projection) {
@@ -578,6 +613,13 @@ export async function syncSearchIndex(
     return { servable: false, indexed: 0, coveredSeq: watermark };
   }
   const fresh = searchRowsFromEntries(projection.entries, watermark);
+  let tailCursor = Math.max(watermark, projection.coveredSeq);
+  for (const entry of stampedFinalEntries(lease.sessionId, readRows)) {
+    if (entry.seq <= tailCursor) continue;
+    if (entry.seq !== tailCursor + 1) break;
+    fresh.push(...searchRowsFromEntries([entry], tailCursor));
+    tailCursor = entry.seq;
+  }
   if (fresh.length) await sessions.appendSearchEntries(lease, fresh);
   return { servable: true, indexed: fresh.length, coveredSeq: projection.coveredSeq };
 }

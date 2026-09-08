@@ -114,7 +114,7 @@ async function tapeOnlyTurn(
   const { store, lease } = sim;
   const tape = (rec: Parameters<SessionStore["appendTape"]>[1]) => store.appendTape(lease, rec);
   const userSeq = baseSeq;
-  const replySeq = baseSeq + 1;
+  const replySeq = baseSeq + 1 + (turn.thinking ? 1 : 0) + (turn.toolResult ? 2 : 0);
   const at = Date.now();
   await tape({
     kind: "message",
@@ -405,6 +405,79 @@ test("a permanently unservable session is memoized: the next sync never re-reads
   await tapeOnlyTurn(other, { input: "unrelated question", reply: "unrelated answer" }, 0);
   const otherSync = await syncSearchIndex(other.store, other.lease);
   assert.ok(otherSync.servable, "the memo is per session, not global");
+});
+
+test("a stamped trigger in an open span is searchable before the turn settles", async () => {
+  const sim = await simSession();
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "please approve this push" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "please approve this push", entryCreatedAt: Date.now() },
+  });
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "execute", arguments: { command: "git push" } }],
+      stopReason: "stop",
+    },
+    scopeLabel: scope,
+  });
+  const sync = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(sync.servable, true);
+  assert.equal(sync.indexed, 1);
+  assert.equal((await sim.store.searchEntries(VIEWER, "approve this push")).length, 1);
+});
+
+test("open-tail indexing stops at a draft gap so a later settle still indexes the drafts", async () => {
+  const sim = await simSession();
+  const tape = (rec: Parameters<SessionStore["appendTape"]>[1]) => sim.store.appendTape(sim.lease, rec);
+  const at = Date.now();
+  await tape({
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "kick off the deploy" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "kick off the deploy", entryCreatedAt: at },
+  });
+  await tape({
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "starting the deploy runbook" },
+        { type: "toolCall", id: "c1", name: "execute", arguments: { command: "deploy" } },
+      ],
+      stopReason: "stop",
+    },
+    scopeLabel: scope,
+  });
+  await tape({
+    kind: "annotation",
+    payload: { entry: { type: "assistant", payload: { text: "deploy note landed" }, at } },
+    scopeLabel: scope,
+    entrySeq: 3,
+  });
+  const early = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(early.indexed, 1, "only the contiguous stamped trigger is indexed while the span is open");
+  assert.equal((await sim.store.searchEntries(VIEWER, "kick off")).length, 1);
+  assert.deepEqual(await sim.store.searchEntries(VIEWER, "deploy note"), []);
+  await tape({
+    kind: "annotation",
+    payload: { turnEnd: true, render: TAPE_RENDER_VERSION },
+    scopeLabel: scope,
+    entrySeq: 3,
+  });
+  const settled = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(settled.indexed, 2);
+  assert.equal((await sim.store.searchEntries(VIEWER, "deploy runbook")).length, 1);
+  assert.equal((await sim.store.searchEntries(VIEWER, "deploy note")).length, 1);
 });
 
 test("a settled session's turn-end sync reads a bounded tape suffix, not the whole tape", async () => {
