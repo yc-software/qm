@@ -49,7 +49,9 @@ function strip(saved: StoredCustomProvider): CustomProviderSpec {
 export function createCustomProviderStore(input: {
   backing: DurableMap<StoredCustomProvider>;
   keyMaterial: string | Buffer;
+  write?: <T>(fn: () => Promise<T>) => Promise<T>;
 }): CustomProviderStore {
+  const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
   const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
 
   return {
@@ -78,31 +80,35 @@ export function createCustomProviderStore(input: {
     },
 
     async upsert(spec, apiKey, updatedBy) {
-      validateCustomProviderSpec(spec);
-      const actor = updatedBy.trim();
-      if (!actor) throw new Error("updatedBy is required");
-      const existing = await input.backing.get(spec.id);
-      const trimmedKey = apiKey?.trim();
-      const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
-      await input.backing.put(spec.id, {
-        ...spec,
-        ...(apiKeyEnc ? { apiKeyEnc } : {}),
-        disabled: false,
-        updatedAt: Date.now(),
-        updatedBy: actor,
+      return write(async () => {
+        validateCustomProviderSpec(spec);
+        const actor = updatedBy.trim();
+        if (!actor) throw new Error("updatedBy is required");
+        const existing = await input.backing.get(spec.id);
+        const trimmedKey = apiKey?.trim();
+        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
+        await input.backing.put(spec.id, {
+          ...spec,
+          ...(apiKeyEnc ? { apiKeyEnc } : {}),
+          disabled: false,
+          updatedAt: Date.now(),
+          updatedBy: actor,
+        });
       });
     },
 
     async delete(id, updatedBy) {
-      const existing = await input.backing.get(id);
-      if (!existing || existing.disabled) return false;
-      await input.backing.put(id, {
-        ...existing,
-        disabled: true,
-        updatedAt: Date.now(),
-        updatedBy,
+      return write(async () => {
+        const existing = await input.backing.get(id);
+        if (!existing || existing.disabled) return false;
+        await input.backing.put(id, {
+          ...existing,
+          disabled: true,
+          updatedAt: Date.now(),
+          updatedBy,
+        });
+        return true;
       });
-      return true;
     },
   };
 }

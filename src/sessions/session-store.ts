@@ -473,7 +473,7 @@ export interface DistinctScope {
   channelName?: string;
 }
 
-export interface EntrySearchHit {
+export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;
   seq: number;
   type: EntryType;
@@ -704,6 +704,7 @@ export interface SessionStore {
 
   appendSearchEntries(lease: Lease, rows: readonly NewSearchEntry[]): Promise<void>;
   searchIndexCoverage(sessionId: string): Promise<number>;
+  missingSearchEntries(sessionId: string): Promise<number>;
   lastSearchableEntrySeq(sessionId: string): Promise<number>;
 
   scanAll(): Promise<Session[]>;

@@ -1,5 +1,7 @@
+import type { ModelVerifier } from "../model/model-verification.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { SessionShareStore } from "../sessions/session-share.ts";
+import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
 import type { ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
@@ -104,6 +106,9 @@ export interface ServerDeps {
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
   modelCredentialFetch?: typeof fetch;
+  modelRegistry?: ModelOverlayStore;
+  modelVerifier?: ModelVerifier;
+  refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;
   brandingDefault?: OrgBranding;

@@ -32,11 +32,23 @@ test("every drop zone the canvas renders has a positioning rule in shell.css", (
   assert.deepEqual(missing, [], "drop zones rendered with no .zone-<edge> rule (they collapse to 0×0)");
 });
 
-test("no surface paints a shadow", () => {
-  const painted = [...(shellCss + tsSource).matchAll(/(?:box|text)-shadow\s*:\s*([^;}]+)/g)]
+test("only the elevated chat surfaces paint a shadow", () => {
+  const elevated = [".pinned-strip", ".message-stack .user-row.stuck > .user-bubble", ".composer-wrap"];
+  const rules = shellCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  const painted = [...rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
+    [...rule[2].matchAll(/(box|text)-shadow\s*:\s*([^;}]+)/g)]
+      .filter((shadow) => shadow[2].trim() !== "none")
+      .map((shadow) => [rule[1].trim(), shadow[1], shadow[2].trim()]),
+  );
+  assert.deepEqual(
+    painted,
+    elevated.map((selector) => [selector, "box", "var(--chat-surface-shadow)"]),
+    "only the pinned strip, latest prompt bubble, and composer may use the shared elevation shadow",
+  );
+  const inlineShadows = [...tsSource.matchAll(/(?:box|text)-shadow\s*:\s*([^;}]+)/g)]
     .map((m) => m[1].trim())
     .filter((v) => v !== "none");
-  assert.deepEqual(painted, [], "shadows are not part of this app's surface treatment");
+  assert.deepEqual(inlineShadows, [], "inline styles must not introduce additional shadows");
   assert.doesNotMatch(shellCss + tsSource, /drop-shadow\(/);
 });
 

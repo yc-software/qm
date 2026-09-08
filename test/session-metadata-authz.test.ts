@@ -66,7 +66,9 @@ test("the single-session read applies the managed-project check the session list
     "the list agrees while membership stands",
   );
 
+  assert.ok((await built.app.searchSessions("member", "push")).some((hit) => hit.sessionId === sessionId));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
+  assert.deepEqual(await built.app.searchSessions("member", "push"), []);
   assert.ok(
     await built.sessions.getForParticipant(sessionId, "member"),
     "the participant row outlives the project membership, so the project check is what must reject",

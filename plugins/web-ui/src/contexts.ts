@@ -27,7 +27,7 @@ import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
-import { mainConversation } from "./conversations";
+import { startNewChat } from "./sessions";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
 import { activityOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
@@ -1444,7 +1444,7 @@ function selectContext(scopeId: string | null): void {
 }
 
 function startChatIn(c: CoreContext): void {
-  mainConversation().newChat(c.kind === "personal" ? undefined : { scopeId: c.scopeId, name: c.name });
+  startNewChat(c.kind === "personal" ? null : c.scopeId, c.name);
 }
 
 async function openFromContext(s: CoreSession): Promise<void> {

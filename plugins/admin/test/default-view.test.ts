@@ -285,7 +285,7 @@ test("governance reviews high-impact changes in product and preserves drafts", (
   assert.doesNotMatch(html, /confirm\("Enable Dangerous/);
 });
 
-test("governance disables egress controls when the deployment cannot enforce them", () => {
+test("governance disables egress controls when agent computers cannot enforce them", () => {
   assert.match(html, /id="egress-capability"/);
   assert.doesNotMatch(html, /View deployment/);
   assert.match(html, /id="egress-deny-editor"/);
@@ -298,11 +298,16 @@ test("governance disables egress controls when the deployment cannot enforce the
   assert.match(html, /capability\.classList\.toggle\("hidden", !!enforcement\.active\)/);
   assert.match(html, /control\.disabled = !enforcement\.active/);
   assert.match(html, /enforcement\.reason === "control_plane_unconfigured"/);
-  assert.match(html, /Egress enforcement has not been activated for this deployment/);
+  assert.match(html, /Egress enforcement has not been activated for agent computers/);
   assert.match(html, /Backend supports policy; control plane inactive/);
   assert.match(html, /Backend cannot enforce host policy/);
   assert.doesNotMatch(html, /fidelity, which cannot enforce outbound host policy/);
   assert.doesNotMatch(html, /Agents still have open outbound access/);
+  assert.match(html, /Agent computer egress policy unavailable/);
+  assert.match(html, /"Agent computers use "\s*\+\s*titleCase\(enforcement.backend\)/);
+  assert.match(html, /cannot enforce host restrictions on all outbound traffic/);
+  assert.match(html, /A configured egress proxy still applies policy to traffic sent through it/);
+  assert.doesNotMatch(html, /This deployment’s|The deployment backend cannot enforce/);
 });
 
 test("governance keeps effective-state summaries synchronized after focused saves", () => {

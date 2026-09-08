@@ -11,6 +11,7 @@
   --radius-lg: 16px;
   --chat-pad: 16px;
   --composer-inset: 13px;
+  --chat-surface-shadow: 0 2px 5px rgb(0 0 0 / 0.08), 0 8px 24px rgb(0 0 0 / 0.1);
   /* Height reserved at the bottom of every chat message for its own hover footer; it doubles
      as the rhythm between message blocks. */
   --meta-lane: 24px;
@@ -500,7 +501,7 @@ a.chat-row-open {
 .session-row:hover .session,
 .session-row:focus-within .session,
 .session-row.menu-open .session {
-  padding-right: 62px;
+  padding-right: 90px;
 }
 .session:hover {
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
@@ -786,6 +787,7 @@ a.chat-row-open {
     color 0.12s ease;
 }
 .session-row:hover .session-menu-btn,
+.session-row:focus-within .session-menu-btn,
 .session-row.menu-open .session-menu-btn,
 .session-menu-btn:focus-visible {
   opacity: 1;
@@ -1335,16 +1337,17 @@ a.chat-row-open {
 }
 .chat-scroll {
   isolation: isolate;
-  --chat-scroll-pad-top: 28px;
+  --chat-scroll-pad-top: 8px;
   container-type: size;
 
-  --chat-prompt-gap: 24px;
+  --chat-edge-space: 24px;
+  --chat-scroll-pad-bottom: calc(var(--chat-edge-space) + 16px);
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
 
-  padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
-  scroll-behavior: smooth;
+  padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
+  scroll-behavior: auto;
 }
 
 .fork-origin-row {
@@ -1405,7 +1408,7 @@ a.chat-row-open {
   top: 0;
   z-index: 6;
   width: min(var(--content-w), 100%);
-  margin: 0 auto 10px;
+  margin: 0 auto 8px;
   border: 1px solid var(--border, #d0d0d0);
   border-radius: 10px;
   background: var(--background, #fff);
@@ -1413,10 +1416,11 @@ a.chat-row-open {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  box-shadow: var(--chat-surface-shadow);
 }
 .pinned-strip.expanded {
   padding: 6px 10px;
-  max-height: min(38vh, 240px);
+  max-height: min(38cqh, 240px);
   overflow-y: auto;
 }
 .pinned-strip-head {
@@ -1553,12 +1557,33 @@ a.chat-row-open {
 }
 .message-stack .user-row:not(:has(~ .user-row)) {
   position: sticky;
-  top: calc(-1 * var(--chat-scroll-pad-top, 0px));
+  top: var(--chat-sticky-top, 0px);
   z-index: 3;
-  padding-top: 14px;
-  margin-top: -14px;
-  margin-bottom: var(--chat-prompt-gap);
-  background: var(--background);
+  padding-top: 8px;
+  margin-top: -8px;
+  margin-bottom: 12px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.message-stack .user-row.sticky-disabled {
+  position: relative;
+  top: auto;
+}
+
+.message-stack .user-row:not(:has(~ .user-row)) > .user-bubble {
+  pointer-events: auto;
+  transition: box-shadow 120ms ease;
+}
+
+.message-stack .user-row.stuck > .user-bubble {
+  box-shadow: var(--chat-surface-shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-stack .user-row > .user-bubble {
+    transition: none;
+  }
 }
 
 .assistant-row + .user-row {
@@ -2463,7 +2488,12 @@ a.chat-row-open {
 }
 
 .chat-bottom-dock {
+  position: relative;
+  z-index: 4;
   min-width: 0;
+}
+.custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {
+  margin-top: -16px;
 }
 
 .bg-chip {
@@ -2496,6 +2526,19 @@ a.chat-row-open {
   margin: 0 auto 8px;
   color: var(--muted-foreground);
   font-size: 12.5px;
+}
+.composer-wrap > .bg-activity {
+  flex: 0 0 calc(100% + var(--composer-pad-inline) + var(--composer-pad-end));
+  width: auto;
+  min-width: 0;
+  margin: calc(-1 * var(--composer-pad-block)) calc(-1 * var(--composer-pad-end)) 8px
+    calc(-1 * var(--composer-pad-inline));
+  padding: 8px var(--composer-pad-end) 8px var(--composer-pad-inline);
+  border-radius: inherit;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--secondary) 40%, var(--background));
 }
 .readonly-chat .bg-activity {
   margin-top: 8px;
@@ -2624,9 +2667,10 @@ a.chat-row-open {
   max-height: 30vh;
 }
 
-.live-work-dock {
-  width: min(var(--content-w), calc(100% - 32px));
-  margin: 0 auto 8px;
+.live-work-status {
+  width: 100%;
+  min-width: 0;
+  margin: 8px 0 0;
   color: var(--muted-foreground);
 }
 .live-work-line {
@@ -2689,15 +2733,15 @@ a.chat-row-open {
   transition: transform 0.15s ease;
 }
 
-.live-work-dock.expanded .live-work-line {
+.live-work-status.expanded .live-work-line {
   flex-wrap: wrap;
 }
-.live-work-dock.expanded .live-work-label {
+.live-work-status.expanded .live-work-label {
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
 }
-.live-work-dock.expanded .live-work-detail {
+.live-work-status.expanded .live-work-detail {
   order: 1;
   flex-basis: 100%;
   margin-top: 4px;
@@ -2706,7 +2750,7 @@ a.chat-row-open {
   text-overflow: clip;
   max-height: 38vh;
 }
-.live-work-dock.expanded .live-work-toggle {
+.live-work-status.expanded .live-work-toggle {
   transform: rotate(90deg);
 }
 
@@ -2816,14 +2860,18 @@ a.chat-row-open {
 }
 
 .composer-wrap {
+  --composer-pad-block: 12px;
+  --composer-pad-inline: 12px;
+  --composer-pad-end: var(--composer-pad-inline);
   position: relative;
   z-index: 1;
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
-  padding: 12px;
+  padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
   border: 1px solid var(--border);
   border-radius: 24px;
   background: var(--background);
+  box-shadow: var(--chat-surface-shadow);
 }
 .composer-input {
   width: 100%;
@@ -3328,7 +3376,7 @@ a.chat-row-open {
   text-underline-offset: 2px;
 }
 .readonly-scroll {
-  --chat-scroll-pad-top: 20px;
+  --chat-scroll-pad-top: 8px;
 }
 .chat-loading {
   flex: 1;
@@ -4564,7 +4612,7 @@ a.chat-row-open {
   .session-row:hover .session,
   .session-row:focus-within .session,
   .session-row.menu-open .session {
-    padding-right: 92px;
+    padding-right: 136px;
   }
   .session-menu {
     right: 0;
@@ -6840,9 +6888,11 @@ h3.ambient-field-label {
   display: none;
 }
 
-/* …but archive has no group-level counterpart (the header's X closes the pane, it doesn't
-   archive), so a lone tab keeps its archive button. */
-.dockview-theme-qm .dv-single-tab .split-tab-archive {
+.split-group-session-action {
+  display: none;
+}
+
+.dockview-theme-qm .dv-single-tab .split-group-session-action {
   display: inline-flex;
 }
 
@@ -6950,9 +7000,7 @@ h3.ambient-field-label {
     min-width 0.12s ease;
 }
 
-/* When the archive button is present it takes the auto margin; the close button that
-   follows sits snug beside it instead of splitting the leftover space. */
-.split-tab-archive + .split-tab-close {
+.split-tab-close + .split-tab-close {
   margin-left: 2px;
 }
 
@@ -6966,6 +7014,7 @@ h3.ambient-field-label {
 }
 
 .dv-tab:hover .split-tab-close,
+.dv-tab:focus-within .split-tab-close,
 .split-tab-close:focus-visible {
   opacity: 0.8;
 }
@@ -7243,9 +7292,9 @@ h3.ambient-field-label {
 }
 
 [data-density="compact"] .chat-scroll {
-  --chat-scroll-pad-top: 14px;
-  --chat-prompt-gap: 14px;
-  padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
+  --chat-scroll-pad-top: 8px;
+  --chat-edge-space: 14px;
+  padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
 }
 [data-density="compact"] .message-row {
   --meta-lane: 20px;
@@ -7267,8 +7316,7 @@ h3.ambient-field-label {
   /* Mid-width surfaces: the floating composer/dock hug the full-width column with 16px
      side margins, but must still clear the device safe areas — the 10px variant below
      only kicks in at <=470px, so the insets need a floor here too. */
-  .composer-wrap,
-  .live-work-dock {
+  .composer-wrap {
     width: auto;
     margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
     margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
@@ -7300,10 +7348,6 @@ h3.ambient-field-label {
     margin-right: calc(22px + env(safe-area-inset-right));
     margin-left: calc(22px + env(safe-area-inset-left));
   }
-  .live-work-dock {
-    margin-right: calc(10px + env(safe-area-inset-right));
-    margin-left: calc(10px + env(safe-area-inset-left));
-  }
   .goal-strip {
     margin-right: calc(18px + env(safe-area-inset-right));
     margin-left: calc(18px + env(safe-area-inset-left));
@@ -7311,8 +7355,8 @@ h3.ambient-field-label {
 }
 [data-density="card"] .context-banner,
 [data-density="strip"] .context-banner,
-[data-density="card"] .live-work-dock,
-[data-density="strip"] .live-work-dock,
+[data-density="card"] .live-work-status,
+[data-density="strip"] .live-work-status,
 [data-density="card"] .goal-strip,
 [data-density="strip"] .goal-strip {
   display: none;
@@ -7322,6 +7366,8 @@ h3.ambient-field-label {
 }
 
 [data-density] .composer-wrap {
+  --composer-pad-block: 6px;
+  --composer-pad-inline: 8px;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -7330,7 +7376,7 @@ h3.ambient-field-label {
      the surface's own width — a pane that fills a wide window centres the composer on the
      transcript column instead of stretching across it, and a narrow one still runs full-bleed. */
   margin-bottom: 10px;
-  padding: 6px 8px;
+  padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
   border-radius: 16px;
 }
 [data-density] .composer-input {
@@ -7459,11 +7505,22 @@ h3.ambient-field-label {
   background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--background));
 }
 
-/* Floating tooltip (ours — never the browser's native title bubble). */
+[data-qm-tooltip-anchor] {
+  anchor-name: --qm-tooltip-anchor;
+}
+
 .qm-tooltip {
   position: fixed;
+  position-anchor: --qm-tooltip-anchor;
+  position-area: top span-all;
+  justify-self: anchor-center;
+  position-try-fallbacks: flip-block;
+  position-visibility: anchors-visible;
+  inset: auto;
+  margin: 7px;
+  width: max-content;
   z-index: 4000;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 14px));
   padding: 4px 8px;
   border-radius: 6px;
   font-size: 11.5px;
@@ -7471,12 +7528,27 @@ h3.ambient-field-label {
   color: var(--background, #fff);
   background: color-mix(in srgb, var(--foreground) 92%, transparent);
   pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.1s ease;
-  white-space: nowrap;
+  display: none;
+  overflow-wrap: anywhere;
 }
 .qm-tooltip.visible {
-  opacity: 1;
+  display: block;
+}
+.qm-tooltip.beside {
+  position-area: right span-all;
+  justify-self: normal;
+  align-self: anchor-center;
+  position-try-fallbacks: --qm-tooltip-above, --qm-tooltip-below;
+}
+@position-try --qm-tooltip-above {
+  position-area: top span-all;
+  justify-self: anchor-center;
+  align-self: normal;
+}
+@position-try --qm-tooltip-below {
+  position-area: bottom span-all;
+  justify-self: anchor-center;
+  align-self: normal;
 }
 
 /* ===== Chat search palette (⌘K) ===== */
@@ -7770,8 +7842,7 @@ h3.ambient-field-label {
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
-.inbox-toolbar-spacer,
-.inbox-draft-spacer {
+.inbox-toolbar-spacer {
   flex: 1;
 }
 .inbox-chips {
@@ -8172,6 +8243,7 @@ h3.ambient-field-label {
   gap: 8px;
 }
 .inbox-draft-label {
+  margin-right: auto;
   font-size: 11px;
   color: var(--muted-foreground);
 }
@@ -8190,7 +8262,6 @@ h3.ambient-field-label {
   text-decoration: underline;
 }
 .inbox-session-link {
-  margin-left: auto;
   font-size: 11px;
 }
 .inbox-draft-headers-fields {
@@ -8276,17 +8347,6 @@ h3.ambient-field-label {
 .inbox-draft-body:focus-visible {
   outline: none;
   border-color: var(--accent);
-}
-.inbox-draft-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.inbox-draft-actions .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
 }
 .inbox-chat {
   display: flex;
@@ -8443,7 +8503,53 @@ h3.ambient-field-label {
 }
 .inbox-chat-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.inbox-chat-suggest {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.inbox-chat-composer.has-text .inbox-chat-suggest {
+  visibility: hidden;
+}
+.inbox-suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+.inbox-suggest-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--foreground);
+}
+.inbox-suggest-chip.primary {
+  border-color: color-mix(in srgb, var(--cta) 45%, var(--border));
+  color: var(--cta);
+  background: color-mix(in srgb, var(--cta) 7%, transparent);
+}
+.inbox-suggest-chip.primary:hover:not(:disabled) {
+  border-color: var(--cta);
+  background: color-mix(in srgb, var(--cta) 14%, transparent);
+}
+.inbox-suggest-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .inbox-chat-send {
   display: inline-flex;
@@ -8879,12 +8985,12 @@ h3.ambient-field-label {
   min-height: 0;
 }
 .mini-convo-body .chat-scroll {
-  --chat-scroll-pad-top: 12px;
-  --chat-prompt-gap: 12px;
+  --chat-scroll-pad-top: 8px;
+  --chat-edge-space: 12px;
   --chat-pad: 12px;
   container-type: normal;
   max-height: 250px;
-  padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
+  padding: var(--chat-scroll-pad-top) var(--chat-pad) var(--chat-scroll-pad-bottom);
 }
 .mini-convo-body .message-stack {
   width: 100%;
@@ -9502,7 +9608,10 @@ h3.ambient-field-label {
   .composer-wrap {
     width: calc(100% - 16px);
     margin: 0 auto calc(8px + env(safe-area-inset-bottom));
-    padding: 8px 8px 8px 10px;
+    --composer-pad-block: 8px;
+    --composer-pad-inline: 10px;
+    --composer-pad-end: 8px;
+    padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
     border-radius: 22px;
   }
   .composer-input {
@@ -9628,6 +9737,7 @@ h3.ambient-field-label {
     margin-bottom: 0;
   }
 
+  .sidebar .session-share-btn,
   .sidebar .session-archive-btn {
     display: none;
   }
@@ -9858,16 +9968,6 @@ h3.ambient-field-label {
   }
 }
 
-.session-share-button {
-  flex-shrink: 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  padding: 4px 9px;
-  font-size: 12px;
-  cursor: pointer;
-}
 .session-share-dialog {
   width: min(480px, calc(var(--share-dialog-space, 100vw) - 40px));
 }

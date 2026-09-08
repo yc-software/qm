@@ -1,3 +1,4 @@
+import { metadata } from "./model-metadata.ts";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
@@ -17,7 +18,13 @@ test("a web turn submits the fetched OpenRouter model selected by runtime config
     ["pi"],
     { pi: ["anthropic/claude-sonnet-4.5"] },
     { harnessId: "pi", modelId: "anthropic/claude-sonnet-4.5" },
-    { "anthropic/claude-sonnet-4.5": { name: "Anthropic: Claude Sonnet 4.5", provider: "openrouter" } },
+    {
+      "anthropic/claude-sonnet-4.5": metadata(
+        "anthropic/claude-sonnet-4.5",
+        "Anthropic: Claude Sonnet 4.5",
+        "openrouter",
+      ),
+    },
   );
   const model = getModelOptions()[0]!.model;
   const submitted: Record<string, unknown>[] = [];

@@ -131,6 +131,8 @@ import { workSeconds, workedLabel } from "./work-duration";
 import { markClampedPrompts } from "./prompt-clamp";
 import { decorateTextCodeBlocks, normalizePlainTextFences } from "./text-code";
 
+import { createTranscriptViewport } from "./transcript-viewport";
+
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
@@ -190,6 +192,7 @@ export function createChatSurface(
   dependencies: { fetchTranscript?: typeof fetchTranscript; openSession?: typeof openSession } = {},
 ): ChatSurface {
   const runSlot = createRunSlot();
+  const transcriptViewport = createTranscriptViewport();
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
@@ -284,6 +287,7 @@ export function createChatSurface(
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
 
   function teardownActiveChat(): void {
+    transcriptViewport.dispose();
     forkOriginController.invalidateRefresh();
     readOnlyView = null;
     preserveOutgoingWorkingDot(null);
@@ -401,12 +405,12 @@ export function createChatSurface(
     chatState.host = document.createElement("div");
     chatState.host.className = "custom-chat";
 
-    const model = ctx.composer.currentModelOption().model;
+    const model = ctx.composer.currentModelOption()?.model;
     const defaultThinkingLevel = defaultEffortForModel(model);
     const agent = new Agent({
       initialState: {
         systemPrompt: "",
-        model,
+        ...(model ? { model } : {}),
         ...(defaultThinkingLevel === "low" ? { thinkingLevel: "low" as const } : {}),
         messages,
         tools: [],
@@ -471,7 +475,6 @@ export function createChatSurface(
       });
     });
 
-    stickToBottom = true;
     container.replaceChildren(chatState.host);
     const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
     drawActiveChat(agent, { forceScroll: true });
@@ -521,7 +524,9 @@ export function createChatSurface(
   }
 
   function currentTurnOptions(): TurnOptions {
-    const { harnessId: harness } = ctx.composer.currentModelOption();
+    const selected = ctx.composer.currentModelOption();
+    if (!selected) throw new Error("No model is available");
+    const harness = selected.harnessId;
     return {
       ...(harnessSupportsEffort(harness) ? { effortLevel: ctx.composer.state.effortLevel } : {}),
       ...(harnessSupportsFastMode(harness) ? { fastMode: ctx.composer.state.fastMode } : {}),
@@ -1030,6 +1035,7 @@ export function createChatSurface(
       requestAnimationFrame(() => {
         decorateTextCodeBlocks(host);
         markClampedPrompts(host);
+        if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
       });
     };
     readonlyRedraw = draw;
@@ -1275,17 +1281,17 @@ export function createChatSurface(
           }
           ${glanceTier || ctx.pane ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
-          <section class="chat-scroll" @scroll=${onTranscriptScroll}>
+          <section class="chat-scroll">
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing} ${liveWorkStatus(agent)}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${backgroundActivityStrip()} ${goalStrip(agent)} ${liveWorkDock(agent)} ${ctx.composer.queuedStrip(agent)}
-            ${ctx.composer.composerForm(agent)}
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
+            ${ctx.composer.composerForm(agent, backgroundActivityStrip())}
           </div>
         </div>
       `,
@@ -2143,7 +2149,7 @@ export function createChatSurface(
     `;
   }
 
-  function liveWorkDock(agent: Agent): TemplateResult | typeof nothing {
+  function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
@@ -2153,7 +2159,7 @@ export function createChatSurface(
     let title = "";
     if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
     return html`
-      <section class="live-work-dock ${expanded ? "expanded" : ""}" aria-live="polite">
+      <section class="live-work-status ${expanded ? "expanded" : ""}" aria-live="polite">
         <button
           type="button"
           class="live-work-line ${expandable ? "" : "static"}"
@@ -2686,34 +2692,13 @@ export function createChatSurface(
     return fileChip(file.name, file.sizeBytes, href);
   }
 
-  let stickToBottom = true;
-
-  function onTranscriptScroll(e: Event): void {
-    const s = e.currentTarget as HTMLElement;
-    stickToBottom = s.scrollHeight - s.scrollTop - s.clientHeight <= 120;
-  }
-
   function scrollToBottom(): void {
-    stickToBottom = true;
     scrollTranscript(true);
   }
 
   function scrollTranscript(force = false): void {
-    const scroller = ctx.container()?.querySelector<HTMLElement>(".chat-scroll");
-    if (!scroller) return;
-    if (!force && !stickToBottom) return;
-    requestAnimationFrame(() => {
-      if (force) {
-        const prev = scroller.style.scrollBehavior;
-        scroller.style.scrollBehavior = "auto";
-        scroller.scrollTop = scroller.scrollHeight;
-        requestAnimationFrame(() => {
-          scroller.style.scrollBehavior = prev;
-        });
-        return;
-      }
-      scroller.scrollTop = scroller.scrollHeight;
-    });
+    transcriptViewport.sync(ctx.container()?.querySelector<HTMLElement>(".chat-scroll") ?? null);
+    transcriptViewport.follow(force);
   }
 
   redrawHooks.add(redrawForConnector);

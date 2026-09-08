@@ -73,7 +73,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     emit: turn.emit,
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,
-    screenExternalContent: turn.screenExternalContent,
+    screenToolResult: turn.screenToolResult,
     toolApprovalGate: turn.toolApprovalGate,
   };
 }

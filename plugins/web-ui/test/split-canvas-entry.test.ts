@@ -18,32 +18,24 @@ const fn = (src: string, name: string): string => {
   return body;
 };
 
-test("no new-chat affordance can cost the user their canvas", () => {
-  assert.match(split, /export function addBlankPane\(scopeId\?: string\): boolean \{/);
-  const add = fn(split, "addBlankPane");
-  assert.match(add, /if \(!splitState\.active \|\| !dockApi\) return false;/, "no canvas ⇒ the caller must fall back");
-  assert.match(add, /return true;\n\}$/, "having split, the canvas owns the click");
-  assert.doesNotMatch(add.slice(add.indexOf("splitPane(")), /return false/, "a full canvas must not fall through");
-
-  assert.match(shell, /startNewChatInLastScope\(\);/, "the sidebar routes its click through the shared starter");
-  assert.doesNotMatch(shell, /addBlankPane/, "and never mounts a chat behind the canvas' back");
+test("every new-chat affordance follows the shared placement rule", () => {
+  const placed = fn(split, "startNewChatInCanvas");
+  assert.match(placed, /dockApi\.panels\.length >= MAX_PANES/);
+  assert.match(placed, /dockApi\.removePanel\(target\)/);
+  assert.match(placed, /dockApi\.groups\.length > 1 && dockApi\.groups\.length < MAX_TILES/);
   const start = fn(sessions, "startNewChat");
-  const claimed = start.indexOf("addBlankPane(scopeId ?? undefined)");
-  assert.ok(claimed > 0, "every new-chat affordance must offer the click to the canvas");
-  assert.match(
-    start.slice(claimed),
-    /^addBlankPane\(scopeId \?\? undefined\)\) return;/m,
-    "and bail out when it takes it",
-  );
-  assert.ok(
-    start.indexOf("addPendingSession(mainConversation().newChat(") > claimed,
-    "only then may it mount a single chat",
-  );
-  assert.match(fn(sessions, "startProjectChat"), /startNewChat\(scopeId, name\);/, "the project + shares that path");
-  assert.match(fn(sessions, "startNewChatInLastScope"), /startNewChat\(/, "so does the sidebar's Create New Chat");
-
-  assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
-  assert.doesNotMatch(fn(split, "exitSplitIfActive"), /removeItem|lastLayout = null/);
+  assert.match(start, /if \(splitState\.active\) return startNewChatInCanvas/);
+  assert.match(start, /addPendingSession\(conv\.newChat/);
+  assert.match(shell, /startNewChatInLastScope\(\);/);
+  assert.match(fn(sessions, "startProjectChat"), /startNewChat\(scopeId, name\);/);
+  assert.match(fn(sessions, "startNewChatInLastScope"), /startNewChat\(/);
+  assert.match(fn(shell, "openAppEditChat"), /startNewChat\(null, null, threadRef\)/);
+  for (const file of ["contexts.ts", "search.ts", "crons.ts"]) {
+    const source = read(file);
+    assert.doesNotMatch(source, /\.newChat\(/);
+    assert.match(source, /startNewChat\(/);
+  }
+  assert.match(sessions, /action: \{ label: "New chat", onClick: \(\) => startNewChat\(\) \}/);
 });
 
 test("a pane opened from a project's + starts its chat in that project", () => {

@@ -787,9 +787,11 @@ function threadMoreTpl(item: InboxItem, expanded: boolean): TemplateResult | typ
   </button>`;
 }
 
-function sendLabel(item: InboxItem, busy: boolean): string {
-  if (busy) return "Sending…";
-  return item.source === "gmail" ? "Send reply" : "Send to Slack";
+function syncAskEnabled(box: HTMLTextAreaElement): void {
+  const composer = box.closest(".inbox-chat-composer");
+  const send = composer?.querySelector<HTMLButtonElement>(".inbox-chat-send");
+  if (send) send.disabled = !box.value.trim();
+  composer?.classList.toggle("has-text", !!box.value.trim());
 }
 
 export function chatTpl(item: InboxItem): TemplateResult {
@@ -832,8 +834,8 @@ export function chatTpl(item: InboxItem): TemplateResult {
               )}
             </div>`
       }
-      ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
-      <div class="inbox-chat-composer">
+      ${busy ? html`<div class="inbox-chat-working">Thinking…</div>` : nothing}
+      <div class="inbox-chat-composer ${pending.trim() ? "has-text" : ""}">
         <textarea
           class="inbox-chat-input"
           rows="1"
@@ -854,6 +856,30 @@ export function chatTpl(item: InboxItem): TemplateResult {
           }}
         ></textarea>
         <div class="inbox-chat-actions">
+          <div class="inbox-chat-suggest">
+            ${
+              item.status === "open"
+                ? html`
+                    <button
+                      class="inbox-suggest-chip primary"
+                      type="button"
+                      ?disabled=${sending.has(item.id)}
+                      ${tip(item.source === "gmail" ? "Send the drafted reply in Gmail" : "Send the drafted reply to Slack")}
+                      @click=${() => void sendItem(item)}
+                    >
+                      ${icon(Send, 12)}<span>${sending.has(item.id) ? "Sending…" : "Send it"}</span>
+                    </button>
+                    <button
+                      class="inbox-suggest-chip"
+                      type="button"
+                      @click=${() => void setItemStatus(item, "dismissed")}
+                    >
+                      ${icon(X, 12)}<span>Dismiss</span>
+                    </button>
+                  `
+                : nothing
+            }
+          </div>
           <button
             class="btn inbox-chat-send"
             type="button"
@@ -877,7 +903,6 @@ export function chatTpl(item: InboxItem): TemplateResult {
 
 export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): TemplateResult {
   const draft = effectiveDraft(item);
-  const busy = sending.has(item.id);
   const gmail = item.source === "gmail";
   const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
   return html`
@@ -893,6 +918,13 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                 @click=${(e: MouseEvent) => openDraftSession(e, item.draftSessionId!)}
               >
                 ${icon(ArrowUpRight, 12)}<span>Open agent session</span>
+              </a>`
+            : nothing
+        }
+        ${
+          item.externalUrl
+            ? html`<a class="inbox-external-link" href=${item.externalUrl} target="_blank" rel="noreferrer noopener">
+                ${icon(ArrowUpRight, 12)}<span>Open in ${gmail ? "Gmail" : "Slack"}</span>
               </a>`
             : nothing
         }
@@ -949,22 +981,6 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
           @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
           @blur=${() => void persistDraft(item)}
         ></textarea>
-      </div>
-      <div class="inbox-draft-actions">
-        <button class="btn primary inbox-send-btn" type="button" ?disabled=${busy} @click=${() => void sendItem(item)}>
-          ${icon(Send, 13)}<span>${sendLabel(item, busy)}</span>
-        </button>
-        <button class="btn" type="button" @click=${() => void setItemStatus(item, "dismissed")}>
-          ${icon(X, 13)}<span>Dismiss</span>
-        </button>
-        <span class="inbox-draft-spacer"></span>
-        ${
-          item.externalUrl
-            ? html`<a class="inbox-external-link" href=${item.externalUrl} target="_blank" rel="noreferrer noopener">
-                ${icon(ArrowUpRight, 13)}<span>Open in ${gmail ? "Gmail" : "Slack"}</span>
-              </a>`
-            : nothing
-        }
       </div>
       ${
         !gmail && item.reactions?.length

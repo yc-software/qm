@@ -1078,3 +1078,19 @@ test("a summary that landed while the pass was summarizing makes it drop its own
   assert.equal(contextSummaryPayload(summaries[0]!)?.text, "a rival fold");
   assert.equal(resetCalls.length, 0, "the dropped pass never reached its write");
 });
+
+test("the token estimate counts the environment note persisted on a user entry", () => {
+  const environment = `<environment>\n${"## What you remember\nlikes terse replies. ".repeat(40)}\n</environment>`;
+  const bare = {
+    sessionId: "s",
+    seq: 1,
+    parentSeq: null,
+    type: "user",
+    payload: { text: "hi" },
+    scopeLabel: "org:o",
+    createdAt: 1,
+  } as SessionEntry;
+  const withEnv = { ...bare, seq: 2, payload: { text: "hi", environment } } as SessionEntry;
+  const delta = estimateHistoryTokens([withEnv]) - estimateHistoryTokens([bare]);
+  assert.ok(delta >= countTokens(environment) * 0.9, `environment tokens must be counted (delta ${delta})`);
+});

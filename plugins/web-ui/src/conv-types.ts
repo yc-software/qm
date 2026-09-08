@@ -1,5 +1,5 @@
 import type { Agent } from "@earendil-works/pi-agent-core";
-import type { TemplateResult } from "lit";
+import type { TemplateResult, nothing } from "lit";
 import type { DensityTier } from "./density";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type {
@@ -119,14 +119,14 @@ interface ComposerState {
 export interface ComposerSurface {
   restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;
-  composerForm(agent: Agent): TemplateResult;
+  composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;
   queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
   queuedRunsFor(threadRef: string | null): QueuedRun[];
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
   focusComposerEnd(): void;
   resizeComposer(): void;
-  currentModelOption(): ModelOption;
+  currentModelOption(): ModelOption | undefined;
   carryModelPick(fromThreadRef: string | null, toThreadRef: string): void;
   refreshRuntimeSelection(scopeId: string | null, agent?: Agent): Promise<void>;
   onDragEnter(e: DragEvent): void;

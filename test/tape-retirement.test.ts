@@ -6,7 +6,6 @@ import {
   projectTapeEntries,
   renderableTapeSlice,
   RENDER_IMPORT_EVENT,
-  syncSearchIndex,
 } from "../src/harness/tape-projection.ts";
 import { foldTape } from "../src/harness/tape-fold.ts";
 import { TAPE_RENDER_VERSION, type Lease, type SessionStore, type TapeRecord } from "../src/sessions/session-store.ts";
@@ -378,13 +377,10 @@ test("an uncovered tape gets a fold import before the render stamp", async () =>
   assert.deepEqual(projection!.entries, entries);
 });
 
-test("the search sync advances across a render import instead of wedging", async () => {
+test("search remains complete across a render import", async () => {
   const sim = await preCutoverSession();
   await importSession(sim);
-  const sync = await syncSearchIndex(sim.store, sim.lease);
-  assert.equal(sync.servable, true);
-  assert.ok(sync.indexed >= 2);
-  assert.equal(sync.coveredSeq, (await sim.store.getEntries(sim.session.id)).length - 1);
+  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
 });
 
 test("a tainted uncovered session is refused without a coverage claim", async () => {
@@ -675,4 +671,12 @@ test("limitedSessionParity exercises the bounded read path and detects fallback"
   assert.equal(limited.status, "projected");
   assert.ok(limited.status === "projected");
   assert.deepEqual(limited.report.real, []);
+
+  const staleEntries = await sim.store.getEntries(sim.session.id);
+  const staleRows = await sim.store.getTape(sim.session.id);
+  await simLiveTurn(sim, { input: "one more thing", ts: "1720000000.000300", reply: "Done." });
+  const raced = await limitedSessionParity(sim.store, sim.session.id, staleEntries, staleRows, 3);
+  assert.equal(raced.status, "projected");
+  assert.ok(raced.status === "projected");
+  assert.deepEqual(raced.report.real, [], "a turn landing between the snapshot and the serving read is not a mismatch");
 });

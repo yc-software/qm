@@ -4984,6 +4984,133 @@
             </section>
             <section class="card">
               <div class="head">
+                <h2>Models on existing providers</h2>
+                <p>
+                  Start with a provider and model ID. We look up exact catalog or provider metadata before asking for
+                  any missing details. Organization credentials are inherited; subscription support is not implied.
+                </p>
+              </div>
+              <div class="body">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Provider</th>
+                      <th>Template</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="model-registry-rows"></tbody>
+                </table>
+                <p class="muted" id="model-registry-empty">No additional models.</p>
+              </div>
+              <div class="body setup-form">
+                <label
+                  >Provider
+                  <select id="model-registry-provider">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                  </select></label
+                >
+                <label
+                  >Model ID
+                  <input
+                    type="text"
+                    id="model-registry-id"
+                    autocomplete="off"
+                    placeholder="e.g. claude-opus-4-6"
+                    required
+                /></label>
+              </div>
+              <div class="foot"><button id="model-registry-lookup" class="primary">Look up model</button></div>
+              <div class="body" id="model-registry-result" hidden>
+                <p id="model-registry-source" class="muted"></p>
+                <p id="model-registry-summary"></p>
+                <p id="model-registry-lookup-note" class="muted"></p>
+                <div id="model-registry-missing" hidden>
+                  <h3>Complete missing information</h3>
+                  <p class="muted">
+                    These fields were not available from the exact model record. Use the provider's documentation;
+                    choose a compatible template explicitly.
+                  </p>
+                  <div class="setup-form" id="model-registry-missing-fields"></div>
+                </div>
+                <details id="model-registry-advanced">
+                  <summary>Advanced overrides</summary>
+                  <p class="muted">
+                    Review imported values or override them. Pricing is per million tokens. Overrides require
+                    verification again.
+                  </p>
+                  <div class="setup-form" id="model-registry-advanced-fields">
+                    <label
+                      >Display name <input type="text" id="model-registry-name" autocomplete="off" required
+                    /></label>
+                    <label
+                      >Compatible builtin template
+                      <select id="model-registry-template"></select
+                    ></label>
+                    <p class="muted" id="model-registry-capabilities"></p>
+                    <label
+                      >Context window (tokens)
+                      <input id="model-registry-contextWindow" type="number" min="2" step="1" required
+                    /></label>
+                    <label
+                      >Maximum output (tokens)
+                      <input id="model-registry-maxTokens" type="number" min="1" step="1" required
+                    /></label>
+                    <label
+                      >Input ($ / million tokens)
+                      <input id="model-registry-input" type="number" min="0" step="any" required
+                    /></label>
+                    <label
+                      >Output ($ / million tokens)
+                      <input id="model-registry-output" type="number" min="0" step="any" required
+                    /></label>
+                    <label
+                      >Cache read ($ / million tokens)
+                      <input id="model-registry-cacheRead" type="number" min="0" step="any" required
+                    /></label>
+                    <label
+                      >Cache write ($ / million tokens)
+                      <input id="model-registry-cacheWrite" type="number" min="0" step="any" required
+                    /></label>
+                    <label class="check"
+                      ><input id="model-registry-base" type="checkbox" checked /> Offer in admin model choices</label
+                    >
+                    <label class="check"
+                      ><input id="model-registry-webui" type="checkbox" checked /> Offer in web picker by default</label
+                    >
+                    <label class="check"
+                      ><input id="model-registry-fastMode" type="checkbox" /> Model supports the Anthropic fast
+                      tier</label
+                    >
+                    <label class="check"
+                      ><input id="model-registry-auxiliary" type="checkbox" /> Eligible for auxiliary tasks</label
+                    >
+                    <details>
+                      <summary>Advanced pricing tiers</summary>
+                      <label
+                        >JSON array of inputTokensAbove, input, output, cacheRead and cacheWrite
+                        <textarea id="model-registry-tiers" rows="4" placeholder="[]"></textarea>
+                      </label>
+                    </details>
+                  </div>
+                </details>
+              </div>
+              <p class="muted" id="model-registry-verification-notice">
+                Verify and enable sends a synthetic connection check using the organization's serving credentials. It
+                may incur a small provider charge (up to 128 output tokens per request; an additional check with fast
+                mode; provider retries may apply). A successful check confirms access now, not pricing, maximum context,
+                every capability, or personal-key access. Failed checks do not save or enable the new definition.
+                Existing saved settings remain unchanged. A failed recheck of those settings removes their verification.
+              </p>
+              <div class="foot">
+                <button class="primary" id="model-registry-save" disabled>Verify and enable</button
+                ><button id="model-registry-new">New model</button><span class="status" id="st-model-registry"></span>
+              </div>
+            </section>
+            <section class="card">
+              <div class="head">
                 <h2>Custom providers</h2>
                 <p>
                   Point the deployment at any OpenAI- or Anthropic-compatible endpoint: a vendor like DeepSeek, or a
@@ -5243,8 +5370,10 @@
                   <div class="body">
                     <div class="governance-capability" id="egress-capability" role="status">
                       <div>
-                        <strong>Egress policy unavailable</strong
-                        ><span>The deployment backend cannot enforce outbound host policy.</span>
+                        <strong>Agent computer egress policy unavailable</strong
+                        ><span
+                          >The agent computer provider cannot enforce host restrictions on all outbound traffic.</span
+                        >
                       </div>
                     </div>
                     <div class="egress-empty-state">
@@ -7554,13 +7683,15 @@
         );
         const capability = $("egress-capability");
         capability.classList.toggle("hidden", !!enforcement.active);
-        let enforcementTitle = "Egress policy unavailable";
+        let enforcementTitle = "Agent computer egress policy unavailable";
         if (enforcement.reason === "control_plane_unconfigured") enforcementTitle = "Enforcement is not activated";
         capability.querySelector("strong").textContent = enforcementTitle;
         let enforcementSummary =
-          "This deployment’s " + titleCase(enforcement.backend) + " backend cannot enforce outbound host policy.";
+          "Agent computers use " +
+          titleCase(enforcement.backend) +
+          ", which cannot enforce host restrictions on all outbound traffic. A configured egress proxy still applies policy to traffic sent through it.";
         if (enforcement.reason === "control_plane_unconfigured") {
-          enforcementSummary = "Egress enforcement has not been activated for this deployment.";
+          enforcementSummary = "Egress enforcement has not been activated for agent computers.";
         }
         capability.querySelector("span").textContent = enforcementSummary;
         const egressCard = $("card-egress");
@@ -8764,6 +8895,7 @@
           : "Write-only API key";
       }
       async function loadOnboarding() {
+        await loadModelRegistry();
         const [models, slack, catalog, config] = await Promise.all([
           api("GET", "/api/model-providers"),
           api("GET", "/api/slack-installation"),
@@ -8869,6 +9001,260 @@
         await loadCustomProviders();
         setStatus("st-onboarding-model", "Provider disabled.", "ok");
       };
+      let modelRegistryTemplates = [];
+      let modelRegistryLookup = null;
+      let modelRegistryLookupRequest = 0;
+      let modelRegistryBusy = false;
+      function modelRegistryTemplateOptions() {
+        const select = $("model-registry-template");
+        const previous = select.value;
+        select.replaceChildren();
+        const blank = document.createElement("option");
+        blank.value = "";
+        blank.textContent = "Choose a compatible template";
+        select.appendChild(blank);
+        for (const template of modelRegistryTemplates.filter(
+          (m) => m.provider === $("model-registry-provider").value,
+        )) {
+          const option = document.createElement("option");
+          option.value = template.id;
+          option.textContent = template.name;
+          select.appendChild(option);
+        }
+        select.value = [...select.options].some((option) => option.value === previous) ? previous : "";
+        modelRegistryCapabilities();
+      }
+      function modelRegistryCapabilities() {
+        const template = modelRegistryTemplates.find((m) => m.id === $("model-registry-template").value);
+        $("model-registry-capabilities").textContent = template
+          ? `Inherited: ${template.input.join(", ")} input; reasoning ${template.reasoning ? "yes" : "no"}.`
+          : "";
+      }
+      function modelRegistryIdentity() {
+        return { provider: $("model-registry-provider").value, id: $("model-registry-id").value.trim() };
+      }
+      function resetRegistryLookup() {
+        modelRegistryLookupRequest++;
+        modelRegistryLookup = null;
+        $("model-registry-result").hidden = true;
+        $("model-registry-save").disabled = true;
+        $("model-registry-save").textContent = "Verify and enable";
+        setStatus("st-model-registry", "", "");
+      }
+      function showRegistryLookup(result) {
+        modelRegistryLookup = { ...result, identity: modelRegistryIdentity() };
+        const spec = result.spec;
+        modelRegistryTemplateOptions();
+        for (const field of ["name", "template", "contextWindow", "maxTokens"])
+          $("model-registry-" + field).value = spec[field] ?? "";
+        for (const field of ["input", "output", "cacheRead", "cacheWrite"])
+          $("model-registry-" + field).value = spec.cost?.[field] ?? "";
+        for (const field of ["base", "webui", "auxiliary", "fastMode"])
+          $("model-registry-" + field).checked = spec[field] ?? (field === "base" || field === "webui");
+        $("model-registry-tiers").value = JSON.stringify(spec.cost?.tiers ?? [], null, 2);
+        $("model-registry-source").textContent =
+          "Source: " +
+          result.source +
+          (result.catalogGeneratedAt ? " · catalog " + new Date(result.catalogGeneratedAt).toLocaleDateString() : "");
+        $("model-registry-summary").textContent =
+          result.kind === "builtin"
+            ? `${spec.name} · ${spec.contextWindow.toLocaleString()} context tokens · ${spec.maxTokens.toLocaleString()} maximum output · $${spec.cost.input} input / $${spec.cost.output} output per million tokens`
+            : spec.name || spec.id;
+        $("model-registry-lookup-note").textContent = result.message;
+        $("model-registry-result").hidden = false;
+        const missing = result.missing || [];
+        for (const field of [
+          "name",
+          "template",
+          "contextWindow",
+          "maxTokens",
+          "input",
+          "output",
+          "cacheRead",
+          "cacheWrite",
+        ]) {
+          const label = $("model-registry-" + field).closest("label");
+          $(missing.includes(field) ? "model-registry-missing-fields" : "model-registry-advanced-fields").appendChild(
+            label,
+          );
+        }
+        $("model-registry-missing").hidden = !missing.length;
+        $("model-registry-advanced").hidden = result.kind === "builtin";
+        $("model-registry-advanced").open = false;
+        $("model-registry-save").textContent =
+          result.kind === "builtin" ? "Verify and enable existing model" : "Verify and enable";
+        $("model-registry-save").disabled = false;
+        modelRegistryCapabilities();
+      }
+      function editRegistryModel(spec) {
+        if (modelRegistryBusy) return;
+        resetRegistryLookup();
+        $("model-registry-id").disabled = Boolean(spec);
+        $("model-registry-provider").disabled = Boolean(spec?.provider);
+        $("model-registry-id").value = spec?.id || "";
+        $("model-registry-provider").value = spec?.provider || "openai";
+        modelRegistryTemplateOptions();
+        if (spec)
+          showRegistryLookup({
+            kind: "saved",
+            spec,
+            missing: [
+              ...["name", "template", "contextWindow", "maxTokens"].filter((field) => spec[field] == null),
+              ...["input", "output", "cacheRead", "cacheWrite"].filter((field) => spec.cost?.[field] == null),
+            ],
+            source: "Saved administrator definition",
+            message: "Review the saved definition under Advanced overrides. Changes require verification again.",
+          });
+      }
+      $("model-registry-lookup").onclick = async () => {
+        if (modelRegistryBusy) return;
+        resetRegistryLookup();
+        const request = modelRegistryLookupRequest;
+        const identity = modelRegistryIdentity();
+        $("model-registry-lookup").disabled = true;
+        setStatus("st-model-registry", "Looking up exact model metadata…", "");
+        try {
+          const response = await api("POST", "/api/model-registry/lookup", identity);
+          if (request !== modelRegistryLookupRequest) return;
+          if (!response.ok) throw new Error(response.data?.message || "Lookup failed. Try again.");
+          showRegistryLookup(response.data);
+          setStatus("st-model-registry", "Metadata loaded. Review, then verify access.", "");
+        } catch (error) {
+          if (request === modelRegistryLookupRequest) setStatus("st-model-registry", error.message, "err");
+        } finally {
+          $("model-registry-lookup").disabled = false;
+        }
+      };
+      async function loadModelRegistry() {
+        const response = await api("GET", "/api/model-registry");
+        if (!response.ok) {
+          setStatus("st-model-registry", "Could not load models.", "err");
+          return;
+        }
+        modelRegistryTemplates = response.data.templates;
+        modelRegistryTemplateOptions();
+        const rows = $("model-registry-rows");
+        rows.replaceChildren();
+        const enabled = response.data.models.filter((m) => !m.disabled);
+        $("model-registry-empty").hidden = enabled.length > 0;
+        for (const { spec, unavailableReason, verifiedAt } of enabled) {
+          const row = document.createElement("tr");
+          for (const value of [
+            (spec.name || spec.id) +
+              " (" +
+              spec.id +
+              ")" +
+              (unavailableReason
+                ? " — " + unavailableReason
+                : verifiedAt
+                  ? " — Verified with organization credentials " + new Date(verifiedAt).toLocaleString()
+                  : " — Not verified"),
+            spec.provider || "Unknown",
+            spec.template || "Missing",
+          ]) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+          }
+          const actions = document.createElement("td");
+          const edit = document.createElement("button");
+          edit.textContent = "Edit";
+          edit.onclick = () => editRegistryModel(spec);
+          const remove = document.createElement("button");
+          remove.className = "danger";
+          remove.textContent = "Delete";
+          remove.onclick = async () => {
+            if (!confirm("Delete " + spec.name + "? New uses will be refused.")) return;
+            const result = await api("DELETE", "/api/model-registry/" + encodeURIComponent(spec.id));
+            if (!result.ok) {
+              setStatus("st-model-registry", result.data?.message || "Could not delete model.", "err");
+              return;
+            }
+            await loadOnboarding();
+            editRegistryModel(null);
+            setStatus("st-model-registry", "Model deleted.", "ok");
+          };
+          actions.append(edit, remove);
+          row.appendChild(actions);
+          rows.appendChild(row);
+        }
+      }
+      $("model-registry-provider").onchange = () => {
+        resetRegistryLookup();
+        modelRegistryTemplateOptions();
+      };
+      $("model-registry-id").oninput = resetRegistryLookup;
+      $("model-registry-template").onchange = modelRegistryCapabilities;
+      $("model-registry-new").onclick = () => editRegistryModel(null);
+      $("model-registry-save").onclick = async () => {
+        if (modelRegistryBusy || !modelRegistryLookup) return;
+        const lookup = modelRegistryLookup;
+        const identity = modelRegistryIdentity();
+        if (JSON.stringify(identity) !== JSON.stringify(lookup.identity)) {
+          resetRegistryLookup();
+          return;
+        }
+        const button = $("model-registry-save");
+        let disabledControls = [];
+        try {
+          const value = (field) => $("model-registry-" + field).value.trim();
+          const number = (field) => {
+            if (!value(field)) throw new Error(field + " is required");
+            return Number(value(field));
+          };
+          const builtin = lookup.kind === "builtin";
+          const spec = builtin
+            ? null
+            : {
+                ...identity,
+                name: value("name"),
+                template: value("template"),
+                contextWindow: number("contextWindow"),
+                maxTokens: number("maxTokens"),
+                cost: Object.fromEntries(
+                  ["input", "output", "cacheRead", "cacheWrite"].map((field) => [field, number(field)]),
+                ),
+              };
+          if (spec) {
+            if (!spec.name || !spec.template) throw new Error("Display name and a compatible template are required.");
+            spec.cost.tiers = JSON.parse(value("tiers") || "[]");
+            for (const field of ["base", "webui", "auxiliary", "fastMode"])
+              spec[field] = $("model-registry-" + field).checked;
+          }
+          modelRegistryBusy = true;
+          disabledControls = [...button.closest("section").querySelectorAll("input,select,textarea,button")].map(
+            (el) => [el, el.disabled],
+          );
+          disabledControls.forEach(([el]) => {
+            el.disabled = true;
+          });
+          button.textContent = "Verifying…";
+          setStatus("st-model-registry", "Checking the model with organization credentials…", "");
+          const result = await api(
+            builtin ? "POST" : "PUT",
+            "/api/model-registry/" + encodeURIComponent(identity.id) + (builtin ? "/enable" : ""),
+            builtin ? { provider: identity.provider, verify: true } : { ...spec, verify: true },
+          );
+          if (!result.ok) throw new Error(result.data?.message || "Could not verify model.");
+          await loadOnboarding();
+          setStatus(
+            "st-model-registry",
+            builtin
+              ? result.data.message
+              : "Model verified and enabled with organization credentials. Personal-key access may differ.",
+            "ok",
+          );
+        } catch (error) {
+          setStatus("st-model-registry", error.message, "err");
+        } finally {
+          modelRegistryBusy = false;
+          disabledControls.forEach(([el, disabled]) => {
+            el.disabled = disabled;
+          });
+          button.textContent = lookup.kind === "builtin" ? "Verify and enable existing model" : "Verify and enable";
+        }
+      };
+
       let customProvidersLoaded = [];
       function parseCustomModels(text) {
         return text

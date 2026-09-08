@@ -1,12 +1,13 @@
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import {
   defaultModelForHarness,
-  FAST_MODE_MODEL_IDS,
+  fastModeModelIds,
   harnessSupportsFastMode,
   isHarnessId,
   modelSupportedByHarness,
   resolveModel,
   thinkingLevelsForHarness,
+  modelUnavailableReason,
   type HarnessId,
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
@@ -24,9 +25,7 @@ function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
     ...(typeof choice.fastMode === "boolean"
       ? {
           fastMode:
-            choice.fastMode &&
-            harnessSupportsFastMode(choice.harnessId) &&
-            FAST_MODE_MODEL_IDS.includes(choice.modelId),
+            choice.fastMode && harnessSupportsFastMode(choice.harnessId) && fastModeModelIds().includes(choice.modelId),
         }
       : {}),
   };
@@ -40,6 +39,7 @@ export function resolveRuntimeChoice(
   requested?: Partial<RuntimeChoice>,
 ): RuntimeChoice {
   const approved = config.getApprovedHarnesses() ?? [fallback.harnessId];
+  if (approved.length === 0) throw new NonRetryableTurnError("No harnesses are approved");
   const orgStored = config.getRuntimeSelection(orgScopeId);
   const orgLegacy = config.getBaseModel(orgScopeId);
   const configuredOrg: RuntimeChoice =
@@ -51,6 +51,12 @@ export function resolveRuntimeChoice(
           ...(typeof orgStored.fastMode === "boolean" ? { fastMode: orgStored.fastMode } : {}),
         }
       : { harnessId: fallback.harnessId, modelId: orgLegacy ?? fallback.modelId };
+  const configuredId =
+    requested?.modelId ??
+    (scope !== orgScopeId ? (config.getRuntimeSelection(scope)?.modelId ?? config.getBaseModel(scope)) : null) ??
+    configuredOrg.modelId;
+  const unavailableReason = modelUnavailableReason(configuredId);
+  if (unavailableReason) throw new NonRetryableTurnError(`${configuredId}: ${unavailableReason}`);
   const firstApproved = approved.find(isHarnessId) ?? fallback.harnessId;
   const safeFallback =
     approved.includes(fallback.harnessId) && modelSupportedByHarness(fallback.modelId, fallback.harnessId)

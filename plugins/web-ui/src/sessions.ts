@@ -1,3 +1,4 @@
+import { openSessionShare } from "./session-share";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
@@ -87,7 +88,7 @@ import {
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
-  addBlankPane,
+  startNewChatInCanvas,
   beginSessionDrag,
   endPaneDrag,
   notifyPanesChanged,
@@ -454,11 +455,18 @@ function toggleRecentProject(scopeId: string): void {
   renderList();
 }
 
-export function startNewChat(scopeId: string | null, name: string | null): void {
+export function startNewChat(
+  scopeId: string | null = null,
+  name: string | null = null,
+  threadRef?: string,
+): Conversation | null {
   closeSidebarOnNarrowView();
   if (scopeId) sessionsState.collapsedProjectScopes.delete(scopeId);
-  if (addBlankPane(scopeId ?? undefined)) return;
-  addPendingSession(mainConversation().newChat(scopeId ? { scopeId, name } : undefined), scopeId, name);
+  if (splitState.active) return startNewChatInCanvas(scopeId ?? undefined, threadRef);
+  const conv = mainConversation();
+  if (threadRef) conv.mountContinuable(threadRef, null, scopeId, [], name);
+  else addPendingSession(conv.newChat(scopeId ? { scopeId, name } : undefined), scopeId, name);
+  return conv;
 }
 
 export function startNewChatInLastScope(): void {
@@ -565,7 +573,7 @@ export function drawChatsPage(): void {
         chatsPageScope = s;
         drawChatsPage();
       },
-      action: { label: "New chat", onClick: () => mainConversation().newChat() },
+      action: { label: "New chat", onClick: () => startNewChat() },
       search: {
         value: chatsPageQuery,
         placeholder: "Search chats…",
@@ -722,15 +730,6 @@ function chatPageRow(s: CoreSession): TemplateResult {
               <button
                 class="icon-btn"
                 type="button"
-                ${tip("Copy link")}
-                aria-label=${`Copy link to ${sessionTitle(s)}`}
-                @click=${() => void copyText(sessionLink(location.origin, UI_BASE, s.id))}
-              >
-                ${icon(Link, 13.5)}
-              </button>
-              <button
-                class="icon-btn"
-                type="button"
                 ${tip(s.pinned ? "Unpin" : "Pin")}
                 aria-label=${`${s.pinned ? "Unpin" : "Pin"} ${sessionTitle(s)}`}
                 @click=${() => {
@@ -739,6 +738,15 @@ function chatPageRow(s: CoreSession): TemplateResult {
                 }}
               >
                 ${s.pinned ? icon(PinOff, 13.5) : icon(Pin, 13.5)}
+              </button>
+              <button
+                class="icon-btn"
+                type="button"
+                ${tip("Share conversation")}
+                aria-label=${`Share ${sessionTitle(s)}`}
+                @click=${() => void openSessionShare(s.id)}
+              >
+                ${icon(Link, 13.5)}
               </button>
               <button
                 class="icon-btn"
@@ -930,6 +938,18 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
       ${
         saved
           ? html`<div class="session-menu">
+              <button
+                class="session-menu-btn session-share-btn"
+                type="button"
+                ${tip("Share conversation")}
+                aria-label=${`Share ${sessionTitle(s)}`}
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  void openSessionShare(s.id);
+                }}
+              >
+                ${icon(Link, 13.5)}
+              </button>
               <button
                 class="session-menu-btn session-archive-btn"
                 type="button"

@@ -5,7 +5,7 @@ import {
   FAST_MODE_MODEL_IDS,
   harnessSupportsFastMode,
   HARNESS_IDS,
-  SELECTABLE_BASE_MODELS,
+  selectableBaseModels,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   modelServiceable,
@@ -45,6 +45,8 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
+  if (["base-model", "runtime", "webui-models", "browse-model", "auto-flagger", "import"].includes(resource))
+    await deps.refreshModels?.();
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
@@ -110,6 +112,7 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
+  await deps.refreshModels?.();
   audit(deps, { principalId: actor.id, action: "resources.read", resource: "resources", scopeLabel: scope });
   return sendJson(res, 200, { resources: adminResourceManifest() });
 }
@@ -242,6 +245,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
+  await deps.refreshModels?.();
   await deps.config.refreshScope(targetScope);
   audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
   const environmentMetadata = await scopeEnvironmentMetadata(deps, targetScope);
@@ -330,7 +334,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
-    browseModelOptions: SELECTABLE_BASE_MODELS.filter((m) =>
+    browseModelOptions: selectableBaseModels().filter((m) =>
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),
     egressEnforcement: {

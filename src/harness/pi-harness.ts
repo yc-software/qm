@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1114,6 +1115,7 @@ function customModelsPath(): string | null {
 async function buildModelRuntime(
   keys: ProviderKeys | string,
   modelGateway?: ModelGatewayTransportConfig,
+  cacheRetention?: "long",
 ): Promise<ModelRuntime> {
   const k: ProviderKeys = typeof keys === "string" ? { anthropic: keys } : keys;
   // Custom providers must exist in the runtime's own registry — a runtime
@@ -1127,6 +1129,8 @@ async function buildModelRuntime(
   for (const [provider, apiKey] of Object.entries(k)) {
     if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
+  const retained = <T extends object | undefined>(options: T): T =>
+    cacheRetention ? ({ ...options, cacheRetention } as T) : options;
   const stream = runtime.stream.bind(runtime);
   runtime.stream = (<TApi extends Api>(
     model: Model<TApi>,
@@ -1134,9 +1138,9 @@ async function buildModelRuntime(
     options?: ModelsApiStreamOptions<TApi>,
   ) => {
     const request = modelGatewayRequest(modelGateway, model);
-    if (!request) return stream(model, context, options);
+    if (!request) return stream(model, context, retained(options));
     const routedOptions = {
-      ...options,
+      ...retained(options),
       apiKey: request.apiKey,
       transformHeaders: async (headers: ProviderHeaders) => ({
         ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
@@ -1156,9 +1160,9 @@ async function buildModelRuntime(
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
     const request = modelGatewayRequest(modelGateway, model);
-    if (!request) return streamSimple(model, context, options);
+    if (!request) return streamSimple(model, context, retained(options));
     const routedOptions = {
-      ...options,
+      ...retained(options),
       apiKey: request.apiKey,
       transformHeaders: async (headers: ProviderHeaders) => ({
         ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
@@ -1219,6 +1223,44 @@ export async function oneShot(
   }
 }
 
+export async function probeModel(
+  model: Model<Api>,
+  keys: ProviderKeys,
+  signal: AbortSignal,
+  fastMode = false,
+  modelGateway?: ModelGatewayTransportConfig,
+): Promise<void> {
+  const runtime = await buildModelRuntime(keys, modelGateway);
+  signal.throwIfAborted();
+  const fastHeader = fastMode && !modelGateway?.models[model.id];
+  const candidate = fastHeader ? withFastModeHeaders(model) : model;
+  const response = await runtime
+    .streamSimple(
+      candidate,
+      {
+        systemPrompt: "This is a connection check. Reply OK. Do not call tools.",
+        messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
+        tools: [
+          {
+            name: "connection_check",
+            description: "A synthetic tool for verifying request compatibility. Do not call it.",
+            parameters: Type.Object({}),
+          },
+        ],
+      },
+      {
+        maxTokens: Math.min(128, model.maxTokens),
+        signal,
+        maxRetryDelayMs: 1,
+        onPayload: (payload) => applyFastSpeed(payload, fastMode, model.api),
+      },
+    )
+    .result();
+  signal.throwIfAborted();
+  if (response.stopReason !== "stop" || !response.content.some((part) => part.type === "text" && part.text.trim()))
+    throw new Error(response.errorMessage || "Model verification did not produce a completed text response");
+}
+
 const FAST_MODE_BETA = "fast-mode-2026-02-01";
 
 export const FAST_COST_MULTIPLIER = 2;
@@ -1259,32 +1301,6 @@ export function applyFastSpeed<T>(payload: T, fast: boolean | undefined, api?: s
 export function modelHasFastMode(model: unknown): boolean {
   const m = model as { headers?: Record<string, string>; fastMode?: boolean } | undefined;
   return Boolean(m?.fastMode) || Boolean(m?.headers?.["anthropic-beta"]?.includes(FAST_MODE_BETA));
-}
-
-const ONE_HOUR_CACHE_CONTROL = { type: "ephemeral", ttl: "1h" } as const;
-
-export function applySystemPromptCacheSplit(payload: unknown, boundary: number | undefined): void {
-  if (typeof boundary !== "number" || !Number.isFinite(boundary) || boundary <= 0) return;
-  if (!payload || typeof payload !== "object") return;
-  const p = payload as { system?: unknown; tools?: unknown };
-  if (!Array.isArray(p.system) || p.system.length !== 1) return;
-  const block = p.system[0] as { type?: unknown; text?: unknown } | undefined;
-  if (!block || block.type !== "text" || typeof block.text !== "string") return;
-  const text = block.text;
-  if (boundary >= text.length) return;
-  const stable = text.slice(0, boundary);
-  const rest = text.slice(boundary);
-  if (!stable.trim() || !rest.trim()) return;
-  p.system = [
-    { type: "text", text: stable, cache_control: { ...ONE_HOUR_CACHE_CONTROL } },
-    { type: "text", text: rest },
-  ];
-  if (Array.isArray(p.tools)) {
-    for (const t of p.tools) {
-      const tool = t as { cache_control?: unknown } | undefined;
-      if (tool && tool.cache_control) tool.cache_control = { ...ONE_HOUR_CACHE_CONTROL };
-    }
-  }
 }
 
 export const OUTPUT_BUDGET_FLOOR_TOKENS = 1_024;
@@ -1430,11 +1446,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
   async function createTurnSession(
+    model: Model<Api>,
     sessionId: string,
     systemPrompt: string,
     history: SessionEntry[],
     priorTurns?: ConversationTurn[],
-    systemCacheBoundary?: number,
     readOnly?: boolean,
     surfaceTools?: boolean,
     surfaceName?: string,
@@ -1448,12 +1464,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     turnProviderKeys?: ProviderKeys,
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
-    const cacheBoundary =
-      systemCacheSplit &&
-      typeof systemCacheBoundary === "number" &&
-      systemPrompt.slice(0, systemCacheBoundary).isWellFormed()
-        ? systemCacheBoundary
-        : undefined;
     let reconstructed: PiReplayMessage[] | null;
     try {
       reconstructed = reconstructMessagesFromHistory(history);
@@ -1484,10 +1494,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
     const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
-    const model = getRequiredModel(resolveModelId(turnScope), !turnProviderKeys);
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
       turnProviderKeys ? undefined : modelGateway,
+      systemCacheSplit ? "long" : undefined,
     );
     const ref: ToolContextRef = { current: null };
     const { resourceLoader, cwd, agentDir } = await createIsolatedResources(tempDirPrefix, composedPrompt);
@@ -1569,13 +1579,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          if (cacheBoundary !== undefined) {
-            try {
-              applySystemPromptCacheSplit(payload, cacheBoundary);
-            } catch (e) {
-              swallow("pi: system prompt cache split", e);
-            }
-          }
           const guarded = guardOutputBudget(payload, model);
           if (guarded.kind === "raised") {
             console.error(
@@ -1659,12 +1662,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
+        const desiredModelId = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
+        const baseModel = getRequiredModel(desiredModelId, !turn.providerKeys);
+        const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
+        const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
+        const wantFastHeader = wantFast && !turnModelGateway?.models[desiredModelId];
         const { entry, compileMs } = await createTurnSession(
+          wantFastHeader ? withFastModeHeaders(baseModel) : baseModel,
           turn.session.id,
           turn.systemPrompt,
           turn.history,
           turn.priorTurns,
-          turn.systemCacheBoundary,
           turn.readOnly,
           turn.surfaceTools,
           turn.surfaceName,
@@ -1678,7 +1686,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.providerKeys,
         );
         try {
-          const turnModelGateway = turn.providerKeys ? undefined : modelGateway;
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
           entry.ref.current = turn.tools;
           entry.ref.pendingApprovals = [];
@@ -1689,22 +1696,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           entry.ref.emit = turn.emit;
           entry.ref.scopeLabel = turn.scopeLabel;
           entry.ref.orgScopeId = turn.orgScopeId;
-          entry.ref.screenExternalContent = turn.screenExternalContent;
           entry.ref.toolApprovalGate = turn.toolApprovalGate;
 
-          const desiredModelId = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
-          const wantFast = wantsFastMode(turn.runtime?.fastMode, desiredModelId);
-          const wantFastHeader = wantFast && !turnModelGateway?.models[desiredModelId];
-          const current = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
-          const currentFast = modelHasFastMode(current);
-          if (current?.id !== desiredModelId || currentFast !== wantFastHeader) {
-            try {
-              const base = resolveModel(desiredModelId, !turn.providerKeys);
-              if (base) await entry.agentSession.setModel(wantFastHeader ? withFastModeHeaders(base) : base);
-            } catch (e) {
-              swallow("pi: model switch", e);
-            }
-          }
           const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
           entry.ref.fast = wantFast;
           const effectiveModel = activeModel?.id ?? desiredModelId;
@@ -1728,6 +1721,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             type: "user",
             payload: {
               text: turn.input,
+              ...(turn.environment ? { environment: turn.environment } : {}),
               ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
               ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
             },

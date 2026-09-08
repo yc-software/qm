@@ -1,5 +1,8 @@
+import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
+import type { probeModel } from "./harness/pi-harness.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
+import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -318,6 +321,7 @@ import {
   modelProviderAvailabilityFor,
   resolveModel,
   type HarnessId,
+  modelSupportedByHarness,
 } from "./model/pi-models.ts";
 import { createAdminService, bootAdminGrantSeed, type AdminService } from "./admin/admin-service.ts";
 import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
@@ -404,6 +408,9 @@ export interface BuiltApp {
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
+  modelRegistry: ModelOverlayStore;
+  modelVerifier: ModelVerifier;
+  refreshModels: () => Promise<void>;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
@@ -465,6 +472,7 @@ export function buildApp(
     securityScreener?: SecurityScreener;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
+    modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
   if (config.databaseUrl && !config.connectorSecretKey) {
@@ -978,17 +986,32 @@ export function buildApp(
       ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
       : createMemoryRunSignalStore();
   const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
+  const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
+    advisoryLock.withLock("model-registry", async () => {
+      await refreshModels();
+      return fn();
+    });
   const customProviders = createCustomProviderStore({
+    write: writeModelRegistry,
     backing: artifactMap("custom_model_providers"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
   });
+  const modelVerifier = createModelVerifier({
+    credentials: modelCredentials,
+    keyMaterial: config.connectorSecretKey ?? randomBytes(32),
+    modelGateway: config.modelGateway,
+    probe: overrides.modelVerificationProbe,
+  });
+  const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
-  void refreshCustomProviders().catch((e) =>
-    console.error("[wiring] custom provider hydration failed:", errMessage(e)),
-  );
+  const refreshModels = async () => {
+    await refreshCustomProviders();
+    await modelRegistry.refresh();
+  };
   const resolveModelProviderKeys = async () => {
+    await refreshModels();
     const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
       modelCredentials.resolve("anthropic"),
       modelCredentials.resolve("openai"),
@@ -1106,11 +1129,15 @@ export function buildApp(
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
   const hydrateModelCatalog = async (): Promise<unknown> => {
+    await refreshModels();
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, (input) => {
+  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input) => {
+    await refreshModels();
     if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
+      if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
+        throw new Error(`Unsupported model: ${input.runtime.modelId}`);
       return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
     }
     return resolveRuntimeChoiceDurable(
@@ -1354,6 +1381,7 @@ export function buildApp(
     return broker;
   };
   const orchestratorDeps: OrchestratorDeps = {
+    refreshModels,
     identity,
     resolution,
     config: configStore,
@@ -1550,6 +1578,8 @@ export function buildApp(
     modelGateway,
     modelCredentials,
     userModelCredentials,
+    modelRegistry,
+    refreshModels,
     customProviders,
     refreshCustomProviders,
     mcpServers,
@@ -1950,6 +1980,9 @@ export function buildApp(
     modelGateway,
     modelCredentials,
     userModelCredentials,
+    modelRegistry,
+    modelVerifier,
+    refreshModels,
     customProviders,
     refreshCustomProviders,
     mcpServers,
@@ -2034,6 +2067,9 @@ export function serverDeps(
     providerKeys: providerKeysPresent(config),
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
+    modelRegistry: built.modelRegistry,
+    modelVerifier: built.modelVerifier,
+    refreshModels: built.refreshModels,
     customProviders: built.customProviders,
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,

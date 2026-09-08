@@ -1,4 +1,3 @@
-import { openSessionShare } from "./session-share";
 import { html, nothing, type TemplateResult } from "lit";
 import { Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Rocket } from "lucide";
 import { api } from "./core-bridge";
@@ -173,7 +172,6 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
             </button>`
           : html`<div class="session-heading">${heading}</div>`
       }
-      ${o.sessionId ? html`<button type="button" class="session-share-button" @click=${() => void openSessionShare(o.sessionId!)}>Share</button>` : nothing}
       <div class="topbar-actions session-tools">
         ${tool("crons", Clock3, "Crons")} ${tool("files", Files, "Files")} ${tool("apps", Rocket, "Apps")}
         ${tool("skills", Box, "Skills")} ${tool("memory", Brain, "Memory")}

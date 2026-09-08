@@ -91,7 +91,7 @@ test("steering is reachable only as an explicit act on a queued row", () => {
   assert.match(strip, /class="chip-x"[\s\S]{0,240}removeQueued\(agent, q\)/);
   assert.match(
     composer,
-    /const steerable =\s*agent\.state\.isStreaming && ctx\.chat\.hasLiveRun\(\) && harnessSupportsSteer\(currentModelOption\(\)\.harnessId\);/,
+    /const steerable =\s*agent\.state\.isStreaming && ctx\.chat\.hasLiveRun\(\) &&\s*harnessSupportsSteer\(currentModelOption\(\)\?\.harnessId \?\? ""\);/,
     "Steer acts only against a live run on a harness that can fold one in",
   );
 });
@@ -184,7 +184,10 @@ test("the strip renders core's queue, refreshed from the same read that names th
 });
 
 test("the queued strip sits behind and outside the composer form", () => {
-  assert.match(chat, /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent\)/);
+  assert.match(
+    chat,
+    /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent, backgroundActivityStrip\(\)\)/,
+  );
   const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
   assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);
   const queuedRule = shell.match(/(?:^|\n)\.queued-strip \{[^}]*\}/)?.[0] ?? "";

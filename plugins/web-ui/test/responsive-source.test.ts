@@ -19,7 +19,7 @@ test("mobile shell follows the visual viewport and device safe areas", () => {
 
 test("mobile sidebar is modal, dismissible, and sized for touch", () => {
   assert.match(shell, /actionRow\(ICON\.newChat[\s\S]{0,200}startNewChatInLastScope\(\);/);
-  assert.match(sessions, /export function startNewChat\([\s\S]{0,120}closeSidebarOnNarrowView\(\);/);
+  assert.match(sessions, /export function startNewChat\([^)]*\)[^{]*\{\s*closeSidebarOnNarrowView\(\);/);
   assert.match(shell, /class="sidebar-scrim"[^>]+aria-label="Close sidebar"[^>]+@click=\$\{toggleSidebar\}/);
   assert.match(shell, /main\.inert = modal/);
   assert.match(
@@ -130,14 +130,10 @@ test("touch layouts expose row actions and preserve readable composer choices", 
   assert.match(compactCss, /margin: 0 auto max\(18px, calc\(10px \+ env\(safe-area-inset-bottom\)\)\)/);
   assert.match(
     compactCss,
-    /\.composer-wrap,\s*\.live-work-dock \{\s*width: auto;\s*margin-right: max\(16px, calc\(10px \+ env\(safe-area-inset-right\)\)\);\s*margin-left: max\(16px, calc\(10px \+ env\(safe-area-inset-left\)\)\)/,
+    /\.composer-wrap \{\s*width: auto;\s*margin-right: max\(16px, calc\(10px \+ env\(safe-area-inset-right\)\)\);\s*margin-left: max\(16px, calc\(10px \+ env\(safe-area-inset-left\)\)\)/,
   );
   assert.match(
     compactCss,
     /\.composer-wrap \{\s*margin-right: calc\(10px \+ env\(safe-area-inset-right\)\);\s*margin-bottom: calc\(10px \+ env\(safe-area-inset-bottom\)\);\s*margin-left: calc\(10px \+ env\(safe-area-inset-left\)\)/,
-  );
-  assert.match(
-    compactCss,
-    /\.live-work-dock \{\s*margin-right: calc\(10px \+ env\(safe-area-inset-right\)\);\s*margin-left: calc\(10px \+ env\(safe-area-inset-left\)\)/,
   );
 });

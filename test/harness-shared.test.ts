@@ -18,13 +18,11 @@ function capturingRunPrompt(reply = "one-shot reply"): {
   };
 }
 
-test("harness adapters forward external-content screening into their tool bridge", () => {
-  const screenExternalContent: NonNullable<HarnessTurnInput["screenExternalContent"]> = async () => ({
-    decision: "auto",
-  });
+test("harness adapters forward tool-result screening into their tool bridge", () => {
+  const screenToolResult: NonNullable<HarnessTurnInput["screenToolResult"]> = async () => ({ outcome: "allow" });
   const toolApprovalGate: NonNullable<HarnessTurnInput["toolApprovalGate"]> = () => true;
-  const ref = harnessToolContext({ screenExternalContent, toolApprovalGate } as HarnessTurnInput);
-  assert.equal(ref.screenExternalContent, screenExternalContent);
+  const ref = harnessToolContext({ screenToolResult, toolApprovalGate } as HarnessTurnInput);
+  assert.equal(ref.screenToolResult, screenToolResult);
   assert.equal(ref.toolApprovalGate, toolApprovalGate);
   assert.equal(ref.pausedOnApproval, false);
   assert.equal(ref.silentRequested, false);

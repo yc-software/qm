@@ -444,12 +444,10 @@ rl.on("line", (line) => {
   return path;
 }
 
-test("Codex forwards external-content screening into its native tool bridge", () => {
-  const screenExternalContent: NonNullable<HarnessTurnInput["screenExternalContent"]> = async () => ({
-    decision: "auto",
-  });
-  const ref = harnessToolContext({ screenExternalContent } as HarnessTurnInput);
-  assert.equal(ref.screenExternalContent, screenExternalContent);
+test("Codex forwards tool-result screening into its native tool bridge", () => {
+  const screenToolResult: NonNullable<HarnessTurnInput["screenToolResult"]> = async () => ({ outcome: "allow" });
+  const ref = harnessToolContext({ screenToolResult } as HarnessTurnInput);
+  assert.equal(ref.screenToolResult, screenToolResult);
 });
 
 test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t) => {

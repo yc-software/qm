@@ -1,3 +1,4 @@
+import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
 import type {
   DeliveryProvenance,
   Grant,
@@ -574,6 +575,8 @@ export interface AppDeps {
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
   modelCredentialFetch?: typeof fetch;
+  modelRegistry?: ModelOverlayStore;
+  refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;
   acl: AclStore;

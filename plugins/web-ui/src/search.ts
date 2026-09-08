@@ -1,14 +1,7 @@
-/** Chat search — a ⌘K palette over every conversation the viewer can see.
- *
- * Results come from the core's Postgres full-text index and are grouped by
- * session, newest first. Enter opens the selected conversation; ⌘/Ctrl+Enter
- * (or the pinned bottom row) pipes the query to QM as the prompt of a new
- * chat, so a fruitless search becomes a question.
- */
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CornerDownLeft, Search } from "lucide";
 import { api, userSendMessage, type CoreSession } from "./core-bridge";
-import { mainConversation } from "./conversations";
+import { startNewChat } from "./sessions";
 import { recencyGroup } from "./session-list";
 import { searchGroup } from "./search-group";
 import { slackWireToPlain, stripSlackDirectives } from "./slack-text";
@@ -39,7 +32,6 @@ const searchState = {
   hits: [] as ChatSearchHit[],
   failed: false,
   loading: false,
-  /** Selection over hits (0..hits.length-1) plus the trailing ask-QM row. */
   sel: 0,
 };
 
@@ -64,6 +56,7 @@ export function openChatSearch(): void {
   searchState.query = "";
   searchState.hits = [];
   searchState.loading = false;
+  searchState.failed = false;
   searchState.sel = 0;
   draw();
   requestAnimationFrame(() => host?.querySelector<HTMLInputElement>(".chat-search-input")?.focus());
@@ -72,6 +65,7 @@ export function openChatSearch(): void {
 function closeChatSearch(): void {
   if (!searchState.open) return;
   searchState.open = false;
+  fetchSeq++;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   inflight?.abort();
@@ -108,12 +102,14 @@ function onQueryInput(e: InputEvent): void {
   searchState.query = (e.currentTarget as HTMLInputElement).value;
   searchState.sel = 0;
   if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = null;
+  fetchSeq++;
+  inflight?.abort();
+  inflight = null;
+  searchState.hits = [];
+  searchState.failed = false;
   const q = searchState.query.trim();
   if (q.length < MIN_QUERY_LEN) {
-    inflight?.abort();
-    inflight = null;
-    searchState.hits = [];
-    searchState.failed = false;
     searchState.loading = false;
     draw();
     return;
@@ -143,8 +139,6 @@ async function runSearch(q: string): Promise<void> {
   draw();
 }
 
-/** Cluster hits by session (sessions ordered by their newest hit) so a
- * conversation never fragments into repeated group headers. */
 function groupHitsBySession(hits: ChatSearchHit[]): ChatSearchHit[] {
   const order: string[] = [];
   const bySession = new Map<string, ChatSearchHit[]>();
@@ -179,6 +173,7 @@ function onPaletteKeydown(e: KeyboardEvent): void {
   if (e.key === "Enter") {
     e.preventDefault();
     if (e.metaKey || e.ctrlKey) return void askQm();
+    if (searchState.loading) return;
     const hit = searchState.hits[searchState.sel];
     if (hit) return void openHit(hit);
     if (askRowShown() && searchState.sel === searchState.hits.length) return void askQm();
@@ -205,9 +200,8 @@ function askQm(): void {
   const q = searchState.query.trim();
   if (!q) return;
   closeChatSearch();
-  const conv = mainConversation();
-  conv.newChat();
-  void conv.state.agent?.prompt(
+  const conv = startNewChat();
+  void conv?.state.agent?.prompt(
     userSendMessage(
       `Find my previous session based on the following search query, give me a link when you've identified it: ${q}`,
     ),
@@ -303,9 +297,7 @@ function paletteTpl(): TemplateResult {
   } else if (searchState.loading && !searchState.hits.length) {
     body = html`<div class="chat-search-empty">Searching…</div>`;
   } else if (searchState.failed) {
-    body = html`<div class="chat-search-empty chat-search-failed">
-      Search failed. Check the connection and try again.
-    </div>`;
+    body = html`<div class="chat-search-empty chat-search-failed">Search failed. Try again.</div>`;
   } else if (!searchState.hits.length) {
     body = html`<div class="chat-search-empty">No messages match “${q}”.</div>`;
   } else {

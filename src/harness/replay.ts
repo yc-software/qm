@@ -162,7 +162,10 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       if (ov) {
         if (ov.text.trim() || ov.files?.length) raw.push(userMsg(renderOverheard(ov), e.createdAt));
       } else {
-        const t = entryText(e);
+        const environment = (e.payload as { environment?: unknown } | null)?.environment;
+        const t = [entryText(e), typeof environment === "string" ? environment.trim() : ""]
+          .filter(Boolean)
+          .join("\n\n");
         if (t) raw.push(userMsg(t, e.createdAt));
       }
     } else if (e.type === "assistant") {

@@ -79,9 +79,15 @@ import type { GapWork, HarnessLlmRequestRecord, HarnessTurnResult, RuntimeChoice
 import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
+  quarantineReleaseKey,
+  securityScreenChunks,
   securityScreenPayload,
+  toolLabelOf,
   UNSCREENED_REASON,
   unscreenedNotice,
+  type SecurityScreenVerdict,
+  type ToolResultScreen,
+  type ToolResultScreenInput,
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
@@ -109,7 +115,7 @@ import {
   tapeNeedsInterruptHeal,
 } from "../harness/tape-fold.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
-import { createTranscriptSource, syncSearchIndex } from "../harness/tape-projection.ts";
+import { createTranscriptSource } from "../harness/tape-projection.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
@@ -491,6 +497,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
+      await deps.refreshModels?.();
       const { actor, conversation } = input;
       const automatedTurn = input.origin.kind === "automation";
       const ambientTurn = input.origin.kind === "ambient";
@@ -1051,11 +1058,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const sharedFilesBlock = sharedFilesSystemSection(resolution.grantedHandles);
       if (sharedFilesBlock) systemPrompt += `\n\n${sharedFilesBlock}`;
 
-      const stableSystemBytes = systemPrompt.length;
-      if (turnTimezone) {
-        const timeBlock = currentTimeBlock(turnTimezone, Date.now());
-        if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
-      }
+      const timeBlock = turnTimezone ? currentTimeBlock(turnTimezone, Date.now()) : "";
       let memoryContext = "a channel";
       if (conversation.kind === "dm") memoryContext = "a direct message";
       else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
@@ -1860,8 +1863,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
           systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
         }
+        const stableSystemBytes = systemPrompt.length;
+        if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
         systemPrompt += memoryBlock;
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
+        const volatileContext = systemPrompt.slice(stableSystemBytes).trim();
+        systemPrompt = systemPrompt.slice(0, stableSystemBytes);
 
         if (
           ambientTurn &&
@@ -2499,7 +2506,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote = inputUnscreened || inbound.unscreened.length ? unscreenedNotice("inbound content") : "";
         const turnEnv = environmentNote(
-          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim()]
+          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim(), volatileContext]
             .filter((s) => s && s.trim())
             .join("\n\n"),
         );
@@ -2718,13 +2725,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(effectiveTurnWallClockMs !== undefined ? { turnWallClockMs: effectiveTurnWallClockMs } : {}),
             ...(securityPolicy.inboundScreening === "external"
               ? {
-                  screenToolResult: async (
-                    tool: string,
-                    result: string,
-                    unscreenable: boolean,
-                  ): Promise<boolean | "unscreened" | "quarantine_pending"> => {
-                    const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
-                    if (authorizeCommand(`quarantine:${toolLabel}`, `quarantine:${toolLabel}`)) {
+                  screenToolResult: async ({
+                    tool,
+                    result,
+                    unscreenable,
+                    provenance,
+                    source,
+                  }: ToolResultScreenInput): Promise<ToolResultScreen> => {
+                    if (provenance !== "external") return { outcome: "allow" };
+                    const toolLabel = toolLabelOf(tool);
+                    const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
+                    if (authorizeCommand(quarantineReleaseKey(tool), quarantineReleaseKey(tool))) {
                       deps.auditLog.record({
                         at: Date.now(),
                         principalId: actor.id,
@@ -2734,26 +2745,33 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         status: "allowed",
                         detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
                       });
-                      return "unscreened";
+                      return { outcome: "unscreened" };
                     }
-                    const bounded = unscreenable
-                      ? null
-                      : securityScreenPayload({
-                          surface: `tool_result:${toolLabel}`,
-                          text: "",
-                          triggered: true,
-                          securityScreenData: result,
-                        });
-                    if (!unscreenable && bounded === null) return true;
+                    const chunks = unscreenable
+                      ? []
+                      : securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result);
+                    if (!unscreenable && chunks.length === 0) return { outcome: "allow" };
+                    const verdicts: Array<SecurityScreenVerdict | undefined> = [];
+                    for (let i = 0; i < chunks.length && !verdicts.some((v) => v?.decision === "strict"); i += 4) {
+                      verdicts.push(
+                        ...(await Promise.all(
+                          chunks.slice(i, i + 4).map((chunk) =>
+                            classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
+                              hook: "tool_response",
+                              surface: toolLabel,
+                              origin: input.origin.kind,
+                            }),
+                          ),
+                        )),
+                      );
+                    }
                     const verdict =
-                      bounded && !bounded.truncated
-                        ? await classifySecurityData(bounded.content, actor.id, scopeId, recordScreenRequest, {
-                            hook: "tool_response",
-                            surface: toolLabel,
-                            origin: input.origin.kind,
-                          })
-                        : undefined;
-                    if (verdict?.decision === "auto" && !verdict.unscreened) return true;
+                      verdicts.find((v) => v?.decision === "strict") ??
+                      (verdicts.length === chunks.length &&
+                      verdicts.every((v) => v?.decision === "auto" && !v.unscreened)
+                        ? verdicts[0]
+                        : undefined);
+                    if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };
                     if (verdict?.decision === "strict") {
                       const releaseKey = `security-screen-release:${toolLabel}`;
                       if (authorizeCommand(releaseKey)) {
@@ -2766,7 +2784,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           status: "allowed",
                           detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
                         });
-                        return true;
+                        return { outcome: "allow" };
                       }
                       deps.auditLog.record({
                         at: Date.now(),
@@ -2775,7 +2793,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         resource: input.surface ?? "unknown",
                         scopeLabel: scopeId,
                         status: "refused",
-                        detail: JSON.stringify({ reason: "screen_verdict", tool: toolLabel }),
+                        detail: JSON.stringify({
+                          reason: "screen_verdict",
+                          tool: toolLabel,
+                          ...(source ? { source } : {}),
+                          ...(verdict.reason ? { verdict: verdict.reason } : {}),
+                        }),
                       });
                       if (!quarantineReleaseApprovals.some((qa) => qa.approvalKey === releaseKey)) {
                         quarantineReleaseApprovals.push({
@@ -2790,7 +2813,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           grantModes: { session: false, always: false },
                         });
                       }
-                      return "quarantine_pending";
+                      return { outcome: "quarantine", ...(verdict.reason ? { reason: verdict.reason } : {}) };
                     }
                     deps.auditLog.record({
                       at: Date.now(),
@@ -2800,45 +2823,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       scopeLabel: scopeId,
                       status: "allowed",
                       detail: JSON.stringify({
-                        reason: unscreenable || bounded?.truncated ? "unscreenable_payload" : UNSCREENED_REASON,
+                        reason: unscreenable ? "unscreenable_payload" : UNSCREENED_REASON,
                       }),
                     });
-                    return "unscreened";
+                    return { outcome: "unscreened" };
                   },
                 }
               : {}),
             ...(securityPolicy.toolApprovals === "all" ? { toolApprovalGate: authorizeToolCall } : {}),
             systemPrompt,
-            systemCacheBoundary: stableSystemBytes,
             history: continuation?.history ?? history,
             tools,
             ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
-            ...(securityPolicy.inboundScreening === "external" &&
-            (deps.securityScreener || deps.harness.models.screenSecurity)
-              ? {
-                  screenExternalContent: ({ content, tool }: { content: string; tool: string; source: string }) => {
-                    const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
-                    if (authorizeCommand(`quarantine:${toolLabel}`, `quarantine:${toolLabel}`)) {
-                      deps.auditLog.record({
-                        at: Date.now(),
-                        principalId: actor.id,
-                        action: "security_posture.tool_result_released",
-                        resource: input.surface ?? "unknown",
-                        scopeLabel: scopeId,
-                        status: "allowed",
-                        detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                      });
-                      return Promise.resolve({ decision: "auto" as const, unscreened: true });
-                    }
-                    return classifySecurityData(content, actor.id, scopeId, undefined, {
-                      hook: "tool_response",
-                      surface: tool,
-                      origin: input.origin.kind,
-                    });
-                  },
-                }
-              : {}),
             ...(selectedTape
               ? {
                   tapeRows: selectedTape.rows,
@@ -3021,7 +3018,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
           }
           latchedCoverageSeq = lastSeq;
-          await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: sync", e));
         };
         if (
           input.addressed &&

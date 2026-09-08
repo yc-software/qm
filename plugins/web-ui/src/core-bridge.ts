@@ -1,3 +1,4 @@
+import type { ModelMetadata } from "./pi-models.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
@@ -639,10 +640,11 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
 
 export interface RuntimeConfig {
   interactiveFastMode?: boolean;
+  unavailableReason?: string;
   scopeId: string;
   approvedHarnesses: string[];
   modelsByHarness: Record<string, string[]>;
-  modelCatalog: Record<string, { name: string; provider: string }>;
+  modelCatalog: Record<string, ModelMetadata>;
   orgDefault: { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean; revision: number };
   scopeOverride: {
     harnessId: string;
@@ -1652,7 +1654,7 @@ function userEntryText(payload: unknown): string | null {
   return display.trim() ? display : null;
 }
 
-export function entriesToMessages(entries: SessionEntry[], model: Model<Api>): AgentMessage[] {
+export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
   const userByTs = new Map<string, HistoryUserMessage>();
   let pending: ToolActivity[] = [];
@@ -1716,9 +1718,9 @@ export function entriesToMessages(entries: SessionEntry[], model: Model<Api>): A
     const msg: AssistantWork = {
       role: "assistant",
       content: [{ type: "text", text }],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
+      api: model?.api ?? "unknown",
+      provider: model?.provider ?? "unknown",
+      model: model?.id ?? "unknown",
       usage: zeroUsage(),
       stopReason: "stop",
       timestamp: at ?? pending[pending.length - 1]?.createdAt,
@@ -1863,9 +1865,9 @@ export function entriesToMessages(entries: SessionEntry[], model: Model<Api>): A
         const msg: AssistantMessage = {
           role: "assistant",
           content: [{ type: "text", text: "" }],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
+          api: model?.api ?? "unknown",
+          provider: model?.provider ?? "unknown",
+          model: model?.id ?? "unknown",
           usage: zeroUsage(),
           stopReason: "error",
           errorMessage: failure.message,
@@ -1883,7 +1885,7 @@ export function entriesToMessages(entries: SessionEntry[], model: Model<Api>): A
 export function attachPendingApprovals(
   messages: AgentMessage[],
   approvals: PendingApproval[],
-  model: Model<Api>,
+  model?: Model<Api>,
 ): void {
   if (!approvals.length) return;
 
@@ -1909,9 +1911,9 @@ export function attachPendingApprovals(
     trailing = {
       role: "assistant",
       content: [{ type: "text", text: "" }],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
+      api: model?.api ?? "unknown",
+      provider: model?.provider ?? "unknown",
+      model: model?.id ?? "unknown",
       usage: zeroUsage(),
       stopReason: "stop",
       timestamp: Date.now(),

@@ -191,15 +191,9 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   assert.match(prompt, /\$AGENT_API_URL/);
 });
 
-test("the cached prefix is byte-identical across two turns of one conversation (only the volatile tail changes)", async () => {
+test("the system prompt is byte-identical across two turns a minute apart; the clock rides the environment note", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { orchestrator: orch } = buildOrchestrator();
-
-  const VOLATILE_BOUNDARY = "\n\n## The user's local time";
-  const prefixOf = (prompt: string): string => {
-    const at = prompt.indexOf(VOLATILE_BOUNDARY);
-    assert.notEqual(at, -1, "the volatile tail must open with ## The user's local time");
-    return prompt.slice(0, at);
-  };
 
   const turn = (): OrchestratorInput =>
     dm("dm:U1:cache-stable", "!sysprompt", {
@@ -209,25 +203,38 @@ test("the cached prefix is byte-identical across two turns of one conversation (
         { target: "C2", label: "#random" },
       ],
     });
+  const systemOf = (reply: string): string => reply.split("\n\n<environment>")[0]!;
+  const environmentOf = (reply: string): string => reply.slice(systemOf(reply).length);
 
   const first = await orch.handleTurn(turn());
+  t.mock.timers.tick(61_000);
   const second = await orch.handleTurn(turn());
   assert.equal(first.status, "ok");
   assert.equal(second.status, "ok");
 
-  const prefixA = prefixOf(first.reply ?? "");
-  const prefixB = prefixOf(second.reply ?? "");
-
-  const hasHeading = (text: string, title: string): boolean => text.includes(`\n## ${title}\n`);
-
-  for (const title of ["This machine", "Skills", "Where you are", "Where scheduled tasks post"]) {
-    assert.ok(hasHeading(prefixA, title), `expected "## ${title}" inside the cached prefix`);
+  for (const title of [
+    "This machine",
+    "Skills",
+    "Where you are",
+    "Where scheduled tasks post",
+    "Your logins",
+    "Connected apps",
+  ]) {
+    assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
   }
-  for (const title of ["Your logins", "Connected apps", "What you remember"]) {
-    assert.ok(!hasHeading(prefixA, title), `"## ${title}" must stay in the volatile tail, not the cached prefix`);
+  for (const title of ["The user's local time", "What you remember"]) {
+    assert.ok(
+      !systemOf(first.reply ?? "").includes(`\n## ${title}\n`),
+      `"## ${title}" must not be in the system prompt`,
+    );
   }
-
-  assert.equal(prefixB, prefixA, "the cached prefix must be byte-identical across two turns of one conversation");
+  assert.match(environmentOf(first.reply ?? ""), /## The user's local time/);
+  assert.notEqual(environmentOf(second.reply ?? ""), environmentOf(first.reply ?? ""), "the clock moved a minute");
+  assert.equal(
+    systemOf(second.reply ?? ""),
+    systemOf(first.reply ?? ""),
+    "the system prompt must be byte-identical across turns or every cached message block behind it is invalidated",
+  );
 });
 
 test("the cached prefix survives skill-store reordering + a recordUse-style metadata update", async () => {
@@ -239,11 +246,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   const churningSkills = { visibleFor: async () => [...visible] } as unknown as SkillStore;
   const { orchestrator: orch } = buildOrchestrator({ skills: churningSkills });
 
-  const prefixOf = (prompt: string): string => {
-    const at = prompt.indexOf("\n\n## The user's local time");
-    assert.notEqual(at, -1, "the volatile tail must open with ## The user's local time");
-    return prompt.slice(0, at);
-  };
+  const prefixOf = (prompt: string): string => prompt.split("\n\n<environment>")[0]!;
   const turn = () => dm("dm:U1:skill-order", "!sysprompt", { timezone: "America/New_York" });
 
   const first = await orch.handleTurn(turn());

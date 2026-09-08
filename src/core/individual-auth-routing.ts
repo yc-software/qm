@@ -5,6 +5,8 @@ import {
   defaultModelForHarness,
   defaultModelForProvider,
   resolveModel,
+  isOverlayModel,
+  modelUnavailableReason,
   type ModelProvider,
 } from "../model/pi-models.ts";
 import type { UserModelCredential } from "../model/user-model-credential-store.ts";
@@ -22,6 +24,7 @@ export function resolveIndividualAuthRouting(
   requestedModel: string | undefined,
   preferredHarness?: string,
 ): IndividualAuthRouting {
+  if (requestedModel && modelUnavailableReason(requestedModel)) return null;
   const requestedProvider = requestedModel ? resolveModel(requestedModel)?.provider : undefined;
   const pick = ((): { provider: "anthropic" | "openai"; cred: UserModelCredential } | null => {
     if (requestedProvider === "anthropic" && anthCred) return { provider: "anthropic", cred: anthCred };
@@ -31,6 +34,12 @@ export function resolveIndividualAuthRouting(
     return null;
   })();
   if (!pick) return null;
+  if (
+    requestedModel &&
+    isOverlayModel(requestedModel) &&
+    (pick.cred.kind !== "apikey" || requestedProvider !== pick.provider)
+  )
+    return null;
   if (pick.cred.kind === "apikey" && pick.cred.apiKey) {
     return {
       kind: "apikey",
