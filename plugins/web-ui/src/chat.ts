@@ -1273,12 +1273,12 @@ export function createChatSurface(
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing} ${liveWorkStatus(agent)}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${goalStrip(agent)} ${liveWorkDock(agent)} ${ctx.composer.queuedStrip(agent)}
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
             ${ctx.composer.composerForm(agent, backgroundActivityStrip())}
           </div>
         </div>
@@ -2120,7 +2120,7 @@ export function createChatSurface(
     `;
   }
 
-  function liveWorkDock(agent: Agent): TemplateResult | typeof nothing {
+  function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
@@ -2130,7 +2130,7 @@ export function createChatSurface(
     let title = "";
     if (expandable) title = liveWorkExpanded ? "Show less" : "Show more";
     return html`
-      <section class="live-work-dock ${expanded ? "expanded" : ""}" aria-live="polite">
+      <section class="live-work-status ${expanded ? "expanded" : ""}" aria-live="polite">
         <button
           type="button"
           class="live-work-line ${expandable ? "" : "static"}"

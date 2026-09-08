@@ -2611,9 +2611,10 @@ a.chat-row-open {
   max-height: 30vh;
 }
 
-.live-work-dock {
-  width: min(var(--content-w), calc(100% - 32px));
-  margin: 0 auto 8px;
+.live-work-status {
+  width: 100%;
+  min-width: 0;
+  margin: 8px 0 0;
   color: var(--muted-foreground);
 }
 .live-work-line {
@@ -2676,15 +2677,15 @@ a.chat-row-open {
   transition: transform 0.15s ease;
 }
 
-.live-work-dock.expanded .live-work-line {
+.live-work-status.expanded .live-work-line {
   flex-wrap: wrap;
 }
-.live-work-dock.expanded .live-work-label {
+.live-work-status.expanded .live-work-label {
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
 }
-.live-work-dock.expanded .live-work-detail {
+.live-work-status.expanded .live-work-detail {
   order: 1;
   flex-basis: 100%;
   margin-top: 4px;
@@ -2693,7 +2694,7 @@ a.chat-row-open {
   text-overflow: clip;
   max-height: 38vh;
 }
-.live-work-dock.expanded .live-work-toggle {
+.live-work-status.expanded .live-work-toggle {
   transform: rotate(90deg);
 }
 
@@ -7245,8 +7246,7 @@ h3.ambient-field-label {
   /* Mid-width surfaces: the floating composer/dock hug the full-width column with 16px
      side margins, but must still clear the device safe areas — the 10px variant below
      only kicks in at <=470px, so the insets need a floor here too. */
-  .composer-wrap,
-  .live-work-dock {
+  .composer-wrap {
     width: auto;
     margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
     margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
@@ -7278,10 +7278,6 @@ h3.ambient-field-label {
     margin-right: calc(22px + env(safe-area-inset-right));
     margin-left: calc(22px + env(safe-area-inset-left));
   }
-  .live-work-dock {
-    margin-right: calc(10px + env(safe-area-inset-right));
-    margin-left: calc(10px + env(safe-area-inset-left));
-  }
   .goal-strip {
     margin-right: calc(18px + env(safe-area-inset-right));
     margin-left: calc(18px + env(safe-area-inset-left));
@@ -7289,8 +7285,8 @@ h3.ambient-field-label {
 }
 [data-density="card"] .context-banner,
 [data-density="strip"] .context-banner,
-[data-density="card"] .live-work-dock,
-[data-density="strip"] .live-work-dock,
+[data-density="card"] .live-work-status,
+[data-density="strip"] .live-work-status,
 [data-density="card"] .goal-strip,
 [data-density="strip"] .goal-strip {
   display: none;
