@@ -99,3 +99,16 @@ test("the menu-backed filter wears the same box as the native select's resting s
   assert.equal(menu["height"], "34px");
   assert.equal(select["min-height"], "34px");
 });
+
+test("a filter menu opens downward, since the shared popover defaults to opening up for the composer", () => {
+  const control = ui.match(/<div\s+class=\$\{`menu-control form-menu-control field-menu[\s\S]*?>/)?.[0] ?? "";
+  assert.match(control, /data-drop="down"/, "without this the filter opens over the header above it");
+  assert.match(css, /\.menu-control\[data-drop="down"\] \.menu-popover \{\s*top: calc\(100% \+ 6px\);\s*bottom: auto;/);
+  assert.match(
+    css,
+    /\.menu-control\[data-drop="down"\] \.menu-popover\.drop-up \{/,
+    "the flip-up fallback must survive so a filter near the bottom edge still fits",
+  );
+  const scope = css.match(/\n\.scope-filter \.menu-popover \{[^}]*\}/)?.[0] ?? "";
+  assert.doesNotMatch(scope, /top:|bottom:/, "drop direction belongs to the shared control, not one caller");
+});

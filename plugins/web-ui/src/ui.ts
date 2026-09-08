@@ -156,7 +156,10 @@ export function menuSelect(props: {
     `;
   };
   return html`
-    <div class=${`menu-control form-menu-control field-menu${props.className ? ` ${props.className}` : ""}`}>
+    <div
+      class=${`menu-control form-menu-control field-menu${props.className ? ` ${props.className}` : ""}`}
+      data-drop="down"
+    >
       <button
         class="menu-button"
         type="button"
