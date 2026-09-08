@@ -79,6 +79,7 @@ import type { GapWork, HarnessLlmRequestRecord, HarnessTurnResult, RuntimeChoice
 import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
+  securityScreenChunks,
   securityScreenPayload,
   UNSCREENED_REASON,
   unscreenedNotice,
@@ -2742,23 +2743,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       });
                       return { outcome: "unscreened" };
                     }
-                    const bounded = unscreenable
-                      ? null
-                      : securityScreenPayload({
-                          surface: `tool_result:${toolLabel}${sourceLabel}`,
-                          text: "",
-                          triggered: true,
-                          securityScreenData: result,
-                        });
-                    if (!unscreenable && bounded === null) return { outcome: "allow" };
+                    const chunks = unscreenable
+                      ? []
+                      : securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result);
+                    if (!unscreenable && chunks.length === 0) return { outcome: "allow" };
+                    const verdicts = await Promise.all(
+                      chunks.map((chunk) =>
+                        classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
+                          hook: "tool_response",
+                          surface: toolLabel,
+                          origin: input.origin.kind,
+                        }),
+                      ),
+                    );
                     const verdict =
-                      bounded && !bounded.truncated
-                        ? await classifySecurityData(bounded.content, actor.id, scopeId, recordScreenRequest, {
-                            hook: "tool_response",
-                            surface: toolLabel,
-                            origin: input.origin.kind,
-                          })
-                        : undefined;
+                      verdicts.find((v) => v?.decision === "strict") ??
+                      (verdicts.length && verdicts.every((v) => v?.decision === "auto" && !v.unscreened)
+                        ? verdicts[0]
+                        : undefined);
                     if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };
                     if (verdict?.decision === "strict") {
                       const releaseKey = `security-screen-release:${toolLabel}`;
@@ -2811,7 +2813,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       scopeLabel: scopeId,
                       status: "allowed",
                       detail: JSON.stringify({
-                        reason: unscreenable || bounded?.truncated ? "unscreenable_payload" : UNSCREENED_REASON,
+                        reason: unscreenable ? "unscreenable_payload" : UNSCREENED_REASON,
                       }),
                     });
                     return { outcome: "unscreened" };

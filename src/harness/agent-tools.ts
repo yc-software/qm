@@ -10,6 +10,7 @@ import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
+import { REDACTED_COMMAND_MAX_CHARS } from "../sandbox/exec-process-session.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
@@ -694,7 +695,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         undefined,
         false,
         undefined,
-        r.reached ? { provenance: "external", source: "reached room" } : { provenance: commandProvenance(params.command) },
+        r.reached
+          ? { provenance: "external", source: "reached room" }
+          : { provenance: commandProvenance(params.command) },
       );
     } catch (e) {
       if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
@@ -1440,7 +1443,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               undefined,
               false,
               undefined,
-              { provenance: commandProvenance(r.command) },
+              {
+                provenance: r.command.length >= REDACTED_COMMAND_MAX_CHARS ? "external" : commandProvenance(r.command),
+              },
             );
           }
           case "stop": {
@@ -1899,6 +1904,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(offset > 0 ? { offset } : {}),
             },
             text([...lines, ...(footer ? [`(${footer})`] : [])].join("\n")),
+            false,
+            undefined,
+            false,
+            undefined,
+            r.visible.length ? { provenance: "external", source: "shared crons" } : undefined,
           );
         }
         case "get": {
@@ -1913,7 +1923,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const r = await tc.cronGet(id);
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(callId, { tool: "cron", id }, text(fmtCronLine(r.cron)));
+          return recordResult(
+            callId,
+            { tool: "cron", id },
+            text(fmtCronLine(r.cron)),
+            false,
+            undefined,
+            false,
+            undefined,
+            {
+              provenance: "external",
+              source: "shared crons",
+            },
+          );
         }
         case "runs": {
           const id = needId();
