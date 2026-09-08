@@ -14,6 +14,7 @@ import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
+import { startSignalPoll } from "../src/runs/run-signal-store.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
@@ -627,4 +628,58 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
     await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
   ).json()) as { runId?: string | null };
   assert.equal(active2.runId, second, "once the live run finishes, the queued one becomes active");
+});
+
+test("web steer after the reader closes is refused without storing it, and resends once as a queued turn", async () => {
+  const threadRef = "web:U1:closed-reader";
+  const submit = (text: string) =>
+    fetch(
+      `${webBase}/api/turn`,
+      asUser("U1", {
+        method: "POST",
+        body: JSON.stringify({ threadRef, text }),
+      }),
+    );
+  const first = await submit("first message");
+  assert.equal(first.status, 202);
+  const { runId } = (await first.json()) as { runId: string };
+  const claimed = await built.runs.claimById(runId, "reader-test", 60_000);
+  assert.ok(claimed?.leaseToken);
+  const seen: string[] = [];
+  const stop = startSignalPoll(built.signals, runId, {
+    onSteer: async (text) => {
+      seen.push(text);
+    },
+    onAbort: async () => {},
+  });
+  await stop();
+  assert.equal((await built.runs.get(runId))?.status, "running");
+  const response = await fetch(
+    `${webBase}/api/runs/${runId}/signal`,
+    asUser("U1", {
+      method: "POST",
+      body: JSON.stringify({ kind: "steer", text: "second message" }),
+    }),
+  );
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { accepted: false, reason: "terminal" });
+  assert.deepEqual(seen, []);
+  assert.deepEqual(await built.signals.takePending(runId), []);
+  const outsider = await fetch(
+    `${webBase}/api/runs/${runId}/signal`,
+    asUser("U2", { method: "POST", body: JSON.stringify({ kind: "steer", text: "not allowed" }) }),
+  );
+  assert.equal(outsider.status, 404);
+  assert.equal((await built.app.signalRun(runId, { kind: "abort" })).accepted, true);
+  assert.deepEqual(await built.signals.takePending(runId), [{ kind: "abort" }]);
+  const resent = await submit("second message");
+  assert.equal(resent.status, 202);
+  const { runId: nextId } = (await resent.json()) as { runId: string };
+  assert.notEqual(nextId, runId);
+  await built.runs.complete(runId, claimed.leaseToken, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(runId);
+  assert.deepEqual(
+    (await built.runs.inFlightForThread(threadRef)).map((r) => r.id),
+    [nextId],
+  );
 });

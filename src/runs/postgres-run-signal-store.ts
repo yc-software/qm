@@ -43,6 +43,14 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
       ],
     },
+    {
+      id: "runs/signals/0003",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS run_signal_readers(
+          run_id TEXT PRIMARY KEY, token TEXT NOT NULL, closed_at BIGINT
+        )`,
+      ],
+    },
   ]);
   const q = pg.query;
 
@@ -103,6 +111,23 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return rows.length > 0;
     },
 
+    async openReader(runId, token) {
+      await q(
+        `INSERT INTO run_signal_readers(run_id, token) VALUES ($1,$2)
+        ON CONFLICT (run_id) DO UPDATE SET token=EXCLUDED.token, closed_at=NULL`,
+        [runId, token],
+      );
+    },
+
+    async closeReader(runId, token) {
+      await q(`UPDATE run_signal_readers SET closed_at=$3 WHERE run_id=$1 AND token=$2`, [runId, token, Date.now()]);
+    },
+
+    async readerClosed(runId) {
+      const { rows } = await q(`SELECT 1 FROM run_signal_readers WHERE run_id=$1 AND closed_at IS NOT NULL`, [runId]);
+      return rows.length > 0;
+    },
+
     async hasDedupeKey(dedupeKey) {
       const { rows } = await q(`SELECT 1 FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
       return rows.length > 0;
@@ -152,6 +177,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
 
     async prune(olderThanMs) {
       await q(`DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [Date.now() - olderThanMs]);
+      await q(`DELETE FROM run_signal_readers WHERE closed_at < $1`, [Date.now() - olderThanMs]);
     },
 
     onSignal(runId, cb) {

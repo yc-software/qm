@@ -625,6 +625,9 @@ export function createTurnMethods(
       if (signal.request && signal.request.conversation.threadRef !== run.request.conversation.threadRef) {
         return { accepted: false, reason: "conversation_mismatch" };
       }
+      if (signal.kind === "steer" && (await deps.signals.readerClosed(runId))) {
+        return { accepted: false, reason: "terminal" };
+      }
       let outbound = signal;
       if (signal.kind === "steer") {
         const requestActor = signal.request?.actor;

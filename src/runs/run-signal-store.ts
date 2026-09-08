@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { TurnRequest } from "../types.ts";
 
 export type RunSignalKind = "abort" | "steer";
@@ -19,6 +20,9 @@ export interface RunSignalStore {
   pendingRunIds(): Promise<string[]>;
   prune(olderThanMs: number): Promise<void>;
   onSignal(runId: string, cb: () => void): () => void;
+  openReader(runId: string, token: string): Promise<void>;
+  closeReader(runId: string, token: string): Promise<void>;
+  readerClosed(runId: string): Promise<boolean>;
   close?(): Promise<void>;
 }
 
@@ -29,6 +33,7 @@ export function createMemoryRunSignalStore(): RunSignalStore {
   const authors = new Map<string, Array<{ at: number; author: string }>>();
   const listeners = new Map<string, Set<() => void>>();
   const dedupeKeys = new Set<string>();
+  const readers = new Map<string, { token: string; closedAt: number | null }>();
   return {
     async send(runId, signal) {
       if (signal.dedupeKey) {
@@ -43,6 +48,16 @@ export function createMemoryRunSignalStore(): RunSignalStore {
       if (author) authors.set(runId, [...(authors.get(runId) ?? []), { at: Date.now(), author }]);
       for (const cb of listeners.get(runId) ?? []) cb();
       return true;
+    },
+    async openReader(runId, token) {
+      readers.set(runId, { token, closedAt: null });
+    },
+    async closeReader(runId, token) {
+      const reader = readers.get(runId);
+      if (reader?.token === token) reader.closedAt = Date.now();
+    },
+    async readerClosed(runId) {
+      return readers.get(runId)?.closedAt != null;
     },
     async hasDedupeKey(dedupeKey) {
       return dedupeKeys.has(dedupeKey);
@@ -67,6 +82,8 @@ export function createMemoryRunSignalStore(): RunSignalStore {
     },
     async prune(olderThanMs) {
       const cutoff = Date.now() - olderThanMs;
+      for (const [runId, reader] of readers)
+        if (reader.closedAt !== null && reader.closedAt < cutoff) readers.delete(runId);
       for (const [runId, list] of authors) {
         const kept = list.filter((a) => a.at >= cutoff);
         if (kept.length) authors.set(runId, kept);
@@ -98,6 +115,9 @@ export function startSignalPoll(
   handlers: SignalPollHandlers,
   opts?: { intervalMs?: number; onError?: (e: unknown) => void; drainOnStop?: boolean },
 ): () => Promise<void> {
+  const readerToken = randomUUID();
+  const ready = signals.openReader(runId, readerToken);
+  void ready.catch((e: unknown) => opts?.onError?.(e));
   let draining = false;
   let redrain = false;
   let accepting = true;
@@ -110,6 +130,7 @@ export function startSignalPoll(
     }
     draining = true;
     inFlight = (async () => {
+      await ready;
       let abortDelivered = false;
       for (const s of await signals.takeLive(runId)) {
         if (s.kind === "abort") {
@@ -136,6 +157,8 @@ export function startSignalPoll(
     accepting = false;
     clearInterval(timer);
     unsubscribe();
+    await ready;
+    await signals.closeReader(runId, readerToken);
     if (opts?.drainOnStop) drain(true);
     for (;;) {
       const current = inFlight;

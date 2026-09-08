@@ -448,3 +448,47 @@ test("pg store: hasDedupeKey answers for keys already recorded", { skip }, async
     await store.close?.();
   }
 });
+
+for (const backend of ["memory", "postgres"] as const) {
+  test(
+    `${backend}: reader state survives replacement and a stale reader cannot close its successor`,
+    { skip: backend === "postgres" ? skip : false },
+    async () => {
+      const writer = backend === "memory" ? createMemoryRunSignalStore() : createPostgresRunSignalStore(URL!);
+      const observer = backend === "memory" ? writer : createPostgresRunSignalStore(URL!);
+      const runId = crypto.randomUUID();
+      try {
+        assert.equal(await observer.readerClosed(runId), false);
+        await writer.openReader(runId, "first");
+        assert.equal(await observer.readerClosed(runId), false);
+        await writer.closeReader(runId, "first");
+        assert.equal(await observer.readerClosed(runId), true);
+        await writer.openReader(runId, "second");
+        await writer.closeReader(runId, "first");
+        assert.equal(await observer.readerClosed(runId), false);
+        await writer.closeReader(runId, "second");
+        assert.equal(await observer.readerClosed(runId), true);
+        await writer.prune(-1);
+        assert.equal(await observer.readerClosed(runId), false);
+      } finally {
+        await writer.close?.();
+        if (observer !== writer) await observer.close?.();
+      }
+    },
+  );
+}
+
+test("startSignalPoll: stopping before reader registration completes still closes it", async () => {
+  const store = createMemoryRunSignalStore();
+  const opened = Promise.withResolvers<void>();
+  const open = store.openReader.bind(store);
+  store.openReader = async (...args) => {
+    await opened.promise;
+    await open(...args);
+  };
+  const stop = startSignalPoll(store, "delayed", { onSteer: async () => {}, onAbort: async () => {} });
+  const stopping = stop();
+  opened.resolve();
+  await stopping;
+  assert.equal(await store.readerClosed("delayed"), true);
+});
