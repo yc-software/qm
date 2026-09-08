@@ -1902,6 +1902,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           detectMs = Date.now() - detectStart;
           if (!decision.respond) {
             const reactions = decision.reactions?.length ? decision.reactions : undefined;
+            const declineStatus = reactions ? "react" : "silent";
             deps.auditLog.record({
               at: Date.now(),
               principalId: actor.id,
@@ -1914,6 +1915,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               `[orchestrator] turn.${reactions ? "react" : "silent"} (detection ${reactions ? `acknowledged emoji=${reactions.join(",")}` : "declined"}) thread=${conversation.threadRef}` +
                 (decision.reason ? ` reason=${JSON.stringify(decision.reason)}` : ""),
             );
+            deps.metrics?.record({
+              totalMs: 0,
+              sessionId: session.id,
+              ...(input.runId ? { runId: input.runId } : {}),
+              ingressMs: Math.max(0, Date.now() - coreReceivedAt),
+              detectMs,
+              status: declineStatus,
+              scopeLabel: scopeId,
+            });
             return reactions
               ? { status: "react", sessionId: session.id, reactions }
               : { status: "silent", sessionId: session.id };
