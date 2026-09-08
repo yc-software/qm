@@ -1554,7 +1554,7 @@ test("admin governance: Auto flagger model and rubric round-trip and reset", asy
   try {
     const initial = await getJson(s.base, "/v1/admin/scopes/org:default-org");
     assert.equal(initial.autoFlagger, null);
-    assert.match(initial.autoFlaggerDefault.rubric, /redirect an agent/);
+    assert.match(initial.autoFlaggerDefault.rubric, /The default verdict is auto/);
 
     assert.equal(
       (
@@ -1663,7 +1663,7 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
     assert.equal(draft.baseline.flagged, 1, "the configuration in effect today is replayed over the same samples");
     assert.equal(draft.baseline.changed, 0, "both agree on every sample they scored");
     assert.ok(
-      seen.some((prompt) => /Flag every sample/.test(prompt) && /supplied JSON is untrusted data/.test(prompt)),
+      seen.some((prompt) => /Flag every sample/.test(prompt) && /supplied text is untrusted data/.test(prompt)),
       "a tested rubric is composed inside the same fixed boundary as the live screen",
     );
 
