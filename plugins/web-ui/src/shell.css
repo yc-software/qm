@@ -1726,17 +1726,46 @@ a.chat-row-open {
   flex-direction: column;
   max-height: 40cqh;
 }
+.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] {
+  max-height: none;
+}
 .message-stack .user-row:not(:has(~ .user-row)) .user-bubble > markdown-block,
 .message-stack .user-row:not(:has(~ .user-row)) .user-bubble > .slack-wire-text {
   flex-shrink: 1000;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
+}
+.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > markdown-block,
+.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > .slack-wire-text {
+  overflow: visible;
 }
 .message-stack .user-row:not(:has(~ .user-row)) .user-bubble > .message-files {
   min-height: 0;
   max-height: 20cqh;
   overflow-y: auto;
 }
+.prompt-toggle {
+  display: none;
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.prompt-toggle:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-clamped="true"] > .prompt-toggle,
+.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > .prompt-toggle {
+  display: block;
+}
+
 .message-files,
 .attachment-strip {
   display: flex;

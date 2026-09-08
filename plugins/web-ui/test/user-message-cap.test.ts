@@ -16,7 +16,7 @@ test("only the pinned prompt is capped, at 40% of its own scroller, and its text
     css.match(new RegExp(String.raw`\n${pinned} > markdown-block,\n${pinned} > \.slack-wire-text \{[^}]*\}`))?.[0] ??
     "";
   assert.match(text, /flex-shrink: 1000;/);
-  assert.match(text, /overflow-y: auto;/);
+  assert.match(text, /overflow: hidden;/);
   const files = css.match(new RegExp(String.raw`\n${pinned} > \.message-files \{[^}]*\}`))?.[0] ?? "";
   assert.match(files, /min-height: 0;/);
   assert.match(files, /max-height: 20cqh;/);

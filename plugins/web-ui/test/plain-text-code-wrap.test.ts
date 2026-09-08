@@ -37,7 +37,7 @@ test("plain-text code fences stay compact without changing source-code fences", 
 });
 
 test("long plain-text fences collapse by default and remain expandable", () => {
-  assert.match(chat, /requestAnimationFrame\(\(\) => decorateTextCodeBlocks\(/);
+  assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*decorateTextCodeBlocks\(/);
   assert.match(chat, /normalizePlainTextFences/);
   assert.match(
     css,
