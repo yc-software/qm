@@ -993,7 +993,7 @@ test("surface reads fail closed without persisting blocked content", async () =>
     content: Array<{ text: string }>;
     details?: unknown;
   };
-  assert.equal(output.content[0]!.text, "[tool output quarantined by Auto security posture]");
+  assert.equal(output.content[0]!.text, "[tool output quarantined by Auto security posture (surface thread)]");
   assert.deepEqual(output.details, {});
   const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;
   assert.equal(stored.quarantined, true);

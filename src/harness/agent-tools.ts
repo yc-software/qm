@@ -16,6 +16,7 @@ import { headSlice, tailSlice } from "../util/text.ts";
 import { GOAL_BLOCKED_MIN_ROUNDS, createGoalRecord, goalFloorMeter, goalReport, type GoalRecord } from "./goal.ts";
 import {
   egressProvenance,
+  quarantineReleaseKey,
   toolResultProvenance,
   unscreenedNotice,
   UNSCREENED_PREFIX,
@@ -414,7 +415,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         summary.ok === true &&
         result === "[sent]" &&
         ret.content.every((c) => c.type === "text"));
-    if (ref.screenToolResult && !screenExempt && result.trim()) {
+    const hasContent = result.trim().length > 0 || ret.content.some((c) => c.type !== "text");
+    if (ref.screenToolResult && !screenExempt && hasContent) {
       const screen = await ref
         .screenToolResult({
           tool,
@@ -426,9 +428,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         .catch((): ToolResultScreen => ({ outcome: "unscreened" }));
       if (screen.outcome === "quarantine") {
         const releaseRequested = !!ref.pendingApprovals;
+        const from = screenAs?.source ? ` (${screenAs.source})` : "";
         result = releaseRequested
-          ? "[tool output quarantined by Auto security posture — release requested, awaiting human approval]"
-          : "[tool output quarantined by Auto security posture]";
+          ? `[tool output quarantined by Auto security posture${from} — release requested, awaiting human approval]`
+          : `[tool output quarantined by Auto security posture${from}]`;
         (ret as { content: Array<{ type: string; text?: string }>; details?: unknown }).content = [
           { type: "text", text: result },
         ];
@@ -441,12 +444,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         };
         isError = true;
         if (releaseRequested) {
-          const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
           ref.pendingApprovals!.push({
             command: tool,
             reason: "Security screen quarantined this tool's output — release it to the agent?",
             kind: "approval",
-            approvalKey: `quarantine:${toolLabel}`,
+            approvalKey: quarantineReleaseKey(tool),
           });
           ref.pausedOnApproval = true;
           (ret as { terminate?: boolean }).terminate = true;
@@ -1957,6 +1959,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             callId,
             { tool: "cron", id, count: r.runs.length, total: r.total },
             text(lines.length ? `${lines.join("\n")}${suffix}${noteLine}` : "(no recorded fires for this cron)"),
+            false,
+            undefined,
+            false,
+            undefined,
+            { provenance: "external", source: "shared crons" },
           );
         }
         case "patch": {

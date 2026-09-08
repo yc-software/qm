@@ -79,10 +79,13 @@ import type { GapWork, HarnessLlmRequestRecord, HarnessTurnResult, RuntimeChoice
 import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
+  quarantineReleaseKey,
   securityScreenChunks,
   securityScreenPayload,
+  toolLabelOf,
   UNSCREENED_REASON,
   unscreenedNotice,
+  type SecurityScreenVerdict,
   type ToolResultScreen,
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
@@ -2096,7 +2099,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
-          ...(egressTokenFor && deps.egressStamps
+          ...(egressTokenFor &&
+          deps.egressStamps &&
+          securityPolicy.inboundScreening === "external" &&
+          (scopeProfile.egressEnforcement ?? "none") !== "none"
             ? { egress: { tokenFor: egressTokenFor, stamps: deps.egressStamps } }
             : {}),
           ...(() => {
@@ -2732,9 +2738,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     source,
                   }: ToolResultScreenInput): Promise<ToolResultScreen> => {
                     if (provenance !== "external") return { outcome: "allow" };
-                    const toolLabel = tool.replace(/[^A-Za-z0-9_-]/g, "_");
+                    const toolLabel = toolLabelOf(tool);
                     const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
-                    if (authorizeCommand(`quarantine:${toolLabel}`, `quarantine:${toolLabel}`)) {
+                    if (authorizeCommand(quarantineReleaseKey(tool), quarantineReleaseKey(tool))) {
                       deps.auditLog.record({
                         at: Date.now(),
                         principalId: actor.id,
@@ -2750,18 +2756,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       ? []
                       : securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result);
                     if (!unscreenable && chunks.length === 0) return { outcome: "allow" };
-                    const verdicts = await Promise.all(
-                      chunks.map((chunk) =>
-                        classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                          hook: "tool_response",
-                          surface: toolLabel,
-                          origin: input.origin.kind,
-                        }),
-                      ),
-                    );
+                    const verdicts: Array<SecurityScreenVerdict | undefined> = [];
+                    for (let i = 0; i < chunks.length && !verdicts.some((v) => v?.decision === "strict"); i += 4) {
+                      verdicts.push(
+                        ...(await Promise.all(
+                          chunks.slice(i, i + 4).map((chunk) =>
+                            classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
+                              hook: "tool_response",
+                              surface: toolLabel,
+                              origin: input.origin.kind,
+                            }),
+                          ),
+                        )),
+                      );
+                    }
                     const verdict =
                       verdicts.find((v) => v?.decision === "strict") ??
-                      (verdicts.length && verdicts.every((v) => v?.decision === "auto" && !v.unscreened)
+                      (verdicts.length === chunks.length &&
+                      verdicts.every((v) => v?.decision === "auto" && !v.unscreened)
                         ? verdicts[0]
                         : undefined);
                     if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };

@@ -5,8 +5,13 @@ import { EGRESS_PROXY_AUD, verifyCapabilityToken, type CapabilityClaims } from "
 import { egressDecision, hostMatches, isHostDenied, type EgressVerdict } from "./resolution/egress-policy.ts";
 import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
-import { createEgressStampStore, type EgressStamp, type EgressStampStore } from "./admin/egress-stamp-store.ts";
-import { createMemoryMap, createPostgresMapFactory } from "./persistence/durable-map.ts";
+import {
+  createEgressStampStore,
+  EGRESS_STAMPS_TABLE,
+  type EgressStamp,
+  type EgressStampStore,
+} from "./admin/egress-stamp-store.ts";
+import { createPostgresMapFactory } from "./persistence/durable-map.ts";
 import { signedRequestHeaders } from "./auth/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
 import { errMessage } from "./util/errors.ts";
@@ -196,6 +201,27 @@ const RELAY_FLUSH_MS = 2_000;
 const RELAY_MAX_BATCH = 500;
 const RELAY_MAX_BUFFER = 5_000;
 const RELAY_PATH = "/v1/egress-audit";
+const STAMP_PATH = "/v1/egress-stamp";
+
+async function signedPost(
+  coreApiUrl: string,
+  path: string,
+  signingSecret: string,
+  body: string,
+  timeoutMs: number,
+  fetchImpl: typeof fetch,
+): Promise<void> {
+  const url = coreApiUrl.replace(/\/$/, "") + path;
+  const res = await fetchImpl(url, {
+    method: "POST",
+    headers: signedRequestHeaders(signingSecret, "POST", new URL(url).pathname, body, {
+      "content-type": "application/json",
+    }),
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`core responded ${res.status}`);
+}
 
 export function createRelayAuditSink(
   coreApiUrl: string,
@@ -203,7 +229,6 @@ export function createRelayAuditSink(
   fetchImpl: typeof fetch = fetch,
 ): EgressAuditRecorder & { flush(): Promise<void>; start(): void; stop(): void } {
   const url = coreApiUrl.replace(/\/$/, "") + RELAY_PATH;
-  const pathWithQuery = new URL(url).pathname;
   const buffer: Array<Omit<EgressAuditRecord, "ts" | "source">> = [];
   let flushing = false;
   let dropped = 0;
@@ -212,16 +237,7 @@ export function createRelayAuditSink(
     flushing = true;
     try {
       const batch = buffer.slice(0, RELAY_MAX_BATCH);
-      const body = JSON.stringify({ records: batch });
-      const res = await fetchImpl(url, {
-        method: "POST",
-        headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {
-          "content-type": "application/json",
-        }),
-        body,
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!res.ok) throw new Error(`core responded ${res.status}`);
+      await signedPost(coreApiUrl, RELAY_PATH, signingSecret, JSON.stringify({ records: batch }), 10_000, fetchImpl);
       buffer.splice(0, batch.length);
       if (dropped > 0) {
         console.warn(`[egress-authz] audit relay recovered; ${dropped} records were dropped while the buffer was full`);
@@ -249,28 +265,14 @@ export function createRelayAuditSink(
   };
 }
 
-const STAMP_PATH = "/v1/egress-stamp";
-
 export function createRelayStamper(
   coreApiUrl: string,
   signingSecret: string,
   fetchImpl: typeof fetch = fetch,
 ): EgressStamper {
-  const url = coreApiUrl.replace(/\/$/, "") + STAMP_PATH;
-  const pathWithQuery = new URL(url).pathname;
   return {
-    async stamp(execId, rec) {
-      const body = JSON.stringify({ execId, ...rec });
-      const res = await fetchImpl(url, {
-        method: "POST",
-        headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {
-          "content-type": "application/json",
-        }),
-        body,
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (!res.ok) throw new Error(`core responded ${res.status}`);
-    },
+    stamp: (execId, rec) =>
+      signedPost(coreApiUrl, STAMP_PATH, signingSecret, JSON.stringify({ execId, ...rec }), 5_000, fetchImpl),
   };
 }
 
@@ -287,14 +289,18 @@ function main(): void {
   relay?.start();
   const audit: EgressAuditRecorder =
     relay ?? (databaseUrl ? createPostgresEgressAuditSink(databaseUrl) : createEgressAuditSink());
-  const stamps: EgressStamper =
-    coreApiUrl && relaySecret
-      ? createRelayStamper(coreApiUrl, relaySecret)
-      : createEgressStampStore(
-          databaseUrl
-            ? createPostgresMapFactory(databaseUrl).map<EgressStamp>("egress_stamps")
-            : createMemoryMap<EgressStamp>(),
-        );
+  let stamps: EgressStamper;
+  if (coreApiUrl && relaySecret) stamps = createRelayStamper(coreApiUrl, relaySecret);
+  else if (databaseUrl) {
+    stamps = createEgressStampStore(createPostgresMapFactory(databaseUrl).map<EgressStamp>(EGRESS_STAMPS_TABLE));
+  } else {
+    console.warn(
+      "[egress-authz] no CORE_API_URL or DATABASE_URL — per-execution egress cannot be stamped, so those connections are denied",
+    );
+    stamps = {
+      stamp: () => Promise.reject(new Error("no shared egress stamp store is configured")),
+    };
+  }
 
   const tokenless = process.env.EGRESS_TOKENLESS === "open" ? ("open" as const) : ("deny" as const);
   const server = buildEgressAuthzServer({

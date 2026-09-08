@@ -106,11 +106,9 @@ const INTERNAL_RESULT_TOOLS = new Set([
   "write",
 ]);
 
-const WORKSPACE_RESULT_TOOLS = new Set(["read", "memory", "history"]);
-
 export function toolResultProvenance(tool: string): ToolResultProvenance {
   if (INTERNAL_RESULT_TOOLS.has(tool)) return "internal";
-  if (WORKSPACE_RESULT_TOOLS.has(tool)) return "workspace";
+  if (tool === "read") return "workspace";
   return "external";
 }
 
@@ -223,19 +221,36 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
 }
 
 const SCREEN_CHUNK_CHARS = 7_500;
+const SCREEN_CHUNK_OVERLAP = 500;
+
+function boundedChunk(surface: string, slice: string, out: string[]): void {
+  const payload = securityScreenPayload({ surface, text: "", triggered: true, securityScreenData: slice });
+  if (!payload) return;
+  if (!payload.truncated || slice.length <= 1) {
+    out.push(payload.content);
+    return;
+  }
+  const mid = Math.ceil(slice.length / 2);
+  const overlap = Math.min(SCREEN_CHUNK_OVERLAP, Math.floor(slice.length / 4));
+  boundedChunk(surface, slice.slice(0, mid + overlap), out);
+  boundedChunk(surface, slice.slice(mid - overlap), out);
+}
 
 export function securityScreenChunks(surface: string, data: string): string[] {
   const chunks: string[] = [];
-  for (let start = 0; start < data.length; start += SCREEN_CHUNK_CHARS) {
-    const payload = securityScreenPayload({
-      surface,
-      text: "",
-      triggered: true,
-      securityScreenData: data.slice(start, start + SCREEN_CHUNK_CHARS),
-    });
-    if (payload) chunks.push(payload.content);
+  const step = SCREEN_CHUNK_CHARS - SCREEN_CHUNK_OVERLAP;
+  for (let start = 0; start === 0 || start + SCREEN_CHUNK_OVERLAP < data.length; start += step) {
+    boundedChunk(surface, data.slice(start, start + SCREEN_CHUNK_CHARS), chunks);
   }
   return chunks;
+}
+
+export function toolLabelOf(tool: string): string {
+  return tool.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+export function quarantineReleaseKey(tool: string): string {
+  return `quarantine:${toolLabelOf(tool)}`;
 }
 
 export function renderSecurityPolicyPrompt(policy: ResolvedSecurityPolicy): string {

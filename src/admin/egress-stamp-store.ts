@@ -1,6 +1,8 @@
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 
+export const EGRESS_STAMPS_TABLE = "egress_stamps";
+
 export interface EgressStamp {
   at: number;
   scopeLabel: ScopeId;

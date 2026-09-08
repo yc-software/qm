@@ -54,7 +54,12 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
-import { createEgressStampStore, type EgressStamp, type EgressStampStore } from "./admin/egress-stamp-store.ts";
+import {
+  createEgressStampStore,
+  EGRESS_STAMPS_TABLE,
+  type EgressStamp,
+  type EgressStampStore,
+} from "./admin/egress-stamp-store.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust } from "./persistence/pg-pool.ts";
@@ -1145,7 +1150,7 @@ export function buildApp(
     ? createPostgresCredentialUsageSink(config.databaseUrl)
     : createCredentialUsageSink();
   const egressAudit = config.databaseUrl ? createPostgresEgressAuditSink(config.databaseUrl) : createEgressAuditSink();
-  const egressStamps = createEgressStampStore(artifactMap<EgressStamp>("egress_stamps"));
+  const egressStamps = createEgressStampStore(artifactMap<EgressStamp>(EGRESS_STAMPS_TABLE));
   const turnStream = createTurnStream();
   const sessionStateBus: SessionStateBus = config.databaseUrl
     ? createPostgresSessionStateBus(config.databaseUrl)
