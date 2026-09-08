@@ -1312,53 +1312,13 @@ a.chat-row-open {
   --chat-scroll-pad-top: 28px;
   container-type: size;
 
-  --chat-edge-fade: 24px;
+  --chat-prompt-gap: 24px;
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
 
   padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
   scroll-behavior: smooth;
-}
-
-.chat-scroll::before,
-.chat-scroll::after {
-  content: "";
-  display: block;
-  position: sticky;
-  z-index: 2;
-  height: var(--chat-edge-fade);
-  margin-left: calc(-1 * var(--chat-pad));
-  margin-right: calc(-1 * var(--chat-pad));
-  pointer-events: none;
-  backdrop-filter: blur(1px);
-  -webkit-backdrop-filter: blur(1px);
-}
-.chat-scroll::before {
-  top: calc(-1 * var(--chat-scroll-pad-top));
-  margin-top: calc(-1 * var(--chat-scroll-pad-top));
-  margin-bottom: calc(var(--chat-scroll-pad-top) - var(--chat-edge-fade));
-  background: linear-gradient(
-    to bottom,
-    var(--background),
-    color-mix(in srgb, var(--background) 74%, transparent) 38%,
-    color-mix(in srgb, var(--background) 32%, transparent) 68%,
-    transparent
-  );
-  mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-}
-.chat-scroll::after {
-  bottom: 0;
-  background: linear-gradient(
-    to top,
-    var(--background),
-    color-mix(in srgb, var(--background) 74%, transparent) 38%,
-    color-mix(in srgb, var(--background) 32%, transparent) 68%,
-    transparent
-  );
-  mask-image: linear-gradient(to top, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  -webkit-mask-image: linear-gradient(to top, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
 }
 
 .fork-origin-row {
@@ -1571,34 +1531,8 @@ a.chat-row-open {
   z-index: 3;
   padding-top: 14px;
   margin-top: -14px;
-  margin-bottom: var(--chat-edge-fade);
+  margin-bottom: var(--chat-prompt-gap);
   background: var(--background);
-}
-
-.message-stack .user-row:not(:has(~ .user-row))::after {
-  content: "";
-  position: absolute;
-  left: calc(-1 * var(--chat-pad));
-  right: calc(-1 * var(--chat-pad));
-  top: 100%;
-  height: var(--chat-edge-fade, 20px);
-  pointer-events: none;
-  opacity: 0;
-  background: linear-gradient(
-    to bottom,
-    var(--background),
-    color-mix(in srgb, var(--background) 74%, transparent) 38%,
-    color-mix(in srgb, var(--background) 32%, transparent) 68%,
-    transparent
-  );
-  mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-  transition: opacity 120ms ease;
-}
-.message-stack .user-row.stuck:not(:has(~ .user-row))::after {
-  opacity: 1;
 }
 
 .assistant-row + .user-row {
@@ -2801,8 +2735,6 @@ a.chat-row-open {
 .user-bubble code-block.text-code-collapsible[data-expanded="false"] .text-code-body {
   max-height: 76px;
   overflow: hidden;
-  mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.74) 38%, rgb(0 0 0 / 0.32) 68%, transparent);
 }
 .text-code-toggle {
   margin-left: auto;
@@ -7242,7 +7174,7 @@ h3.ambient-field-label {
 
 [data-density="compact"] .chat-scroll {
   --chat-scroll-pad-top: 14px;
-  --chat-edge-fade: 14px;
+  --chat-prompt-gap: 14px;
   padding: var(--chat-scroll-pad-top) var(--chat-pad) 0;
 }
 [data-density="compact"] .message-row {
@@ -8772,7 +8704,7 @@ h3.ambient-field-label {
 }
 .mini-convo-body .chat-scroll {
   --chat-scroll-pad-top: 12px;
-  --chat-edge-fade: 12px;
+  --chat-prompt-gap: 12px;
   --chat-pad: 12px;
   container-type: normal;
   max-height: 250px;

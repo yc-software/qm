@@ -2660,15 +2660,6 @@ export function createChatSurface(
   function onTranscriptScroll(e: Event): void {
     const s = e.currentTarget as HTMLElement;
     stickToBottom = s.scrollHeight - s.scrollTop - s.clientHeight <= 120;
-    markStuckUserRow(s);
-  }
-
-  function markStuckUserRow(scroller: HTMLElement): void {
-    const rows = scroller.querySelectorAll<HTMLElement>(".message-stack .user-row");
-    const row = rows.length ? rows[rows.length - 1] : undefined;
-    if (!row) return;
-    const stuck = row.getBoundingClientRect().top <= scroller.getBoundingClientRect().top + 0.5;
-    row.classList.toggle("stuck", stuck);
   }
 
   function scrollToBottom(): void {
@@ -2679,10 +2670,8 @@ export function createChatSurface(
   function scrollTranscript(force = false): void {
     const scroller = ctx.container()?.querySelector<HTMLElement>(".chat-scroll");
     if (!scroller) return;
-    markStuckUserRow(scroller);
     if (!force && !stickToBottom) return;
     requestAnimationFrame(() => {
-      markStuckUserRow(scroller);
       if (force) {
         const prev = scroller.style.scrollBehavior;
         scroller.style.scrollBehavior = "auto";
