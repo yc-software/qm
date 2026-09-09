@@ -370,6 +370,37 @@ test("a root-level wildcard glob forces a full fetch so its matches are never dr
   }
 });
 
+test("literal prefixes with git pattern metacharacters are escaped in the sparse file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse7-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "[demo]"), { recursive: true });
+  writeFileSync(join(dir, "skills", "[demo]", "SKILL.md"), "---\nname: demo\ndescription: d\n---\n# B");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["skills/[demo]/**"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(
+      paths.includes("skills/[demo]/SKILL.md"),
+      "bracket literal must be escaped so git does not treat it as a character class",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolvePackAuth: an explicit host-bound slug honors the configured injection", async () => {
   const sources = {
     serviceCredential: async (s: string) => ({ secret: "svc:" + s, host: "github.com", enabled: true }),
