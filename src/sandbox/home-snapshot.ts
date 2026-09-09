@@ -286,8 +286,9 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
 
   async function tarSize(session: S, left: () => number): Promise<number> {
     const stat = await run(session, `wc -c < ${shq(homeTarPath)}`, 30_000, left);
-    const size = Number.parseInt(stat.stdout.trim(), 10);
-    if (stat.exitCode !== 0 || !Number.isFinite(size)) throw new Error(`${label} snapshot read-back empty`);
+    const size = Number(stat.stdout.trim());
+    if (stat.exitCode !== 0 || !Number.isSafeInteger(size) || size <= 0)
+      throw new Error(`${label} snapshot read-back empty`);
     return size;
   }
 
@@ -338,7 +339,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
       const prune = prunePaths.length
         ? `\\( ${prunePaths.map((p) => `-path ${shq(p)}`).join(" -o ")} \\) -prune -o `
         : "";
-      const script = `cd ${shq(homeDir)} 2>/dev/null || exit 0; find . ${prune}-type f -print0 > ${shq(listPath)} 2>/dev/null; tar --null -T ${shq(listPath)} -cf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(listPath)}; exit $rc`;
+      const script = `cd ${shq(homeDir)} 2>/dev/null || exit 0; find . ${prune}-print0 > ${shq(listPath)} 2>/dev/null; tar --no-recursion --null -T ${shq(listPath)} -cf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(listPath)}; exit $rc`;
       try {
         const made = await run(session, script, 180_000, left);
         if (made.exitCode !== 0) throw new Error(`${label} snapshot tar failed: ${made.stderr.slice(0, 200)}`);
@@ -363,7 +364,9 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
     async hydrateHome(scope, session): Promise<boolean> {
       const left = startClock();
       const stored = await withTimeout(() => store.open(scope), left(), `${label} hydrate open`);
-      if (!stored || stored.size === 0) return false;
+      if (!stored) return false;
+      if (!Number.isSafeInteger(stored.size) || stored.size <= 0)
+        throw new Error(`${label} hydrate: invalid snapshot size ${stored.size}`);
       try {
         const started = await run(session, `mkdir -p ${shq(homeDir)} && : > ${shq(homeTarPath)}`, 30_000, left);
         if (started.exitCode !== 0)
@@ -371,10 +374,19 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
         let total = 0;
         let i = 0;
         for await (const piece of coalesce(stored.parts, partBytes)) {
-          await writePart(session, i++, piece, left);
           total += piece.length;
+          if (total > stored.size)
+            throw new Error(`${label} hydrate: received ${total} bytes, expected ${stored.size}`);
+          await writePart(session, i++, piece, left);
         }
-        if (total === 0) return false;
+        if (total !== stored.size)
+          throw new Error(`${label} hydrate: received ${total} bytes, expected ${stored.size}`);
+        const written = await tarSize(session, left);
+        if (written !== stored.size)
+          throw new Error(`${label} hydrate: wrote ${written} bytes, expected ${stored.size}`);
+        const validated = await run(session, `tar -tf ${shq(homeTarPath)} > /dev/null`, 180_000, left);
+        if (validated.exitCode !== 0)
+          throw new Error(`${label} hydrate archive invalid: ${validated.stderr.slice(0, 200)}`);
         const r = await run(
           session,
           `cd ${shq(homeDir)} && tar -xf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(homeTarPath)}; exit $rc`,
