@@ -12,7 +12,12 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { isNoSuchKey, type S3Send } from "../persistence/s3.ts";
-import { artifactPath, type FileArtifact, type FileArtifactStore } from "./file-artifact-store.ts";
+import {
+  FileArtifactDeletedError,
+  artifactPath,
+  type FileArtifact,
+  type FileArtifactStore,
+} from "./file-artifact-store.ts";
 import type { FileUpload, FileUploadStore } from "./file-upload-store.ts";
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
@@ -236,11 +241,20 @@ export function createDirectFileUploads(options: {
           throw new FileUploadError("file identity conflict", 409);
         return artifact;
       }
+      if (row.state === "failed") throw new FileUploadError("upload bytes are no longer available", 410);
       if (row.state !== "pending" && row.state !== "completing")
         throw new FileUploadError("upload cannot be completed", 409);
       if (row.state === "pending" && row.expiresAt <= now()) throw new FileUploadError("upload expired", 409);
       if (!(await verifyObject(row))) {
-        const parts = await uploadedParts(row);
+        let parts: Part[];
+        try {
+          parts = await uploadedParts(row);
+        } catch (error) {
+          if (!(error instanceof Error) || error.name !== "NoSuchUpload") throw error;
+          if (await verifyObject(row)) return service.complete(id);
+          await store.transition(id, ["pending", "completing"], "failed");
+          throw new FileUploadError("upload bytes are no longer available", 410);
+        }
         if (row.state === "pending" && !(await store.transition(id, ["pending"], "completing"))) {
           row = await requireRow(id);
           if (row.state !== "completing" && row.state !== "complete")
@@ -270,20 +284,27 @@ export function createDirectFileUploads(options: {
       const current = await requireRow(id);
       if (current.state !== "completing" && current.state !== "complete")
         throw new FileUploadError("upload cannot be published", 409);
-      const { artifact } = await files.publish({
-        id,
-        ownerScopeId: row.scopeId,
-        createdBy: row.actorId,
-        name: row.name,
-        path: artifactPath(id, row.name),
-        mimetype: row.mimetype,
-        blobKey: `files/uploads/${id}`,
-        sizeBytes: row.sizeBytes,
-        sha256: null,
-        direction: "out",
-        createdInScope: row.scopeId,
-        createdAt: row.createdAt,
-      });
+      let artifact: FileArtifact;
+      try {
+        ({ artifact } = await files.publish({
+          id,
+          ownerScopeId: row.scopeId,
+          createdBy: row.actorId,
+          name: row.name,
+          path: artifactPath(id, row.name),
+          mimetype: row.mimetype,
+          blobKey: `files/uploads/${id}`,
+          sizeBytes: row.sizeBytes,
+          sha256: null,
+          direction: "out",
+          createdInScope: row.scopeId,
+          createdAt: row.createdAt,
+        }));
+      } catch (error) {
+        if (!(error instanceof FileArtifactDeletedError)) throw error;
+        await store.transition(id, ["completing"], "complete");
+        throw new FileUploadError("published file was deleted", 410);
+      }
       if (
         artifact.blobKey !== `files/uploads/${id}` ||
         artifact.ownerScopeId !== row.scopeId ||
@@ -295,7 +316,7 @@ export function createDirectFileUploads(options: {
     },
     async abort(id) {
       let row = await requireRow(id);
-      if (row.state === "aborted") return;
+      if (row.state === "aborted" || row.state === "failed") return;
       if (row.state === "pending") {
         if (!(await store.transition(id, ["pending"], "aborting"))) row = await requireRow(id);
         else row = { ...row, state: "aborting" };
@@ -314,6 +335,7 @@ export function createDirectFileUploads(options: {
           if (row.state === "completing") await service.complete(row.id);
           else await service.abort(row.id);
         } catch (error) {
+          if (error instanceof FileUploadError && error.status === 410) continue;
           console.warn("[file uploads] cleanup failed", row.id, error instanceof Error ? error.name : "unknown");
         }
       }

@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { createDirectFileUploads, multipartChecksum, FILE_UPLOAD_PART_SIZE } from "../src/files/direct-file-upload.ts";
+import {
+  FileUploadError,
+  createDirectFileUploads,
+  multipartChecksum,
+  FILE_UPLOAD_PART_SIZE,
+} from "../src/files/direct-file-upload.ts";
 import type { FileUpload, FileUploadStore } from "../src/files/file-upload-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -26,7 +31,9 @@ function fixture() {
       return true;
     },
     async expired(now) {
-      return [...rows.values()].filter((r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted");
+      return [...rows.values()].filter(
+        (r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted" && r.state !== "failed",
+      );
     },
   };
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
@@ -252,4 +259,50 @@ test("an upload cannot reuse an unrelated artifact ID", async () => {
   });
   await assert.rejects(f.service.begin({ ...f.input, requestId: id }), /already used/);
   assert.equal(f.calls.length, 0);
+});
+
+test("recovery cannot resurrect a deleted file when the upload state update failed", async () => {
+  const f = fixture();
+  const row = await f.service.begin(f.input);
+  f.uploadParts(row);
+  const transition = f.store.transition.bind(f.store);
+  f.store.transition = async (id, from, to) => {
+    if (to === "complete") throw new Error("database acknowledgement lost");
+    return transition(id, from, to);
+  };
+  await assert.rejects(f.service.complete(row.id), /acknowledgement lost/);
+  assert.ok(await f.files.get(row.id));
+  assert.equal((await f.store.get(row.id))!.state, "completing");
+  await f.files.delete(row.id);
+  f.store.transition = transition;
+  const restarted = createDirectFileUploads(f.options);
+  await assert.rejects(
+    restarted.complete(row.id),
+    (error: unknown) => error instanceof FileUploadError && error.status === 410 && /deleted/.test(error.message),
+  );
+  assert.equal(await f.files.get(row.id, { includeDisabled: true }), null);
+  assert.equal((await f.store.get(row.id))!.state, "complete");
+  await assert.rejects(
+    restarted.complete(row.id),
+    (error: unknown) => error instanceof FileUploadError && error.status === 410 && /deleted/.test(error.message),
+  );
+});
+
+test("missing multipart upload and object become terminal instead of retrying forever", async () => {
+  const f = fixture();
+  const row = await f.service.begin(f.input);
+  await f.store.transition(row.id, ["pending"], "completing");
+  const send = f.options.client.send;
+  f.options.client.send = async (command: any) => {
+    if (command.constructor.name === "ListPartsCommand")
+      throw Object.assign(new Error("missing upload"), { name: "NoSuchUpload" });
+    return send(command);
+  };
+  f.advance();
+  await f.service.sweep();
+  assert.equal((await f.store.get(row.id))!.state, "failed");
+  assert.equal((await f.store.expired(Date.now())).length, 0);
+  assert.equal(await f.files.get(row.id), null);
+  await f.service.abort(row.id);
+  await assert.rejects(f.service.complete(row.id), /no longer available/);
 });

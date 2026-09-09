@@ -1,7 +1,7 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 
-export type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted";
+export type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
 
 export interface FileUpload {
   id: string;
@@ -29,8 +29,11 @@ export const MAX_ACTIVE_UPLOADS = 4;
 export const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
 
 export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
-  const db = createPgPool(connectionString, "files/uploads/0001", [
-    `CREATE TABLE IF NOT EXISTS file_uploads (
+  const db = createPgPool(connectionString, [
+    {
+      id: "files/uploads/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS file_uploads (
       id TEXT PRIMARY KEY,
       actor_id TEXT NOT NULL,
       state TEXT NOT NULL,
@@ -38,8 +41,17 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
       expires_at BIGINT NOT NULL,
       data JSONB NOT NULL
     )`,
-    `CREATE INDEX IF NOT EXISTS file_uploads_actor_state ON file_uploads(actor_id, state)`,
-    `CREATE INDEX IF NOT EXISTS file_uploads_expiry ON file_uploads(expires_at) WHERE state NOT IN ('complete', 'aborted')`,
+        `CREATE INDEX IF NOT EXISTS file_uploads_actor_state ON file_uploads(actor_id, state)`,
+        `CREATE INDEX IF NOT EXISTS file_uploads_expiry ON file_uploads(expires_at) WHERE state NOT IN ('complete', 'aborted')`,
+      ],
+    },
+    {
+      id: "files/uploads/0002",
+      statements: [
+        "ALTER TABLE file_uploads ADD COLUMN IF NOT EXISTS next_attempt_at BIGINT NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS file_uploads_retry ON file_uploads(next_attempt_at,expires_at) WHERE state NOT IN ('complete','aborted','failed')",
+      ],
+    },
   ]);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),
@@ -50,7 +62,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
       await withPgTransaction(await db.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-uploads:${upload.actorId}`]);
         const result = await client.query(
-          "SELECT count(*) AS count, coalesce(sum(size_bytes),0) AS bytes FROM file_uploads WHERE actor_id=$1 AND state NOT IN ('complete','aborted')",
+          "SELECT count(*) AS count, coalesce(sum(size_bytes),0) AS bytes FROM file_uploads WHERE actor_id=$1 AND state NOT IN ('complete','aborted','failed')",
           [upload.actorId],
         );
         if (
@@ -77,7 +89,12 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     async expired(now) {
       return (
         await db.q(
-          "SELECT data,state FROM file_uploads WHERE expires_at <= $1 AND state NOT IN ('complete','aborted') ORDER BY expires_at LIMIT 100",
+          `WITH due AS (
+             SELECT id FROM file_uploads
+             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
+             ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
+           ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
+             WHERE file_uploads.id=due.id RETURNING file_uploads.data,file_uploads.state`,
           [now],
         )
       ).map(decode);

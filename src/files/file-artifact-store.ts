@@ -64,6 +64,12 @@ export interface ListOwnedOptions {
 }
 
 export type FileArtifactRef = Pick<FileArtifact, "ownerScopeId" | "path">;
+export class FileArtifactDeletedError extends Error {
+  constructor() {
+    super("file was deleted");
+    this.name = "FileArtifactDeletedError";
+  }
+}
 
 export interface FileArtifactStore {
   put(input: PutFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
@@ -134,6 +140,7 @@ export function clampLimit(limit?: number): number {
 
 export function createMemoryFileArtifactStore(byteStore: DurableByteStore): FileArtifactStore {
   const rows = new Map<string, FileArtifact>();
+  const deleted = new Set<string>();
 
   async function listFiles(
     scopes: readonly ScopeId[],
@@ -187,6 +194,7 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
     },
 
     async publish(input) {
+      if (deleted.has(input.id)) throw new FileArtifactDeletedError();
       const existing = rows.get(input.id);
       if (existing) return { artifact: existing, created: false };
       const { blobKey, sizeBytes, sha256 } = input;
@@ -243,6 +251,7 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
     },
 
     async delete(id) {
+      deleted.add(id);
       rows.delete(id);
     },
   };
