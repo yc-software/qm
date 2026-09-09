@@ -213,7 +213,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
   }
 
   function escapeGitPattern(segment: string): string {
-    return segment.replace(/[[\]?]/g, "\\$&");
+    return segment.replace(/[\\[\]?]/g, "\\$&");
   }
 
   function sparsePathsFor(globs: string[]): string[] | null {

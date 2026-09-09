@@ -401,6 +401,37 @@ test("literal prefixes with git pattern metacharacters are escaped in the sparse
   }
 });
 
+test("literal prefixes containing backslashes are escaped in the sparse file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse8-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "a\\b"), { recursive: true });
+  writeFileSync(join(dir, "skills", "a\\b", "SKILL.md"), "---\\nname: ab\\ndescription: d\\n---\\n# B");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["skills/a\\b/**"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(
+      paths.includes("skills/a\\b/SKILL.md"),
+      "backslash literal must be escaped so git does not quote the next character",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolvePackAuth: an explicit host-bound slug honors the configured injection", async () => {
   const sources = {
     serviceCredential: async (s: string) => ({ secret: "svc:" + s, host: "github.com", enabled: true }),
