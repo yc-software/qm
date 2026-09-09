@@ -183,11 +183,11 @@ test("teardown pauses the sandbox; destroy kills it", async () => {
   assert.equal(fake.current(h.id), null);
 });
 
-test("keepWarm teardown pauses; next provision resumes the same sandbox", async () => {
+test("keepWarm teardown leaves the sandbox running for background work", async () => {
   const a = await sandbox.provision(layers);
   await sandbox.writeFile(a, "keep.txt", "resident\n");
   await sandbox.teardown(a, { keepWarm: true });
-  assert.equal(fake.current(a.id)?.state, "paused");
+  assert.equal(fake.current(a.id)?.state, "running");
   const b = await sandbox.provision(layers);
   assert.equal(b.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 1);
@@ -427,4 +427,35 @@ test("a lost native E2B sandbox requires explicit recovery instead of a blank re
   const restarted = make({ client, store });
   await assert.rejects(restarted.provision(layers), /explicitly import a recovery snapshot/);
   assert.equal(fake.createdCount(scopeName()), 1);
+});
+
+test("legacy pause preserves dirty home after failed portable checkpoint and retries on an unused turn", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const portable = instrumentedSnapshotStore();
+  const first = make({ store, snapshots: portable.store });
+  const handle = await first.provision(layers);
+  await first.teardown(handle);
+  const resumed = await first.provision(layers);
+  await first.writeFile(resumed, "unsaved.txt", "needs checkpoint");
+  portable.failWrites(true);
+  await first.teardown(resumed);
+  assert.equal((await store.get(scope))?.homeDirty, true);
+  portable.failWrites(false);
+  const unused = await first.provision(layers);
+  await first.teardown(unused, { homeUnchanged: true });
+  assert.equal(portable.puts(), 2);
+  assert.equal((await store.get(scope))?.homeDirty, false);
+});
+
+test("legacy pause preserves dirty home while portable checkpoints are throttled", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const portable = instrumentedSnapshotStore();
+  const first = make({ store, snapshots: portable.store, snapshotIntervalMs: 60_000 });
+  const handle = await first.provision(layers);
+  await first.teardown(handle);
+  const resumed = await first.provision(layers);
+  await first.writeFile(resumed, "unsaved.txt", "needs checkpoint");
+  await first.teardown(resumed);
+  assert.equal(portable.puts(), 1);
+  assert.equal((await store.get(scope))?.homeDirty, true);
 });

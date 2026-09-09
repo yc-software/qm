@@ -694,8 +694,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         if (rec.orgId && rec.orgId !== configOrgId()) continue;
         if (
           client.nativeSnapshots &&
-          rec.lastActivityMs &&
-          rec.lastActivityMs > cutoff &&
           (!rec.expiresAtMs || rec.expiresAtMs > Date.now()) &&
           (!rec.lastSnapshotMs || Date.now() - rec.lastSnapshotMs > snapshotIntervalMs)
         ) {

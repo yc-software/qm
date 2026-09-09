@@ -687,3 +687,22 @@ test("a late checkpoint from another core cannot replace a newer committed check
   assert.equal((await store.get(scope))?.nativeSnapshotId, newest);
   assert.equal((await store.get(scope))?.snapshotGeneration, 2);
 });
+
+test("maintenance checkpoints an idle scope with a live background job without reaping it", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const first = make({ store, client: { ...fake.client, nativeSnapshots: true } });
+  const handle = await first.provision(layers);
+  assert.ok(supportsProcessSessions(first));
+  if (!supportsProcessSessions(first)) return;
+  await first.startProcess(handle, "sleep 5");
+  await first.teardown(handle);
+  const checkpoint = (await store.get(scope))?.nativeSnapshotId;
+  await first.writeFile(handle, "background.txt", "new output");
+  await store.merge(scope, { lastActivityMs: Date.now() - 7 * 3600_000, lastSnapshotMs: 1 });
+  const result = await first.reapDeepIdle!(72 * 3600_000);
+  assert.equal(result.reaped, 0);
+  assert.equal(fake.current(scopeName())?.state, "running");
+  assert.notEqual((await store.get(scope))?.nativeSnapshotId, checkpoint);
+});

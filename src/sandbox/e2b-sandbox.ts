@@ -536,9 +536,14 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
       }
     }
+    if (tdOpts?.keepWarm) return;
     try {
       await session.pause();
-      await store.merge(scope, { preservationState: "paused", preservationError: undefined, homeDirty: false });
+      await store.merge(scope, {
+        preservationState: "paused",
+        preservationError: undefined,
+        ...(stored?.nativePause ? { homeDirty: false } : {}),
+      });
       sessionByName.delete(handle.id);
     } catch (error) {
       await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
