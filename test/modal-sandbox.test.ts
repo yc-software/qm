@@ -137,7 +137,7 @@ test("sandbox is reused across provisions and warm start is reported", async () 
 });
 
 test("an existing live sandbox holding the scope name is adopted after a restart", async () => {
-  await fake.client.create({ name: scopeName() });
+  await make().provision(layers);
   const h = await sandbox.provision(layers);
   assert.equal(h.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 1);
@@ -157,7 +157,7 @@ test("a create race with another core instance adopts the winner instead of erro
       return fake.client.fromName(name);
     },
   };
-  await fake.client.create({ name: scopeName() });
+  await make().provision(layers);
   const s = createModalSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "modal-ws-"))), {
     client: racing,
     namePrefix: "qmt",
@@ -481,16 +481,13 @@ test("reapDeepIdle spares a box running a detached background job", async () => 
   assert.equal(fake.current(scopeName())?.state, "running");
 });
 
-test("snapshots are refused for a box adopted before it ever finished hydrating", async () => {
+test("unhydrated named homes are refused before adoption and never overwrite checkpoints", async () => {
   await fake.client.create({ name: scopeName() });
   const counting = instrumentedSnapshotStore();
-  const errors: string[] = [];
-  const s = make({ snapshots: counting.store, onError: (e: { code: string }) => errors.push(e.code) });
-  const h = await s.provision(layers);
-  await s.teardown(h);
-  assert.equal(counting.puts(), 0, "an unhydrated home must never overwrite the stored snapshot");
-  assert.ok(errors.includes("teardown_snapshot_failed"));
-  assert.equal(fake.current(h.id)?.state, "running", "the box survives; only the snapshot is refused");
+  const s = make({ snapshots: counting.store });
+  await assert.rejects(s.provision(layers), /never finished hydrating/);
+  assert.equal(counting.puts(), 0);
+  assert.equal(fake.current(scopeName())?.state, "running");
 });
 
 test("rotation aborts and keeps the old box when terminating it fails", async () => {
@@ -773,3 +770,26 @@ test("explicit restart of interrupted hydration retains the checkpoint and retri
   const restored = await restarted.provision(layers);
   assert.equal(await restarted.readFile(restored, "working.txt"), "last complete checkpoint");
 });
+
+for (const path of ["stored", "name-conflict"] as const) {
+  test(`unhydrated homes cannot enter through ${path} adoption`, async () => {
+    const session = await fake.client.create({ name: scopeName() });
+    const store = createMemoryMap<StoredModalSandbox>();
+    if (path === "stored") await store.put(scope, { sandboxId: session.sandboxId, createdAtMs: Date.now() });
+    let first = true;
+    const client = {
+      ...fake.client,
+      async fromName(name: string) {
+        if (path === "name-conflict" && first) {
+          first = false;
+          return null;
+        }
+        return fake.client.fromName(name);
+      },
+    };
+    const backend = make({ store, client });
+    await assert.rejects(backend.provision(layers), /never finished hydrating/);
+    assert.equal(fake.current(scopeName())?.state, "running");
+    assert.equal(fake.createdCount(scopeName()), 1);
+  });
+}

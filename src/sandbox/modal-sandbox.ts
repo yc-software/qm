@@ -199,6 +199,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       if (!adopted) throw err;
       if ((await store.get(scope))?.hydrationPending)
         throw new Error("Modal home hydration is incomplete; refusing to adopt the replacement", { cause: err });
+      await assertHydrated(adopted);
       sessionByName.set(name, adopted);
       const merged = await store.merge(scope, { sandboxId: adopted.sandboxId, lastActivityMs: Date.now() });
       if (!merged) {
@@ -263,6 +264,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   ): Promise<{ session: ModalSession; coldStart: boolean }> {
     return provisionQueue(scope, async () => {
       const adopt = async (session: ModalSession): Promise<{ session: ModalSession; coldStart: boolean }> => {
+        await assertHydrated(session);
         sessionByName.set(name, session);
         await store.merge(scope, { lastActivityMs: Date.now() });
         return { session, coldStart: false };
@@ -302,6 +304,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           if (!(err instanceof ModalSandboxGoneError)) throw err;
         }
         if (session) {
+          await assertHydrated(session);
           try {
             await snapshotHome(scope, session);
           } catch (e) {
@@ -332,6 +335,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       if (!stored) {
         const found = await client.fromName(name);
         if (found) {
+          await assertHydrated(found);
           await store.put(scope, {
             sandboxId: found.sandboxId,
             createdAtMs: Date.now(),
@@ -668,7 +672,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         let session = sessionByName.get(name);
         if (!session) {
           session = await client.fromId(stored.sandboxId);
-          sessionByName.set(name, session);
         }
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
@@ -742,6 +745,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       let reaped = 0;
       for (const [scope, rec] of await store.entries()) {
         if (rec.orgId && rec.orgId !== configOrgId()) continue;
+        if (rec.hydrationPending) continue;
         if (
           usesNativeSnapshots(rec) &&
           (!rec.expiresAtMs || rec.expiresAtMs > Date.now()) &&
