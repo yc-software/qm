@@ -1,8 +1,10 @@
 export const COMPOSER_VARIANTS = [
   { id: "bui", label: "QM" },
-  { id: "assistant-ui", label: "assistant-ui" },
-  { id: "ai-elements", label: "AI Elements" },
-  { id: "prompt-kit", label: "prompt-kit" },
+  { id: "chatgpt", label: "ChatGPT" },
+  { id: "claude", label: "Claude" },
+  { id: "t3", label: "T3 Chat" },
+  { id: "perplexity", label: "Perplexity" },
+  { id: "cursor", label: "Cursor" },
 ] as const;
 
 export type ComposerVariant = (typeof COMPOSER_VARIANTS)[number]["id"];

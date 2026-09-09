@@ -5,7 +5,11 @@
 @import "./styles/approval.css";
 @import "./styles/tool-chips.css";
 @import "./styles/composer.css";
-@import "./styles/composer-variants.css";
+@import "./styles/composer-chatgpt.css";
+@import "./styles/composer-claude.css";
+@import "./styles/composer-t3.css";
+@import "./styles/composer-perplexity.css";
+@import "./styles/composer-cursor.css";
 @import "./styles/recommendation.css";
 @import "./styles/tables.css";
 @import "./styles/filter.css";
