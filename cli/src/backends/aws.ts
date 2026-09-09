@@ -1240,11 +1240,16 @@ interface RolloutTarget {
   taskDefinition: string;
   desiredCount: number;
   deploymentId?: string;
+  waitForDrain?: boolean;
 }
 
-async function awaitServiceTargets(config: QmConfig, expected: Record<string, RolloutTarget>): Promise<void> {
+async function awaitServiceTargets(
+  config: QmConfig,
+  expected: Record<string, RolloutTarget>,
+  timeoutMs?: number,
+): Promise<void> {
   const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 15_000);
-  const deadline = Date.now() + envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 20 * 60_000);
+  const deadline = Date.now() + (timeoutMs ?? envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 20 * 60_000));
   let healthyStreak = 0;
   let failurePolls = new Map<string, number>();
   let describeFailures = 0;
@@ -1329,6 +1334,12 @@ async function awaitServiceTargets(config: QmConfig, expected: Record<string, Ro
         }
       } else if (running < want.desiredCount) {
         waiting.push(`${workload} (${running}/${want.desiredCount})`);
+      } else if (
+        want.waitForDrain &&
+        (deployment.rolloutState !== "COMPLETED" || state.deployments?.length !== 1) &&
+        state.deploymentConfiguration?.strategy !== "BLUE_GREEN"
+      ) {
+        waiting.push(`${workload} (prior tasks are still draining)`);
       } else if (state.deploymentConfiguration?.strategy === "BLUE_GREEN") {
         const nativeStatus = nativeStatuses.get(workload);
         if (nativeStatus === "SUCCESSFUL") continue;
@@ -1676,6 +1687,7 @@ async function applyServiceTargets(
   config: QmConfig,
   targets: Record<string, string>,
   desiredCounts?: Record<string, number>,
+  options: { waitForDrain?: boolean; waitForCompensationDrain?: boolean; timeoutMs?: number } = {},
 ): Promise<void> {
   const aws = requireAws(config);
   const workloads = Object.keys(targets);
@@ -1708,9 +1720,14 @@ async function applyServiceTargets(
       Object.fromEntries(
         workloads.map((workload) => [
           workload,
-          { taskDefinition: targets[workload]!, desiredCount: expectedCounts[workload]! },
+          {
+            taskDefinition: targets[workload]!,
+            desiredCount: expectedCounts[workload]!,
+            waitForDrain: options.waitForDrain,
+          },
         ]),
       ),
+      options.timeoutMs,
     );
   } catch (error) {
     const restoreFailures: string[] = [];
@@ -1739,9 +1756,14 @@ async function applyServiceTargets(
           Object.fromEntries(
             changed.map((workload) => [
               workload,
-              { taskDefinition: before.tasks[workload]!, desiredCount: before.counts[workload]! },
+              {
+                taskDefinition: before.tasks[workload]!,
+                desiredCount: before.counts[workload]!,
+                waitForDrain: options.waitForCompensationDrain,
+              },
             ]),
           ),
+          options.timeoutMs,
         );
       } catch (restoreError) {
         restoreFailures.push(errMessage(restoreError));
@@ -2469,6 +2491,157 @@ export async function awsRollback(
     releaseLease(aws, lease);
   }
   ok(`rolled back ${config.orgId}`);
+}
+
+export function taskDefinitionForBackgroundWork(
+  task: Record<string, unknown>,
+  enabled: boolean,
+): Record<string, unknown> {
+  const containers = structuredClone(task.containerDefinitions) as Array<Record<string, unknown>> | undefined;
+  const core = containers?.find((container) => container.name === "core");
+  if (!core) throw new CliError("core task definition has no core container");
+  const secrets = core.secrets as Array<{ name: string }> | undefined;
+  if (secrets?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED")) {
+    throw new CliError("BACKGROUND_WORK_ENABLED cannot be changed while supplied as a secret");
+  }
+  const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
+  core.environment = [
+    ...environment.filter((entry) => entry.name !== "BACKGROUND_WORK_ENABLED"),
+    { name: "BACKGROUND_WORK_ENABLED", value: enabled ? "1" : "0" },
+  ];
+  const fields = [
+    "family",
+    "taskRoleArn",
+    "executionRoleArn",
+    "networkMode",
+    "volumes",
+    "placementConstraints",
+    "requiresCompatibilities",
+    "cpu",
+    "memory",
+    "pidMode",
+    "ipcMode",
+    "proxyConfiguration",
+    "inferenceAccelerators",
+    "ephemeralStorage",
+    "runtimePlatform",
+    "enableFaultInjection",
+  ];
+  return {
+    ...Object.fromEntries(fields.flatMap((field) => (task[field] == null ? [] : [[field, task[field]]]))),
+    containerDefinitions: containers,
+  };
+}
+
+export async function awsSetBackgroundWork(
+  config: QmConfig,
+  configDir: string,
+  enabled: boolean,
+  candidatePath?: string,
+): Promise<void> {
+  const { aws, workloads } = awsTopology(config, configDir);
+  if (!workloads.includes("core")) throw new CliError("background work requires the core workload");
+  const candidate = candidatePath ? releaseCandidate(config, candidatePath) : undefined;
+  assertAwsCallerAccount(aws);
+  await withAwsLease(aws, async () => {
+    const current = currentDeploymentManifest(aws);
+    if (!current) throw new CliError("background work requires a recorded deployment");
+    const states = describedServices(config, workloads);
+    assertOwnedServices(config, states, workloads);
+    const before = serviceSnapshotFromStates(states, workloads);
+    for (const workload of workloads) {
+      if (
+        current.tasks[workload] !== before.tasks[workload] ||
+        current.counts?.[workload] !== before.counts[workload]
+      ) {
+        throw new CliError(`cannot change background work while ${workload} differs from the deployment manifest`);
+      }
+    }
+    if (!before.counts.core) throw new CliError("cannot change background work while core is scaled down");
+    let coreTask: Record<string, unknown> | undefined;
+    for (const workload of candidate ? workloads : ["core"]) {
+      const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
+        "ecs",
+        "describe-task-definition",
+        "--task-definition",
+        before.tasks[workload]!,
+      ]).taskDefinition;
+      const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
+        (item) => item.name === workload,
+      );
+      if (!task || typeof container?.image !== "string" || !isPinnedWorkloadImage(config, workload, container.image)) {
+        throw new CliError(`${workload} does not have a trusted digest-pinned image`);
+      }
+      if (
+        candidate &&
+        (container.image !== candidate.images[workload] ||
+          !candidate.imageProvenance[workload] ||
+          canonicalJson(candidate.imageProvenance[workload]) !== canonicalJson(current.imageProvenance?.[workload]))
+      ) {
+        throw new CliError(`${workload} does not match the expected release candidate`);
+      }
+      if (workload === "core") coreTask = task;
+    }
+    const desired = taskDefinitionForBackgroundWork(coreTask!, enabled);
+    const core = (coreTask!.containerDefinitions as Array<Record<string, unknown>>).find(
+      (item) => item.name === "core",
+    )!;
+    const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
+    const currentFlag = environment.find((entry) => entry.name === "BACKGROUND_WORK_ENABLED")?.value;
+    const timeoutMs = envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
+    if (currentFlag === (enabled ? "1" : "0")) {
+      await awaitServiceTargets(
+        config,
+        {
+          core: { taskDefinition: before.tasks.core!, desiredCount: before.counts.core, waitForDrain: !enabled },
+        },
+        timeoutMs,
+      );
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "qm-background-work-"));
+    try {
+      const file = join(dir, "core.json");
+      writeFileSync(file, JSON.stringify(desired));
+      const target = registerTaskDefinition(config, file);
+      await applyServiceTargets(
+        config,
+        { core: target },
+        { core: before.counts.core },
+        { waitForDrain: !enabled, waitForCompensationDrain: true, timeoutMs },
+      );
+      try {
+        recordDeploymentManifest(
+          aws,
+          { ...before.tasks, core: target },
+          {
+            counts: current.counts,
+            imageLabel: current.imageLabel,
+            dbRestorePoint: current.dbRestorePoint,
+            layer: current.layer,
+            imageProvenance: current.imageProvenance,
+          },
+        );
+      } catch (error) {
+        const failures: string[] = [];
+        try {
+          await applyServiceTargets(
+            config,
+            { core: before.tasks.core! },
+            { core: before.counts.core },
+            { waitForDrain: true, waitForCompensationDrain: true, timeoutMs },
+          );
+          manifestTransaction(aws, current, current.id);
+        } catch (restoreError) {
+          failures.push(`restoring background work: ${errMessage(restoreError)}`);
+        }
+        throwAfterCompensation(error, failures);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  ok(`background work ${enabled ? "enabled" : "disabled"}`);
 }
 
 function envValues(configDir: string, path: string | undefined): Map<string, string> {

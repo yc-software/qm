@@ -18,6 +18,8 @@ import {
   awsMigrateCandidate,
   awsRollback,
   awsSecretsPush,
+  awsSetBackgroundWork,
+  taskDefinitionForBackgroundWork,
   awsStatus,
   awsUp,
   githubTrustSubject,
@@ -213,6 +215,7 @@ function statefulAws(
     failPromotion?: boolean;
     promotionAlreadyCurrent?: boolean;
     drainRollout?: boolean;
+    drainPolls?: number;
     primaryFailedTasks?: boolean;
     rolloutFailed?: boolean;
     transientFailedTaskPolls?: number;
@@ -301,6 +304,9 @@ else if (a.includes("ecs describe-services")) {
   const start = args.indexOf("--services") + 1;
   const end = Math.min(...[args.indexOf("--output", start), args.indexOf("--region", start)].filter((index) => index >= 0));
   const names = args.slice(start, end);
+  const blocked = s.blockDisabledDrain && names.some((name) => s.definitions[s.services[name]?.taskDefinition]?.containerDefinitions?.some((container) => container.name === "core" && container.environment?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED" && entry.value === "0")));
+  const draining = ${JSON.stringify(opts.drainRollout ?? false)} || (s.drainPolls || 0) > 0 || blocked;
+  if (s.drainPolls > 0) { s.drainPolls--; save(); }
   const transientFailedTaskPolls = ${JSON.stringify(opts.transientFailedTaskPolls ?? 0)};
   let transientlyFailing = false;
   if (transientFailedTaskPolls && s.updated) {
@@ -328,7 +334,7 @@ else if (a.includes("ecs describe-services")) {
     if (name === staleName && service.previousTaskDefinition) {
       return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: service.desiredCount, taskDefinition: service.previousTaskDefinition, deployments: [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.previousTaskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }], tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
     }
-    const deployments = ${JSON.stringify(opts.drainRollout ?? false)}
+    const deployments = draining
       ? [
           { id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: service.desiredCount, failedTasks: 1 },
           { id: "old-protected", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: 1, failedTasks: 0 },
@@ -340,7 +346,7 @@ else if (a.includes("ecs describe-services")) {
         : blueGreenBakePolls
           ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }]
         : [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: transientFailedTaskPolls && s.updated ? 1 : 0 }];
-    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: ${JSON.stringify(opts.drainRollout ?? false)} ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
+    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
 else if (a.includes("ecs list-service-deployments") && ${JSON.stringify(opts.failNativeStatusOnceAfterUpdate ?? false)} && s.updated && !s.nativeStatusFailedOnce) {
@@ -397,8 +403,10 @@ else if (a.includes("ecs update-service")) {
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--desired-count")) service.desiredCount = Number(after("--desired-count"));
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)}) service.deploymentId = "ecs-svc/" + name + "-" + (++s.revision);
   s.updated = true;
+  s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
   s.blueGreenPolls = 0;
-  if (${JSON.stringify(opts.failFirstUpdateAfterMutation ?? false)} && !s.failedFirstUpdate) {
+  if (s.failNextUpdatesAfterMutation > 0 || (${JSON.stringify(opts.failFirstUpdateAfterMutation ?? false)} && !s.failedFirstUpdate)) {
+    if (s.failNextUpdatesAfterMutation > 0) s.failNextUpdatesAfterMutation--;
     s.failedFirstUpdate = true;
     save();
     console.error("UpdateServiceResponseLost");
@@ -416,6 +424,7 @@ else if (a.includes("dynamodb get-item")) {
   console.log(JSON.stringify(s.dynamo[key] ? { Item: s.dynamo[key] } : {}));
 }
 else if (a.includes("dynamodb transact-write-items")) {
+  if (s.failNextTransactions > 0) { s.failNextTransactions--; save(); console.error("TransactionRejected"); process.exit(1); }
   if (${JSON.stringify(opts.failTransactions ?? false)}) { console.error("TransactionRejected"); process.exit(1); }
   const failTransactionPuts = ${JSON.stringify(opts.failTransactionPuts ?? 0)};
   if (failTransactionPuts) {
@@ -1389,6 +1398,149 @@ test("AWS up coalesces a requested restart into one deployment even when the tas
     assert.ok(calls.lastIndexOf("ecs list-service-deployments") < calls.lastIndexOf("dynamodb transact-write-items"));
     await assert.rejects(() => awsUp(single, dir, { yes: true, restart: ["missing"] }), /not selected/);
     await assert.rejects(() => awsUp(single, dir, { buildOnly: true, restart: ["core"] }), /cannot be used/);
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("background mode changes preserve task settings and reject secret-controlled modes", () => {
+  const task = {
+    family: "core",
+    taskDefinitionArn: "read-only",
+    status: "ACTIVE",
+    cpu: "1024",
+    volumes: [{ name: "scratch" }],
+    containerDefinitions: [
+      {
+        name: "core",
+        image: "pinned",
+        environment: [{ name: "OTHER", value: "kept" }],
+        secrets: [{ name: "TOKEN", valueFrom: "secret" }],
+      },
+      { name: "sidecar", image: "unchanged" },
+    ],
+  };
+  const changed = taskDefinitionForBackgroundWork(task, false);
+  assert.equal(changed.taskDefinitionArn, undefined);
+  assert.equal(changed.status, undefined);
+  assert.deepEqual(changed.volumes, task.volumes);
+  const containers = changed.containerDefinitions as typeof task.containerDefinitions;
+  assert.deepEqual(containers[1], task.containerDefinitions[1]);
+  assert.deepEqual(containers[0]!.secrets, task.containerDefinitions[0]!.secrets);
+  assert.deepEqual(containers[0]!.environment, [
+    { name: "OTHER", value: "kept" },
+    { name: "BACKGROUND_WORK_ENABLED", value: "0" },
+  ]);
+  assert.equal(task.containerDefinitions[0]!.environment!.length, 1);
+  assert.throws(
+    () =>
+      taskDefinitionForBackgroundWork(
+        { containerDefinitions: [{ name: "core", secrets: [{ name: "BACKGROUND_WORK_ENABLED" }] }] },
+        true,
+      ),
+    /supplied as a secret/,
+  );
+});
+
+test("background activation preserves candidate and manifest without another migration; demotion drains old tasks", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-background-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const base = oneServiceConfig();
+  const single = { ...base, env: { ...base.env, core: { ...base.env.core, BACKGROUND_WORK_ENABLED: "false" } } };
+  const fake = statefulAws(dir, single, {}, { drainPolls: 6 });
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(single, dir, { yes: true });
+    const readState = () => JSON.parse(readFileSync(fake.state, "utf8"));
+    const manifest = () => {
+      const state = readState();
+      return JSON.parse(
+        state.dynamo[`deployment/manifest/${state.dynamo["deployment/current"].manifestId.S}`].manifest.S,
+      );
+    };
+    const initial = manifest();
+    const candidate = {
+      contract: 1,
+      accountId: single.aws!.accountId,
+      region: single.aws!.region,
+      label: "verified",
+      images: { core: readState().definitions[initial.tasks.core].containerDefinitions[0].image },
+      imageProvenance: initial.imageProvenance,
+    };
+    const candidatePath = join(dir, "candidate.json");
+    writeFileSync(candidatePath, JSON.stringify(candidate));
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, true, candidatePath);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs register-task-definition/);
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, false);
+    const disabled = manifest();
+    assert.notEqual(disabled.tasks.core, initial.tasks.core);
+    assert.deepEqual(disabled.imageProvenance, initial.imageProvenance);
+    assert.deepEqual(disabled.layer, initial.layer);
+    assert.equal(disabled.dbRestorePoint, initial.dbRestorePoint);
+    const disableCalls = readFileSync(fake.log, "utf8");
+    assert.ok(
+      (disableCalls.slice(disableCalls.indexOf("ecs update-service")).match(/ecs describe-services/g)?.length ?? 0) >=
+        6,
+    );
+    const lostResponse = readState();
+    lostResponse.failNextUpdatesAfterMutation = 1;
+    writeFileSync(fake.state, JSON.stringify(lostResponse));
+    writeFileSync(fake.log, "");
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, true, candidatePath), /UpdateServiceResponseLost/);
+    assert.equal(manifest().id, disabled.id);
+    const compensationCalls = readFileSync(fake.log, "utf8");
+    assert.ok(
+      (compensationCalls.slice(compensationCalls.lastIndexOf("ecs update-service")).match(/ecs describe-services/g)
+        ?.length ?? 0) >= 6,
+    );
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, true, candidatePath);
+    const active = manifest();
+    assert.notEqual(active.tasks.core, disabled.tasks.core);
+    assert.deepEqual(active.imageProvenance, initial.imageProvenance);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs run-task|rds |ecr /);
+    const core = readState().definitions[active.tasks.core].containerDefinitions[0];
+    assert.equal(core.image, candidate.images.core);
+    assert.equal(
+      core.environment.find((entry: { name: string }) => entry.name === "BACKGROUND_WORK_ENABLED").value,
+      "1",
+    );
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, true, candidatePath);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|ecs register-task-definition/);
+    candidate.images.core = candidate.images.core.replace(/sha256:.+$/, "sha256:" + "b".repeat(64));
+    writeFileSync(candidatePath, JSON.stringify(candidate));
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, true, candidatePath), /expected release candidate/);
+    const faulted = readState();
+    faulted.failNextTransactions = 3;
+    writeFileSync(fake.state, JSON.stringify(faulted));
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /manifest write failed/);
+    assert.equal(manifest().id, active.id);
+    assert.equal(readState().services["acme-core"].taskDefinition, active.tasks.core);
+    const busy = readState();
+    busy.blockDisabledDrain = true;
+    writeFileSync(fake.state, JSON.stringify(busy));
+    const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+    process.env.QM_AWS_ROLLOUT_DEADLINE_MS = "1500";
+    try {
+      await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /timed out/);
+      assert.equal(manifest().id, active.id);
+      assert.equal(readState().services["acme-core"].taskDefinition, active.tasks.core);
+    } finally {
+      if (priorDeadline === undefined) delete process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+      else process.env.QM_AWS_ROLLOUT_DEADLINE_MS = priorDeadline;
+    }
+    const drifted = readState();
+    drifted.services["acme-core"].desiredCount++;
+    writeFileSync(fake.state, JSON.stringify(drifted));
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /differs from the deployment manifest/);
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
