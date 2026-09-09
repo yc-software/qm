@@ -8165,26 +8165,6 @@ h3.ambient-field-label {
     flex: none;
   }
 }
-.inbox-item-surface .inbox-context {
-  max-height: 480px;
-  overflow: hidden;
-}
-.inbox-item-surface .inbox-context[data-expanded="true"] {
-  max-height: none;
-}
-.inbox-thread-more {
-  align-self: flex-start;
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  color: var(--muted-foreground);
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.inbox-thread-more:hover {
-  color: var(--foreground);
-}
 .inbox-item-surface .inbox-draft-body {
   min-height: 200px;
 }
@@ -8200,10 +8180,9 @@ h3.ambient-field-label {
 }
 .inbox-context {
   display: flex;
+  flex: none;
   flex-direction: column;
   gap: 14px;
-  max-height: 240px;
-  overflow-y: auto;
 }
 .inbox-context-msg {
   display: flex;
@@ -8908,23 +8887,6 @@ h3.ambient-field-label {
   flex: none;
   font-size: 11.5px;
   color: var(--muted-foreground);
-}
-.rv-orig {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 11px;
-  margin-bottom: 10px;
-  background: color-mix(in srgb, var(--foreground) 2%, transparent);
-}
-.rv-orig-head {
-  font-size: 11px;
-  color: var(--muted-foreground);
-  margin-bottom: 3px;
-}
-.rv-orig-text {
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
 }
 .draft-review-surface .inbox-draft {
   margin-top: 10px;

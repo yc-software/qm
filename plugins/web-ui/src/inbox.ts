@@ -134,8 +134,6 @@ const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove t
 const ASIDE_MIN_HEIGHT = 320;
 const ASIDE_MAX_HEIGHT = 1100;
 const CHAT_INPUT_MAX_HEIGHT = 200;
-const expandedThreads = new Set<string>();
-const clampedThreads = new Set<string>();
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const sending = new Set<string>();
 const acting = new Set<string>();
@@ -180,7 +178,6 @@ export function resetInboxState(): void {
   inboxState.fetchedAt = 0;
   inboxState.notice = null;
   inboxState.syncBusy = false;
-  expandedThreads.clear();
   draftEdits.clear();
   sending.clear();
   acting.clear();
@@ -746,45 +743,30 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
 }
 
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
-  const rows = item.context ?? [];
-  if (!rows.length) return nothing;
-  const expanded = expandedThreads.has(item.id);
-  return html`<div class="inbox-context" data-expanded=${String(expanded)}>
-      ${rows.map((m, i) => {
-        const name = participantName(m.author) || m.author;
-        return html`
-          <div class="inbox-context-msg">
-            <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
-              >${initials(name)}</span
-            >
-            <div class="inbox-context-body">
-              <div class="inbox-context-head">
-                <span class="inbox-context-author">${name}</span>
-                ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
-              </div>
-              <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
-              ${itemImagesTpl(item, m.images, i)}
+  const rows = [
+    ...(item.context ?? []).map((message, index) => ({ ...message, imageIndex: index })),
+    { author: item.from, at: item.receivedAt, text: item.snippet, images: item.images, imageIndex: -1 },
+  ];
+  return html`<div class="inbox-context">
+    ${rows.map((m) => {
+      const name = participantName(m.author) || m.author;
+      return html`
+        <div class="inbox-context-msg">
+          <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
+            >${initials(name)}</span
+          >
+          <div class="inbox-context-body">
+            <div class="inbox-context-head">
+              <span class="inbox-context-author">${name}</span>
+              ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
             </div>
+            <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
+            ${itemImagesTpl(item, m.images, m.imageIndex)}
           </div>
-        `;
-      })}
-    </div>
-    ${threadMoreTpl(item, expanded)}`;
-}
-
-function threadMoreTpl(item: InboxItem, expanded: boolean): TemplateResult | typeof nothing {
-  if (!clampedThreads.has(item.id) && !expanded) return nothing;
-  return html`<button
-    class="inbox-thread-more"
-    type="button"
-    @click=${() => {
-      if (expanded) expandedThreads.delete(item.id);
-      else expandedThreads.add(item.id);
-      drawAll();
-    }}
-  >
-    ${expanded ? "Show less" : "Show the whole thread"}
-  </button>`;
+        </div>
+      `;
+    })}
+  </div>`;
 }
 
 function syncAskEnabled(box: HTMLTextAreaElement): void {
@@ -1082,8 +1064,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
-              ${contextTpl(item)} ${itemImagesTpl(item, item.images, -1)}
-              ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}
+              ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}
             </div>`
           : nothing
       }
@@ -1247,8 +1228,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
-        ${contextTpl(item)} ${itemImagesTpl(item, item.images, -1)}
-        ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}
+        ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}
       </div>
     </div>
     <aside class="inbox-item-aside">${chatTpl(item)}</aside>
@@ -1315,24 +1295,8 @@ function drawFull(): void {
       host,
     ),
   );
-  markClampedThread(host, openItem?.id ?? null);
   sizeAside(host);
   sizeChatInputs(host);
-}
-
-/**
- * The thread caps its height, so the toggle only earns its place when there is
- * more thread than the cap shows. Measured after the render that drew it.
- */
-function markClampedThread(host: HTMLElement, itemId: string | null): void {
-  if (!itemId) return;
-  const context = host.querySelector<HTMLElement>(".inbox-item-surface .inbox-context");
-  if (!context) return;
-  const clamped = context.scrollHeight - context.clientHeight > 1;
-  const was = clampedThreads.has(itemId);
-  if (clamped) clampedThreads.add(itemId);
-  else if (!expandedThreads.has(itemId)) clampedThreads.delete(itemId);
-  if (clamped !== was && !expandedThreads.has(itemId)) drawFull();
 }
 
 /**
