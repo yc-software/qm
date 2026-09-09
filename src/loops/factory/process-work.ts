@@ -16,10 +16,11 @@ export interface FactoryEnvInput {
   linearApiKey: string;
   githubToken: string;
   repoDir: string;
+  factorySourceDir: string;
 }
 
 export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string> {
-  const { config, guidance, linearApiKey, githubToken, repoDir } = input;
+  const { config, guidance, linearApiKey, githubToken, repoDir, factorySourceDir } = input;
   return {
     ...(guidance !== undefined ? { IO_FEEDBACK: guidance } : {}),
     IO_LINEAR_API_KEY: linearApiKey,
@@ -36,7 +37,7 @@ export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string>
     IO_VERIFY_TEST_FILE_CMD: config.verifyTestFileCmd,
     IO_VERIFY_LINT_CMD: config.verifyLintCmd,
     IO_REPO_DIR: repoDir,
-    IO_FACTORY_SOURCE_DIR: repoDir,
+    IO_FACTORY_SOURCE_DIR: factorySourceDir,
     IO_REPO_CLONE_URL: config.repoCloneUrl,
     ...(config.repoSetupCmd !== undefined ? { IO_REPO_SETUP_CMD: config.repoSetupCmd } : {}),
     ...(config.proofStartCmd !== undefined ? { IO_PROOF_START_CMD: config.proofStartCmd } : {}),
@@ -51,6 +52,7 @@ export interface FactoryProcessInput {
   sandbox: Sandbox;
   scopeId: ScopeId;
   repoDir: string;
+  factorySourceDir: string;
   ticketId: string;
   env: Record<string, string>;
   onChunk?: (chunk: string) => void;
@@ -68,7 +70,7 @@ export interface FactoryProcessResult {
 }
 
 export async function runFactoryProcess(input: FactoryProcessInput): Promise<FactoryProcessResult> {
-  const { scopeId, repoDir, ticketId, env, onChunk, signal } = input;
+  const { scopeId, repoDir, factorySourceDir, ticketId, env, onChunk, signal } = input;
   if (!TICKET_RE.test(ticketId)) throw new Error("factory_ticket_invalid");
   const sandbox = input.sandbox;
   if (!supportsProcessSessions(sandbox)) {
@@ -79,10 +81,14 @@ export async function runFactoryProcess(input: FactoryProcessInput): Promise<Fac
   const grace = input.termGraceMs ?? FACTORY_TERM_GRACE_MS;
   const handle = await sandbox.provision([{ scopeId, mode: "rw", mountPath: "" }]);
   try {
-    const { processId } = await sandbox.startProcess(handle, `bash ${FACTORY_WRAPPER} ${ticketId}`, {
-      cwd: repoDir,
-      env,
-    });
+    const { processId } = await sandbox.startProcess(
+      handle,
+      `bash ${factorySourceDir}/${FACTORY_WRAPPER} ${ticketId}`,
+      {
+        cwd: repoDir,
+        env,
+      },
+    );
     try {
       let cursor = 0;
       let stdout = "";

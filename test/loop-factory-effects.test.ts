@@ -1,15 +1,22 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createFactoryLoopEffects,
   loadFactoryContext,
+  FACTORY_SOURCE_BRANCH,
+  FACTORY_SOURCE_DIR,
   type FactoryContext,
   type FactoryEffectsDeps,
   type FactoryWorkEffects,
 } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
 import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
-import { renderFactoryEnv } from "../src/loops/factory/process-work.ts";
+import { FACTORY_WRAPPER, renderFactoryEnv } from "../src/loops/factory/process-work.ts";
+import { shq } from "../src/util/shell.ts";
 import { LINEAR_GRAPHQL_URL } from "../src/loops/factory/linear-intake.ts";
 import { FORGE_CHECKS } from "../src/loops/factory/forge-evaluate.ts";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src/credentials/keychain.ts";
@@ -28,6 +35,8 @@ const ORG_SCOPE = "org:acme";
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
 const REPO_DIR = "/workspace/repo";
+const CLONE_DIR = "/workspace/qm-yc";
+const CLONE_URL = "https://github.com/yc-software/qm-yc.git";
 const TICKET = "QM-12";
 
 const CONFIG: FactoryConfig = {
@@ -100,7 +109,13 @@ const OPEN_PR_ARTIFACT = {
 type Call =
   | { op: "provision"; layers: WorkspaceLayer[]; handle: SandboxHandle }
   | { op: "run"; handle: SandboxHandle; command: string }
-  | { op: "startProcess"; handle: SandboxHandle; command: string; opts: StartProcessOptions | undefined }
+  | {
+      op: "startProcess";
+      handle: SandboxHandle;
+      command: string;
+      opts: StartProcessOptions | undefined;
+      processId: string;
+    }
   | { op: "readProcess"; handle: SandboxHandle; processId: string }
   | { op: "signalProcess"; handle: SandboxHandle; processId: string; signal: string }
   | { op: "teardown"; handle: SandboxHandle; opts: TeardownOptions | undefined };
@@ -121,6 +136,7 @@ function fakeSandbox(
     probeMissing?: string[];
     stdout?: string;
     teardownError?: Error;
+    bootstrapExit?: number;
     read?: (n: number, calls: Call[]) => Promise<ReadProcessResult>;
   } = {},
 ): FakeSandbox {
@@ -134,6 +150,7 @@ function fakeSandbox(
       : { chunks: "", cursor: stdout.length, status: exited };
   const unused = (name: string) => () => Promise.reject(new Error(`the factory effects must not call ${name}`));
   let provisioned = 0;
+  let started = 0;
   const sandbox: Record<string, unknown> = {
     profile: {
       backend: "fake",
@@ -162,12 +179,18 @@ function fakeSandbox(
     listDir: unused("listDir"),
     removeDir: unused("removeDir"),
     startProcess: (handle: SandboxHandle, command: string, startOpts?: StartProcessOptions) => {
-      calls.push({ op: "startProcess", handle, command, opts: startOpts });
-      return Promise.resolve({ processId: "p1" });
+      started += 1;
+      const processId = `p${started}`;
+      calls.push({ op: "startProcess", handle, command, opts: startOpts, processId });
+      return Promise.resolve({ processId });
     },
     readProcess: (handle: SandboxHandle, processId: string) => {
       calls.push({ op: "readProcess", handle, processId });
-      const n = calls.filter((call) => call.op === "readProcess").length;
+      const start = calls.find((call) => call.op === "startProcess" && call.processId === processId);
+      if (start?.op === "startProcess" && !start.command.includes(FACTORY_WRAPPER)) {
+        return Promise.resolve({ chunks: "", cursor: 0, status: { state: "exited", code: opts.bootstrapExit ?? 0 } });
+      }
+      const n = calls.filter((call) => call.op === "readProcess" && call.processId === processId).length;
       return (opts.read ?? defaultRead)(n, calls);
     },
     writeStdin: unused("writeStdin"),
@@ -185,6 +208,44 @@ function fakeSandbox(
 }
 
 const ops = (calls: Call[]): string[] => calls.map((call) => call.op);
+
+const wrapperStart = (calls: Call[]): Extract<Call, { op: "startProcess" }> => {
+  const start = calls.find((call) => call.op === "startProcess" && call.command.includes(FACTORY_WRAPPER));
+  assert.ok(start?.op === "startProcess", "the wrapper was never started");
+  return start;
+};
+
+const bootstrapStarts = (calls: Call[]): Extract<Call, { op: "startProcess" }>[] =>
+  calls.filter(
+    (call): call is Extract<Call, { op: "startProcess" }> =>
+      call.op === "startProcess" && !call.command.includes(FACTORY_WRAPPER),
+  );
+
+const runWithFakeGit = (script: string, failOn = ""): { code: number; git: string[]; output: string } => {
+  const bin = mkdtempSync(join(tmpdir(), "factory-bootstrap-bin-"));
+  const log = join(bin, "git.log");
+  const fakeGit = [
+    "#!/bin/sh",
+    `printf '%s\\n' "$*" >> ${shq(log)}`,
+    'if [ -n "${FAKE_GIT_FAIL:-}" ]; then case "$*" in *"$FAKE_GIT_FAIL"*) exit 1;; esac; fi',
+    "",
+  ].join("\n");
+  writeFileSync(join(bin, "git"), fakeGit, "utf8");
+  chmodSync(join(bin, "git"), 0o755);
+  const result = spawnSync("/bin/sh", ["-c", script], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, FAKE_GIT_FAIL: failOn },
+  });
+  const git = existsSync(log)
+    ? readFileSync(log, "utf8")
+        .split("\n")
+        .filter((line) => line !== "")
+    : [];
+  rmSync(bin, { recursive: true, force: true });
+  assert.equal(result.error, undefined, String(result.error));
+  assert.equal(typeof result.status, "number", `killed by ${result.signal}`);
+  return { code: result.status ?? 1, git, output: `${result.stdout}${result.stderr}` };
+};
 
 function fakeConfig(initial: FactoryConfig | null): {
   config: FactoryEffectsDeps["config"];
@@ -295,6 +356,20 @@ async function workedRunId(effects: FactoryWorkEffects, item: LoopItem = ITEM): 
   return runId;
 }
 
+const tempCloneDir = (t: TestContext): string => {
+  const root = mkdtempSync(join(tmpdir(), "factory-bootstrap-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return join(root, "qm-yc");
+};
+
+async function recordedBootstrapScript(cloneDir: string): Promise<string> {
+  const fake = fakeSandbox();
+  await workedRunId(createFactoryLoopEffects(deps({ sandbox: fake.sandbox })));
+  const bootstrap = bootstrapStarts(fake.calls)[0];
+  assert.ok(bootstrap);
+  return bootstrap.command.replaceAll(CLONE_DIR, cloneDir);
+}
+
 test("the composed object exposes exactly the four work-side effects and does no I/O to build them", async () => {
   const fake = fakeSandbox();
   const fetched = fakeFetch([intakePage(["QM-12", "QM-13"])]);
@@ -400,6 +475,8 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
   assert.deepEqual(ops(fake.calls), [
     "provision",
     "run",
+    "startProcess",
+    "readProcess",
     "teardown",
     "provision",
     "startProcess",
@@ -408,16 +485,15 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
     "readProcess",
     "teardown",
   ]);
-  const preflightTeardown = fake.calls[2];
+  const preflightTeardown = fake.calls.find((call) => call.op === "teardown");
   assert.ok(preflightTeardown?.op === "teardown");
   assert.deepEqual(preflightTeardown.opts, { keepWarm: true });
   const provision = fake.calls[0];
   assert.ok(provision?.op === "provision");
   assert.deepEqual(provision.layers, [{ scopeId: LOOP.ownerScopeId, mode: "rw", mountPath: "" }]);
 
-  const started = fake.calls[4];
-  assert.ok(started?.op === "startProcess");
-  assert.equal(started.command, `bash .claude/io-coding-agent-js.sh ${TICKET}`);
+  const started = wrapperStart(fake.calls);
+  assert.equal(started.command, `bash ${FACTORY_SOURCE_DIR}/.claude/io-coding-agent-js.sh ${TICKET}`);
   assert.equal(started.opts?.cwd, REPO_DIR);
   assert.notEqual(started.handle.id, preflightTeardown.handle.id);
   assert.deepEqual(
@@ -428,6 +504,7 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
       linearApiKey: LINEAR_KEY,
       githubToken: GITHUB_TOKEN,
       repoDir: REPO_DIR,
+      factorySourceDir: FACTORY_SOURCE_DIR,
     }),
   );
   assert.equal(runId, "factory:loop-1:item-1:1");
@@ -439,12 +516,104 @@ test("work omits IO_FEEDBACK without guidance, honours repoDir, and numbers the 
 
   const runId = await workedRunId(effects, { ...ITEM, attempts: 2 });
 
-  const started = fake.calls.find((call) => call.op === "startProcess");
-  assert.ok(started?.op === "startProcess");
+  const started = wrapperStart(fake.calls);
   assert.equal(started.opts?.cwd, "/srv/code");
   assert.equal("IO_FEEDBACK" in (started.opts?.env ?? {}), false);
   assert.equal(started.opts?.env?.IO_REPO_DIR, "/srv/code");
+  assert.equal(started.opts?.env?.IO_FACTORY_SOURCE_DIR, FACTORY_SOURCE_DIR);
+  assert.notEqual(started.opts?.env?.IO_FACTORY_SOURCE_DIR, started.opts?.env?.IO_REPO_DIR);
   assert.equal(runId, "factory:loop-1:item-1:3");
+});
+
+test("work bootstraps the factory control plane on the preflight handle before the wrapper, once per call", async () => {
+  const fake = fakeSandbox();
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox }));
+
+  await workedRunId(effects);
+
+  assert.ok(FACTORY_SOURCE_DIR.startsWith(`${CLONE_DIR}/`), FACTORY_SOURCE_DIR);
+  const bootstraps = bootstrapStarts(fake.calls);
+  assert.equal(bootstraps.length, 1);
+  const bootstrap = bootstraps[0];
+  assert.ok(bootstrap);
+  assert.ok(fake.calls.indexOf(bootstrap) < fake.calls.indexOf(wrapperStart(fake.calls)));
+  const preflightProvision = fake.calls[0];
+  assert.ok(preflightProvision?.op === "provision");
+  assert.equal(bootstrap.handle.id, preflightProvision.handle.id);
+
+  await workedRunId(effects, { ...ITEM, attempts: 1 });
+  assert.equal(bootstrapStarts(fake.calls).length, 2);
+});
+
+test("the bootstrap command clones a cold checkout and converges a warm one without re-cloning", async (t) => {
+  const cloneDir = tempCloneDir(t);
+  const script = await recordedBootstrapScript(cloneDir);
+
+  const cold = runWithFakeGit(script);
+
+  assert.equal(cold.code, 0, cold.output);
+  assert.deepEqual(cold.git, [
+    `clone --depth 1 --single-branch --branch ${FACTORY_SOURCE_BRANCH} ${CLONE_URL} ${cloneDir}`,
+  ]);
+
+  mkdirSync(join(cloneDir, ".git"), { recursive: true });
+  const warm = runWithFakeGit(script);
+
+  assert.equal(warm.code, 0, warm.output);
+  assert.deepEqual(warm.git, [
+    `-C ${cloneDir} fetch --depth 1 origin ${FACTORY_SOURCE_BRANCH}`,
+    `-C ${cloneDir} checkout -f FETCH_HEAD`,
+  ]);
+});
+
+test("a failed fetch fails the bootstrap instead of checking out a stale FETCH_HEAD", async (t) => {
+  const cloneDir = tempCloneDir(t);
+  const script = await recordedBootstrapScript(cloneDir);
+  mkdirSync(join(cloneDir, ".git"), { recursive: true });
+
+  const result = runWithFakeGit(script, "fetch");
+
+  assert.notEqual(result.code, 0);
+  assert.deepEqual(result.git, [`-C ${cloneDir} fetch --depth 1 origin ${FACTORY_SOURCE_BRANCH}`]);
+});
+
+test("a bootstrap that exits non-zero fails the run loudly, starts no wrapper and stores nothing", async () => {
+  const fake = fakeSandbox({ bootstrapExit: 128 });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox }));
+
+  const error = await rejection(workedRunId(effects));
+
+  assert.equal(error.message, "factory_source_bootstrap_failed: exit 128");
+  assert.deepEqual(ops(fake.calls), ["provision", "run", "startProcess", "readProcess", "teardown"]);
+  assert.equal(
+    fake.calls.some((call) => call.op === "startProcess" && call.command.includes(FACTORY_WRAPPER)),
+    false,
+  );
+  const teardown = fake.calls.find((call) => call.op === "teardown");
+  assert.ok(teardown?.op === "teardown");
+  assert.deepEqual(teardown.opts, { keepWarm: true });
+  assert.deepEqual(await effects.captureOutputs({ loop: LOOP, item: ITEM, runId: "factory:loop-1:item-1:1" }), []);
+});
+
+test("the bootstrap authenticates through the process env alone and never puts the token in a command", async () => {
+  const fake = fakeSandbox();
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox }));
+
+  await workedRunId(effects);
+
+  for (const call of fake.calls) {
+    if (call.op === "run" || call.op === "startProcess") {
+      assert.equal(call.command.includes(GITHUB_TOKEN), false, call.command);
+    }
+  }
+  const bootstrap = bootstrapStarts(fake.calls)[0];
+  assert.ok(bootstrap);
+  assert.deepEqual(bootstrap.opts?.env, {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: `url.https://x-access-token:${GITHUB_TOKEN}@github.com/.insteadOf`,
+    GIT_CONFIG_VALUE_0: "https://github.com/",
+  });
 });
 
 test("a preflight that misses tools names them and never starts the wrapper", async () => {
@@ -608,13 +777,7 @@ test("evaluate releases the stored run whatever the outcome", async () => {
 });
 
 test("a fresh attempt for an item evicts the previous attempt's stored run and leaves other items alone", async () => {
-  const perRunStdout = async (_n: number, calls: Call[]): Promise<ReadProcessResult> => {
-    const since = calls.slice(calls.map((call) => call.op).lastIndexOf("startProcess"));
-    return since.filter((call) => call.op === "readProcess").length === 1
-      ? { chunks: WORK_STDOUT, cursor: WORK_STDOUT.length, status: { state: "running" } }
-      : { chunks: "", cursor: WORK_STDOUT.length, status: { state: "exited", code: 0 } };
-  };
-  const effects = createFactoryLoopEffects(deps({ sandbox: fakeSandbox({ read: perRunStdout }).sandbox }));
+  const effects = createFactoryLoopEffects(deps({ sandbox: fakeSandbox().sandbox }));
   const other = { ...ITEM, id: "item-2" };
 
   const first = await workedRunId(effects);
@@ -683,9 +846,8 @@ test("pausing the loop mid-run terminates the process, rejects work, and stores 
     const signal = fake.calls.find((call) => call.op === "signalProcess");
     assert.ok(signal?.op === "signalProcess");
     assert.equal(signal.signal, "TERM");
-    assert.equal(signal.processId, "p1");
-    const started = fake.calls.find((call) => call.op === "startProcess");
-    assert.ok(started?.op === "startProcess");
+    const started = wrapperStart(fake.calls);
+    assert.equal(signal.processId, started.processId);
     assert.equal(signal.handle.id, started.handle.id);
     assert.deepEqual(await effects.captureOutputs({ loop: LOOP, item: ITEM, runId: "factory:loop-1:item-1:1" }), []);
   }
