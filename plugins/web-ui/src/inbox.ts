@@ -834,7 +834,7 @@ export function chatTpl(item: InboxItem): TemplateResult {
               )}
             </div>`
       }
-      ${busy ? html`<div class="inbox-chat-working">Thinking…</div>` : nothing}
+      ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
       <div class="inbox-chat-composer ${pending.trim() ? "has-text" : ""}">
         <textarea
           class="inbox-chat-input"
