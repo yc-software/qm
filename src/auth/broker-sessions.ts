@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 
-export interface BrokerSession {
+interface BrokerSession {
   email: string;
   authTime: number;
   expiresAtMs: number;
