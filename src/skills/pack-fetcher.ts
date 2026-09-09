@@ -212,12 +212,21 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
     }
   }
 
-  function sparsePathsFor(globs: string[]): string[] {
+  function sparsePathsFor(globs: string[]): string[] | null {
     const paths = new Set<string>();
     for (const glob of globs) {
       const cut = glob.search(/\*/);
-      const prefix = (cut >= 0 ? glob.slice(0, cut) : glob).replace(/\/+$/, "").split("/").filter(Boolean);
-      if (!prefix.length) continue;
+      let literal = (cut >= 0 ? glob.slice(0, cut) : glob).replace(/\/+$/, "");
+      // A wildcard mid-segment (e.g. plugins/pm-*/skills/*) would yield a
+      // partial segment git's non-cone matcher rejects; truncate at the last
+      // slash so the prefix is always whole directories. A glob whose literal
+      // prefix already ends at a directory boundary is kept as-is.
+      if (cut >= 0 && !glob.slice(0, cut).endsWith("/")) {
+        const slash = literal.lastIndexOf("/");
+        literal = slash >= 0 ? literal.slice(0, slash) : "";
+      }
+      const prefix = literal.split("/").filter(Boolean);
+      if (!prefix.length) return null; // no safe literal dir prefix -> full fetch
       const dir = `/${prefix.join("/")}`;
       paths.add(dir);
       if (cut >= 0) paths.add(`${dir}/**`);
@@ -270,8 +279,8 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       try {
         await git(["clone", "--no-checkout", "--quiet", repo.url, "repo"], work, auth, repo.gitConfig);
         const globs = pack.config?.skillGlobs ?? [];
-        const sparse = globs.length ? sparsePathsFor(globs) : [];
-        if (sparse.length) {
+        const sparse = globs.length && pack.config?.sparseCheckout === true ? sparsePathsFor(globs) : null;
+        if (sparse && sparse.length) {
           await mkdir(join(repoDir, ".git", "info"), { recursive: true });
           await writeFile(join(repoDir, ".git", "info", "sparse-checkout"), `${sparse.join("\n")}\n`);
           await git(["config", "core.sparseCheckout", "true"], repoDir, undefined);
