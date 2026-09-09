@@ -1,3 +1,4 @@
+import { coreRememberedSessions } from "./sessions.ts";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { json } from "../../chassis/src/http.ts";
@@ -40,6 +41,7 @@ export async function startServer(): Promise<void> {
     cfg: CFG,
     signingKey,
     signer: new TokenSigner(CFG.tokenSecret, CFG.issuer),
+    sessions: coreRememberedSessions(CFG.coreApiUrl, CFG.coreSigningSecret),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
     mailer,
     brandName: () => {

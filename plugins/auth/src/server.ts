@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+import { coreRememberedSessions, type RememberedSessions, type RememberedSession } from "./sessions.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, PayloadTooLargeError, sendBuffered, serveEmojiFavicon } from "../../chassis/src/http.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
@@ -19,6 +21,7 @@ export interface AuthDeps {
   signingKey: SigningKey;
   signer: TokenSigner;
   claims: ClaimStore;
+  sessions?: RememberedSessions;
   mailer: Mailer | null;
   brandName?: () => string;
   emailAllowed?: (email: string) => Promise<boolean>;
@@ -71,7 +74,7 @@ function basicCredentials(header: string | undefined): { id: string; secret: str
 function readAuthorizeRequest(
   cfg: AuthConfig,
   params: URLSearchParams,
-): { request: AuthRequest } | { problem: string } {
+): { request: AuthRequest; prompt: string; maxAge: number | undefined } | { problem: string } {
   const clientId = params.get("client_id") ?? "";
   const redirectUri = params.get("redirect_uri") ?? "";
   if (!clientId || !safeEqual(clientId, cfg.clientId))
@@ -91,11 +94,23 @@ function readAuthorizeRequest(
   if (!nonce || nonce.length > 512) return { problem: "This sign-in request is missing its nonce." };
   const scope = params.get("scope") ?? "openid";
   if (!scope.split(/\s+/).includes("openid")) return { problem: "This sign-in request must ask for the openid scope." };
-  return { request: { clientId, redirectUri, state, nonce, codeChallenge, scope } };
+  const prompt = params.get("prompt") ?? "";
+  const prompts = prompt.split(/\s+/).filter(Boolean);
+  if (prompts.some((value) => !["login", "none"].includes(value)) || (prompts.includes("none") && prompts.length > 1))
+    return { problem: "Unsupported prompt." };
+  const rawMaxAge = params.get("max_age");
+  if (rawMaxAge !== null && (!/^\d+$/.test(rawMaxAge) || !Number.isSafeInteger(Number(rawMaxAge))))
+    return { problem: "max_age must be a nonnegative whole number of seconds." };
+  return {
+    request: { clientId, redirectUri, state, nonce, codeChallenge, scope },
+    prompt,
+    maxAge: rawMaxAge === null ? undefined : Number(rawMaxAge),
+  };
 }
 
 export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { cfg, signer, claims, mailer, signingKey } = deps;
+  const sessions = deps.sessions ?? coreRememberedSessions(cfg.coreApiUrl, cfg.coreSigningSecret);
   const brandName = deps.brandName ?? ((): string => cfg.brandName);
   const invited =
     deps.emailAllowed ??
@@ -153,7 +168,56 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       }),
     );
 
-  async function authorizeForm(res: ServerResponse, params: URLSearchParams): Promise<void> {
+  const cookieSignature = (token: string): string =>
+    createHmac("sha256", cfg.tokenSecret)
+      .update(`qm-auth.browser.v1\n${cfg.issuer}\n${cfg.clientId}\n${token}`)
+      .digest("base64url");
+
+  const rememberedToken = (req: IncomingMessage): string | undefined => {
+    const values = (req.headers.cookie ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter((part) => part.startsWith("qm_idp_session="));
+    const value = values.length === 1 ? values[0]!.slice("qm_idp_session=".length) : "";
+    const [token, signature] = value.split(".");
+    return /^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(value) &&
+      token &&
+      signature &&
+      safeEqual(signature, cookieSignature(token))
+      ? token
+      : undefined;
+  };
+
+  const sessionCookie = (token: string, session: RememberedSession): string =>
+    `qm_idp_session=${token}.${cookieSignature(token)}; HttpOnly; Secure; SameSite=Lax; Path=${cfg.publicPath || "/"}; Max-Age=${Math.max(0, Math.floor((session.expiresAtMs - now()) / 1000))}`;
+
+  async function issueCode(
+    res: ServerResponse,
+    request: AuthRequest,
+    email: string,
+    authTime: number,
+    cookie: string,
+  ): Promise<void> {
+    const code = await signer.sealCode(
+      {
+        clientId: request.clientId,
+        redirectUri: request.redirectUri,
+        nonce: request.nonce,
+        codeChallenge: request.codeChallenge,
+        email,
+        authTime,
+      },
+      cfg.codeTtlS,
+      now(),
+    );
+    const destination = new URL(request.redirectUri);
+    destination.searchParams.set("code", code.token);
+    destination.searchParams.set("state", request.state);
+    res.writeHead(302, noStore({ location: destination.toString(), "set-cookie": cookie }));
+    res.end();
+  }
+
+  async function authorizeForm(req: IncomingMessage, res: ServerResponse, params: URLSearchParams): Promise<void> {
     const parsed = readAuthorizeRequest(cfg, params);
     if ("problem" in parsed)
       return problem(
@@ -163,6 +227,33 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         "Start again from the page you were trying to reach.",
         parsed.problem,
       );
+    const token = rememberedToken(req);
+    if (token && !parsed.prompt.split(/\s+/).includes("login") && parsed.maxAge !== 0) {
+      let session: RememberedSession | null;
+      try {
+        session = await sessions.use(token);
+      } catch {
+        return problem(
+          res,
+          503,
+          "Sign-in is temporarily unavailable",
+          "The sign-in service cannot reach its backend. Try again in a minute.",
+        );
+      }
+      if (
+        session &&
+        (parsed.maxAge === undefined || Math.floor(now() / 1000) - session.authTime <= parsed.maxAge) &&
+        (await emailAllowed(session.email))
+      )
+        return issueCode(res, parsed.request, session.email, session.authTime, sessionCookie(token, session));
+    }
+    if (parsed.prompt.split(/\s+/).includes("none")) {
+      const destination = new URL(parsed.request.redirectUri);
+      destination.searchParams.set("error", "login_required");
+      destination.searchParams.set("state", parsed.request.state);
+      res.writeHead(302, noStore({ location: destination.toString() }));
+      return void res.end();
+    }
     if (!mailer) return emailUnavailable(res);
     const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
     return sendHtml(
@@ -290,22 +381,18 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     if (!(await emailAllowed(link.email))) {
       return problem(res, 403, "This address can't sign in", "Your administrator has not allowed this email address.");
     }
-    const code = await signer.sealCode(
-      {
-        clientId: link.clientId,
-        redirectUri: link.redirectUri,
-        nonce: link.nonce,
-        codeChallenge: link.codeChallenge,
-        email: link.email,
-      },
-      cfg.codeTtlS,
-      now(),
-    );
-    const destination = new URL(link.redirectUri);
-    destination.searchParams.set("code", code.token);
-    destination.searchParams.set("state", link.state);
-    res.writeHead(302, noStore({ location: destination.toString() }));
-    res.end();
+    let session: RememberedSession & { token: string };
+    try {
+      session = await sessions.create(link.email, cfg.sessionIdleS, cfg.sessionAbsoluteS);
+    } catch {
+      return problem(
+        res,
+        503,
+        "Sign-in is temporarily unavailable",
+        "The sign-in service cannot remember this browser. Request a fresh link in a minute.",
+      );
+    }
+    return issueCode(res, link, link.email, session.authTime, sessionCookie(session.token, session));
   }
 
   async function token(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -356,6 +443,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       email: granted.email,
       nonce: granted.nonce,
       ttlS: ID_TOKEN_TTL_S,
+      authTime: granted.authTime,
       nowMs,
     });
     const access = await signer.sealAccess({ sub, email: granted.email }, cfg.accessTtlS, nowMs);
@@ -397,7 +485,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       subject_types_supported: ["public"],
       id_token_signing_alg_values_supported: [ID_TOKEN_ALG],
       scopes_supported: ["openid", "email"],
-      claims_supported: ["sub", "iss", "aud", "exp", "iat", "nonce", "azp", "email", "email_verified"],
+      claims_supported: ["sub", "iss", "aud", "exp", "iat", "nonce", "azp", "email", "email_verified", "auth_time"],
       token_endpoint_auth_methods_supported: ["client_secret_basic"],
       code_challenge_methods_supported: ["S256"],
     });
@@ -426,7 +514,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       return void res.end(JSON.stringify({ keys: [signingKey.publicJwk] }));
     }
     if (method === "GET" && path === "/.well-known/openid-configuration") return discovery(res);
-    if (method === "GET" && path === "/authorize") return authorizeForm(res, url.searchParams);
+    if (method === "GET" && path === "/authorize") return authorizeForm(req, res, url.searchParams);
     if (method === "POST" && path === "/authorize") return authorizeSubmit(req, res);
     if (method === "GET" && path === "/verify") return confirmVerify(res);
     if (method === "POST" && path === "/verify") return verify(req, res);
