@@ -593,6 +593,7 @@ test("AWS module supports CloudFront TLS or a direct HTTPS ALB without mixing th
   assert.match(edge, /domain_name\s*=\s*aws_lb\.this\.dns_name/);
   assert.match(edge, /origin_protocol_policy\s*=\s*var\.certificate_arn == "" \? "http-only" : "https-only"/);
   assert.match(edge, /cloudfront_default_certificate\s*=\s*true/);
+  for (const header of ["X-Timestamp", "X-Signature", "X-Agent-Capability"]) assert.ok(edge.includes(`"${header}"`));
 });
 
 test("AWS module reuses account OIDC, guards account and passes configured task roles", () => {

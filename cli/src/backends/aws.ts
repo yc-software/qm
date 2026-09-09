@@ -77,6 +77,10 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
   request: async (config, url, init) => {
     const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
     if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
+    if (awsPublicOrigin(config).protocol === "http:") {
+      const response = await fetch(url, init);
+      return { status: response.status, body: await response.text() };
+    }
     return new Promise((resolve, reject) => {
       const request = https.request(
         url,
