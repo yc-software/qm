@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -212,6 +212,19 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
     }
   }
 
+  function sparsePathsFor(globs: string[]): string[] {
+    const paths = new Set<string>();
+    for (const glob of globs) {
+      const cut = glob.search(/\*/);
+      const prefix = (cut >= 0 ? glob.slice(0, cut) : glob).replace(/\/+$/, "").split("/").filter(Boolean);
+      if (!prefix.length) continue;
+      const dir = `/${prefix.join("/")}`;
+      paths.add(dir);
+      if (cut >= 0) paths.add(`${dir}/**`);
+    }
+    return [...paths];
+  }
+
   async function readTree(root: string): Promise<RepoFile[]> {
     const files: RepoFile[] = [];
     let totalBytes = 0;
@@ -256,6 +269,13 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
       const repoDir = join(work, "repo");
       try {
         await git(["clone", "--no-checkout", "--quiet", repo.url, "repo"], work, auth, repo.gitConfig);
+        const globs = pack.config?.skillGlobs ?? [];
+        const sparse = globs.length ? sparsePathsFor(globs) : [];
+        if (sparse.length) {
+          await mkdir(join(repoDir, ".git", "info"), { recursive: true });
+          await writeFile(join(repoDir, ".git", "info", "sparse-checkout"), `${sparse.join("\n")}\n`);
+          await git(["config", "core.sparseCheckout", "true"], repoDir, undefined);
+        }
         await git(["checkout", "--detach", "--quiet", ref || "HEAD"], repoDir, undefined);
         const commit = (await git(["rev-parse", "HEAD"], repoDir, undefined)).trim();
         const files = await readTree(repoDir);
