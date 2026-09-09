@@ -1,0 +1,266 @@
+.composer-wrap[data-composer="cursor"] {
+  --cursor-bg: var(--inset);
+  --cursor-line: var(--line-strong);
+  --cursor-accent: oklch(0.62 0.16 250);
+  --cursor-accent-tint: color-mix(in srgb, var(--cursor-accent) 15%, transparent);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  max-width: 760px;
+  padding: 8px 10px;
+  border: 1px solid var(--cursor-line);
+  border-radius: 8px;
+  background: var(--cursor-bg);
+  box-shadow: none;
+  font-size: 12px;
+}
+.dark .composer-wrap[data-composer="cursor"] {
+  --cursor-accent: oklch(0.7 0.14 250);
+}
+.composer-wrap[data-composer="cursor"]:focus-within {
+  border-color: var(--cursor-accent);
+}
+.composer-wrap[data-composer="cursor"] .cursor-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.composer-wrap[data-composer="cursor"] .cursor-context .attachment-strip {
+  display: contents;
+}
+.composer-wrap[data-composer="cursor"] .cursor-add-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px dashed var(--cursor-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.composer-wrap[data-composer="cursor"] .cursor-add-context:hover:not(:disabled) {
+  border-color: var(--ink-3);
+  background: var(--hover);
+  color: var(--ink);
+}
+.composer-wrap[data-composer="cursor"] .cursor-add-context:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.composer-wrap[data-composer="cursor"] .composer-input {
+  order: 0;
+  min-height: 40px;
+  padding: 2px 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+.composer-wrap[data-composer="cursor"] .composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.composer-wrap[data-composer="cursor"] .composer-left,
+.composer-wrap[data-composer="cursor"] .composer-right {
+  gap: 6px;
+  min-height: 24px;
+}
+.composer-wrap[data-composer="cursor"] .menu-button {
+  height: 24px;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+.composer-wrap[data-composer="cursor"] .cursor-model .menu-button {
+  font-weight: 400;
+}
+.composer-wrap[data-composer="cursor"] .cursor-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.composer-wrap[data-composer="cursor"] .composer-toolbar .icon-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.composer-wrap[data-composer="cursor"] kbd {
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.composer-wrap[data-composer="cursor"] .send-btn,
+.composer-wrap[data-composer="cursor"] .stop-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--surface);
+}
+.composer-wrap[data-composer="cursor"] .send-btn:disabled {
+  background: var(--ink);
+  color: var(--surface);
+  opacity: 0.4;
+}
+.composer-wrap[data-composer="cursor"] .menu-popover {
+  width: 220px;
+  padding: 4px;
+  border: 1px solid var(--cursor-line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.composer-wrap[data-composer="cursor"] .cursor-model .menu-popover {
+  width: 300px;
+}
+.composer-wrap[data-composer="cursor"] .menu-option {
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.composer-wrap[data-composer="cursor"] .menu-option .icon {
+  flex: none;
+  color: var(--ink-3);
+}
+.composer-wrap[data-composer="cursor"] .menu-option.active > .icon:last-child {
+  color: var(--cursor-accent);
+}
+.composer-wrap[data-composer="cursor"] .cursor-mode .menu-option-copy {
+  flex: 1 1 auto;
+}
+.composer-wrap[data-composer="cursor"] .cursor-hint {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-wrap[data-composer="cursor"] .cursor-spacer {
+  flex: 1 1 auto;
+}
+.composer-wrap[data-composer="cursor"] .cursor-max {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--cursor-accent-tint);
+  color: var(--cursor-accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+.composer-wrap[data-composer="cursor"] .menu-group-label {
+  padding: 6px 8px 2px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.composer-wrap[data-composer="cursor"] .cursor-auto {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  padding: 2px 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+.composer-wrap[data-composer="cursor"] .cursor-switch {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--cursor-line);
+  border-radius: 999px;
+  background: var(--field);
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-out-strong),
+    border-color 150ms var(--ease-out-strong);
+}
+.composer-wrap[data-composer="cursor"] .cursor-switch::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--cursor-line);
+  border-radius: 999px;
+  background: var(--surface);
+  transition: transform 150ms var(--ease-out-strong);
+}
+.composer-wrap[data-composer="cursor"] .cursor-switch[aria-checked="true"] {
+  border-color: var(--cursor-accent);
+  background: var(--cursor-accent);
+}
+.composer-wrap[data-composer="cursor"] .cursor-switch[aria-checked="true"]::after {
+  border-color: transparent;
+  transform: translateX(12px);
+}
+.composer-wrap[data-composer="cursor"] .menu-search {
+  padding: 2px 2px 4px;
+}
+.composer-wrap[data-composer="cursor"] .menu-search input {
+  height: 26px;
+  border-color: var(--cursor-line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.composer-wrap[data-composer="cursor"] .menu-search input:focus-visible {
+  border-color: var(--cursor-accent);
+}
+.composer-wrap[data-composer="cursor"] .cursor-effort {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 6px 4px 2px;
+  border-top: 1px solid var(--line);
+}
+.composer-wrap[data-composer="cursor"] .cursor-pill {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--cursor-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.composer-wrap[data-composer="cursor"] .cursor-pill:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.composer-wrap[data-composer="cursor"] .cursor-pill.active {
+  border-color: var(--cursor-accent);
+  background: var(--cursor-accent-tint);
+  color: var(--cursor-accent);
+}
+@media (max-width: 560px) {
+  .composer-wrap[data-composer="cursor"] .menu-button,
+  .composer-wrap[data-composer="cursor"] .composer-toolbar .icon-btn,
+  .composer-wrap[data-composer="cursor"] .send-btn,
+  .composer-wrap[data-composer="cursor"] .stop-btn {
+    height: 36px;
+  }
+  .composer-wrap[data-composer="cursor"] .composer-toolbar .icon-btn,
+  .composer-wrap[data-composer="cursor"] .send-btn,
+  .composer-wrap[data-composer="cursor"] .stop-btn {
+    width: 36px;
+  }
+  .composer-wrap[data-composer="cursor"] kbd {
+    display: none;
+  }
+}
