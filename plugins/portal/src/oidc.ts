@@ -18,7 +18,7 @@ export interface OidcConfig {
   hostedDomain?: string;
 }
 
-export const GOOGLE_ISSUER = "https://accounts.google.com";
+const GOOGLE_ISSUER = "https://accounts.google.com";
 
 export function hostedDomainHint(issuer: string, allowedEmailDomain: string | undefined): string | undefined {
   return issuer === GOOGLE_ISSUER && allowedEmailDomain ? allowedEmailDomain : undefined;
