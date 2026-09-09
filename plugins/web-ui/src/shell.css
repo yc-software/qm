@@ -6929,7 +6929,7 @@ h3.ambient-field-label {
   gap: 2px;
   padding-left: 10px;
   border-radius: 5px;
-  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--background) 96%, transparent) 10px);
+  background: color-mix(in srgb, var(--background) 96%, transparent);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease;
