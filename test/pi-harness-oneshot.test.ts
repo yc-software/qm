@@ -338,7 +338,7 @@ test("oneShot routes configured models through the model gateway without mutatin
     url: `http://127.0.0.1:${address.port}`,
     apiKey: "gateway-secret",
     apiKeyHeader: "api-key",
-    models: { "claude-haiku-4-5": "router/haiku" },
+    models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
   };
   const model = getRequiredModel("claude-haiku-4-5");
   assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");

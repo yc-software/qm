@@ -1130,7 +1130,12 @@ async function buildModelRuntime(
     if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
   if (modelGateway) {
-    const providers = new Set(Object.keys(modelGateway.models).map((id) => getRequiredModel(id).provider));
+    const providers = new Set(
+      Object.keys(modelGateway.models).flatMap((id) => {
+        const model = resolveModel(id);
+        return model ? [model.provider] : [];
+      }),
+    );
     const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
     runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
     const getAuth = runtime.getAuth.bind(runtime);
