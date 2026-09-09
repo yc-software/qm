@@ -1129,6 +1129,18 @@ async function buildModelRuntime(
   for (const [provider, apiKey] of Object.entries(k)) {
     if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
+  if (modelGateway) {
+    const providers = new Set(Object.keys(modelGateway.models).map((id) => getRequiredModel(id).provider));
+    const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
+    runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
+    const getAuth = runtime.getAuth.bind(runtime);
+    runtime.getAuth = (async (model, overrides) => {
+      if (typeof model === "string") return getAuth(model, overrides);
+      const request = modelGatewayRequest(modelGateway, model);
+      if (request) return { auth: { apiKey: request.apiKey, headers: request.headers }, source: "model gateway" };
+      return getAuth(model, overrides);
+    }) as typeof runtime.getAuth;
+  }
   const retained = <T extends object | undefined>(options: T): T =>
     cacheRetention ? ({ ...options, cacheRetention } as T) : options;
   const stream = runtime.stream.bind(runtime);

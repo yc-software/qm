@@ -341,12 +341,17 @@ test("oneShot routes configured models through the model gateway without mutatin
     models: { "claude-haiku-4-5": "router/haiku" },
   };
   const model = getRequiredModel("claude-haiku-4-5");
+  assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
+  const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
+  await assert.rejects(
+    oneShot("pi-unmapped-test", directModel, {}, "system", "hello", { modelGateway }),
+    /No API key found|Provider is not configured/,
+  );
+
   assert.equal(
-    await oneShot("pi-gateway-test", model, "direct-provider-key", "system", "hello", { modelGateway }),
+    await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello", { modelGateway }),
     "gateway",
   );
-  const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
-  assert.equal(await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello"), "gateway");
   assert.deepEqual(requests, [
     { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku" },
     { providerKey: "direct-provider-key", model: "claude-opus-4-8" },
