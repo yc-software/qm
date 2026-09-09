@@ -772,9 +772,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const SCOPED_EPHEMERAL_ERROR =
     '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for a run that leaves no trace.';
   const FILE_SEND_GUIDANCE =
-    "The read/write/publish/background tools always use the scoped computer. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+    "The read/write/publish tools use the default sandbox; execute and background can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
-    "Must this command's writes/installs/logins survive future turns? Scoped is durable; scratch and owner are invocation-only.";
+    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch and owner are invocation-only. Publish durable code to git and artifacts to Files.";
 
   const reachScopeDescription =
     (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
@@ -782,9 +782,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
   const reachDescription =
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
-    '- "scoped" (DEFAULT): this conversation\'s durable computer — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; writes/installs/logins survive future turns.\n' +
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (scratchExec
-      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the durable computer responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
+      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the sandbox responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
       : "") +
     (ownerAuthExec
       ? "- \"owner\": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
@@ -798,7 +798,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
-    '- "scoped" (DEFAULT): this conversation\'s durable computer — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; writes/installs/logins survive future turns, so follow-up work ("now tweak that", "where\'s that file?") just works.\n' +
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (ownerAuthExec
       ? '- "owner": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for owner-authenticated work in shared automation.\n'
       : "") +
@@ -907,7 +907,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ],
             {
               description:
-                'Which computer runs this command: "scoped" (default — this conversation\'s durable computer: its files, logins, and tokens; survives for follow-ups) or "scratch" (blank, instant, credential-free, nothing persists — prefer for heavy self-contained runs needing no logins, workspace files, or follow-up).',
+                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and authorized logins; recovery depends on the provider) or "scratch" (blank, instant, credential-free, nothing persists — prefer for heavy self-contained runs needing no logins, workspace files, or follow-up).',
             },
           ),
         ),
@@ -1345,7 +1345,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "remind your future self what to do with each wake. action=unwatch (with monitor_id from " +
       `watch) disarms it. Each job has a hard time-to-live (default ${bgTtlMin} minutes, max ${bgTtlMaxMin}) after which ` +
       "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
-      `that finishes within ${execCeilingSec}s, just use \`execute\`. Available only on your durable computer; ` +
+      `that finishes within ${execCeilingSec}s, just use \`execute\`. Available on the default sandbox or an authorized explicit sandbox_id; ` +
       "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
       `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlMin} minutes after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
       "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +

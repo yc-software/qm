@@ -66,6 +66,12 @@ export function createSandboxResources(opts: {
     if (!record) throw new Error(`sandbox not found: ${id}`);
     return record;
   };
+  const use = <T>(id: string, action: () => Promise<T>): Promise<T> =>
+    opts.lock.withLock(`sandbox-resource:${id}`, async () => {
+      const record = await get(id);
+      if (record.state === "retired") throw new Error("sandbox has been retired");
+      return action();
+    });
   return {
     get,
     async recordLegacy(scopeId, backend, handle) {
@@ -85,13 +91,7 @@ export function createSandboxResources(opts: {
       });
       return id;
     },
-    async use(id, action) {
-      return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
-        const record = await get(id);
-        if (record.state === "retired") throw new Error("sandbox has been retired");
-        return action();
-      });
-    },
+    use,
     async retire(actorId, id) {
       const record = await get(id);
       await authorize(actorId, record.ownerScopeId);
@@ -139,7 +139,7 @@ export function createSandboxResources(opts: {
       await authorize(actorId, record.ownerScopeId);
       const backend = opts.backends[record.backend];
       if (!backend?.computerStatus) throw new Error(`sandbox status unavailable: ${record.backend}`);
-      return backend.computerStatus(record.backingScopeId);
+      return use(id, () => backend.computerStatus!(record.backingScopeId));
     },
     async restart(actorId, id) {
       const record = await get(id);
@@ -147,7 +147,7 @@ export function createSandboxResources(opts: {
       await authorize(actorId, record.ownerScopeId);
       const backend = opts.backends[record.backend];
       if (!backend?.restartComputer) throw new Error(`sandbox restart unavailable: ${record.backend}`);
-      await backend.restartComputer(record.backingScopeId);
+      await use(id, () => backend.restartComputer!(record.backingScopeId));
     },
     async resolve(scopeId) {
       const route = await opts.defaults.get(scopeId);
@@ -184,24 +184,31 @@ export function createSandboxResources(opts: {
         legacy: false,
         state: "provisioning",
       };
-      await opts.records.put(id, record);
-      const sandbox = opts.backends[record.backend]!;
-      try {
-        const handle = await sandbox.provision(
-          [{ scopeId: record.backingScopeId, mountPath: "/", mode: "rw" }],
-          await opts.provisionOptions?.(scopeId),
-        );
-        const ready: SandboxResource = { ...record, state: "ready", machineId: handle.id, spec: sandbox.profile.spec };
-        await opts.records.put(id, ready);
-        return ready;
-      } catch (error) {
-        await opts.records.put(id, {
-          ...record,
-          state: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
+      return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
+        await opts.records.put(id, record);
+        const sandbox = opts.backends[record.backend]!;
+        try {
+          const handle = await sandbox.provision(
+            [{ scopeId: record.backingScopeId, mountPath: "/", mode: "rw" }],
+            await opts.provisionOptions?.(scopeId),
+          );
+          const ready: SandboxResource = {
+            ...record,
+            state: "ready",
+            machineId: handle.id,
+            spec: sandbox.profile.spec,
+          };
+          await opts.records.put(id, ready);
+          return ready;
+        } catch (error) {
+          await opts.records.put(id, {
+            ...record,
+            state: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      });
     },
     async setDefault(actorId, scopeId, id) {
       await authorize(actorId, scopeId);

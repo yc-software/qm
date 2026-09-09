@@ -99,3 +99,20 @@ test("stored policies and reset requests discover removed services across restar
   assert.equal(await afterClear.resolve(scope, "retired-tool"), "legacy");
   assert.ok(await afterClear.residentResetGeneration(scope, "retired-tool"));
 });
+
+test("resident reset completion is durable per computer without changing scope policy", async () => {
+  const backing = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverPolicy>();
+  const resets = createMemoryMap<import("../src/credentials/device-flow-cutover.ts").DeviceFlowCutoverReset>();
+  const scope = scopeId("channel", "team");
+  const store = createDeviceFlowCutoverStore(backing, { resets });
+  await store.set(scope, "aws", "ephemeral_only", "admin");
+  await store.set(scope, "aws", "legacy", "admin");
+  const generation = await store.residentResetGeneration(scope, "aws", "computer-a");
+  assert.ok(generation);
+  await store.markResidentReset(scope, "aws", generation, "computer-a");
+  const restarted = createDeviceFlowCutoverStore(backing, { resets });
+  assert.equal(await restarted.residentResetGeneration(scope, "aws", "computer-a"), null);
+  assert.equal(await restarted.residentResetGeneration(scope, "aws", "computer-b"), generation);
+  await restarted.markResidentReset(scope, "aws", generation, "computer-b");
+  assert.equal(await restarted.residentResetGeneration(scope, "aws", "computer-b"), null);
+});

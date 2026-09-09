@@ -75,13 +75,16 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     return sandbox;
   };
 
-  async function computerTarget(scopeId: string): Promise<{ sandbox: Sandbox; scopeId: string }> {
+  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
+    handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, action) : action();
+
+  async function computerTarget(scopeId: string): Promise<{ sandbox: Sandbox; scopeId: string; resourceId?: string }> {
     const resource = await opts.resources?.resolve(scopeId);
     if (resource === null) throw new Error("this scope has no default sandbox");
     if (resource) {
       const sandbox = backends[resource.backend];
       if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
-      return { sandbox, scopeId: resource.backingScopeId };
+      return { sandbox, scopeId: resource.backingScopeId, resourceId: resource.id };
     }
     return { sandbox: await pickStrict(scopeId), scopeId };
   }
@@ -164,31 +167,31 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
 
     run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
       const run = () => forHandle(handle).run(handle, command, execOpts);
-      return handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, run) : run();
+      return useHandle(handle, run);
     },
     readFile(handle, relPath) {
-      return forHandle(handle).readFile(handle, relPath);
+      return useHandle(handle, () => forHandle(handle).readFile(handle, relPath));
     },
     writeFile(handle, relPath, data) {
       const write = () => forHandle(handle).writeFile(handle, relPath, data);
-      return handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, write) : write();
+      return useHandle(handle, write);
     },
     writeFileBytes(handle, relPath, data) {
       const write = () => forHandle(handle).writeFileBytes(handle, relPath, data);
-      return handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, write) : write();
+      return useHandle(handle, write);
     },
     readFileBytes(handle, relPath) {
-      return forHandle(handle).readFileBytes(handle, relPath);
+      return useHandle(handle, () => forHandle(handle).readFileBytes(handle, relPath));
     },
     listDir(handle, relDir) {
-      return forHandle(handle).listDir(handle, relDir);
+      return useHandle(handle, () => forHandle(handle).listDir(handle, relDir));
     },
     removeDir(handle, relDir) {
       const remove = () => forHandle(handle).removeDir(handle, relDir);
-      return handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, remove) : remove();
+      return useHandle(handle, remove);
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      return forHandle(handle).teardown(handle, tdOpts);
+      return useHandle(handle, () => forHandle(handle).teardown(handle, tdOpts));
     },
 
     ...(some(supportsProcessSessions)
@@ -196,29 +199,40 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
           startProcess: (handle: SandboxHandle, command: string, o?) => {
             const start = () =>
               requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);
-            return handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, start) : start();
+            return useHandle(handle, start);
           },
           readProcess: (handle: SandboxHandle, id: string, o?) =>
-            requireCap(forHandle(handle), "readProcess", handle.scopeId).readProcess(handle, id, o),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "readProcess", handle.scopeId).readProcess(handle, id, o),
+            ),
           writeStdin: (handle: SandboxHandle, id: string, data: string) =>
-            requireCap(forHandle(handle), "writeStdin", handle.scopeId).writeStdin(handle, id, data),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "writeStdin", handle.scopeId).writeStdin(handle, id, data),
+            ),
           signalProcess: (handle: SandboxHandle, id: string, sig: string) =>
-            requireCap(forHandle(handle), "signalProcess", handle.scopeId).signalProcess(handle, id, sig),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "signalProcess", handle.scopeId).signalProcess(handle, id, sig),
+            ),
           listProcesses: (handle: SandboxHandle) =>
-            requireCap(forHandle(handle), "listProcesses", handle.scopeId).listProcesses(handle),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "listProcesses", handle.scopeId).listProcesses(handle),
+            ),
         }
       : {}),
     ...(some((s) => typeof s.exportFiles === "function")
       ? {
           exportFiles: (handle: SandboxHandle, o?) =>
-            requireCap(forHandle(handle), "exportFiles", handle.scopeId).exportFiles(handle, o),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "exportFiles", handle.scopeId).exportFiles(handle, o),
+            ),
         }
       : {}),
     ...(some((s) => typeof s.computerStatus === "function")
       ? {
           computerStatus: async (scopeId: string) => {
             const target = await computerTarget(scopeId);
-            return requireCap(target.sandbox, "computerStatus", scopeId).computerStatus(target.scopeId);
+            const action = () => requireCap(target.sandbox, "computerStatus", scopeId).computerStatus(target.scopeId);
+            return target.resourceId && opts.resources ? opts.resources.use(target.resourceId, action) : action();
           },
         }
       : {}),
@@ -226,18 +240,25 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       ? {
           restartComputer: async (scopeId: string) => {
             const target = await computerTarget(scopeId);
-            return requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId);
+            const action = () => requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId);
+            return target.resourceId && opts.resources ? opts.resources.use(target.resourceId, action) : action();
           },
         }
       : {}),
     ...(some(supportsBlobStaging)
       ? {
           stageIn: (handle: SandboxHandle, dest: string, blobId: string, opts?: StageOptions) =>
-            requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
+            ),
           stageOut: (handle: SandboxHandle, src: string, opts?: StageOptions) =>
-            requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src, opts),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src, opts),
+            ),
           importFiles: (handle: SandboxHandle, entries) =>
-            requireCap(forHandle(handle), "importFiles", handle.scopeId).importFiles(handle, entries),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "importFiles", handle.scopeId).importFiles(handle, entries),
+            ),
         }
       : {}),
 

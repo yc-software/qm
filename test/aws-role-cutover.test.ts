@@ -386,8 +386,9 @@ test("shared ACMECLI cutover isolates brokered STS without shrinking the existin
     "legacy_room_acmecli",
     "prefer-mode mutations never poison the encrypted rollback input",
   );
+  const rollbackComputer = await built.sandbox.provision([{ scopeId: room, mountPath: "/", mode: "rw" }]);
   assert.equal(
-    await built.deviceFlowCutover.residentResetGeneration(room, "acmecli"),
+    await built.deviceFlowCutover.residentResetGeneration(room, "acmecli", rollbackComputer.resourceId),
     null,
     "rollback reset is consumed after one verified restore",
   );

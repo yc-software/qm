@@ -177,6 +177,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         }
       : undefined;
   const resourceHandles = new Map<string, SandboxHandle>();
+  const resourcePendingHandles = new Map<string, SandboxHandle>();
   const resourcePending = new Map<string, Promise<SandboxHandle>>();
   let provisionInFlight: Promise<SandboxHandle> | null = null;
   const provision = (eager = false): Promise<SandboxHandle> => {
@@ -187,17 +188,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     });
     return provisionInFlight;
   };
-  const doProvision = async (emit: typeof emitGapWork): Promise<SandboxHandle> => {
-    const provisionStart = Date.now();
-    const handle = await deps.sandbox.provision(resolution.layers, {
-      env: connectorEnv,
-      egress: resolution.egress,
-      ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-      ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
-    });
-    box.pending = handle;
-    emit("provision", provisionStart, Date.now());
-    box.provisionMs = Date.now() - provisionStart;
+  const prepareCredentials = async (handle: SandboxHandle, emit: typeof emitGapWork): Promise<void> => {
     if (deps.keychain) {
       const deviceFlowStart = Date.now();
       const restoreOwnerId =
@@ -207,7 +198,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       const resetGenerations = new Map<string, string>();
       for (const service of credentialServices) {
         if (cutoverModeOf(service) !== "legacy") continue;
-        const generation = await deps.deviceFlowCutover?.residentResetGeneration(memoryScopeId, service);
+        const generation = await deps.deviceFlowCutover?.residentResetGeneration(
+          memoryScopeId,
+          service,
+          handle.resourceId,
+        );
         if (generation) resetGenerations.set(service, generation);
       }
       const owned = resetGenerations.size ? await deps.keychain.listByOwner(restoreOwnerId) : [];
@@ -253,7 +248,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           });
         }
         for (const [service, generation] of resetGenerations) {
-          await deps.deviceFlowCutover?.markResidentReset(memoryScopeId, service, generation);
+          await deps.deviceFlowCutover?.markResidentReset(memoryScopeId, service, generation, handle.resourceId);
         }
       } catch (err) {
         deps.errors?.record({
@@ -267,6 +262,19 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       emit("creds", deviceFlowStart, Date.now());
       perf.credsMs += Date.now() - deviceFlowStart;
     }
+  };
+  const doProvision = async (emit: typeof emitGapWork): Promise<SandboxHandle> => {
+    const provisionStart = Date.now();
+    const handle = await deps.sandbox.provision(resolution.layers, {
+      env: connectorEnv,
+      egress: resolution.egress,
+      ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+      ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
+    });
+    box.pending = handle;
+    emit("provision", provisionStart, Date.now());
+    box.provisionMs = Date.now() - provisionStart;
+    await prepareCredentials(handle, emit);
     const dirCleanupStart = Date.now();
     await deps.sandbox.removeDir(handle, turnSessionDir);
     await sweepStaleTurnFiles(handle);
@@ -377,11 +385,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         egress: resolution.egress,
         ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
       });
-      resourceHandles.set(id, handle);
+      resourcePendingHandles.set(id, handle);
+      await prepareCredentials(handle, emitGapWork);
       await deps.sandbox.removeDir(handle, turnSessionDir);
       await sweepStaleTurnFiles(handle);
       if (deps.skills)
         await skillMaterializer.materializeIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
+      resourceHandles.set(id, handle);
+      resourcePendingHandles.delete(id);
       return handle;
     })().finally(() => {
       resourcePending.delete(id);
@@ -594,7 +605,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const released = new Set<string>();
     const current = box.handle ?? box.pending;
     const releases: Promise<void>[] = [];
-    for (const handle of resourceHandles.values()) {
+    for (const handle of [...resourceHandles.values(), ...resourcePendingHandles.values()]) {
       const key = `${handle.backend}:${handle.id}`;
       if (released.has(key) || (current?.id === handle.id && current.backend === handle.backend)) continue;
       released.add(key);
@@ -615,6 +626,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     for (const result of releasedResults)
       if (result.status === "rejected") swallow("resource sandbox release", result.reason);
     resourceHandles.clear();
+    resourcePendingHandles.clear();
     if (provisionInFlight) await provisionInFlight.catch(() => {});
     provisionInFlight = null;
     const handle = box.handle ?? box.pending;
@@ -658,7 +670,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionPending: () => provisionInFlight !== null,
     invalidateProvision: () => {
       const previous = box.handle ?? box.pending;
-      if (previous) resourceHandles.set(previous.resourceId ?? previous.id, previous);
+      if (previous)
+        (box.handle ? resourceHandles : resourcePendingHandles).set(previous.resourceId ?? previous.id, previous);
       box.handle = null;
       box.pending = null;
       provisionInFlight = null;

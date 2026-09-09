@@ -1,3 +1,4 @@
+import { createDeviceFlowCutoverStore } from "../src/credentials/device-flow-cutover.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -7,7 +8,7 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
-function fixture() {
+function fixture(configure?: (backend: Sandbox) => void) {
   const records = createMemoryMap<SandboxResource>();
   const defaults = createMemoryMap<SandboxDefault>();
   const routes = createMemoryMap<SandboxRoute>();
@@ -46,6 +47,7 @@ function fixture() {
       provisioned.push(`restart:${scopeId}`);
     },
   };
+  configure?.(backend);
   const resources = createSandboxResources({
     records,
     defaults,
@@ -218,3 +220,216 @@ test("retirement refuses the default, waits for an active command, and prevents 
   await assert.rejects(router.run(handle, "no resurrection"), /retired/);
   await assert.rejects(resources.setDefault("alice", "personal:alice", record.id), /retired/);
 });
+
+test("every handle operation rejects retirement before reaching a backend that could revive the machine", async () => {
+  let backendCalls = 0;
+  const hit = async (): Promise<never> => {
+    backendCalls++;
+    throw new Error("backend reached");
+  };
+  const { resources, router, layers } = fixture((backend) => {
+    backend.profile.processSessions = true;
+    backend.startProcess = hit;
+    backend.readProcess = hit;
+    backend.writeStdin = hit;
+    backend.signalProcess = hit;
+    backend.listProcesses = async () => [];
+    backend.exportFiles = hit;
+    backend.stageIn = hit;
+    backend.stageOut = hit;
+    backend.importFiles = hit;
+  });
+  const record = await resources.create("alice", "personal:alice", "local");
+  const handle = await router.provision(layers, { sandboxId: record.id });
+  await resources.retire("alice", record.id);
+  const operations: Array<() => Promise<unknown>> = [
+    () => router.run(handle, "work"),
+    () => router.readFile(handle, "file"),
+    () => router.readFileBytes(handle, "file"),
+    () => router.writeFile(handle, "file", "data"),
+    () => router.writeFileBytes(handle, "file", new Uint8Array()),
+    () => router.listDir(handle, "."),
+    () => router.removeDir(handle, "dir"),
+    () => router.teardown(handle),
+    () => router.startProcess!(handle, "work"),
+    () => router.readProcess!(handle, "process"),
+    () => router.writeStdin!(handle, "process", "input"),
+    () => router.signalProcess!(handle, "process", "TERM"),
+    () => router.listProcesses!(handle),
+    () => router.exportFiles!(handle),
+    () => router.stageIn!(handle, "file", "blob"),
+    () => router.stageOut!(handle, "file"),
+    () => router.importFiles!(handle, []),
+    () => resources.status("alice", record.id),
+    () => resources.restart("alice", record.id),
+  ];
+  for (const operation of operations) await assert.rejects(operation(), /retired/);
+  assert.equal(backendCalls, 0);
+});
+
+for (const fail of [false, true])
+  test(`retirement waits for outstanding creation ${fail ? "failure" : "success"} and remains terminal`, async () => {
+    const { resources, records, backend } = fixture();
+    const provision = backend.provision;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let first = true;
+    backend.provision = async (layers, options) => {
+      if (first) {
+        first = false;
+        entered();
+        await gate;
+        if (fail) throw new Error("create failed");
+      }
+      return provision(layers, options);
+    };
+    const creating = resources.create("alice", "personal:alice", "local");
+    const completed = creating.then(
+      () => undefined,
+      (error) => {
+        assert.match(String(error), /create failed/);
+      },
+    );
+    await started;
+    const record = (await records.all())[0]!;
+    let retired = false;
+    const retiring = resources.retire("alice", record.id).then(() => {
+      retired = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(retired, false);
+    assert.equal((await records.get(record.id))?.state, "provisioning");
+    release();
+    await Promise.all([completed, retiring]);
+    assert.equal((await records.get(record.id))?.state, "retired");
+    await assert.rejects(
+      resources.use(record.id, async () => {}),
+      /retired/,
+    );
+  });
+
+for (const shared of [false, true])
+  test(`explicit target receives the same credential cleanup and restore as default (${shared ? "isolated shared automation" : "personal"})`, async () => {
+    const scripts: Array<{ id: string; script: string }> = [];
+    const restoredTars: Array<{ id: string; bytes: Uint8Array }> = [];
+    const scope = shared ? "channel:team" : "personal:alice";
+    const owner = shared ? scope : "alice";
+    let failCleanupFor: string | undefined;
+    const { resources, router } = fixture((backend) => {
+      backend.run = async (handle, script) => {
+        scripts.push({ id: handle.id, script });
+        if (handle.id === failCleanupFor && script.includes("rm -rf --")) {
+          failCleanupFor = undefined;
+          return { stdout: "", stderr: "cleanup failed", code: 1, timedOut: false };
+        }
+        return { stdout: "", stderr: "", code: 0, timedOut: false };
+      };
+      backend.writeFileBytes = async (handle, path, bytes) => {
+        if (path.endsWith(".tar")) restoredTars.push({ id: handle.id, bytes });
+      };
+    });
+    const record = await resources.create("admin", scope, "local");
+    const owners: string[] = [];
+    const resetMarks: unknown[][] = [];
+    const cutover = createDeviceFlowCutoverStore(createMemoryMap(), { resets: createMemoryMap() });
+    await cutover.set(scope, "aws", "ephemeral_only", "admin");
+    await cutover.set(scope, "aws", "legacy", "admin");
+    const turn = createTurnSandboxes({
+      deps: {
+        sandbox: router,
+        sandboxResources: resources,
+        keychain: {
+          listByOwner: async (id: string) => {
+            owners.push(id);
+            return [
+              { kind: "file", service: "aws", origin: "device-flow-auto-capture", targets: [".aws/config"] },
+              { kind: "file", service: "gh", origin: "device-flow-auto-capture", targets: [".config/gh/hosts.yml"] },
+            ];
+          },
+          materializeOwnFiles: async (id: string) => {
+            owners.push(id);
+            return [
+              {
+                service: "aws",
+                origin: "device-flow-auto-capture",
+                files: [{ path: ".aws/config", contentBase64: Buffer.from("allowed-token").toString("base64") }],
+              },
+              {
+                service: "gh",
+                origin: "device-flow-auto-capture",
+                files: [
+                  { path: ".config/gh/hosts.yml", contentBase64: Buffer.from("quarantined-token").toString("base64") },
+                ],
+              },
+            ];
+          },
+        },
+        deviceFlowCutover: {
+          ...cutover,
+          markResidentReset: async (...args: Parameters<typeof cutover.markResidentReset>) => {
+            resetMarks.push(args);
+            await cutover.markResidentReset(...args);
+          },
+        },
+      },
+      input: { origin: shared ? { kind: "automation", useOwnerKeychain: true } : { kind: "user" } },
+      actor: { id: "alice", type: "internal" },
+      session: { id: "s" },
+      resolution: { layers: [{ scopeId: scope, mode: "rw", mountPath: "/" }] },
+      scopeId: scope,
+      memoryScopeId: scope,
+      transferId: "t",
+      turnSessionDir: "turn/s",
+      turnFilesDir: "turn/s/t",
+      connectorEnv: {},
+      isolateOwnerKeychain: shared,
+      ownerAuthAvailable: false,
+      ownerEnvCredentialIds: [],
+      credentialTools: [
+        { service: "aws", roots: [".aws"] },
+        { service: "gh", roots: [".config/gh"] },
+      ],
+      credentialServices: ["aws"],
+      credentialCutoverServices: [],
+      quarantinedServices: ["gh"],
+      cutoverModeOf: () => "legacy",
+      visibleSkills: [],
+      visibleSkillsForTurn: async () => [],
+      emitGapWork: () => {},
+      perf: { credsMs: 0 },
+    } as unknown as TurnSandboxContext);
+    if (shared) {
+      failCleanupFor = scope;
+      await assert.rejects(turn.provision(), /quarantine failed/);
+      turn.invalidateProvision();
+    }
+    const legacyId = (await resources.list("admin", scope)).defaultSandboxId;
+    const defaultHandle = shared ? await turn.provisionResource(legacyId!) : await turn.provision();
+    failCleanupFor = record.backingScopeId;
+    await assert.rejects(turn.provisionResource(record.id), /quarantine failed/);
+    const explicit = await turn.provisionResource(record.id);
+    assert.ok(owners.length >= 6);
+    assert.ok(owners.every((id) => id === owner));
+    assert.equal(resetMarks.length, 2);
+    for (const handle of [defaultHandle, explicit]) {
+      assert.ok(
+        scripts.some(
+          ({ id, script }) =>
+            id === handle.id &&
+            script.includes("rm -rf --") &&
+            script.includes(".config/gh") &&
+            script.includes(".aws"),
+        ),
+      );
+      const tar = restoredTars.find(({ id }) => id === handle.id);
+      assert.ok(tar);
+      assert.ok(Buffer.from(tar.bytes).includes(Buffer.from("allowed-token")));
+      assert.ok(!Buffer.from(tar.bytes).includes(Buffer.from("quarantined-token")));
+    }
+  });
