@@ -99,17 +99,17 @@ function modelMenu(p: ComposerParts): TemplateResult {
       p.effort.available
         ? html`<div class="lc-foot" role="group" aria-label="Effort">
             ${p.effort.levels.map(
-            (level) => html`
-              <button
-                class="settings-chip ${level.value === p.effort.level ? "active" : ""}"
-                type="button"
-                aria-pressed=${level.value === p.effort.level ? "true" : "false"}
-                @click=${() => p.effort.select(level.value)}
-              >
-                ${level.label}
-              </button>
-            `,
-          )}
+              (level) => html`
+                <button
+                  class="settings-chip ${level.value === p.effort.level ? "active" : ""}"
+                  type="button"
+                  aria-pressed=${level.value === p.effort.level ? "true" : "false"}
+                  @click=${() => p.effort.select(level.value)}
+                >
+                  ${level.label}
+                </button>
+              `,
+            )}
           </div>`
         : nothing
     }
