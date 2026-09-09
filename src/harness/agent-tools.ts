@@ -631,6 +631,24 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const verdict = computerVerdict(s);
         const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
         const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
+        let shellLine = s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`;
+        if (s.lifecycleState === "paused") shellLine = "paused (not probed)";
+        const recoveryLines: string[] = [];
+        if (s.lifecycleState) recoveryLines.push(`lifecycle: ${s.lifecycleState}`);
+        if (s.expiresAtMs !== undefined)
+          recoveryLines.push(`machine expires: ${new Date(s.expiresAtMs).toISOString()}`);
+        if (s.recovery) {
+          recoveryLines.push(`recovery strategy: ${s.recovery.strategy}`);
+          if (s.recovery.state) recoveryLines.push(`recovery state: ${s.recovery.state}`);
+          if (s.recovery.checkpointId) recoveryLines.push(`checkpoint: ${s.recovery.checkpointId}`);
+          if (s.recovery.checkpointAtMs !== undefined)
+            recoveryLines.push(`checkpoint captured: ${new Date(s.recovery.checkpointAtMs).toISOString()}`);
+          if (s.recovery.checkpointExpiresAtMs === null)
+            recoveryLines.push("checkpoint expires: no provider expiry reported");
+          else if (s.recovery.checkpointExpiresAtMs !== undefined)
+            recoveryLines.push(`checkpoint expires: ${new Date(s.recovery.checkpointExpiresAtMs).toISOString()}`);
+          if (s.recovery.error) recoveryLines.push(`recovery error: ${s.recovery.error}`);
+        }
         const verdictLine =
           verdict === "wedged"
             ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
@@ -639,7 +657,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { tool: "execute", computer: "status", verdict, ...s },
           text(
-            `machine: ${machineLine}; shell: ${s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`}${pressureLine}${verdictLine}`,
+            [`machine: ${machineLine}; shell: ${shellLine}${pressureLine}${verdictLine}`, ...recoveryLines].join("\n"),
           ),
         );
       } catch (e) {

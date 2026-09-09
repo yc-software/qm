@@ -389,6 +389,33 @@ test("native pause skips tar checkpoints and status does not wake a paused sandb
   assert.equal(await restarted.readFile(resumed, "work.txt"), "keep");
 });
 
+test("legacy metadata adopts paused native state without reading a broken portable snapshot", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const portable = instrumentedSnapshotStore();
+  const first = make({ store, snapshots: portable.store });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "unpublished.txt", "newest native contents");
+  await first.teardown(handle);
+  const legacy = (await store.get(scope))!;
+  await store.put(scope, { sandboxId: legacy.sandboxId, createdAtMs: legacy.createdAtMs });
+  portable.failReads(true);
+  portable.failWrites(true);
+  const client = {
+    ...fake.client,
+    nativePause: true,
+    async info() {
+      return { state: fake.current(scopeName())!.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
+    },
+  };
+  const restarted = make({ client, store, snapshots: portable.store });
+  const resumed = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(resumed, "unpublished.txt"), "newest native contents");
+  await restarted.teardown(resumed);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  assert.equal((await store.get(scope))?.nativePause, true);
+  assert.equal((await store.get(scope))?.preservationState, "paused");
+});
+
 test("pause failures are durable and visible and leave the source available for retry", async () => {
   const store = createMemoryMap<StoredE2bSandbox>();
   let fail = true;

@@ -548,6 +548,49 @@ test("computer status surfaces list-view disagreement and guest pressure", async
   assert.match(status.content[0]!.text!, /io pressure: 86\.14% \(load 30\.78\)/);
 });
 
+test("computer status exposes paused lifecycle and recovery deadlines without claiming a failed shell", async () => {
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      computerStatus: async () => ({
+        machine: "e2b sandbox",
+        provisioned: true,
+        guestResponsive: false,
+        lifecycleState: "paused",
+        expiresAtMs: Date.parse("2026-09-10T00:00:00Z"),
+        recovery: {
+          strategy: "provider_pause",
+          checkpointId: "checkpoint-1",
+          checkpointAtMs: Date.parse("2026-09-09T00:00:00Z"),
+          checkpointExpiresAtMs: Date.parse("2026-10-09T00:00:00Z"),
+          state: "failed",
+          error: "resume failed; retry required",
+        },
+      }),
+    },
+    emit: () => {},
+    scopeLabel: "personal:U1",
+  };
+  const [execute] = createAgentTools(ref);
+  const out = (await call(execute, { command: "", computer: "status", purpose: "p" })) as {
+    content: Array<{ text?: string }>;
+  };
+  const output = out.content[0]!.text!;
+  assert.match(output, /shell: paused \(not probed\)/);
+  assert.doesNotMatch(output, /NOT answering|WEDGED/);
+  for (const expected of [
+    "lifecycle: paused",
+    "machine expires: 2026-09-10T00:00:00.000Z",
+    "recovery strategy: provider_pause",
+    "recovery state: failed",
+    "checkpoint: checkpoint-1",
+    "checkpoint captured: 2026-09-09T00:00:00.000Z",
+    "checkpoint expires: 2026-10-09T00:00:00.000Z",
+    "recovery error: resume failed; retry required",
+  ])
+    assert.ok(output.includes(expected), expected);
+});
+
 test("computer status verdicts: answering guest is ok, dead guest without a machine is down", async () => {
   const base = fakeToolContext();
   const cases: Array<{ status: ComputerStatus; wedged: boolean }> = [
