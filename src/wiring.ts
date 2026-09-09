@@ -36,7 +36,6 @@ import {
   type PersistedScopedFlag,
   type PersistedBaseModel,
   type PersistedApprovedHarnesses,
-  type PersistedFactoryConfig,
   type PersistedInternalMemberOverrides,
   type PersistedWebuiModels,
   type PersistedPeopleDirectoryUrl,
@@ -556,7 +555,6 @@ export function buildApp(
     channelHeaderPin: artifactMap<PersistedScopedFlag>("channel_header_pin_flag"),
     baseModels: artifactMap<PersistedBaseModel>("base_model_configs"),
     approvedHarnesses: artifactMap<PersistedApprovedHarnesses>("approved_harness_configs"),
-    factoryConfigs: artifactMap<PersistedFactoryConfig>("factory_configs"),
     internalMemberOverrides: artifactMap<PersistedInternalMemberOverrides>("internal_member_overrides"),
     orgAmbient: artifactMap<PersistedScopedFlag>("org_ambient_flag"),
     interactiveFastMode: artifactMap<PersistedScopedFlag>("interactive_fast_mode_flag"),
@@ -1771,13 +1769,6 @@ export function buildApp(
       directory,
       currentScopeMembers,
       sessions,
-    },
-    factory: {
-      sandbox,
-      config: configStore,
-      credentials: credentialStore,
-      orgScopeId: orgScope,
-      loops: loopStore,
     },
   });
   const loops: LoopServiceDeps = {

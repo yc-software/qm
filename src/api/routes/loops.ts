@@ -460,13 +460,9 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
   if (b.decision === "return" || b.decision === "returned") {
     if (!note)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "a return needs a note for the next attempt" });
-    try {
-      const returned = await deps.fire.returnOutput(loop.id, outputId, acting.actorId, note);
-      if (!returned) return decisionMissing();
-      return sendJson(ctx.res, 200, { output: returned });
-    } catch (e) {
-      return sendJson(ctx.res, 502, { error: "return_failed", message: errMessage(e) });
-    }
+    const returned = await deps.fire.returnOutput(loop.id, outputId, acting.actorId, note);
+    if (!returned) return decisionMissing();
+    return sendJson(ctx.res, 200, { output: returned });
   }
   return sendJson(ctx.res, 400, { error: "bad_request", message: 'decision must be "shipped" or "returned"' });
 }
