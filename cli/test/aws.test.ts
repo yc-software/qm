@@ -354,7 +354,9 @@ else if (a.includes("ecs list-service-deployments")) {
   const service = s.services[name];
   const revision = "service-revision-for-" + String(service?.deploymentId || "").replace(/^ecs-svc\\//, "");
   const status = (s.blueGreenPolls || 0) === 1 ? "PENDING" : (s.blueGreenPolls || 0) <= ${JSON.stringify(opts.blueGreenBakePolls ?? 0)} ? "IN_PROGRESS" : "SUCCESSFUL";
-  console.log(JSON.stringify({ serviceDeployments: service ? [{ targetServiceRevisionArn: "arn:aws:ecs:us-west-2:123456789012:service-revision/acme-qm/" + name + "/" + revision, status, createdAt: 1700000000000 + s.revision }] : [] }));
+  const prior = service?.previousTaskDefinition ? [{ targetServiceRevisionArn: "arn:aws:ecs:us-west-2:123456789012:service-revision/acme-qm/" + name + "/previous", status: "SUCCESSFUL", createdAt: 1700000000000 }] : [];
+  const current = service && (s.blueGreenPolls || 0) !== 1 ? [{ targetServiceRevisionArn: "arn:aws:ecs:us-west-2:123456789012:service-revision/acme-qm/" + name + "/" + revision, status, createdAt: 1700000000000 + s.revision }] : [];
+  console.log(JSON.stringify({ serviceDeployments: [...prior, ...current] }));
 }
 else if (a.includes("ecs describe-service-revisions")) {
   const start = args.indexOf("--service-revision-arns") + 1;
@@ -363,7 +365,7 @@ else if (a.includes("ecs describe-service-revisions")) {
   console.log(JSON.stringify({ serviceRevisions: arns.flatMap((arn) => {
     const name = arn.split("/").at(-2);
     const service = name ? s.services[name] : undefined;
-    return service ? [{ serviceRevisionArn: arn, taskDefinition: service.taskDefinition }] : [];
+    return service ? [{ serviceRevisionArn: arn, taskDefinition: arn.endsWith("/previous") ? service.previousTaskDefinition : service.taskDefinition }] : [];
   }) }));
 }
 else if (a.includes("ecs list-tasks")) console.log(JSON.stringify({ taskArns: process.env.AWS_FAKE_NO_RUNNING_TASK ? [] : [...(process.env.AWS_FAKE_LARGE_ROLLOUT ? Array.from({ length: 100 }, (_, i) => "arn:aws:ecs:us-west-2:123456789012:task/old-core-" + i) : []), "arn:aws:ecs:us-west-2:123456789012:task/live-core"] }));
@@ -395,6 +397,7 @@ else if (a.includes("ecs update-service")) {
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--desired-count")) service.desiredCount = Number(after("--desired-count"));
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)}) service.deploymentId = "ecs-svc/" + name + "-" + (++s.revision);
   s.updated = true;
+  s.blueGreenPolls = 0;
   if (${JSON.stringify(opts.failFirstUpdateAfterMutation ?? false)} && !s.failedFirstUpdate) {
     s.failedFirstUpdate = true;
     save();
@@ -1347,6 +1350,45 @@ test("a no-op re-deploy records no manifest", async () => {
     await awsUp(single, dir, { yes: true });
     const second = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.equal(second.dynamo["deployment/current"].manifestId.S, firstManifestId);
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS up coalesces a requested restart into one deployment even when the task is unchanged", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-restart-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const single = oneServiceConfig();
+  const fake = statefulAws(dir, single, {}, { blueGreenBakePolls: 3 });
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(single, dir, { yes: true });
+    const first = JSON.parse(readFileSync(fake.state, "utf8"));
+    const firstId = first.dynamo["deployment/current"].manifestId.S;
+    const previous = JSON.parse(first.dynamo[`deployment/manifest/${firstId}`].manifest.S);
+    writeFileSync(fake.log, "");
+    await awsUp(single, dir, { dryRun: true, restart: ["core"] });
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
+    writeFileSync(fake.log, "");
+    await awsUp(single, dir, { yes: true, restart: ["core"] });
+    const second = JSON.parse(readFileSync(fake.state, "utf8"));
+    const nextId = second.dynamo["deployment/current"].manifestId.S;
+    const next = JSON.parse(second.dynamo[`deployment/manifest/${nextId}`].manifest.S);
+    assert.notEqual(nextId, firstId);
+    assert.notEqual(next.tasks.core, previous.tasks.core);
+    assert.deepEqual(next.imageProvenance, previous.imageProvenance);
+    const calls = readFileSync(fake.log, "utf8");
+    assert.equal(calls.match(/ecs register-task-definition/g)?.length, 1);
+    assert.equal(calls.match(/ecs update-service/g)?.length, 1);
+    assert.ok((calls.match(/ecs list-service-deployments/g)?.length ?? 0) >= 4);
+    assert.ok(calls.lastIndexOf("ecs list-service-deployments") < calls.lastIndexOf("dynamodb transact-write-items"));
+    await assert.rejects(() => awsUp(single, dir, { yes: true, restart: ["missing"] }), /not selected/);
+    await assert.rejects(() => awsUp(single, dir, { buildOnly: true, restart: ["core"] }), /cannot be used/);
   } finally {
     process.env.PATH = priorPath;
     fake.restore();

@@ -125,6 +125,7 @@ export interface AwsUpOpts {
   buildFromPath?: string;
   imageLabel?: string;
   only?: string[];
+  restart?: string[];
   sandboxDir?: string;
   envFile?: string;
   buildOnly?: boolean;
@@ -1758,6 +1759,7 @@ function reportTaskChanges(
   services: string[],
   images: Record<string, string>,
   arns: Record<string, string>,
+  restart: ReadonlySet<string> = new Set(),
 ): Array<{ service: string; task: EcsTaskDefinition; changed: boolean }> {
   const desired = services.map((service) => ({
     service,
@@ -1770,7 +1772,8 @@ function reportTaskChanges(
       `${item.service}: ${changes.length ? `${changes.length} task-definition change${changes.length === 1 ? "" : "s"}` : "no task-definition change"}`,
     );
     if (changes.length) note(JSON.stringify({ service: item.service, changes }, null, 2));
-    return { service: item.service, task: item.task, changed: changes.length > 0 };
+    if (restart.has(item.service)) step(`${item.service}: restart requested with the deployment`);
+    return { service: item.service, task: item.task, changed: changes.length > 0 || restart.has(item.service) };
   });
 }
 
@@ -1897,6 +1900,11 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   }
   const plugins = new Map(topology.plugins.map((plugin) => [plugin.name, plugin]));
   const services = opts.only ?? topology.workloads;
+  const restart = new Set(opts.restart ?? []);
+  if (restart.size && opts.buildOnly) throw new CliError("--restart cannot be used with --build-only");
+  for (const service of restart) {
+    if (!services.includes(service)) throw new CliError(`--restart workload ${service} is not selected for deployment`);
+  }
   for (const service of services) workloadArchitecture(config, service);
   if (opts.buildOnly && opts.candidate) throw new CliError("--build-only and --candidate are mutually exclusive");
   if (opts.candidate && opts.buildFrom) throw new CliError("--candidate and --build-from are mutually exclusive");
@@ -1991,7 +1999,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       }
       images[service] = plannedWorkloadImage(config, service, plugins.get(service));
     }
-    reportTaskChanges(config, services, images, arns);
+    reportTaskChanges(config, services, images, arns, restart);
     for (const service of services) {
       step(`${service}: desired count ${before.counts[service] ?? 0} → ${workloadDesiredCount(config, service)}`);
     }
@@ -2006,7 +2014,9 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     } else {
       step("deployment layer: preserved (no sandbox directory selected for core)");
     }
-    note(`Plan only. Re-run \`qm up${opts.candidate ? ` --candidate ${opts.candidate}` : ""} --yes\` to deploy.`);
+    note(
+      `Plan only. Re-run \`qm up${opts.candidate ? ` --candidate ${opts.candidate}` : ""}${restart.size ? ` --restart ${[...restart].join(",")}` : ""} --yes\` to deploy.`,
+    );
     return;
   }
   const lease = acquireLease(aws);
@@ -2105,7 +2115,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         images[service] = publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
       }
     }
-    const desired = reportTaskChanges(config, services, images, arns);
+    const desired = reportTaskChanges(config, services, images, arns, restart);
     const targets: Record<string, string> = {};
     for (const item of desired) {
       if (!item.changed) {

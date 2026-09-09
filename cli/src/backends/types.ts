@@ -7,6 +7,7 @@ export interface BackendUpOptions {
   buildFromPath?: string;
   imageLabel?: string;
   only?: string[];
+  restart?: string[];
   imageFrom?: string;
   imageRepoPrefix?: string;
   buildOnly?: boolean;
