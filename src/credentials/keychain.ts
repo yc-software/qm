@@ -1,3 +1,5 @@
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { tokenExpiry } from "../model/subscription-oauth.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, type Destination, type ScopeId } from "../types.ts";
@@ -280,7 +282,12 @@ export interface ConnectorTokenStore {
    * account id), refreshing single-flight if stale. The refresh token never
    * leaves the keychain record.
    */
-  connectorDerivedAuth(host: string, principalId: string, accountType?: string): Promise<DerivedOAuthAuth | null>;
+  connectorDerivedAuth(
+    host: string,
+    principalId: string,
+    accountType?: string,
+    options?: { forceRefresh?: boolean },
+  ): Promise<DerivedOAuthAuth | null>;
 }
 
 interface SaveCredentialInput {
@@ -296,6 +303,7 @@ interface SaveCredentialInput {
   capturePaths?: CredentialPathSpec[];
   origin?: string;
   expectedOrigin?: string;
+  expectedFingerprint?: string;
   expiresAt?: number;
 }
 
@@ -413,7 +421,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   materialize(grantId: string, scopeId: ScopeId, usedBy: string): Promise<MaterializedCred>;
   materializeOwnById(ownerId: string, credentialId: string, scopeId: ScopeId): Promise<MaterializedCred>;
   materializeOwn(ownerId: string): Promise<MaterializedEnvCred[]>;
-  materializeOwnFiles(ownerId: string): Promise<MaterializedFileCred[]>;
+  materializeOwnFiles(ownerId: string): Promise<Array<MaterializedFileCred & { metadata: KeychainCredentialMeta }>>;
 
   materializeStanding(scopeId: ScopeId): Promise<MaterializedEnvCred[]>;
 }
@@ -497,11 +505,13 @@ export function createKeychain(deps: {
   asks: DurableMap<KeychainAsk>;
   key: SecretKey;
   refreshConnector?: OAuthRefresh;
+  advisoryLock?: AdvisoryLock;
   oauthSkewMs?: number;
   oauthRefreshMarginMs?: number;
   now?: () => number;
 }): Keychain {
   const now = deps.now ?? Date.now;
+  const refreshLock = deps.advisoryLock ?? createMemoryAdvisoryLock();
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
 
@@ -531,12 +541,16 @@ export function createKeychain(deps: {
     };
   }
 
-  function decryptToFiles(rec: KeychainCredential, extra?: { grantId: string; purpose: string }): MaterializedFileCred {
+  function decryptToFiles(
+    rec: KeychainCredential,
+    extra?: { grantId: string; purpose: string },
+  ): MaterializedFileCred & { metadata: KeychainCredentialMeta } {
     const raw = decryptSecret(rec.secretEnc, deps.key);
     const files: CredentialFile[] = rec.targets
       ? (JSON.parse(raw) as CredentialFile[])
       : [{ path: keychainFilePath(rec.target ?? ""), contentBase64: Buffer.from(raw, "utf8").toString("base64") }];
     return {
+      metadata: toMeta(rec),
       credentialId: rec.id,
       ownerId: rec.ownerId,
       service: rec.service,
@@ -650,7 +664,8 @@ export function createKeychain(deps: {
     principalId: string,
     token: OAuthToken,
     accountType?: string,
-  ): Promise<KeychainCredential> {
+    expected?: KeychainCredential,
+  ): Promise<KeychainCredential | null> {
     const t = now();
     const id = oauthId(host, principalId, accountType);
     const prior = await deps.creds.get(id);
@@ -679,6 +694,16 @@ export function createKeychain(deps: {
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
+    if (expected) {
+      if (!deps.creds.update) throw new Error("credential store does not support conditional refresh");
+      return deps.creds.update(id, (current) =>
+        current.fingerprint === expected.fingerprint &&
+        current.updatedAt === expected.updatedAt &&
+        current.secretEnc === expected.secretEnc
+          ? rec
+          : current,
+      );
+    }
     await deps.creds.put(id, rec);
     return rec;
   }
@@ -712,11 +737,15 @@ export function createKeychain(deps: {
 
   async function markConnectorRefreshFailure(rec: KeychainCredential, message: string): Promise<void> {
     const t = now();
-    const current = await deps.creds.get(rec.id);
-    if (!current || current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) return;
-    await deps.creds.merge(rec.id, {
-      refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
-      updatedAt: t,
+    if (!deps.creds.update) throw new Error("credential store does not support conditional refresh metadata");
+    await deps.creds.update(rec.id, (current) => {
+      if (
+        current.updatedAt !== rec.updatedAt ||
+        current.fingerprint !== rec.fingerprint ||
+        current.secretEnc !== rec.secretEnc
+      )
+        return current;
+      return { ...current, refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message }, updatedAt: t };
     });
   }
 
@@ -746,12 +775,20 @@ export function createKeychain(deps: {
       // Compare-and-set: if another flight already rotated this credential,
       // keep its result rather than clobbering a newer refresh token.
       const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
+      if (
+        current &&
+        (current.updatedAt !== rec.updatedAt ||
+          current.fingerprint !== rec.fingerprint ||
+          current.secretEnc !== rec.secretEnc)
+      ) {
         const latest = tryDecrypt(current, recToOAuthToken);
-        return latest?.accessToken ?? null;
+        return latest && !oauthExpired(withOAuthExpiry(current), now()) ? latest.accessToken : null;
       }
-      await putConnectorToken(host, principalId, merged, accountType);
-      return merged.accessToken;
+      if (!current) return null;
+      const saved = await putConnectorToken(host, principalId, merged, accountType, rec);
+      return saved && !oauthExpired(withOAuthExpiry(saved), now())
+        ? tryDecrypt(saved, (value) => decryptSecret(value.secretEnc, deps.key))
+        : null;
     } catch (e) {
       const message = storedRefreshError(e);
       console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
@@ -769,20 +806,51 @@ export function createKeychain(deps: {
   const oauthExpired = (rec: KeychainCredentialMeta, t: number) =>
     rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
 
-  async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
+  async function connectorTokenForRecord(
+    rec: KeychainCredential,
+    options?: { forceRefresh?: boolean },
+  ): Promise<string | null> {
+    rec = withOAuthExpiry(rec);
     const t = now();
     const refreshable = rec.refresh?.refreshTokenEnc && deps.refreshConnector && rec.host ? rec.host : null;
-    if (refreshable && rec.expiresAt !== undefined && t >= rec.expiresAt - oauthRefreshMargin) {
+    if (options?.forceRefresh && !refreshable) return null;
+    if (
+      refreshable &&
+      (options?.forceRefresh || (rec.expiresAt !== undefined && t >= rec.expiresAt - oauthRefreshMargin))
+    ) {
       let pending = inflightRefreshes.get(rec.id);
       if (!pending) {
-        pending = refreshAndStore(refreshable, rec.ownerId, rec.refresh?.accountType, rec);
+        pending = refreshLock.withLock(`credential-refresh:${rec.id}`, async () => {
+          const stored = await deps.creds.get(rec.id);
+          if (!stored) return null;
+          const current = withOAuthExpiry(stored);
+          const changed = current.fingerprint !== rec.fingerprint || current.secretEnc !== rec.secretEnc;
+          if (!changed && current.refresh?.refreshFailedAt !== rec.refresh?.refreshFailedAt) return null;
+          if (changed && !oauthExpired(current, now()))
+            return tryDecrypt(current, (value) => decryptSecret(value.secretEnc, deps.key));
+          if (!current.refresh?.refreshTokenEnc) return null;
+          return refreshAndStore(refreshable, current.ownerId, current.refresh.accountType, current);
+        });
         inflightRefreshes.set(rec.id, pending);
-        void pending.finally(() => inflightRefreshes.delete(rec.id));
+        const cleanup = () => {
+          inflightRefreshes.delete(rec.id);
+        };
+        void pending.then(cleanup, cleanup);
       }
       return pending;
     }
-    if (oauthExpired(rec, t) && !refreshable) return null;
+    if (oauthExpired(rec, t)) return null;
     return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
+  }
+
+  function withOAuthExpiry(rec: KeychainCredential): KeychainCredential {
+    if (rec.expiresAt === undefined && rec.host === "auth.openai.com") {
+      const expiry = tryDecrypt(rec, (value) =>
+        tokenExpiry({ access_token: decryptSecret(value.secretEnc, deps.key) }),
+      );
+      if (expiry !== null && expiry !== undefined) rec = { ...rec, expiresAt: expiry };
+    }
+    return rec;
   }
 
   function connectorMeta(rec: KeychainCredentialMeta, t: number): ConnectorMeta {
@@ -869,6 +937,18 @@ export function createKeychain(deps: {
     };
     const expectedOrigin =
       input.expectedOrigin ?? (input.origin === DEVICE_FLOW_ORIGIN ? DEVICE_FLOW_ORIGIN : undefined);
+    if (input.expectedFingerprint !== undefined) {
+      if (!deps.creds.update) throw new Error("credential store does not support conditional saves");
+      const updated = await deps.creds.update(id, (prior) => {
+        if (prior.fingerprint !== input.expectedFingerprint)
+          throw new KeychainError(409, "credential changed during refresh");
+        if (expectedOrigin !== undefined && prior.origin !== expectedOrigin)
+          throw new KeychainError(409, "credential origin changed during refresh");
+        return buildRec(prior);
+      });
+      if (!updated) throw new KeychainError(409, "credential removed during refresh");
+      return toMeta(updated);
+    }
     if (expectedOrigin === undefined) {
       const prior = await deps.creds.get(id);
       const rec = buildRec(prior);
@@ -1303,13 +1383,14 @@ export function createKeychain(deps: {
       return connectorTokenForRecord(rec);
     },
 
-    async connectorDerivedAuth(host, principalId, accountType) {
+    async connectorDerivedAuth(host, principalId, accountType, options) {
       const rec = await connectorRecord(host, principalId, accountType);
       if (!rec) return null;
-      const accessToken = await connectorTokenForRecord(rec);
+      const accessToken = await connectorTokenForRecord(rec, options);
       if (accessToken === null) return null;
       // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
-      const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
+      const fresh = await connectorRecord(host, principalId, accountType);
+      if (!fresh || oauthExpired(withOAuthExpiry(fresh), now())) return null;
       const token = tryDecrypt(fresh, recToOAuthToken);
       if (!token) return null;
       return {
@@ -1383,7 +1464,7 @@ export function createKeychain(deps: {
       return (await deps.creds.select({ where: byOwners([ownerId]) }))
         .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && !c.managed)
         .map((c) => tryDecrypt(c, decryptToFiles))
-        .filter((c): c is MaterializedFileCred => c !== null);
+        .filter((c): c is MaterializedFileCred & { metadata: KeychainCredentialMeta } => c !== null);
     },
 
     async materializeStanding(scopeId) {

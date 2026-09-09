@@ -63,6 +63,7 @@ export interface HarnessSecurityScreenInput {
  * stays in the keychain; the harness (and its jail) never see it.
  */
 export interface CodexTurnAuth {
+  refresh?: () => Promise<CodexTurnAuth | null>;
   accessToken: string;
   idToken: string;
   accountId?: string;

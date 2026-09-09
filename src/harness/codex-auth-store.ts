@@ -1,7 +1,8 @@
 import { CODEX_OAUTH_ISSUER, asObject, codexOAuthJwtAccountId, type JsonObject } from "./codex-auth-file.ts";
 import { codexOAuthRefreshToken, readCodexOAuthAuthFile, sanitizedCodexOAuthAuth } from "./codex-auth-file.ts";
 import type { CredentialFile, Keychain } from "../credentials/keychain.ts";
-import { swallow } from "../util/errors.ts";
+import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { acquireCodexOAuthAuthLock, writeCodexOAuthAuthFile } from "./codex-auth.ts";
 
 /**
@@ -19,7 +20,7 @@ export interface CodexAuthStore {
   /** Where the credential lives, for logs and errors. Never includes secrets. */
   readonly description: string;
   /** Current auth, centrally refreshed when the access token is stale. Null when unavailable. */
-  load(): Promise<JsonObject | null>;
+  load(options?: { forceRefresh?: boolean }): Promise<JsonObject | null>;
 }
 
 /** The Codex CLI's public OAuth client id (auth.openai.com device/PKCE client). */
@@ -107,6 +108,7 @@ async function refreshCodexOAuth(auth: JsonObject, fetchImpl: typeof fetch): Pro
   if (!refreshToken) return null;
   const response = await fetchImpl(`${CODEX_OAUTH_ISSUER}/oauth/token`, {
     method: "POST",
+    signal: AbortSignal.timeout(8_000),
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       client_id: CODEX_OAUTH_CLIENT_ID,
@@ -115,7 +117,16 @@ async function refreshCodexOAuth(auth: JsonObject, fetchImpl: typeof fetch): Pro
       scope: "openid profile email",
     }),
   });
-  if (!response.ok) throw new Error(`Codex OAuth refresh failed: HTTP ${response.status}`);
+  if (!response.ok) {
+    const body = asObject(await response.json().catch(() => null));
+    const code = asObject(body?.error)?.code;
+    const known = ["refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated", "invalid_grant"];
+    const detail = typeof code === "string" && known.includes(code) ? ` (${code})` : "";
+    const message = `ChatGPT credential renewal failed: HTTP ${response.status}${detail}`;
+    if (response.status === 400 || response.status === 401)
+      throw new NonRetryableTurnError(`${message}. Reconnect the credential's owning ChatGPT account.`);
+    throw new Error(message);
+  }
   const body = asObject(await response.json().catch(() => null));
   if (!body || typeof body.access_token !== "string" || !body.access_token) {
     throw new Error("Codex OAuth refresh returned no access token");
@@ -132,7 +143,9 @@ async function refreshCodexOAuth(auth: JsonObject, fetchImpl: typeof fetch): Pro
     },
   };
   // The refreshed identity must stay on the same ChatGPT account.
-  return codexOAuthAuthFromValue(next) && codexOAuthJwtAccountId(next) === codexOAuthJwtAccountId(auth) ? next : null;
+  if (!codexOAuthAuthFromValue(next) || codexOAuthJwtAccountId(next) !== codexOAuthJwtAccountId(auth))
+    throw new NonRetryableTurnError("ChatGPT credential renewal returned a different account or invalid credentials");
+  return next;
 }
 
 function authNeedsRefresh(auth: JsonObject, now: number): boolean {
@@ -144,6 +157,7 @@ interface KeychainCodexAuthStoreDeps {
   keychain: Keychain;
   /** Keychain credential id of the user's Codex ChatGPT login (a file credential holding auth.json). */
   credentialId: string;
+  advisoryLock?: AdvisoryLock;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -172,67 +186,59 @@ function codexAuthFromFiles(files: CredentialFile[]): { path: string; auth: Json
 export function keychainCodexAuthStore(deps: KeychainCodexAuthStoreDeps): CodexAuthStore {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ?? Date.now;
-  let refreshing: Promise<JsonObject | null> | null = null;
+  const lock = deps.advisoryLock ?? createMemoryAdvisoryLock();
 
-  const readCurrent = async (): Promise<{
-    ownerId: string;
-    service: string;
-    path: string;
-    auth: JsonObject;
-  } | null> => {
+  const readCurrent = async () => {
     const meta = await deps.keychain.getCredential(deps.credentialId);
     if (!meta || meta.kind !== "file") return null;
     const bundles = await deps.keychain.materializeOwnFiles(meta.ownerId);
-    const bundle = bundles.find((b) => b.credentialId === deps.credentialId);
+    const bundle = bundles.find((candidate) => candidate.credentialId === deps.credentialId);
     if (!bundle) return null;
     const found = codexAuthFromFiles(bundle.files);
-    return found ? { ownerId: meta.ownerId, service: meta.service, ...found } : null;
-  };
-
-  const persist = async (
-    current: { ownerId: string; service: string; path: string },
-    replacedRefreshToken: string | undefined,
-    next: JsonObject,
-  ): Promise<boolean> => {
-    // Compare-and-set: re-read and refuse if someone else rotated first.
-    const latest = await readCurrent();
-    if (!latest || codexOAuthRefreshToken(latest.auth) !== replacedRefreshToken) return false;
-    await deps.keychain.save({
-      ownerId: current.ownerId,
-      service: current.service,
-      files: [{ path: current.path, contentBase64: Buffer.from(JSON.stringify(next), "utf8").toString("base64") }],
-      ...(codexOAuthAccessTokenExpiresAt(next) !== undefined
-        ? { expiresAt: codexOAuthAccessTokenExpiresAt(next) }
-        : {}),
-    });
-    return true;
+    return found ? { meta: bundle.metadata, files: bundle.files, ...found } : null;
   };
 
   return {
     description: `keychain credential ${deps.credentialId}`,
-    async load(): Promise<JsonObject | null> {
-      const current = await readCurrent();
-      if (!current) return null;
-      if (!authNeedsRefresh(current.auth, now())) return current.auth;
-      // Single refresh in flight per store; concurrent loads share it.
-      refreshing ??= (async () => {
+    async load(options): Promise<JsonObject | null> {
+      const observed = await readCurrent();
+      if (!observed) return null;
+      if (!options?.forceRefresh && !authNeedsRefresh(observed.auth, now())) return observed.auth;
+      return lock.withLock(`credential-refresh:${deps.credentialId}`, async () => {
+        const current = await readCurrent();
+        if (!current) return null;
+        if (
+          codexOAuthRefreshToken(current.auth) !== codexOAuthRefreshToken(observed.auth) &&
+          !authNeedsRefresh(current.auth, now())
+        ) return current.auth;
+        if (!options?.forceRefresh && !authNeedsRefresh(current.auth, now())) return current.auth;
+        const next = await refreshCodexOAuth(current.auth, fetchImpl);
+        if (!next) return null;
         try {
-          const next = await refreshCodexOAuth(current.auth, fetchImpl);
-          if (!next) return null;
-          await persist(current, codexOAuthRefreshToken(current.auth), next);
-          return next;
-        } finally {
-          refreshing = null;
+          await deps.keychain.save({
+            ownerId: current.meta.ownerId,
+            service: current.meta.service,
+            host: current.meta.host,
+            accountLabel: current.meta.accountLabel,
+            origin: current.meta.origin,
+            expectedFingerprint: current.meta.fingerprint,
+            files: current.files.map((file) =>
+              file.path === current.path
+                ? { ...file, contentBase64: Buffer.from(JSON.stringify(next), "utf8").toString("base64") }
+                : file,
+            ),
+            expiresAt: codexOAuthAccessTokenExpiresAt(next),
+          });
+        } catch (error) {
+          if ((error as { status?: number }).status !== 409) throw error;
+          const replacement = await readCurrent();
+          if (!replacement) return null;
+          if (authNeedsRefresh(replacement.auth, now()))
+            throw new Error("Codex credential changed and needs renewal", { cause: error });
+          return replacement.auth;
         }
-      })();
-      try {
-        const refreshed = await refreshing;
-        if (refreshed) return refreshed;
-      } catch (error) {
-        swallow("codex: central oauth refresh", error);
-      }
-      // A stale access token is still worth handing out: the provider decides.
-      return (await readCurrent())?.auth ?? current.auth;
+        return next;
+      });
     },
   };
 }
@@ -248,38 +254,28 @@ export function fileCodexAuthStore(
   fetchImpl: typeof fetch = fetch,
   now: () => number = Date.now,
 ): CodexAuthStore {
-  let refreshing: Promise<JsonObject | null> | null = null;
   return {
     description: `auth file ${path}`,
-    async load(): Promise<JsonObject | null> {
-      const current = readCodexOAuthAuthFile(path);
-      if (!current) return null;
-      if (!authNeedsRefresh(current, now())) return current;
-      refreshing ??= (async () => {
-        try {
-          const next = await refreshCodexOAuth(current, fetchImpl);
-          if (!next) return null;
-          const lock = await acquireCodexOAuthAuthLock(path, undefined, 10_000, 25);
-          try {
-            const latest = readCodexOAuthAuthFile(path);
-            // Compare-and-set: refuse if another process rotated first.
-            if (!latest || codexOAuthRefreshToken(latest) !== codexOAuthRefreshToken(current)) return latest;
-            writeCodexOAuthAuthFile(path, next);
-          } finally {
-            await lock.release();
-          }
-          return next;
-        } finally {
-          refreshing = null;
-        }
-      })();
+    async load(options): Promise<JsonObject | null> {
+      const observed = readCodexOAuthAuthFile(path);
+      if (!observed) return null;
+      if (!options?.forceRefresh && !authNeedsRefresh(observed, now())) return observed;
+      const lock = await acquireCodexOAuthAuthLock(path, undefined, 10_000, 25);
       try {
-        const refreshed = await refreshing;
-        if (refreshed) return refreshed;
-      } catch (error) {
-        swallow("codex: file oauth refresh", error);
+        const current = readCodexOAuthAuthFile(path);
+        if (!current) return null;
+        if (
+          codexOAuthRefreshToken(current) !== codexOAuthRefreshToken(observed) &&
+          !authNeedsRefresh(current, now())
+        ) return current;
+        if (!options?.forceRefresh && !authNeedsRefresh(current, now())) return current;
+        const next = await refreshCodexOAuth(current, fetchImpl);
+        if (!next) return null;
+        writeCodexOAuthAuthFile(path, next);
+        return next;
+      } finally {
+        await lock.release();
       }
-      return readCodexOAuthAuthFile(path) ?? current;
     },
   };
 }

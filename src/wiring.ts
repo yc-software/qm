@@ -60,7 +60,8 @@ import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust } from "./persistence/pg-pool.ts";
+import { codexOAuthJwtAccountIdFromToken } from "./harness/codex-auth-file.ts";
+import { configurePgCaTrust, createPgPool } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -540,8 +541,9 @@ export function buildApp(
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
-  const advisoryLock: AdvisoryLock = pgArtifactMap
-    ? createPostgresAdvisoryLock(pgArtifactMap.pool)
+  const advisoryPool = config.databaseUrl ? createPgPool(config.databaseUrl) : null;
+  const advisoryLock: AdvisoryLock = advisoryPool
+    ? createPostgresAdvisoryLock(advisoryPool)
     : createMemoryAdvisoryLock();
   const configStore = createMemoryConfigStore(config.orgId, {
     connectorClients: artifactMap<StoredConnectorClient>("connector_clients"),
@@ -929,6 +931,7 @@ export function buildApp(
     grants: artifactMap<KeychainGrant>("keychain_grants"),
     asks: artifactMap<KeychainAsk>("keychain_asks"),
     key: credentialKey,
+    advisoryLock,
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
       // AI subscription logins ride the same connector-refresh machinery:
@@ -936,6 +939,12 @@ export function buildApp(
       return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
         if (token.refreshToken && host === "auth.openai.com") {
           const fresh = await refreshChatGPTTokens(token.refreshToken);
+          const accountId =
+            codexOAuthJwtAccountIdFromToken(token.idToken) ??
+            codexOAuthJwtAccountIdFromToken(token.accessToken) ??
+            token.accountId;
+          if (accountId && fresh.accountId !== accountId)
+            throw new Error("ChatGPT credential renewal returned a different account or invalid credentials");
           return oauthTokenFromUserTokens(fresh);
         }
         if (token.refreshToken && host === "claude.ai") {
@@ -1092,7 +1101,7 @@ export function buildApp(
         // ephemeral derived material. The credential can be (re)registered at
         // runtime — resolution happens on every load.
         ...(config.codexAuthCredential && keychain
-          ? { authStore: keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential }) }
+          ? { authStore: keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential, advisoryLock }) }
           : {}),
         signals: runSignals,
         tasks,
@@ -1959,6 +1968,7 @@ export function buildApp(
       void runActivity.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
+      await advisoryPool?.close();
     },
   };
 

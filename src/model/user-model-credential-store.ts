@@ -1,4 +1,5 @@
 import type { DerivedOAuthAuth, Keychain } from "../credentials/keychain.ts";
+import { tokenExpiry } from "./subscription-oauth.ts";
 import type { ModelProvider } from "./pi-models.ts";
 
 type UserCredentialKind = "apikey" | "oauth";
@@ -35,7 +36,11 @@ export interface UserModelCredentialStore {
    * token + account id) — refreshed inside the keychain (single-flight, CAS)
    * when stale. The refresh token never leaves the keychain record.
    */
-  derivedOAuth(userId: string, provider: ModelProvider): Promise<DerivedOAuthAuth | null>;
+  derivedOAuth(
+    userId: string,
+    provider: ModelProvider,
+    options?: { forceRefresh?: boolean },
+  ): Promise<DerivedOAuthAuth | null>;
   delete(userId: string, provider: ModelProvider): Promise<void>;
 }
 
@@ -139,7 +144,8 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
           ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
           ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
           ...(tokens.accountId ? { accountId: tokens.accountId } : {}),
-          ...(tokens.expiresAt !== undefined ? { expiresAt: tokens.expiresAt } : {}),
+          expiresAt:
+            tokens.expiresAt ?? (provider === "openai" ? tokenExpiry({ access_token: tokens.accessToken }) : undefined),
         },
         AI_ACCOUNT_TYPE,
       );
@@ -148,10 +154,10 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
       if (apiKeyMeta) await keychain.remove(userId, apiKeyMeta.id);
     },
 
-    async derivedOAuth(userId, provider) {
+    async derivedOAuth(userId, provider, options) {
       const host = oauthHostFor(provider);
       if (!host) return null;
-      return keychain.connectorDerivedAuth(host, userId, AI_ACCOUNT_TYPE);
+      return keychain.connectorDerivedAuth(host, userId, AI_ACCOUNT_TYPE, options);
     },
 
     async delete(userId, provider) {

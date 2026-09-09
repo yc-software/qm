@@ -68,7 +68,9 @@ function fakeKeychain(state: FakeKeychainState): Keychain {
     },
     async materializeOwnFiles(ownerId: string) {
       if (ownerId !== state.meta.ownerId) return [];
-      return [{ credentialId: state.meta.id, ownerId, service: state.meta.service, files: state.files }];
+      return [
+        { metadata: state.meta, credentialId: state.meta.id, ownerId, service: state.meta.service, files: state.files },
+      ];
     },
     async save(input: { ownerId: string; service: string; files?: CredentialFile[] }) {
       state.saves.push(input);
@@ -125,6 +127,37 @@ test("keychain store returns fresh auth without refreshing", async () => {
   assert.equal(state.saves.length, 0);
 });
 
+test("keychain store force-refreshes a token requested by the app-server", async () => {
+  const state: FakeKeychainState = {
+    meta: META,
+    files: credFiles(authJson("acct", FRESH_EXP, "refresh-1")),
+    saves: [],
+  };
+  let calls = 0;
+  const store = keychainCodexAuthStore({
+    keychain: fakeKeychain(state),
+    credentialId: "cred-1",
+    now: () => NOW,
+    fetchImpl: (async () => {
+      calls += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          access_token: accessToken("acct", FRESH_EXP, "forced"),
+          id_token: idToken("acct"),
+          refresh_token: "refresh-2",
+        }),
+      };
+    }) as unknown as typeof fetch,
+  });
+
+  const auth = await store.load({ forceRefresh: true });
+
+  assert.equal(calls, 1);
+  assert.equal((auth!.tokens as Record<string, unknown>).refresh_token, "refresh-2");
+  assert.equal(state.saves.length, 1);
+});
+
 test("keychain store refreshes a stale access token centrally and persists rotation", async () => {
   const state: FakeKeychainState = {
     meta: META,
@@ -177,10 +210,7 @@ test("keychain store refuses a refresh that switches accounts", async () => {
       }),
     })) as unknown as typeof fetch,
   });
-  const auth = await store.load();
-  // Falls back to the (stale) stored auth rather than adopting a different account.
-  assert.ok(auth);
-  assert.equal((auth!.tokens as Record<string, unknown>).refresh_token, "refresh-1");
+  await assert.rejects(() => store.load(), /different account/);
   assert.equal(state.saves.length, 0);
 });
 
@@ -216,7 +246,7 @@ test("file store refreshes a stale token and writes back under the lock with com
   assert.equal(codexOAuthAccessTokenExpiresAt(persisted), FRESH_EXP * 1000);
 });
 
-test("file store keeps serving current auth when the refresh endpoint fails", async (t) => {
+test("file store reports failed renewal without serving stale credentials", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-store-file-fail-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "auth.json");
@@ -224,12 +254,11 @@ test("file store keeps serving current auth when the refresh endpoint fails", as
   chmodSync(path, 0o600);
   const store = fileCodexAuthStore(
     path,
-    (async () => ({ ok: false, status: 503 })) as unknown as typeof fetch,
+    (async () => new Response("unavailable", { status: 503 })) as unknown as typeof fetch,
     () => NOW,
   );
-  const auth = await store.load();
-  assert.ok(auth);
-  assert.equal((auth!.tokens as Record<string, unknown>).refresh_token, "refresh-1");
+  await assert.rejects(() => store.load(), /renewal failed: HTTP 503/);
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).tokens.refresh_token, "refresh-1");
 });
 
 test("installed Codex accepts child auth without a usable refresh token", () => {

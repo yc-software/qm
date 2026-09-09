@@ -2645,6 +2645,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const derived = await userCredStore.derivedOAuth(actor.id, "openai");
             if (derived?.idToken) {
               codexTurnAuth = {
+                refresh: async () => {
+                  const fresh = await userCredStore.derivedOAuth(actor.id, "openai", { forceRefresh: true });
+                  return fresh?.idToken ? { ...fresh, idToken: fresh.idToken } : null;
+                },
                 accessToken: derived.accessToken,
                 idToken: derived.idToken,
                 ...(derived.accountId ? { accountId: derived.accountId } : {}),

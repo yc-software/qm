@@ -26,7 +26,7 @@ function chatgptAccountId(tokens: { idToken?: string; accessToken: string }): st
   return codexOAuthJwtAccountIdFromToken(tokens.idToken) ?? codexOAuthJwtAccountIdFromToken(tokens.accessToken);
 }
 
-function tokenExpiry(raw: { expires_in?: number; access_token?: string }): number | undefined {
+export function tokenExpiry(raw: { expires_in?: number; access_token?: string }): number | undefined {
   if (typeof raw.expires_in === "number") return Date.now() + raw.expires_in * 1000;
   const claims = decodeJwtClaims(raw.access_token);
   const exp = claims?.exp;
@@ -51,7 +51,7 @@ export async function refreshChatGPTTokens(refreshToken: string): Promise<UserOA
       client_id: CHATGPT_CLIENT_ID,
       scope: CHATGPT_SCOPE,
     }),
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(8_000),
   });
   if (!res.ok) throw new Error(`chatgpt refresh failed (${res.status})`);
   const raw = (await res.json()) as {

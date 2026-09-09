@@ -163,6 +163,11 @@ export class CodexAppServer {
     this.process.stderr?.on("data", (chunk: Buffer) => {
       this.stderr = `${this.stderr}${chunk.toString()}`.slice(-16_384);
     });
+    this.process.stdin?.on("error", (error) => {
+      this.closeError = error;
+      this.failAll(error);
+      this.process.kill("SIGTERM");
+    });
     this.process.once("error", (error) => {
       this.closed = true;
       this.closeError = error;
