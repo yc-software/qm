@@ -363,3 +363,68 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
   assert.match(script, /mv -f /, "and only then moves it into place");
   assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
+
+test("native pause skips tar checkpoints and status does not wake a paused sandbox", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const portable = instrumentedSnapshotStore();
+  const client = {
+    ...fake.client,
+    nativePause: true,
+    async info() {
+      const current = fake.current(scopeName())!;
+      return { state: current.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
+    },
+  };
+  const first = make({ client, store, snapshots: portable.store });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "work.txt", "keep");
+  await first.teardown(handle);
+  assert.equal(portable.puts(), 0);
+  assert.equal((await store.get(scope))?.preservationState, "paused");
+  const status = await first.computerStatus!(scope);
+  assert.equal(status.lifecycleState, "paused");
+  assert.equal(fake.current(scopeName())?.state, "paused");
+  const restarted = make({ client, store, snapshots: portable.store });
+  const resumed = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(resumed, "work.txt"), "keep");
+});
+
+test("pause failures are durable and visible and leave the source available for retry", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  let fail = true;
+  const client = {
+    ...fake.client,
+    nativePause: true,
+    async create(options: Parameters<typeof fake.client.create>[0]) {
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async pause() {
+          if (fail) throw new Error("provider pause unavailable");
+          await session.pause();
+        },
+      };
+    },
+  };
+  const first = make({ client, store });
+  const handle = await first.provision(layers);
+  await assert.rejects(first.teardown(handle), /pause unavailable/);
+  assert.equal((await store.get(scope))?.preservationState, "pause_failed");
+  assert.equal(fake.current(scopeName())?.state, "running");
+  fail = false;
+  await first.teardown(handle);
+  assert.equal((await store.get(scope))?.preservationState, "paused");
+  assert.equal((await store.get(scope))?.preservationError, undefined);
+});
+
+test("a lost native E2B sandbox requires explicit recovery instead of a blank replacement", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const client = { ...fake.client, nativePause: true };
+  const first = make({ client, store });
+  const handle = await first.provision(layers);
+  await first.teardown(handle);
+  fake.expirePaused();
+  const restarted = make({ client, store });
+  await assert.rejects(restarted.provision(layers), /explicitly import a recovery snapshot/);
+  assert.equal(fake.createdCount(scopeName()), 1);
+});

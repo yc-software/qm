@@ -57,6 +57,9 @@ const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 
 export interface StoredE2bSandbox {
   sandboxId: string;
+  nativePause?: boolean;
+  preservationState?: "running" | "paused" | "pause_failed";
+  preservationError?: string;
   createdAtMs: number;
   lastSnapshotMs?: number;
   homeDirty?: boolean;
@@ -135,6 +138,11 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       if (stored) {
         try {
           const session = await client.connect(stored.sandboxId);
+          const info = await client.info?.(session.sandboxId);
+          await store.merge(scope, {
+            preservationState: "running",
+            ...(info ? { nativePause: info.onTimeout === "pause" } : {}),
+          });
           return adopt(session);
         } catch (err) {
           if (!(err instanceof E2bSandboxGoneError)) throw err;
@@ -145,13 +153,21 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       for (const summary of listed) {
         try {
           const session = await client.connect(summary.sandboxId);
-          await store.put(scope, { sandboxId: session.sandboxId, createdAtMs: Date.now() });
+          const info = await client.info?.(session.sandboxId);
+          await store.put(scope, {
+            sandboxId: session.sandboxId,
+            createdAtMs: Date.now(),
+            nativePause: info?.onTimeout === "pause",
+          });
           return adopt(session);
         } catch (err) {
           if (!(err instanceof E2bSandboxGoneError)) throw err;
         }
       }
 
+      if (stored?.nativePause) {
+        throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
+      }
       try {
         onStatus?.("Creating the sandbox…");
       } catch (error) {
@@ -159,7 +175,12 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       }
       const session = await client.create({ metadata: { name }, autoPause: true });
       sessionByName.set(name, session);
-      await store.put(scope, { sandboxId: session.sandboxId, createdAtMs: Date.now() });
+      await store.put(scope, {
+        sandboxId: session.sandboxId,
+        createdAtMs: Date.now(),
+        nativePause: false,
+        preservationState: "running",
+      });
       let hydrated: boolean;
       try {
         hydrated = await hydrateHome(scope, session);
@@ -171,6 +192,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           cause: e,
         });
       }
+      await store.merge(scope, { nativePause: client.nativePause });
       return { session, coldStart: !hydrated };
     });
   }
@@ -225,11 +247,11 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   const profile: AgentComputerProfile = {
     backend: "e2b",
-    writablePersistence: "snapshot_to_workspace",
+    writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     egressEnforcement: "none",
     spec: {
-      os: "Ubuntu — E2B Firecracker sandbox (pauses when idle; home is snapshotted and restored)",
+      os: "Ubuntu — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
@@ -424,7 +446,27 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
       if (!stored) return { machine: "no sandbox provisioned yet", provisioned: false, guestResponsive: false };
       const machine = `e2b sandbox ${stored.sandboxId}`;
+      let expiresAtMs: number | undefined;
+      const recovery = {
+        strategy: stored.nativePause ? ("provider_pause" as const) : ("workspace_snapshot" as const),
+        state: stored.preservationState,
+        ...(stored.preservationError ? { error: stored.preservationError } : {}),
+        ...(stored.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
+      };
       try {
+        if (client.info) {
+          const info = await client.info(stored.sandboxId);
+          expiresAtMs = info.state === "running" ? info.expiresAtMs : undefined;
+          if (info.state === "paused")
+            return {
+              machine,
+              listed: info.state,
+              lifecycleState: "paused",
+              provisioned: true,
+              guestResponsive: false,
+              recovery: { ...recovery, state: info.state, checkpointExpiresAtMs: null },
+            };
+        }
         scopeByName.set(name, scopeId);
         let session = sessionByName.get(name);
         if (!session) {
@@ -432,9 +474,16 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           sessionByName.set(name, session);
         }
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
-        return { machine, provisioned: true, guestResponsive: r.exitCode === 0 && /responsive/.test(r.stdout) };
+        return {
+          machine,
+          expiresAtMs,
+          recovery,
+          provisioned: true,
+          guestResponsive: r.exitCode === 0 && /responsive/.test(r.stdout),
+        };
       } catch (e) {
         return {
+          recovery,
           machine: `${machine} (${errMessage(e).slice(0, 120)})`,
           provisioned: !(e instanceof E2bSandboxGoneError),
           guestResponsive: false,
@@ -480,15 +529,22 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
     const stored = await store.get(scope);
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-    if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
+    if (!stored?.nativePause && snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
       try {
         await snapshotHome(scope, session);
       } catch (e) {
         reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
       }
     }
-    sessionByName.delete(handle.id);
-    await session.pause().catch(swallowAs("e2b-sandbox: pause on teardown", undefined));
+    try {
+      await session.pause();
+      await store.merge(scope, { preservationState: "paused", preservationError: undefined, homeDirty: false });
+      sessionByName.delete(handle.id);
+    } catch (error) {
+      await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
+      reportError("sandbox_preservation", "pause_failed", errMessage(error), scope);
+      throw error;
+    }
   }
 
   return sandbox;

@@ -366,6 +366,8 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
 }
 
 interface ModalSandboxEnv {
+  nativeSnapshotIntervalSec?: number;
+  snapshotRetentionSec?: number;
   tokenId?: string;
   tokenSecret?: string;
   appName?: string;
@@ -387,6 +389,12 @@ interface ModalSandboxEnv {
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
   const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
   return {
+    ...(num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") !== undefined
+      ? { nativeSnapshotIntervalSec: num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") }
+      : {}),
+    ...(num("MODAL_SNAPSHOT_RETENTION_SEC") !== undefined
+      ? { snapshotRetentionSec: num("MODAL_SNAPSHOT_RETENTION_SEC") }
+      : {}),
     ...(env.MODAL_TOKEN_ID ? { tokenId: env.MODAL_TOKEN_ID } : {}),
     ...(env.MODAL_TOKEN_SECRET ? { tokenSecret: env.MODAL_TOKEN_SECRET } : {}),
     ...(env.MODAL_APP_NAME ? { appName: env.MODAL_APP_NAME } : {}),
@@ -993,12 +1001,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — home snapshots are held in memory only, so a core restart plus an expired pause LOSES scope files; set E2B_SNAPSHOT_S3_BUCKET for durable snapshots.",
+      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but portable recovery snapshots are memory-only; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
     );
   }
   if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — home snapshots are held in memory only, and modal has no pause: a core restart, an idle reap, or the 24h lifetime wall LOSES scope files; set MODAL_SNAPSHOT_S3_BUCKET for durable snapshots.",
+      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — native home checkpoints have limited retention; portable recovery snapshots are memory-only. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and use a durable ARTIFACT_STORE for checkpoint references.",
     );
   }
   if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {

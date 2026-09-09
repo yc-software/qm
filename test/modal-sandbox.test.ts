@@ -542,3 +542,148 @@ test("teardown of a box the turn never used skips the snapshot only while the st
   assert.equal(counting.puts(), 2, "the next unused turn catches up the missed snapshot");
   assert.equal((await store.get(scope))?.homeDirty, false);
 });
+
+test("native checkpoints restore across rotation and core restarts without transferring a tar", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const portable = instrumentedSnapshotStore();
+  const first = make({ store, snapshots: portable.store });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "uncommitted.txt", "keep me");
+  await first.teardown(handle);
+  const checkpoint = (await store.get(scope))?.nativeSnapshotId;
+  assert.ok(checkpoint);
+  assert.equal(portable.puts(), 0);
+  await store.merge(scope, { createdAtMs: 0 });
+  const restarted = make({ store, snapshots: portable.store });
+  const next = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(next, "uncommitted.txt"), "keep me");
+  assert.equal(portable.puts(), 0);
+  assert.ok(!fake.execScripts().some((script) => script.includes("tar --null")));
+  const status = await restarted.computerStatus!(scope);
+  assert.equal(status.recovery?.strategy, "provider_snapshot");
+  assert.ok(status.recovery?.checkpointExpiresAtMs);
+});
+
+test("native checkpoint references survive deep-idle reaping", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const first = make({ store });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "work.txt", "durable checkpoint");
+  await store.merge(scope, { lastActivityMs: 1 });
+  assert.equal((await first.reapDeepIdle!(1)).reaped, 1);
+  assert.ok((await store.get(scope))?.nativeSnapshotId);
+  const restarted = make({ store });
+  const restored = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(restored, "work.txt"), "durable checkpoint");
+});
+
+test("expired native checkpoints block replacement without falling back to stale portable data", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const first = make({ store });
+  const handle = await first.provision(layers);
+  await first.teardown(handle);
+  fake.terminate(scopeName());
+  await store.merge(scope, { nativeSnapshotExpiresAtMs: 1 });
+  const restarted = make({ store });
+  await assert.rejects(restarted.provision(layers), /checkpoint has expired/);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  assert.match((await store.get(scope))?.recoveryError ?? "", /expired/);
+});
+
+test("native checkpoint failure preserves the previous reference and keeps the source running", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  let fail = false;
+  const wrapped: ModalClient = {
+    ...fake.client,
+    async create(options) {
+      const session = await fake.client.create(options);
+      return {
+        ...session,
+        async snapshotHome() {
+          if (fail) throw new Error("provider checkpoint unavailable");
+          return session.snapshotHome!();
+        },
+      };
+    },
+  };
+  const first = make({ store, client: wrapped, rotationHoldMs: 0 });
+  const handle = await first.provision(layers);
+  await first.teardown(handle);
+  const checkpoint = (await store.get(scope))?.nativeSnapshotId;
+  fail = true;
+  await store.merge(scope, { createdAtMs: 0 });
+  await first.provision(layers);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  assert.equal((await store.get(scope))?.nativeSnapshotId, checkpoint);
+  assert.match((await store.get(scope))?.recoveryError ?? "", /unavailable/);
+});
+
+test("native scheduling ignores disabled legacy tar intervals and refreshes active homes in maintenance", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const first = make({ store, client: { ...fake.client, nativeSnapshots: true }, snapshotIntervalMs: 1e15 });
+  const handle = await first.provision(layers);
+  await first.teardown(handle);
+  const initial = (await store.get(scope))?.nativeSnapshotId;
+  assert.ok(initial);
+  await store.merge(scope, { lastSnapshotMs: 1 });
+  await first.writeFile(handle, "background.txt", "new background output");
+  await first.reapDeepIdle!(3600_000);
+  assert.notEqual((await store.get(scope))?.nativeSnapshotId, initial);
+  fake.terminate(scopeName());
+  const restarted = make({ store });
+  const recovered = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(recovered, "background.txt"), "new background output");
+});
+
+test("a late checkpoint from another core cannot replace a newer committed checkpoint", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  let release!: () => void;
+  let started!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let calls = 0;
+  const wrap = (session: Awaited<ReturnType<ModalClient["create"]>>) => ({
+    ...session,
+    async snapshotHome() {
+      const snapshot = await session.snapshotHome!();
+      if (++calls === 1) {
+        started();
+        await wait;
+      }
+      return snapshot;
+    },
+  });
+  const client: ModalClient = {
+    ...fake.client,
+    create: async (options) => wrap(await fake.client.create(options)),
+    fromId: async (id) => wrap(await fake.client.fromId(id)),
+  };
+  const first = make({ store, client });
+  const second = make({ store, client });
+  const one = await first.provision(layers);
+  const two = await second.provision(layers);
+  const older = first.teardown(one);
+  await entered;
+  await second.teardown(two);
+  const newest = (await store.get(scope))?.nativeSnapshotId;
+  release();
+  await older;
+  assert.equal((await store.get(scope))?.nativeSnapshotId, newest);
+  assert.equal((await store.get(scope))?.snapshotGeneration, 2);
+});

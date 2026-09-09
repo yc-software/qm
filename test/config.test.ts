@@ -657,3 +657,14 @@ test("retired brain environment does not configure a runtime integration and war
   assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
   assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
 });
+
+test("Modal native retention and interval configuration are independent of legacy portable checkpoint throttling", () => {
+  const config = loadConfig({
+    MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
+    MODAL_SNAPSHOT_RETENTION_SEC: "86400",
+    MODAL_SNAPSHOT_INTERVAL_SEC: "315360000",
+  });
+  assert.equal(config.modalSandbox.nativeSnapshotIntervalSec, 60);
+  assert.equal(config.modalSandbox.snapshotRetentionSec, 86400);
+  assert.equal(config.modalSandbox.snapshotIntervalSec, 315360000);
+});
