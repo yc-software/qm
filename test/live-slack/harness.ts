@@ -82,6 +82,7 @@ export interface WaitOpts {
   timeoutMs?: number;
   match?: RegExp;
   afterTs?: string;
+  includeChannel?: boolean;
   onFrame?: (text: string) => void;
   record?: (msgTs: string, text: string) => void;
 }
@@ -253,7 +254,18 @@ export class ChannelHandle {
 
   async waitForBotReply(rootTs: string, opts: WaitOpts = {}): Promise<SlackMessage> {
     const msg = await waitForFinalBotMessage(
-      () => this.env.qa.replies(this.id, rootTs),
+      async () => {
+        const replies = await this.env.qa.replies(this.id, rootTs);
+        if (!opts.includeChannel) return replies;
+        const channel = await this.env.qa.history(this.id, opts.afterTs ?? rootTs);
+        return [
+          ...new Map(
+            [...replies, ...channel.filter((m) => !m.thread_ts || m.thread_ts === m.ts || m.thread_ts === rootTs)].map(
+              (m) => [m.ts, m],
+            ),
+          ).values(),
+        ];
+      },
       this.env.botUserId,
       opts.afterTs ?? rootTs,
       {

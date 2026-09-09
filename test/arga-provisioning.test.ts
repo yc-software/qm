@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { provisionSlackTwin } from "./live-slack/arga.ts";
+import { provisionSlackTwin, teardownTwin } from "./live-slack/arga.ts";
 
 test("failed Arga provisions are torn down before one fresh retry", async (t) => {
   const requests: Array<{ method: string; path: string }> = [];
@@ -70,4 +70,38 @@ test("a retry is not started when cleanup cannot be confirmed", async (t) => {
 
   await assert.rejects(provisionSlackTwin("key", 60), /cleanup could not be confirmed/);
   assert.equal(provisions, 1);
+});
+
+test("teardown confirms success after a transient status-read server error", async (t) => {
+  const methods: string[] = [];
+  t.mock.method(globalThis, "fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    methods.push(method);
+    if (method === "POST") return Response.json({ status: "tearing_down" });
+    if (methods.length === 2) return Response.json({}, { status: 500 });
+    return Response.json({ status: "torn_down" });
+  });
+  await teardownTwin("key", "run-1");
+  assert.deepEqual(methods, ["POST", "GET", "GET"]);
+});
+
+test("teardown still fails when status cannot be confirmed after bounded retries", async (t) => {
+  let reads = 0;
+  t.mock.method(globalThis, "fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "POST") return Response.json({ status: "tearing_down" });
+    reads++;
+    return Response.json({}, { status: 500 });
+  });
+  await assert.rejects(teardownTwin("key", "run-1"), /500/);
+  assert.equal(reads, 3);
+});
+
+test("provision requests are not replayed after an ambiguous server error", async (t) => {
+  let requests = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    requests++;
+    return Response.json({}, { status: 500 });
+  });
+  await assert.rejects(provisionSlackTwin("key", 60), /500/);
+  assert.equal(requests, 1);
 });

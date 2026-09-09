@@ -23,19 +23,25 @@ export interface SeededUser {
 }
 
 async function argaFetch(apiKey: string, path: string, init: RequestInit = {}): Promise<any> {
-  const res = await fetch(`${ARGA_API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-      ...init.headers,
-    },
-    signal: AbortSignal.timeout(30_000),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok)
+  const signal = AbortSignal.timeout(30_000);
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${ARGA_API_BASE}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+      signal,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) return body;
+    if ((init.method ?? "GET") === "GET" && res.status >= 500 && attempt < 2) {
+      await sleep(250 * (attempt + 1));
+      continue;
+    }
     throw new Error(`arga ${init.method ?? "GET"} ${path} → ${res.status}: ${JSON.stringify(body).slice(0, 400)}`);
-  return body;
+  }
 }
 
 export async function provisionSlackTwin(apiKey: string, ttlMinutes: number): Promise<TwinSession> {
