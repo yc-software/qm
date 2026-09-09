@@ -279,7 +279,7 @@ test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
 });
 
 test("oneShot routes configured models through the model gateway without mutating transport metadata", async (t) => {
-  const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string }> = [];
+  const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
   const server = createServer((request, response) => {
     let body = "";
     request.setEncoding("utf8");
@@ -292,6 +292,7 @@ test("oneShot routes configured models through the model gateway without mutatin
         ...(request.headers["api-key"] ? { gatewayKey: String(request.headers["api-key"]) } : {}),
         ...(request.headers["x-api-key"] ? { providerKey: String(request.headers["x-api-key"]) } : {}),
         ...(requestModel ? { model: requestModel } : {}),
+        ...(request.headers["x-model-marker"] ? { marker: String(request.headers["x-model-marker"]) } : {}),
       });
       response.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of [
@@ -340,7 +341,7 @@ test("oneShot routes configured models through the model gateway without mutatin
     apiKeyHeader: "api-key",
     models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
   };
-  const model = getRequiredModel("claude-haiku-4-5");
+  const model = { ...getRequiredModel("claude-haiku-4-5"), headers: { "x-model-marker": "preserved" } };
   assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
   const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
   await assert.rejects(
@@ -353,13 +354,16 @@ test("oneShot routes configured models through the model gateway without mutatin
     "gateway",
   );
   assert.deepEqual(requests, [
-    { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku" },
+    { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku", marker: "preserved" },
     { providerKey: "direct-provider-key", model: "claude-opus-4-8" },
   ]);
   const routed = modelGatewayRequest(modelGateway, model);
   assert.equal(routed?.model.id, "claude-haiku-4-5");
   assert.equal(routed?.target, "router/haiku");
-  assert.deepEqual(transportFromModel(model), { modelId: "claude-haiku-4-5" });
+  assert.deepEqual(transportFromModel(model), {
+    modelId: "claude-haiku-4-5",
+    headers: { "x-model-marker": "preserved" },
+  });
 });
 
 test("Pi assistant error messages fail the turn instead of becoming a blank reply", () => {

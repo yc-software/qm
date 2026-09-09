@@ -1142,7 +1142,11 @@ async function buildModelRuntime(
     runtime.getAuth = (async (model, overrides) => {
       if (typeof model === "string") return getAuth(model, overrides);
       const request = modelGatewayRequest(modelGateway, model);
-      if (request) return { auth: { apiKey: request.apiKey, headers: request.headers }, source: "model gateway" };
+      if (request)
+        return {
+          auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
+          source: "model gateway",
+        };
       return getAuth(model, overrides);
     }) as typeof runtime.getAuth;
   }
