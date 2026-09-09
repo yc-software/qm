@@ -606,6 +606,33 @@ test("deciding an output ships or returns through the fire service", async () =>
   assert.deepEqual(decisions, ["ship:o1:josh", "return:o1:josh:not yet"]);
 });
 
+test("a failing ship or return reports the cause instead of a bare server error", async () => {
+  const deps = services();
+  deps.fire = {
+    fire: async () => ({ status: "ok" as const }),
+    shipOutput: async () => {
+      throw new Error("forge_undraft_failed: 403");
+    },
+    returnOutput: async () => {
+      throw new Error("linear_state_missing: Auto-Triage");
+    },
+    sweepStale: async () => {},
+    followUp: async () => null,
+    itemAction: async () => ({ ok: true }),
+  };
+  const created = await call(deps, "POST", "/v1/loops", CREATE);
+  const id = (created.body as { loop: { id: string } }).loop.id;
+  const shipFailed = await call(deps, "POST", `/v1/loops/${id}/outputs/o1/decide`, { decision: "ship" });
+  assert.equal(shipFailed.status, 502);
+  assert.deepEqual(shipFailed.body, { error: "ship_failed", message: "forge_undraft_failed: 403" });
+  const returnFailed = await call(deps, "POST", `/v1/loops/${id}/outputs/o1/decide`, {
+    decision: "return",
+    note: "not yet",
+  });
+  assert.equal(returnFailed.status, 502);
+  assert.deepEqual(returnFailed.body, { error: "return_failed", message: "linear_state_missing: Auto-Triage" });
+});
+
 test("deciding an output reports an active item decision lease", async () => {
   const deps = services();
   deps.fire = {
