@@ -1890,13 +1890,7 @@ a.chat-row-open {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-.message-files {
   margin-top: 9px;
-}
-.attachment-strip {
-  flex-basis: 100%;
-  min-width: 0;
 }
 .queued-strip {
   position: relative;
@@ -1911,20 +1905,19 @@ a.chat-row-open {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  padding: 4px 6px 14px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--field);
-  color: var(--ink-2);
-  font-size: 12.5px;
-  line-height: 1.3;
+  min-height: 38px;
+  padding: 6px 6px 14px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 14px 14px 10px 10px;
+  background: color-mix(in srgb, var(--background) 88%, var(--secondary));
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.2;
 }
 .queued-tag {
   flex: none;
-  color: var(--ink-3);
-  font-size: 11.5px;
-  font-weight: 500;
+  font-size: 10px;
+  opacity: 0.75;
 }
 .queued-text {
   flex: 1;
@@ -1932,28 +1925,24 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--ink);
+  color: var(--foreground);
 }
 .queued-steer {
   flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--line-strong);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--ink-2);
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 500;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 11px;
   cursor: pointer;
-  transition: background-color 150ms var(--ease-out-strong);
+  transition: background 0.12s ease;
 }
 .queued-steer:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--ink);
+  background: var(--secondary);
 }
 .queued-steer:disabled {
   opacity: 0.45;
@@ -1968,17 +1957,14 @@ a.chat-row-open {
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--inset);
-  color: var(--ink-2);
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
   font-size: 12px;
-  font-weight: 500;
   line-height: 1.2;
-  text-decoration: none;
-  transition: background-color 150ms var(--ease-out-strong);
 }
 .file-chip span {
   min-width: 0;
@@ -1987,8 +1973,7 @@ a.chat-row-open {
   white-space: nowrap;
 }
 .file-chip small {
-  color: var(--ink-3);
-  font-size: 0.92em;
+  color: var(--muted-foreground);
 }
 .file-image {
   display: inline-block;
@@ -2062,7 +2047,6 @@ a.chat-row-open {
   background: transparent;
   color: inherit;
   font: inherit;
-  text-align: left;
   cursor: pointer;
 }
 .chip-open:hover span {
@@ -2096,19 +2080,18 @@ a.chat-row-open {
   width: 18px;
   height: 18px;
   display: inline-flex;
-  flex: none;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: 5px;
   background: transparent;
-  color: var(--ink-3);
+  color: var(--muted-foreground);
   cursor: pointer;
 }
 .chip-x:hover {
-  background: var(--hover-2);
-  color: var(--ink);
+  background: var(--secondary);
+  color: var(--foreground);
 }
 .thinking-placeholder {
   display: flex;
@@ -2969,46 +2952,41 @@ summary.work-head:hover {
 }
 
 .composer-wrap {
-  --composer-pad-block: 6px;
-  --composer-pad-inline: 6px;
+  --composer-pad-block: 12px;
+  --composer-pad-inline: 12px;
   --composer-pad-end: var(--composer-pad-inline);
   position: relative;
   z-index: 1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 6px 4px;
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  border-radius: 24px;
   background: var(--background);
   box-shadow: var(--chat-surface-shadow);
-  transition: border-color 150ms var(--ease-out-strong);
 }
 .composer-input {
-  flex: 1 1 160px;
-  order: 1;
-  min-width: 0;
-  min-height: 28px;
+  width: 100%;
+  min-height: 48px;
   max-height: 180px;
+  /* No scrollbar below the height cap (resizeComposer flips this to auto only once the
+     cap binds) — an autosized input that fits its content must never paint one, even
+     during the height snap after a send empties it. */
   overflow-x: hidden;
   overflow-y: hidden;
   resize: none;
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--ink);
+  color: var(--foreground);
   font: inherit;
-  font-size: 13.5px;
-  line-height: 20px;
-  padding: 4px;
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 3px 4px 8px;
   box-sizing: border-box;
-  overflow-wrap: anywhere;
 }
 .composer-input::placeholder {
-  color: var(--ink-3);
+  color: var(--muted-foreground);
 }
 .composer-approval-panel {
   display: grid;
@@ -3036,29 +3014,25 @@ summary.work-head:hover {
   justify-content: flex-end;
 }
 .composer-toolbar {
-  display: contents;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 .composer-left,
 .composer-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 7px;
   min-width: 0;
-  min-height: 28px;
-}
-.composer-right {
-  order: 2;
-  margin-left: auto;
 }
 .runtime-upgrade,
 .connector-widget {
   display: flex;
   flex-wrap: wrap;
-  flex-basis: 100%;
   align-items: center;
   justify-content: flex-end;
   gap: 8px 6px;
-  min-width: 0;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -3082,6 +3056,7 @@ summary.work-head:hover {
   min-width: 0;
 }
 .runtime-upgrade button,
+.runtime-default-btn,
 .connector-widget-btn {
   display: inline-flex;
   align-items: center;
@@ -3106,29 +3081,13 @@ summary.work-head:hover {
     background-color 150ms ease-out,
     opacity 150ms ease-out;
 }
-.runtime-default-btn {
-  height: 28px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0 6px;
-  background: transparent;
-  color: var(--ink-2);
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 150ms var(--ease-out-strong);
-}
-.runtime-default-btn:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
 .runtime-upgrade button:hover,
+.runtime-default-btn:hover,
 .connector-widget-btn:hover {
   background: var(--hover-2);
 }
 .runtime-upgrade button:active,
+.runtime-default-btn:active,
 .connector-widget-btn:active {
   transform: scale(0.96);
 }
@@ -3164,27 +3123,25 @@ summary.work-head:hover {
   min-width: 0;
 }
 .menu-button {
-  height: 28px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   max-width: min(240px, 44vw);
   min-width: 0;
-  padding: 0 6px;
+  padding: 0 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--ink-2);
+  font-size: 13px;
+  color: var(--muted-foreground);
   background: transparent;
   cursor: pointer;
-  transition: background-color 150ms var(--ease-out-strong);
 }
 .menu-button:hover,
 .menu-button[aria-expanded="true"] {
-  background: var(--hover);
-  color: var(--ink);
+  background: var(--secondary);
+  color: var(--foreground);
 }
 .menu-button:disabled {
   opacity: 0.55;
@@ -3198,44 +3155,41 @@ summary.work-head:hover {
 }
 .model-control .menu-button {
   max-width: min(280px, 46vw);
+  color: var(--foreground);
 }
 .harness-control .menu-button {
   max-width: min(150px, 28vw);
+  color: var(--foreground);
 }
 .fast-toggle {
   position: relative;
-  height: 28px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   padding: 0 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--ink-2);
+  color: var(--muted-foreground);
   cursor: pointer;
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13px;
   white-space: nowrap;
-  transition:
-    color 150ms var(--ease-out-strong),
-    background-color 150ms var(--ease-out-strong);
+  transition: color 160ms ease;
 }
 .fast-toggle:hover,
 .fast-toggle:focus-visible {
-  background: var(--hover);
-  color: var(--ink);
+  color: var(--foreground);
 }
 .fast-toggle.active {
-  color: var(--blue-ink);
+  color: var(--cta);
 }
 .fast-toggle.unavailable,
 .fast-toggle.unavailable:hover,
 .fast-toggle.unavailable:focus-visible {
   opacity: 0.4;
-  color: var(--ink-2);
+  color: var(--muted-foreground);
   cursor: not-allowed;
 }
 .fast-toggle .icon,
@@ -3244,7 +3198,7 @@ summary.work-head:hover {
   z-index: 1;
 }
 .fast-toggle.active .icon {
-  color: var(--blue-ink);
+  color: var(--cta);
 }
 .fast-toggle .fast-label {
   display: inline-flex;
@@ -3270,9 +3224,7 @@ summary.work-head:hover {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fast-toggle.charging .icon,
-  .menu-popover,
-  .slash-popover {
+  .fast-toggle.charging .icon {
     animation: none;
   }
 }
@@ -3285,11 +3237,10 @@ summary.work-head:hover {
   max-width: calc(100vw - 36px);
   max-height: min(320px, 52vh);
   overflow-y: auto;
-  padding: 4px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  animation: pop-in 150ms var(--ease-out-strong);
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
 }
 .menu-control[data-drop="down"] .menu-popover {
   top: calc(100% + 6px);
@@ -3304,25 +3255,23 @@ summary.work-head:hover {
   left: auto;
   width: 230px;
 }
-.menu-title,
-.menu-group-label {
-  padding: 6px 8px 4px;
-  color: var(--ink-3);
-  font-size: 11.5px;
-  font-weight: 500;
+.menu-title {
+  padding: 7px 8px 6px;
+  font-size: 14px;
+  color: var(--foreground);
 }
 .menu-option {
   width: 100%;
-  min-height: 30px;
+  min-height: 34px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  padding: 6px 8px;
+  padding: 7px 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   background: transparent;
-  color: var(--ink);
+  color: var(--foreground);
   cursor: pointer;
   font: inherit;
   font-size: 13px;
@@ -3330,7 +3279,7 @@ summary.work-head:hover {
 }
 .menu-option:hover,
 .menu-option.active {
-  background: var(--hover);
+  background: var(--secondary);
 }
 .menu-option-copy {
   min-width: 0;
@@ -3350,30 +3299,29 @@ summary.work-head:hover {
   bottom: calc(100% + 8px);
   z-index: 30;
   width: min(460px, calc(100vw - 36px));
-  padding: 4px;
+  padding: 6px;
   max-height: min(320px, 52vh);
   overflow-y: auto;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  animation: pop-in 150ms var(--ease-out-strong);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
 }
 .slash-empty {
-  padding: 6px 8px;
-  color: var(--ink-3);
-  font-size: 12.5px;
+  padding: 7px 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
 }
 .slash-option {
   width: 100%;
-  min-height: 30px;
+  min-height: 34px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 10px;
+  padding: 7px 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   background: transparent;
-  color: var(--ink);
+  color: var(--foreground);
   cursor: pointer;
   font: inherit;
   font-size: 13px;
@@ -3381,12 +3329,12 @@ summary.work-head:hover {
 }
 .slash-option:hover,
 .slash-option.active {
-  background: var(--hover);
+  background: var(--secondary);
 }
 .slash-icon {
   display: inline-flex;
   flex: 0 0 auto;
-  color: var(--ink-3);
+  color: var(--muted-foreground);
 }
 .slash-name {
   flex: 0 0 auto;
@@ -3394,12 +3342,12 @@ summary.work-head:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--ink);
+  color: var(--muted-foreground);
   font-weight: 500;
 }
 .slash-name b {
-  color: var(--blue-ink);
-  font-weight: 600;
+  color: var(--foreground);
+  font-weight: 700;
 }
 .slash-desc {
   flex: 1 1 auto;
@@ -3407,59 +3355,65 @@ summary.work-head:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--ink-3);
-  font-size: 12px;
+  color: var(--muted-foreground);
 }
 .slash-scope {
   flex: 0 0 auto;
-  color: var(--ink-3);
-  font-size: 11.5px;
+  color: var(--muted-foreground);
+  font-size: 13px;
 }
-.send-btn,
-.stop-btn {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  padding: 0;
+.send-btn {
+  width: 34px;
+  height: 34px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--ink);
-  color: var(--page);
+  background: var(--cta);
+  color: var(--cta-foreground);
   cursor: pointer;
-  transition:
-    background-color 200ms var(--ease-out-strong),
-    color 200ms var(--ease-out-strong),
-    transform 200ms var(--ease-out-strong);
+  transition: background 0.12s ease;
 }
-.send-btn:hover:not(:disabled),
-.stop-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ink) 85%, var(--page));
+.send-btn:hover:not(:disabled) {
+  background: var(--cta-hover);
 }
-.send-btn:active:not(:disabled),
-.stop-btn:active:not(:disabled) {
-  transform: scale(0.94);
-}
-.send-btn:focus-visible,
-.stop-btn:focus-visible {
+.send-btn:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--foreground) 35%, transparent);
   outline-offset: 3px;
 }
 .send-btn:disabled {
-  background: var(--field);
-  color: var(--ink-3);
+  opacity: 0.35;
   cursor: not-allowed;
+}
+
+.stop-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    opacity 0.12s ease;
+}
+.stop-btn:hover:not(:disabled) {
+  background: var(--secondary);
+}
+.stop-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--foreground) 35%, transparent);
+  outline-offset: 3px;
 }
 .composer-note,
 .composer-error {
-  order: 3;
-  flex-basis: 100%;
-  min-width: 0;
-  color: var(--ink-3);
   font-size: 12px;
-  line-height: 1.4;
+  margin-top: 8px;
+  color: var(--muted-foreground);
 }
 .composer-error {
   color: var(--destructive, #b42318);
@@ -4757,8 +4711,21 @@ summary.work-head:hover {
   .message-bubble {
     max-width: 88%;
   }
+  .composer-toolbar {
+    align-items: flex-end;
+  }
+  .composer-left,
+  .composer-right {
+    gap: 4px;
+  }
   .menu-button {
     max-width: min(44vw, 190px);
+  }
+  .model-control .menu-button {
+    max-width: min(48vw, 220px);
+  }
+  .harness-control .menu-button {
+    max-width: min(30vw, 150px);
   }
   .composer-toolbar .icon-btn,
   .composer-toolbar .menu-button,
@@ -4813,9 +4780,30 @@ summary.work-head:hover {
     width: 100%;
     min-height: 44px;
   }
+  .composer-toolbar {
+    flex-wrap: wrap;
+  }
+  .composer-left,
+  .composer-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .composer-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
   .runtime-upgrade button,
   .connector-widget-btn {
     min-height: 44px;
+  }
+  .harness-control,
+  .model-control {
+    flex: 1;
+  }
+  .harness-control .menu-button,
+  .model-control .menu-button {
+    width: 100%;
+    max-width: none;
   }
   .menu-button {
     max-width: 150px;
@@ -7383,6 +7371,9 @@ h3.ambient-field-label {
   .custom-chat-shell {
     --content-w: 100%;
   }
+  /* Mid-width surfaces: the floating composer/dock hug the full-width column with 16px
+     side margins, but must still clear the device safe areas — the 10px variant below
+     only kicks in at <=470px, so the insets need a floor here too. */
   .composer-wrap {
     width: auto;
     margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
@@ -7403,10 +7394,13 @@ h3.ambient-field-label {
   .custom-chat-shell {
     --chat-pad: 10px;
   }
+  /* The floating composer/dock margins pair with the full-bleed 14px chat pad and must
+     follow the surface's width too, or a window resize misaligns them with the column. */
   .composer-wrap {
     margin-right: calc(10px + env(safe-area-inset-right));
     margin-bottom: calc(10px + env(safe-area-inset-bottom));
     margin-left: calc(10px + env(safe-area-inset-left));
+    border-radius: 18px;
   }
   .queued-strip {
     margin-right: calc(22px + env(safe-area-inset-right));
@@ -7430,12 +7424,24 @@ h3.ambient-field-label {
 }
 
 [data-density] .composer-wrap {
+  --composer-pad-block: 6px;
+  --composer-pad-inline: 8px;
   display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 2px;
+  /* Chrome only: the column width and side gutters stay with the rules above, which key off
+     the surface's own width — a pane that fills a wide window centres the composer on the
+     transcript column instead of stretching across it, and a narrow one still runs full-bleed. */
   margin-bottom: 10px;
+  padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
+  border-radius: 16px;
 }
 [data-density] .composer-input {
+  flex: 1 1 120px;
   min-height: 0;
   max-height: 120px;
+  padding: 6px 6px 7px;
 }
 [data-density] .composer-toolbar {
   display: contents;
@@ -7444,13 +7450,22 @@ h3.ambient-field-label {
 [data-density] .composer-right {
   width: auto;
 }
-[data-density] .composer-toolbar .stop-btn,
 [data-density] .composer-toolbar .icon-btn,
 [data-density] .composer-toolbar .menu-button,
 [data-density] .composer-toolbar .send-btn {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+[data-density] .runtime-upgrade,
+[data-density] .attachment-strip,
+[data-density] .queued-strip,
+[data-density] .composer-approval-panel,
+[data-density] .composer-note,
+[data-density] .composer-error {
+  flex-basis: 100%;
+
+  min-width: 0;
 }
 .pane-card {
   min-height: 0;
@@ -7516,7 +7531,7 @@ h3.ambient-field-label {
 }
 
 .settings-control .menu-button {
-  width: 28px;
+  width: 34px;
   justify-content: center;
 }
 .menu-control.settings-control[data-align="right"] .menu-popover {
@@ -7530,24 +7545,22 @@ h3.ambient-field-label {
 }
 .settings-chip {
   appearance: none;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-chip);
-  background: var(--field);
-  color: var(--ink-2);
-  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--muted-foreground);
   font-size: 12px;
-  font-weight: 500;
-  padding: 3px 8px;
+  font-weight: 600;
+  padding: 4px 9px;
   cursor: pointer;
 }
 .settings-chip:hover {
-  background: var(--hover);
-  color: var(--ink);
+  color: var(--foreground);
 }
 .settings-chip.active {
-  border-color: var(--blue);
-  color: var(--blue-ink);
-  background: var(--blue-tint);
+  border-color: var(--primary, #6366f1);
+  color: var(--primary, #6366f1);
+  background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--background));
 }
 
 /* Floating tooltip (ours — never the browser's native title bubble). */
@@ -9179,14 +9192,13 @@ h3.ambient-field-label {
   gap: 6px;
   min-width: 0;
   width: min(calc(var(--content-w) - 24px), calc(100% - 56px));
-  min-height: 28px;
-  padding: 3px 10px;
+  padding: 4px 10px;
   margin: 0 auto 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  color: var(--ink-2);
-  background: var(--field);
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted-foreground, inherit);
+  background: var(--card, transparent);
 }
 .goal-strip.paused {
   opacity: 0.7;
@@ -9195,12 +9207,12 @@ h3.ambient-field-label {
 .goal-strip-icon {
   display: inline-flex;
   flex: none;
-  color: var(--ink-3);
+  opacity: 0.8;
 }
 .goal-strip-title {
   flex: none;
-  font-weight: 500;
-  color: var(--ink);
+  font-weight: 600;
+  color: var(--foreground, inherit);
 }
 .goal-strip-objective {
   min-width: 0;
@@ -9210,7 +9222,7 @@ h3.ambient-field-label {
 }
 .goal-strip-meta {
   flex: none;
-  color: var(--ink-3);
+  opacity: 0.75;
 }
 
 .file-chip-group {
@@ -9228,17 +9240,16 @@ h3.ambient-field-label {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  padding: 0 7px;
-  border: 1px solid var(--line-strong);
-  border-start-end-radius: 999px;
-  border-end-end-radius: 999px;
-  background: var(--inset);
-  color: var(--ink-3);
-  transition: background-color 150ms var(--ease-out-strong);
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-start-end-radius: 8px;
+  border-end-end-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
 }
 .file-chip-download:hover {
-  color: var(--ink);
-  background: var(--hover);
+  color: var(--foreground);
+  background: var(--muted);
 }
 
 .inbox-resolved-sect {
@@ -9488,13 +9499,30 @@ h3.ambient-field-label {
   .composer-wrap {
     width: calc(100% - 16px);
     margin: 0 auto calc(8px + env(safe-area-inset-bottom));
+    --composer-pad-block: 8px;
+    --composer-pad-inline: 10px;
+    --composer-pad-end: 8px;
+    padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
+    border-radius: 22px;
   }
   .composer-input {
     font-size: 16px;
-    line-height: 22px;
-    min-height: 44px;
+    line-height: 1.4;
+    min-height: 40px;
     max-height: 32vh;
-    padding: 11px 6px;
+    padding: 8px 6px 6px;
+  }
+  .composer-wrap.compact .composer-toolbar {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+  .composer-wrap.compact .composer-left,
+  .composer-wrap.compact .composer-right {
+    width: auto;
+    flex-wrap: nowrap;
+  }
+  .composer-wrap.compact .composer-right {
+    margin-left: auto;
   }
   .composer-toolbar .stop-btn {
     width: 44px;
@@ -9509,6 +9537,7 @@ h3.ambient-field-label {
   .composer-toolbar .send-btn {
     width: 44px;
     height: 44px;
+    border-radius: 50%;
   }
   .live-work-line {
     min-height: 40px;
@@ -10426,37 +10455,44 @@ h3.ambient-field-label {
 
 .menu-search {
   position: sticky;
-  top: -4px;
+  top: -6px;
   z-index: 1;
   display: block;
-  padding: 2px 2px 6px;
-  background: var(--surface);
+  padding: 4px 2px 6px;
+  background: var(--background);
 }
 
 .menu-search input {
   width: 100%;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--field);
-  color: var(--ink);
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
   font: inherit;
   font-size: 13px;
   outline: none;
 }
 
+.menu-group-label {
+  padding: 9px 8px 3px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 650;
+}
+
 .menu-empty {
-  padding: 16px 8px;
-  color: var(--ink-3);
-  font-size: 12.5px;
+  padding: 18px 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
   text-align: center;
 }
 
 .menu-suffix {
   flex: none;
   white-space: nowrap;
-  color: var(--ink-3);
+  color: var(--muted-foreground);
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-search-row {

@@ -10,7 +10,7 @@ test("pane composer collapses to a single line — keyed off the pane, not a who
   assert.match(css, /\[data-density\] \.composer-wrap \{[^}]*display: flex;/);
   assert.match(css, /\[data-density\] \.composer-toolbar \{\s*display: contents;/);
   assert.match(css, /\[data-density\] \.composer-input \{[^}]*min-height: 0;/);
-  assert.match(composer, /Math\.min\(cap, content\)/, "the CSS min-height alone decides the resting height");
+  assert.match(composer, /Math\.max\(ctx\.pane \? 0 : 48, content\)/);
 });
 
 test("a pane's composer tracks the transcript column instead of the whole surface", () => {
@@ -23,7 +23,7 @@ test("a pane's composer tracks the transcript column instead of the whole surfac
 test("phone touch layout cannot inflate a pane's composer controls", () => {
   assert.match(
     css,
-    /\[data-density\] \.composer-toolbar \.icon-btn,\s*\[data-density\] \.composer-toolbar \.menu-button,\s*\[data-density\] \.composer-toolbar \.send-btn \{\s*width: 28px;\s*height: 28px;\s*min-height: 28px;/,
+    /\[data-density\] \.composer-toolbar \.icon-btn,\s*\[data-density\] \.composer-toolbar \.menu-button,\s*\[data-density\] \.composer-toolbar \.send-btn \{\s*width: 34px;\s*height: 34px;\s*min-height: 34px;/,
   );
   assert.match(css, /\[data-density\] \.composer-left,\s*\[data-density\] \.composer-right \{\s*width: auto;/);
 });

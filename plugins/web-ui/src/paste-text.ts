@@ -23,6 +23,14 @@ export function base64ToText(content: string): string {
   return new TextDecoder().decode(base64ToBytes(content));
 }
 
+export function pasteChipLabel(charCount: number): string {
+  const k = charCount / 1000;
+  let count = `${Math.round(k)}k`;
+  if (charCount < 1000) count = `${charCount}`;
+  else if (k < 9.95) count = `${k.toFixed(1)}k`;
+  return `Pasted text · ${count} chars`;
+}
+
 export function insertIntoDraft(draft: string, text: string, cursor: number | null): { draft: string; cursor: number } {
   const at = cursor === null || cursor < 0 || cursor > draft.length ? draft.length : cursor;
   const before = draft.slice(0, at);
