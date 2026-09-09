@@ -11,6 +11,7 @@ export interface BackendUpOptions {
   imageFrom?: string;
   imageRepoPrefix?: string;
   buildOnly?: boolean;
+  buildConcurrency?: number;
   candidate?: string;
   candidateOut?: string;
   inactive?: boolean;

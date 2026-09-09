@@ -2,7 +2,7 @@ import test from "node:test";
 import https from "node:https";
 import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +37,7 @@ import { computedSecrets } from "../src/secrets.ts";
 import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
 import { manifestRef } from "../src/manifest.ts";
+import { hostingProvider } from "../src/backends/registry.ts";
 
 process.env.QM_AWS_ROLLOUT_POLL_MS = "5";
 process.env.QM_AWS_LIVE_PROBE_POLL_MS = "5";
@@ -2677,6 +2678,170 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("AWS candidate builds honor their concurrency bound and join failures before publishing", async () => {
+  for (const mode of ["serial", "parallel", "failure"]) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-parallel-"));
+    const candidatePath = join(dir, "candidate.json");
+    const events = join(dir, "events");
+    writeFileSync(events, "");
+    const fake = statefulAws(dir, config);
+    const docker = join(dir, "docker");
+    writeFileSync(
+      docker,
+      `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "login") process.exit(0);
+const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
+const dir = ${JSON.stringify(dir)};
+const events = ${JSON.stringify(events)};
+const mode = ${JSON.stringify(mode)};
+const log = (event) => fs.appendFileSync(events, event + ":" + name + "\\n");
+log("start");
+fs.writeFileSync(path.join(dir, "started-" + name), "");
+(async () => {
+  if (mode !== "serial" && ["core", "web-ui"].includes(name)) {
+    const deadline = Date.now() + 10000;
+    while (!["core", "web-ui"].every((peer) => fs.existsSync(path.join(dir, "started-" + peer)))) {
+      if (Date.now() > deadline) process.exit(9);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  if (mode === "failure" && name === "core") { log("fail"); process.exit(7); }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  log("end");
+})();
+`,
+    );
+    chmodSync(docker, 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${dir}:${priorPath}`;
+    try {
+      const provider = hostingProvider("aws");
+      const context = {
+        config,
+        configDir: dir,
+        configPath: join(dir, "qm.config.json"),
+        sandboxDir: dir,
+        target: "aws" as const,
+      };
+      const options = provider.upOptions(
+        context,
+        {
+          "build-only": true,
+          "build-from": true,
+          ...(mode === "serial" ? {} : { "build-concurrency": "2" }),
+          "image-label": "parallel-candidate",
+          "candidate-out": candidatePath,
+        },
+        false,
+      );
+      const result = provider.createBackend(context).up(options);
+      if (mode === "failure") {
+        await assert.rejects(result, /docker exited with 7/);
+        assert.equal(existsSync(candidatePath), false);
+      } else {
+        await result;
+        const candidate = JSON.parse(readFileSync(candidatePath, "utf8"));
+        assert.deepEqual(Object.keys(candidate.images).sort(), Object.keys(config.aws!.services).sort());
+        assert.deepEqual(Object.keys(candidate.imageProvenance).sort(), Object.keys(config.aws!.services).sort());
+        assert.ok(Object.values(candidate.images).every((image) => /@sha256:[a-f0-9]{64}$/.test(String(image))));
+      }
+      const lines = readFileSync(events, "utf8").trim().split("\n");
+      let active = 0;
+      let peak = 0;
+      for (const line of lines) {
+        active += line.startsWith("start:") ? 1 : -1;
+        peak = Math.max(peak, active);
+      }
+      assert.equal(active, 0);
+      assert.equal(peak, mode === "serial" ? 1 : 2);
+      if (mode === "failure") {
+        assert.ok(lines.includes("end:web-ui"));
+        assert.equal(lines.filter((line) => line.startsWith("start:")).length, 2);
+      }
+      assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
+    } finally {
+      process.env.PATH = priorPath;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("cancelling candidate builds terminates and joins every Docker child without a manifest", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cancel-"));
+  const candidatePath = join(dir, "candidate.json");
+  const fake = statefulAws(dir, config);
+  const docker = join(dir, "docker");
+  writeFileSync(
+    docker,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "login") process.exit(0);
+const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
+const dir = ${JSON.stringify(dir)};
+if (name === "core") process.on("SIGTERM", () => {});
+fs.writeFileSync(path.join(dir, "pid-" + name), String(process.pid));
+setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 20000);
+`,
+  );
+  chmodSync(docker, 0o755);
+  const moduleUrl = new URL("../src/backends/aws.ts", import.meta.url).href;
+  const code = `const { awsUp } = await import(${JSON.stringify(moduleUrl)}); await awsUp(${JSON.stringify(config)}, ${JSON.stringify(dir)}, ${JSON.stringify({ buildOnly: true, buildFrom: true, buildConcurrency: 2, imageLabel: "cancelled-candidate", candidateOut: candidatePath })});`;
+  const parent = spawn(process.execPath, ["--input-type=module", "-e", code], {
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    stdio: "ignore",
+  });
+  const exited = new Promise<number | null>((resolve, reject) => {
+    parent.once("error", reject);
+    parent.once("exit", resolve);
+  });
+  try {
+    const deadline = Date.now() + 10000;
+    while (!["core", "web-ui"].every((name) => existsSync(join(dir, "pid-" + name)))) {
+      assert.ok(Date.now() < deadline, "both Docker children must start");
+      assert.equal(parent.exitCode, null);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    parent.kill("SIGTERM");
+    assert.notEqual(await exited, 0);
+    assert.equal(existsSync(candidatePath), false);
+    for (const name of ["core", "web-ui"]) {
+      const pid = Number(readFileSync(join(dir, "pid-" + name), "utf8"));
+      assert.throws(() => process.kill(pid, 0), /ESRCH/);
+      assert.equal(existsSync(join(dir, "completed-" + name)), false);
+    }
+    assert.equal(existsSync(join(dir, "pid-admin")), false);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
+  } finally {
+    parent.kill("SIGKILL");
+    for (const name of ["core", "web-ui"]) {
+      const path = join(dir, "pid-" + name);
+      if (existsSync(path)) {
+        try {
+          process.kill(Number(readFileSync(path, "utf8")), "SIGKILL");
+        } catch {}
+      }
+    }
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS rejects invalid or misplaced candidate build concurrency before mutation", async () => {
+  for (const value of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(awsUp(config, ".", { buildOnly: true, buildConcurrency: value }), /positive integer/);
+  }
+  await assert.rejects(awsUp(config, ".", { buildConcurrency: 2 }), /requires --build-only/);
+  const shared = structuredClone(config);
+  shared.aws!.services["web-ui"]!.ecrRepository = shared.aws!.services.core!.ecrRepository;
+  await assert.rejects(awsUp(shared, ".", { buildOnly: true, buildConcurrency: 2 }), /distinct ECR repositories/);
 });
 
 test("AWS candidate deploy fails closed on account, repository, or missing-workload drift", async () => {

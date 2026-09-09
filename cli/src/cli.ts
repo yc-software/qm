@@ -126,6 +126,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
        --candidate-out <file>               build immutable AWS images and write their manifest
      --candidate <file>                    snapshot, migrate, and deploy exact AWS candidate images
      --inactive                            deploy that candidate before this stack owns public DNS (AWS only)
+     --build-concurrency <n>                concurrent AWS candidate image builds (default: 1)
      --restart <workloads>                  replace selected AWS tasks even when their definition is unchanged
      --dry-run                             resolve the config + report the plan, change nothing
   plan                                     an alias for up --dry-run

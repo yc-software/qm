@@ -64,6 +64,37 @@ export function runInherit(cmd: string, args: string[], opts: { cwd?: string; en
   });
 }
 
+export function runInheritAsync(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) return reject(new CliError(`${cmd} cancelled`));
+    const child = spawn(cmd, args, { stdio: "inherit", ...procOpts(opts) });
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const cancel = () => {
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
+    };
+    const cleanup = () => {
+      clearTimeout(killTimer);
+      opts.signal?.removeEventListener("abort", cancel);
+    };
+    opts.signal?.addEventListener("abort", cancel, { once: true });
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      cleanup();
+      if (opts.signal?.aborted) reject(new CliError(`${cmd} cancelled`));
+      else if (code === 0) resolve();
+      else reject(new CliError(`${cmd} exited with ${signal ?? code}`));
+    });
+  });
+}
+
 export function spawnBackground(
   cmd: string,
   args: string[],

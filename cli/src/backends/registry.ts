@@ -249,6 +249,7 @@ const aws: HostingProvider = {
     "candidate-out",
     "inactive",
     "restart",
+    "build-concurrency",
   ],
   upOptions: (ctx, flags, dryRun) => {
     const only = workloadOptions(flags);
@@ -257,6 +258,7 @@ const aws: HostingProvider = {
     const imageLabel = stringFlag(flags, "image-label");
     const candidate = stringFlag(flags, "candidate");
     const candidateOut = stringFlag(flags, "candidate-out");
+    const buildConcurrency = stringFlag(flags, "build-concurrency");
     const restart = workloadOptions(flags, "restart");
     return {
       dryRun,
@@ -267,6 +269,7 @@ const aws: HostingProvider = {
       ...(imageLabel ? { imageLabel } : {}),
       ...(candidate ? { candidate } : {}),
       ...(candidateOut ? { candidateOut } : {}),
+      ...(buildConcurrency !== undefined ? { buildConcurrency: Number(buildConcurrency) } : {}),
       ...(restart ? { restart } : {}),
       ...(only ? { only } : {}),
     };
@@ -282,6 +285,7 @@ const aws: HostingProvider = {
         ...(opts.buildOnly ? { buildOnly: true } : {}),
         ...(opts.candidate ? { candidate: opts.candidate } : {}),
         ...(opts.candidateOut ? { candidateOut: opts.candidateOut } : {}),
+        ...(opts.buildConcurrency !== undefined ? { buildConcurrency: opts.buildConcurrency } : {}),
         ...(opts.restart ? { restart: opts.restart } : {}),
         ...(opts.inactive ? { inactive: true } : {}),
         ...(opts.only ? { only: opts.only } : {}),

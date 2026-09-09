@@ -47,6 +47,8 @@ import {
   readEnvFile,
   resolveBuildRepoRoot,
   runInherit,
+  runInheritAsync,
+  settleAll,
   sleep,
   streamLabeled,
 } from "../util.ts";
@@ -129,6 +131,7 @@ export interface AwsUpOpts {
   sandboxDir?: string;
   envFile?: string;
   buildOnly?: boolean;
+  buildConcurrency?: number;
   candidate?: string;
   candidateOut?: string;
   inactive?: boolean;
@@ -579,13 +582,14 @@ export function imageTransferArgs(source: string, tagged: string): string[] {
   return ["buildx", "imagetools", "create", "--prefer-index=false", "--tag", tagged, source];
 }
 
-function publishWorkloadImage(
+async function publishWorkloadImage(
   config: QmConfig,
   workload: string,
   plugin: ResolvedPlugin | undefined,
   label: string,
   opts: AwsUpOpts,
-): string {
+  signal?: AbortSignal,
+): Promise<string> {
   const aws = requireAws(config);
   const spec = aws.services[workload]!;
   const tagged = `${ecrHost(aws)}/${spec.ecrRepository}:${label}`;
@@ -606,7 +610,8 @@ function publishWorkloadImage(
     for (const [name, value] of Object.entries(workloadBuildArgs(config, workload)))
       args.push("--build-arg", `${name}=${value}`);
     args.push(plugin.sourceDir!);
-    runInherit("docker", args);
+    if (signal) await runInheritAsync("docker", args, { signal });
+    else runInherit("docker", args);
   } else if (opts.buildFrom && isServiceName(workload)) {
     const root = resolveBuildRepoRoot(opts.buildFromPath, [workload]);
     const dockerfile = join(root, spec.dockerfile ?? join("deploy", workload, "Dockerfile"));
@@ -630,11 +635,13 @@ function publishWorkloadImage(
     for (const [name, value] of Object.entries(workloadBuildArgs(config, workload)))
       args.push("--build-arg", `${name}=${value}`);
     args.push(root);
-    runInherit("docker", args);
+    if (signal) await runInheritAsync("docker", args, { signal });
+    else runInherit("docker", args);
   } else {
     const source = workloadSourceImage(config, workload, plugin);
     if (!source) throw new CliError(`AWS workload ${workload} has no source image`);
-    runInherit("docker", imageTransferArgs(source, tagged));
+    if (signal) await runInheritAsync("docker", imageTransferArgs(source, tagged), { signal });
+    else runInherit("docker", imageTransferArgs(source, tagged));
   }
   const response = awsJson<{ imageDetails?: Array<{ imageDigest?: string }> }>(aws, [
     "ecr",
@@ -1922,6 +1929,16 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   }
   const plugins = new Map(topology.plugins.map((plugin) => [plugin.name, plugin]));
   const services = opts.only ?? topology.workloads;
+  const buildConcurrency = opts.buildConcurrency ?? 1;
+  if (!Number.isSafeInteger(buildConcurrency) || buildConcurrency < 1)
+    throw new CliError("--build-concurrency requires a positive integer");
+  if (opts.buildConcurrency !== undefined && !opts.buildOnly)
+    throw new CliError("--build-concurrency requires --build-only");
+  if (
+    buildConcurrency > 1 &&
+    new Set(services.map((service) => aws.services[service]?.ecrRepository)).size !== services.length
+  )
+    throw new CliError("--build-concurrency requires distinct ECR repositories for selected workloads");
   const restart = new Set(opts.restart ?? []);
   if (restart.size && opts.buildOnly) throw new CliError("--restart cannot be used with --build-only");
   for (const service of restart) {
@@ -1952,7 +1969,29 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     const imageProvenance: Record<string, DeploymentImageProvenance> = {};
     for (const service of services) {
       imageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
-      images[service] = publishWorkloadImage(config, service, plugins.get(service), opts.imageLabel!, opts);
+    }
+    const controller = new AbortController();
+    const cancelBuilds = () => controller.abort();
+    process.on("SIGINT", cancelBuilds);
+    process.on("SIGTERM", cancelBuilds);
+    try {
+      for (let offset = 0; offset < services.length; offset += buildConcurrency) {
+        await settleAll(
+          services.slice(offset, offset + buildConcurrency).map(async (service) => {
+            images[service] = await publishWorkloadImage(
+              config,
+              service,
+              plugins.get(service),
+              opts.imageLabel!,
+              opts,
+              controller.signal,
+            );
+          }),
+        );
+      }
+    } finally {
+      process.off("SIGINT", cancelBuilds);
+      process.off("SIGTERM", cancelBuilds);
     }
     const release: AwsReleaseCandidate = {
       contract: 1,
@@ -2134,7 +2173,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       } else {
         staged.add(service);
         selectedImageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
-        images[service] = publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
+        images[service] = await publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
       }
     }
     const desired = reportTaskChanges(config, services, images, arns, restart);
