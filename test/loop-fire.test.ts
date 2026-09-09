@@ -1012,7 +1012,7 @@ test("factory surface: shipping an already-fixed output posts to Linear and touc
   assert.deepEqual(traffic(sent), [`POST ${LINEAR_URL}`, `POST ${LINEAR_URL}`, `POST ${LINEAR_URL}`]);
   assert.match(sent[1]!.query, /body: "Already fixed\. fixed by #40"/);
   assert.match(sent[2]!.query, /stateId: "st-done"/);
-  assert.equal(fake.fetch.calls.filter((call) => call.url.startsWith("https://api.github.com")).length, 0);
+  assert.equal(fake.fetch.calls.filter((call) => call.url.startsWith("https://api.github.com/")).length, 0);
 });
 
 test("factory surface: an already-fixed output on a terminal ticket only comments, and bare evidence stays bare", async () => {

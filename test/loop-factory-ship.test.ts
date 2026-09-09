@@ -218,7 +218,7 @@ for (const publishProject of ["yc-software/code", "yc-software%2Fcode"]) {
     assert.deepStrictEqual(parseBody(put), { title: "Fix parser" });
     assert.equal(put.headers["private-token"], FORGE_TOKEN);
     assert.ok(!("authorization" in put.headers));
-    assert.equal(calls.filter((call) => call.url.startsWith("https://api.github.com")).length, 0);
+    assert.equal(calls.filter((call) => call.url.startsWith("https://api.github.com/")).length, 0);
   });
 }
 
