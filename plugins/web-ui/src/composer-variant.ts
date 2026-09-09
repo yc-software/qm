@@ -1,10 +1,16 @@
 export const COMPOSER_VARIANTS = [
   { id: "bui", label: "QM" },
-  { id: "chatgpt", label: "ChatGPT" },
-  { id: "claude", label: "Claude" },
-  { id: "t3", label: "T3 Chat" },
-  { id: "perplexity", label: "Perplexity" },
-  { id: "cursor", label: "Cursor" },
+  { id: "scira", label: "Scira" },
+  { id: "openwebui", label: "Open WebUI" },
+  { id: "librechat", label: "LibreChat" },
+  { id: "cline", label: "Cline" },
+  { id: "kilo", label: "Kilo Code" },
+  { id: "assistantui", label: "assistant-ui" },
+  { id: "vovk", label: "Vovk" },
+  { id: "dqnamo", label: "dqnamo" },
+  { id: "beui", label: "beUI" },
+  { id: "headless", label: "chat-input" },
+  { id: "modal", label: "Modal" },
 ] as const;
 
 export type ComposerVariant = (typeof COMPOSER_VARIANTS)[number]["id"];

@@ -1,15 +1,27 @@
 import type { ComposerVariant } from "../composer-variant";
 import type { ComposerVariantModule } from "../composer-parts";
-import { chatgpt } from "./chatgpt";
-import { claude } from "./claude";
-import { cursor } from "./cursor";
-import { perplexity } from "./perplexity";
-import { t3 } from "./t3";
+import { scira } from "./scira";
+import { openwebui } from "./openwebui";
+import { librechat } from "./librechat";
+import { cline } from "./cline";
+import { kilo } from "./kilo";
+import { assistantui } from "./assistantui";
+import { vovk } from "./vovk";
+import { dqnamo } from "./dqnamo";
+import { beui } from "./beui";
+import { headless } from "./headless";
+import { modal } from "./modal";
 
 export const COMPOSER_VARIANT_MODULES: Partial<Record<ComposerVariant, ComposerVariantModule>> = {
-  chatgpt,
-  claude,
-  t3,
-  perplexity,
-  cursor,
+  scira,
+  openwebui,
+  librechat,
+  cline,
+  kilo,
+  assistantui,
+  vovk,
+  dqnamo,
+  beui,
+  headless,
+  modal,
 };

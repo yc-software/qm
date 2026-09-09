@@ -835,6 +835,16 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       onSubmit: (e: Event) => submitComposer(e, agent),
       pickFiles,
       insertText,
+      redraw: () => ctx.chat.drawActiveChat(agent),
+      queue: {
+        runs: queuedRunsFor(ctx.chat.state.threadRef),
+        steerable:
+          agent.state.isStreaming &&
+          ctx.chat.hasLiveRun() &&
+          harnessSupportsSteer(currentModelOption()?.harnessId ?? ""),
+        remove: (run: QueuedRun) => void removeQueued(agent, run),
+        steer: (run: QueuedRun) => void steerQueued(agent, run),
+      },
       send: {
         canSend: composerCanSend(),
         canQueue: Boolean(composerState.draft.trim() || composerState.attachments.length),
@@ -860,6 +870,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       menu: {
         open: composerState.openMenu,
         toggle: (e: Event, kind: string) => toggleComposerMenu(e, kind as ComposerMenu),
+        set: (kind: string | null) => {
+          composerState.openMenu = kind as ComposerMenu | null;
+          ctx.chat.drawActiveChat(agent);
+          if (kind) requestAnimationFrame(() => placeComposerMenu(kind as ComposerMenu));
+        },
         close: () => {
           composerState.openMenu = null;
           ctx.chat.drawActiveChat(agent);
@@ -996,7 +1011,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       return "Nothing running can take this. It will go out as its own turn";
     };
     return html`
-      <div class="queued-strip" role="list" aria-label="Queued messages">
+      <div class="queued-strip" data-composer=${composerVariant()} role="list" aria-label="Queued messages">
         ${queued.map(
           (q) => html`
             <div class="queued-chip" role="listitem">

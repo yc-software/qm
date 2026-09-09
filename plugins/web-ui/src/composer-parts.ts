@@ -2,6 +2,7 @@ import type { TemplateResult, nothing } from "lit";
 import type { IconNode } from "lucide";
 import type { ComposerVariant } from "./composer-variant";
 import type { ModelOption } from "./model-options";
+import type { QueuedRun } from "./core-bridge";
 
 export type Tpl = TemplateResult | typeof nothing;
 
@@ -57,9 +58,12 @@ export interface ComposerParts {
     select(level: string): void;
   };
   fast: { supported: boolean; available: boolean; on: boolean; toggle(): void };
+  redraw(): void;
+  queue: { runs: QueuedRun[]; steerable: boolean; remove(run: QueuedRun): void; steer(run: QueuedRun): void };
   menu: {
     open: string | null;
     toggle(e: Event, kind: string): void;
+    set(kind: string | null): void;
     close(): void;
     query: string;
     setQuery(query: string, kind: string): void;
