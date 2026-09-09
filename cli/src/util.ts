@@ -71,26 +71,62 @@ export function runInheritAsync(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     if (opts.signal?.aborted) return reject(new CliError(`${cmd} cancelled`));
-    const child = spawn(cmd, args, { stdio: "inherit", ...procOpts(opts) });
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const grouped = process.platform !== "win32";
+    const child = spawn(cmd, args, { stdio: "inherit", detached: grouped, ...procOpts(opts) });
+    let cancellation: Promise<void> | undefined;
+    const groupAlive = () => {
+      if (!child.pid) return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+        throw error;
+      }
+    };
+    const killGroup = (signal: NodeJS.Signals) => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    };
     const cancel = () => {
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
+      cancellation = (async () => {
+        if (!child.pid) return;
+        if (!grouped) {
+          const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+          if (killed.status !== 0 && child.exitCode === null)
+            throw new CliError(`${cmd} process tree could not be cancelled`);
+          return;
+        }
+        killGroup("SIGTERM");
+        const deadline = Date.now() + 5000;
+        while (groupAlive() && Date.now() < deadline) await sleep(25);
+        if (groupAlive()) killGroup("SIGKILL");
+        const killDeadline = Date.now() + 5000;
+        while (groupAlive() && Date.now() < killDeadline) await sleep(25);
+        if (groupAlive()) throw new CliError(`${cmd} process group did not exit after cancellation`);
+      })();
+      cancellation.catch(reject);
     };
-    const cleanup = () => {
-      clearTimeout(killTimer);
-      opts.signal?.removeEventListener("abort", cancel);
-    };
+    const cleanup = () => opts.signal?.removeEventListener("abort", cancel);
     opts.signal?.addEventListener("abort", cancel, { once: true });
     child.once("error", (error) => {
       cleanup();
       reject(error);
     });
-    child.once("close", (code, signal) => {
+    child.once("close", async (code, signal) => {
       cleanup();
-      if (opts.signal?.aborted) reject(new CliError(`${cmd} cancelled`));
-      else if (code === 0) resolve();
-      else reject(new CliError(`${cmd} exited with ${signal ?? code}`));
+      try {
+        await cancellation;
+        if (opts.signal?.aborted) reject(new CliError(`${cmd} cancelled`));
+        else if (code === 0) resolve();
+        else reject(new CliError(`${cmd} exited with ${signal ?? code}`));
+      } catch (error) {
+        reject(error);
+      }
     });
   });
 }

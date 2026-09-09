@@ -2787,6 +2787,10 @@ if (args[0] === "login") process.exit(0);
 const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
 const dir = ${JSON.stringify(dir)};
 if (name === "core") process.on("SIGTERM", () => {});
+if (name === "web-ui") {
+  const plugin = 'process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(' + JSON.stringify(path.join(dir, "pid-web-ui-plugin")) + ', String(process.pid)); setTimeout(() => {}, 20000);';
+  require("node:child_process").spawn(process.execPath, ["-e", plugin], { stdio: "inherit" });
+}
 fs.writeFileSync(path.join(dir, "pid-" + name), String(process.pid));
 setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 20000);
 `,
@@ -2804,15 +2808,15 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
   });
   try {
     const deadline = Date.now() + 10000;
-    while (!["core", "web-ui"].every((name) => existsSync(join(dir, "pid-" + name)))) {
-      assert.ok(Date.now() < deadline, "both Docker children must start");
+    while (!["core", "web-ui", "web-ui-plugin"].every((name) => existsSync(join(dir, "pid-" + name)))) {
+      assert.ok(Date.now() < deadline, "Docker children and nested buildx plugin must start");
       assert.equal(parent.exitCode, null);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     parent.kill("SIGTERM");
     assert.notEqual(await exited, 0);
     assert.equal(existsSync(candidatePath), false);
-    for (const name of ["core", "web-ui"]) {
+    for (const name of ["core", "web-ui", "web-ui-plugin"]) {
       const pid = Number(readFileSync(join(dir, "pid-" + name), "utf8"));
       assert.throws(() => process.kill(pid, 0), /ESRCH/);
       assert.equal(existsSync(join(dir, "completed-" + name)), false);
@@ -2821,7 +2825,7 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
   } finally {
     parent.kill("SIGKILL");
-    for (const name of ["core", "web-ui"]) {
+    for (const name of ["core", "web-ui", "web-ui-plugin"]) {
       const path = join(dir, "pid-" + name);
       if (existsSync(path)) {
         try {
