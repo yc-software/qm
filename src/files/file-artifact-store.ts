@@ -44,6 +44,12 @@ export interface PutFileInput {
   maxBytes?: number;
 }
 
+export type PublishFileInput = Omit<PutFileInput, "data" | "maxBytes"> & {
+  blobKey: string;
+  sizeBytes: number;
+  sha256: string | null;
+};
+
 export interface FilePage {
   files: FileArtifact[];
   nextCursor?: string;
@@ -61,6 +67,7 @@ export type FileArtifactRef = Pick<FileArtifact, "ownerScopeId" | "path">;
 
 export interface FileArtifactStore {
   put(input: PutFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
+  publish(input: PublishFileInput): Promise<{ artifact: FileArtifact; created: boolean }>;
 
   get(id: string, opts?: { includeDisabled?: boolean }): Promise<FileArtifact | null>;
 
@@ -176,6 +183,13 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
         input.data,
         input.maxBytes != null ? { maxBytes: input.maxBytes } : {},
       );
+      return this.publish({ ...input, blobKey, sizeBytes, sha256 });
+    },
+
+    async publish(input) {
+      const existing = rows.get(input.id);
+      if (existing) return { artifact: existing, created: false };
+      const { blobKey, sizeBytes, sha256 } = input;
       const at = input.createdAt ?? Date.now();
       const artifact: FileArtifact = {
         id: input.id,

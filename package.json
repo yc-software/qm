@@ -60,6 +60,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1089.0",
     "@aws-sdk/client-sts": "^3.1075.0",
     "@aws-sdk/credential-provider-node": "^3.972.70",
+    "@aws-sdk/s3-request-presigner": "^3.1061.0",
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz",
     "@fly/sprites": "0.0.1",

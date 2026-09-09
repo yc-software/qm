@@ -134,6 +134,11 @@ export function createPostgresFileArtifactStore(
         input.data,
         input.maxBytes != null ? { maxBytes: input.maxBytes } : {},
       );
+      return this.publish({ ...input, blobKey, sizeBytes, sha256 });
+    },
+
+    async publish(input) {
+      const { blobKey, sizeBytes, sha256 } = input;
       const at = input.createdAt ?? Date.now();
       const ins = await query(
         `INSERT INTO file_artifacts

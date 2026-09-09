@@ -1,4 +1,5 @@
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
+import type { DirectFileUploads } from "../files/direct-file-upload.ts";
 import type { ModelVerifier } from "../model/model-verification.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { SessionShareStore } from "../sessions/session-share.ts";
@@ -132,6 +133,7 @@ export interface ServerDeps {
   signals?: RunSignalStore;
   workspace?: WorkspaceStore;
   files?: FileArtifactStore;
+  fileUploads?: DirectFileUploads;
   memory?: MemoryService;
   sandboxBackend?: string;
   egressDeclaredEnforcement?: EgressEnforcement;
