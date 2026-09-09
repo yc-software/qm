@@ -736,3 +736,28 @@ test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxi
     getRequiredModel(auxiliaryModelFor(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"))),
   );
 });
+
+test("Pi screening honors request capture opt-out while retaining model-call metadata", async () => {
+  for (const captureRequests of [false, true]) {
+    const requests: unknown[] = [];
+    const modelCalls: unknown[] = [];
+    const harness = createPiHarness({
+      detectModelId: "claude-haiku-4-5",
+      captureRequests,
+      resolveProviderKeys: async () => ({ anthropic: "test-key" }),
+    });
+    await harness.models.screenSecurity!({
+      payload: "screening-source-sentinel",
+      signal: AbortSignal.abort(),
+      recordModelCall: (call) => {
+        modelCalls.push(call);
+      },
+      recordLlmRequest: async (request) => {
+        requests.push(request);
+      },
+    });
+    assert.equal(modelCalls.length, 1);
+    assert.equal(requests.length, captureRequests ? 1 : 0);
+    assert.equal(JSON.stringify(modelCalls).includes("screening-source-sentinel"), false);
+  }
+});
