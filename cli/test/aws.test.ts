@@ -2830,7 +2830,9 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
       if (existsSync(path)) {
         try {
           process.kill(Number(readFileSync(path, "utf8")), "SIGKILL");
-        } catch {}
+        } catch {
+          void 0;
+        }
       }
     }
     fake.restore();
