@@ -195,3 +195,38 @@ test("write+share registers an artifact keyed on the SAME (owner, path) as the g
   assert.equal(shared[0]!.name, "redline.md");
   assert.deepEqual(await drain(store, shared[0]!.id), Buffer.from("v1 redline"));
 });
+
+test("intentional write+share after deletion creates a fresh visible artifact generation", async () => {
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const acl = createAclStore();
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "republish-")));
+  const grantee = scopeId("personal", "U2");
+  const { sandbox } = memSandbox();
+  const ctx = createToolContext({
+    sandbox,
+    provision: async () => HANDLE,
+    layers: [{ scopeId: owner, mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({}) as never,
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace,
+    deploy: {} as never,
+    acl,
+    files: store,
+    createdBy: "U1",
+    persistWritesToStore: { excludeDirs: ["inbox"] },
+  });
+  const share = [{ scope: grantee, permission: "read" as const }];
+  await ctx.write("report.txt", "first generation", share);
+  const first = (await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }]))[0]!;
+  await ctx.write("report.txt", undefined, share);
+  assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }])).length, 1);
+  await store.delete(first.id);
+  await ctx.write("report.txt", "new generation", share);
+  const current = await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }]);
+  assert.equal(current.length, 1);
+  assert.notEqual(current[0]!.id, first.id);
+  assert.deepEqual(await drain(store, current[0]!.id), Buffer.from("new generation"));
+  assert.equal(await store.get(first.id, { includeDisabled: true }), null);
+  await assert.rejects(store.publish({ ...first, blobKey: first.blobKey! }), /deleted/);
+});

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -864,13 +865,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             const priorRows = deps.files
               ? await deps.files.resolveByOwnerPaths([{ ownerScopeId: writableScopeId, path }])
               : [];
-            const priorAuthor = (priorRows.find((r) => r.direction === "out") ?? priorRows[0])?.createdBy;
+            const priorArtifact = priorRows.find((r) => r.direction === "out") ?? priorRows[0];
+            const priorAuthor = priorArtifact?.createdBy;
             const author = data === undefined ? (priorAuthor ?? deps.createdBy) : deps.createdBy;
             if (deps.files) {
               try {
                 const name = path.split(/[\\/]/).pop() || path;
                 await deps.files.put({
-                  id: fileArtifactId(`${writableScopeId}:${path}`, "out", 0),
+                  id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
                   ownerScopeId: writableScopeId,
                   createdBy: author,
                   name,
