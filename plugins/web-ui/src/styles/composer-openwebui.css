@@ -1,0 +1,189 @@
+.composer-wrap[data-composer="openwebui"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  width: min(768px, calc(100% - 32px));
+  padding: 10px 12px 8px;
+  border-color: var(--line);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: none;
+}
+.composer-wrap[data-composer="openwebui"] > * {
+  order: 0;
+  min-width: 0;
+}
+.composer-wrap[data-composer="openwebui"] .composer-input {
+  min-height: 26px;
+  padding: 2px 4px;
+  font-size: 15px;
+  line-height: 22px;
+}
+.composer-wrap[data-composer="openwebui"] .composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.composer-wrap[data-composer="openwebui"] .composer-right {
+  margin-left: 0;
+}
+.composer-wrap[data-composer="openwebui"] .owui-round {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-out-strong),
+    color 150ms var(--ease-out-strong);
+}
+.composer-wrap[data-composer="openwebui"] .owui-round:hover:not(:disabled, [aria-disabled="true"]),
+.composer-wrap[data-composer="openwebui"] .owui-round[aria-expanded="true"] {
+  background: var(--hover-2);
+  color: var(--ink);
+}
+.composer-wrap[data-composer="openwebui"] .owui-round:disabled,
+.composer-wrap[data-composer="openwebui"] .owui-mic {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.composer-wrap[data-composer="openwebui"] .send-btn,
+.composer-wrap[data-composer="openwebui"] .stop-btn {
+  width: 36px;
+  height: 36px;
+  background: var(--ink);
+  color: var(--surface);
+}
+.composer-wrap[data-composer="openwebui"] .send-btn:disabled {
+  background: var(--hover-2);
+  color: var(--ink-3);
+}
+.composer-wrap[data-composer="openwebui"] .menu-popover {
+  width: 260px;
+  padding: 6px;
+  border-radius: var(--radius-lg);
+}
+.composer-wrap[data-composer="openwebui"] .menu-option {
+  min-height: 34px;
+  border-radius: var(--radius-md);
+}
+.composer-wrap[data-composer="openwebui"] .menu-option-copy {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.composer-wrap[data-composer="openwebui"] .menu-option-copy .icon {
+  flex: none;
+  color: var(--ink-2);
+}
+.owui-models {
+  max-height: min(420px, 60vh);
+}
+.owui-models .owui-model-row .menu-option-copy,
+.owui-picker .owui-model-row .menu-option-copy {
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.owui-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--hover-2);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.owui-desc {
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.3;
+}
+.owui-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  max-width: min(320px, 50vw);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out-strong);
+}
+.owui-picker-btn:hover,
+.owui-picker-btn[aria-expanded="true"] {
+  background: var(--hover);
+}
+.owui-picker-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.owui-picker-btn .icon {
+  flex: none;
+  color: var(--ink-3);
+}
+.owui-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.owui-picker .menu-popover {
+  width: 360px;
+  padding: 6px;
+  border-radius: var(--radius-lg);
+}
+.owui-picker .menu-option {
+  min-height: 40px;
+  border-radius: var(--radius-md);
+}
+.queued-strip[data-composer="openwebui"] {
+  gap: 6px;
+  width: min(768px, calc(100% - 32px));
+  margin: 0 auto 8px;
+}
+.queued-strip[data-composer="openwebui"] .queued-chip {
+  position: relative;
+  overflow: hidden;
+  padding: 8px 8px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.queued-strip[data-composer="openwebui"] .queued-chip::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3px;
+  background: var(--blue);
+}
+@media (max-width: 560px) {
+  .composer-wrap[data-composer="openwebui"],
+  .queued-strip[data-composer="openwebui"] {
+    width: calc(100% - 24px);
+  }
+  .owui-picker .menu-popover {
+    width: min(360px, calc(100vw - 24px));
+  }
+}
