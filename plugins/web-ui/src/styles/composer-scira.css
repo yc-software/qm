@@ -1,0 +1,279 @@
+.composer-wrap[data-composer="scira"] {
+  --scira-badge-bg: var(--ink);
+  --scira-badge-fg: var(--surface);
+  --scira-chip-on: var(--blue-tint);
+  --scira-chip-on-line: var(--blue);
+  --scira-wave: var(--blue);
+  --composer-pad-block: 12px;
+  --composer-pad-inline: 12px;
+  --composer-pad-end: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: min(720px, var(--content-w), calc(100% - 32px));
+  padding: 12px 12px 8px;
+  border-color: var(--line-strong);
+  border-radius: 20px;
+  background: var(--surface);
+}
+.composer-wrap[data-composer="scira"] .attachment-strip {
+  flex-basis: auto;
+}
+.composer-wrap[data-composer="scira"] .scira-field {
+  display: flex;
+}
+.composer-wrap[data-composer="scira"] .composer-input {
+  flex: 1 1 auto;
+  order: 0;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 6px;
+  font-size: 15px;
+  line-height: 22px;
+}
+.composer-wrap[data-composer="scira"] .scira-field .menu-popover {
+  width: 300px;
+}
+.composer-wrap[data-composer="scira"] .scira-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.composer-wrap[data-composer="scira"] .scira-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-out-strong),
+    border-color 150ms var(--ease-out-strong);
+}
+.composer-wrap[data-composer="scira"] .scira-chip:hover:not(:disabled) {
+  background: var(--hover);
+}
+.composer-wrap[data-composer="scira"] .scira-chip[aria-checked="true"] {
+  border-color: var(--scira-chip-on-line);
+  background: var(--scira-chip-on);
+  color: var(--ink);
+}
+.composer-wrap[data-composer="scira"] .scira-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.composer-wrap[data-composer="scira"] .scira-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.composer-wrap[data-composer="scira"] .scira-chip[aria-checked="true"] .scira-check {
+  border-color: var(--scira-chip-on-line);
+  background: var(--scira-chip-on-line);
+  color: var(--surface);
+}
+.composer-wrap[data-composer="scira"] .scira-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+.composer-wrap[data-composer="scira"] .scira-left,
+.composer-wrap[data-composer="scira"] .scira-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.composer-wrap[data-composer="scira"] .scira-right {
+  margin-left: auto;
+}
+.composer-wrap[data-composer="scira"] .scira-plus,
+.composer-wrap[data-composer="scira"] .scira-mic {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out-strong);
+}
+.composer-wrap[data-composer="scira"] .scira-mic {
+  border-color: transparent;
+  color: var(--ink-3);
+}
+.composer-wrap[data-composer="scira"] .scira-plus:hover,
+.composer-wrap[data-composer="scira"] .scira-mic:hover,
+.composer-wrap[data-composer="scira"] .scira-plus[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.composer-wrap[data-composer="scira"] .scira-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border: 1px solid var(--surface);
+  border-radius: 999px;
+  background: var(--scira-badge-bg);
+  color: var(--scira-badge-fg);
+  font-size: 9.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.composer-wrap[data-composer="scira"] .scira-model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(240px, 44vw);
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out-strong);
+}
+.composer-wrap[data-composer="scira"] .scira-model-btn:hover:not(:disabled),
+.composer-wrap[data-composer="scira"] .scira-model-btn[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.composer-wrap[data-composer="scira"] .scira-model-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.composer-wrap[data-composer="scira"] .scira-model .menu-popover {
+  width: 300px;
+}
+.composer-wrap[data-composer="scira"] .scira-model-desc {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-wrap[data-composer="scira"] .send-btn,
+.composer-wrap[data-composer="scira"] .stop-btn {
+  width: 36px;
+  height: 36px;
+  background: var(--ink);
+  color: var(--surface);
+}
+.composer-wrap[data-composer="scira"] .send-btn:disabled {
+  background: var(--ink);
+  color: var(--surface);
+  opacity: 0.4;
+}
+.composer-wrap[data-composer="scira"] .scira-voice {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 5px 0 12px;
+  border-radius: 999px;
+  background: var(--field);
+}
+.composer-wrap[data-composer="scira"] .scira-eq {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 20px;
+  overflow: hidden;
+}
+.composer-wrap[data-composer="scira"] .scira-eq i {
+  flex: none;
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--scira-wave);
+  animation: scira-eq-bounce 900ms ease-in-out infinite alternate;
+}
+.composer-wrap[data-composer="scira"] .scira-voice-label {
+  flex: none;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.composer-wrap[data-composer="scira"] .scira-voice-time {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.composer-wrap[data-composer="scira"] .scira-voice-end {
+  flex: none;
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--surface);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.composer-wrap[data-composer="scira"] .scira-voice-end:hover {
+  background: color-mix(in srgb, var(--ink) 85%, var(--surface));
+}
+.queued-strip[data-composer="scira"] {
+  width: min(696px, calc(var(--content-w) - 24px), calc(100% - 56px));
+}
+@keyframes scira-eq-bounce {
+  from {
+    transform: scaleY(0.2);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@media (max-width: 560px) {
+  .composer-wrap[data-composer="scira"] {
+    width: 100%;
+    margin-bottom: 0;
+    border-inline: 0;
+    border-bottom: 0;
+    border-radius: 20px 20px 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-wrap[data-composer="scira"] .scira-eq i {
+    transform: scaleY(0.4);
+    animation: none;
+  }
+}
