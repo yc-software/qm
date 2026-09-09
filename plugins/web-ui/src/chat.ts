@@ -1381,7 +1381,6 @@ export function createChatSurface(
         ? chatState.forkSession.forkedFrom
         : undefined;
     return sessionTopbarTpl({
-      leading: chatState.agent ? ctx.composer.topbarControl(chatState.agent) : nothing,
       sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,

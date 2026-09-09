@@ -68,12 +68,8 @@ import { base64ToText, bytesToBase64, insertIntoDraft } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
-import { composerVariant } from "./composer-variant";
-import type { ComposerParts } from "./composer-parts";
-import { COMPOSER_VARIANT_MODULES } from "./composer-variants/index";
 
-export type ComposerMenu =
-  "actions" | "effort" | "harness" | "mode" | "model" | "picker" | "settings" | "thinking" | "tools";
+export type ComposerMenu = "effort" | "harness" | "model" | "settings";
 
 interface ComposerMenuOption {
   value: string;
@@ -424,11 +420,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
     const selectedModel = currentModelOption();
-    const variantModule = COMPOSER_VARIANT_MODULES[composerVariant()];
-    if (variantModule && selectedModel) {
-      const parts = buildParts(agent, header, selectedModel);
-      return html`${variantModule.render(parts)}`;
-    }
     if (!selectedModel) {
       const selected =
         (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ??
@@ -686,209 +677,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     `;
   }
 
-  function topbarControl(agent: Agent): TemplateResult | typeof nothing {
-    const variantModule = COMPOSER_VARIANT_MODULES[composerVariant()];
-    const selectedModel = currentModelOption();
-    if (!variantModule?.topbar || !selectedModel) return nothing;
-    return variantModule.topbar(buildParts(agent, nothing, selectedModel));
-  }
-
-  function buildParts(
-    agent: Agent,
-    header: TemplateResult | typeof nothing,
-    selectedModel: ModelOption,
-  ): ComposerParts {
-    const effortAvailable = harnessSupportsEffort(selectedModel.harnessId);
-    const fastSupported = harnessSupportsFastMode(selectedModel.harnessId);
-    const fastAvailable = fastSupported && modelSupportsFastMode(scopeKey(), selectedModel.model.id);
-    const fastOn = fastAvailable && effectiveFastMode();
-    const approvalPauses = ctx.chat.activePendingApprovals();
-    const blockingPauses = approvalPauses.filter(approvalBlocksComposer);
-    const runtimePending = activeRuntimeConfig === null;
-    const effectiveEffort =
-      (activeRuntimeConfig?.effective.effortLevel as EffortLevel | undefined) ??
-      defaultEffortForModel(selectedModel.model);
-    const effectiveFast = activeRuntimeConfig?.effective.fastMode === true && fastAvailable;
-    const runtimeToggled =
-      !runtimePending &&
-      (selectedModel.value !== defaultModelValue(scopeKey()) ||
-        composerState.effortLevel !== effectiveEffort ||
-        fastOn !== effectiveFast);
-    const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || blockingPauses.length > 0;
-    let placeholder = "Ask anything";
-    if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
-    else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
-    let notice: TemplateResult | typeof nothing = nothing;
-    if (composerState.processingFiles) notice = html`<div class="composer-note">Preparing files...</div>`;
-    else if (!approvalPauses.length && runtimePending)
-      notice = composerState.error
-        ? html`<div class="composer-error">
-            ${composerState.error}
-            <button type="button" @click=${() => void refreshRuntimeSelection(ctx.chat.state.scopeId, agent)}>
-              Retry
-            </button>
-          </div>`
-        : html`<div class="composer-note">Loading runtime settings…</div>`;
-    else if (composerState.error) notice = html`<div class="composer-error">${composerState.error}</div>`;
-    const orgDefault = activeRuntimeConfig?.orgDefault;
-    const orgDefaultOption = orgDefault ? modelOptionFor(`${orgDefault.harnessId}:${orgDefault.modelId}`) : undefined;
-    const upgradeNotice =
-      activeRuntimeConfig?.upgradeAvailable && orgDefault
-        ? html`<div class="runtime-upgrade">
-            <span
-              >The org now recommends ${orgDefaultOption?.harnessLabel ?? orgDefault.harnessId} ·
-              ${orgDefaultOption?.buttonLabel ?? orgDefault.modelId}.</span
-            >
-            <button
-              type="button"
-              @click=${() => changeScopeRuntime({ harnessId: orgDefault.harnessId, modelId: orgDefault.modelId }, agent)}
-            >
-              Upgrade
-            </button>
-            <button type="button" @click=${() => changeScopeRuntime({ keep: true }, agent)}>Keep mine</button>
-            <button type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>
-              Inherit future defaults
-            </button>
-          </div>`
-        : nothing;
-    const defaultButtons = html`
-      ${
-        runtimeToggled
-          ? html`<button
-              class="runtime-default-btn"
-              type="button"
-              aria-label="Make default"
-              data-mobile-label="Default"
-              ${tip("Use this harness, model, effort, and fast setting as the default for this scope")}
-              ?disabled=${inputBlocked}
-              @click=${() => changeScopeRuntime({ harnessId: selectedModel.harnessId, modelId: selectedModel.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}
-            >
-              Make default
-            </button>`
-          : nothing
-      }
-      ${
-        runtimeToggled && activeRuntimeConfig?.scopeOverride
-          ? html`<button
-              class="runtime-default-btn"
-              type="button"
-              aria-label="Use org default"
-              data-mobile-label="Org default"
-              ?disabled=${inputBlocked}
-              @click=${() => changeScopeRuntime({ inherit: true }, agent)}
-            >
-              Use org default
-            </button>`
-          : nothing
-      }
-    `;
-    return {
-      variant: composerVariant(),
-      header,
-      slashMenu: slashMenu(agent),
-      upgradeNotice,
-      attachments: composerState.attachments.length
-        ? html`<div class="attachment-strip">
-            ${composerState.attachments.map((a) =>
-              attachmentTile(
-                a,
-                pastedTextIds.has(a.id),
-                () => openPasteView(a.id, agent),
-                () => removeAttachment(a.id, agent),
-              ),
-            )}
-          </div>`
-        : nothing,
-      approvals: approvalPauses.length ? composerApprovalPanel(approvalPauses) : nothing,
-      notice,
-      textarea: blockingPauses.length
-        ? nothing
-        : html`<textarea
-            class="composer-input"
-            dir="auto"
-            rows="1"
-            placeholder=${placeholder}
-            ?disabled=${inputBlocked}
-            .value=${live(composerState.draft)}
-            @input=${(e: InputEvent) => onDraftInput(e, agent)}
-            @keydown=${(e: KeyboardEvent) => onComposerKeydown(e, agent)}
-            @paste=${(e: ClipboardEvent) => void onComposerPaste(e, agent)}
-          ></textarea>`,
-      fileInput: html`<input
-        class="file-input"
-        type="file"
-        multiple
-        hidden
-        ?disabled=${inputBlocked}
-        @change=${(e: Event) => void onFilesSelected(e, agent)}
-      />`,
-      pasteDialog: pasteViewDialog(agent),
-      defaultButtons: appState.me?.individualModelAuth ? nothing : defaultButtons,
-      sendControls: sendControls(agent),
-      settingsMenu: settingsControl(agent, selectedModel, inputBlocked),
-      menuControl: (args) => menuControl({ ...args, kind: args.kind as ComposerMenu, onSelect: args.onSelect }),
-      placeholder,
-      draft: composerState.draft,
-      inputBlocked,
-      attachingDisabled: inputBlocked,
-      compact: Boolean(ctx.pane) || isPhone(),
-      onSubmit: (e: Event) => submitComposer(e, agent),
-      pickFiles,
-      insertText,
-      redraw: () => ctx.chat.drawActiveChat(agent),
-      queue: {
-        runs: queuedRunsFor(ctx.chat.state.threadRef),
-        steerable:
-          agent.state.isStreaming &&
-          ctx.chat.hasLiveRun() &&
-          harnessSupportsSteer(currentModelOption()?.harnessId ?? ""),
-        remove: (run: QueuedRun) => void removeQueued(agent, run),
-        steer: (run: QueuedRun) => void steerQueued(agent, run),
-      },
-      send: {
-        canSend: composerCanSend(),
-        canQueue: Boolean(composerState.draft.trim() || composerState.attachments.length),
-        streaming: agent.state.isStreaming,
-        stop: () => stopStreaming(agent),
-      },
-      models: {
-        all: getModelOptions(scopeKey()),
-        selected: selectedModel,
-        select: (value: string) => selectModel(value, agent),
-        harnesses: getHarnessOptions(scopeKey()),
-        selectHarness: (harnessId: string) => selectHarness(harnessId, agent),
-        supportsFast: (modelId: string) => modelSupportsFastMode(scopeKey(), modelId),
-      },
-      effort: {
-        available: effortAvailable,
-        level: composerState.effortLevel,
-        label: effortLabel(composerState.effortLevel),
-        levels: EFFORT_LEVELS,
-        select: (level: string) => selectEffort(level as EffortLevel, agent),
-      },
-      fast: { supported: fastSupported, available: fastAvailable, on: fastOn, toggle: () => toggleFastMode(agent) },
-      menu: {
-        open: composerState.openMenu,
-        toggle: (e: Event, kind: string) => toggleComposerMenu(e, kind as ComposerMenu),
-        set: (kind: string | null) => {
-          composerState.openMenu = kind as ComposerMenu | null;
-          ctx.chat.drawActiveChat(agent);
-          if (kind) requestAnimationFrame(() => placeComposerMenu(kind as ComposerMenu));
-        },
-        close: () => {
-          composerState.openMenu = null;
-          ctx.chat.drawActiveChat(agent);
-        },
-        query: composerState.menuQuery,
-        setQuery: (query: string, kind: string) => {
-          composerState.menuQuery = query;
-          ctx.chat.drawActiveChat(agent);
-          requestAnimationFrame(() => placeComposerMenu(kind as ComposerMenu));
-        },
-      },
-    };
-  }
-
   function pasteViewDialog(agent: Agent): TemplateResult | typeof nothing {
     const view = composerState.pasteView;
     if (!view) return nothing;
@@ -1011,7 +799,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       return "Nothing running can take this. It will go out as its own turn";
     };
     return html`
-      <div class="queued-strip" data-composer=${composerVariant()} role="list" aria-label="Queued messages">
+      <div class="queued-strip" role="list" aria-label="Queued messages">
         ${queued.map(
           (q) => html`
             <div class="queued-chip" role="listitem">
@@ -2184,7 +1972,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     resetComposer,
     focusComposerEnd,
     insertText,
-    topbarControl,
     resizeComposer,
     currentModelOption,
     carryModelPick,

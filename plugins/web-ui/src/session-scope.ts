@@ -94,7 +94,6 @@ export interface SessionTopbarOpts {
   onTitle?: (() => void) | null;
   onCrumb?: (() => void) | null;
   onTool: (tool: SessionTool) => void;
-  leading?: TemplateResult | typeof nothing;
 }
 
 export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
@@ -114,8 +113,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
     </button>`;
   })();
   const heading = html`
-    ${o.leading ?? nothing} ${crumbTpl}
-    ${o.title ? html`<span class="session-title" dir="auto">${o.title}</span>` : nothing}
+    ${crumbTpl} ${o.title ? html`<span class="session-title" dir="auto">${o.title}</span>` : nothing}
     ${
       o.fork
         ? html`<button

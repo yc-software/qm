@@ -126,7 +126,6 @@ export interface ComposerSurface {
   resetComposer(): void;
   focusComposerEnd(): void;
   insertText(text: string): void;
-  topbarControl(agent: Agent): TemplateResult | typeof import("lit").nothing;
   resizeComposer(): void;
   currentModelOption(): ModelOption | undefined;
   carryModelPick(fromThreadRef: string | null, toThreadRef: string): void;

@@ -95,10 +95,7 @@ test("the imported palette is painted as one style element that applyTheme owns 
 });
 
 test("settings rows live in titled inspector cards, with the radiogroups as segmented controls", () => {
-  assert.match(
-    settings,
-    /settingsCard\("Appearance", nothing, \[themeRow\(\), sidebarSurfaceRow\(\), composerStyleRow\(\)\]\)/,
-  );
+  assert.match(settings, /settingsCard\("Appearance", nothing, \[themeRow\(\), sidebarSurfaceRow\(\)\]\)/);
   assert.match(settings, /settingsCard\("Account", signOutAction\(\)/);
   assert.match(
     settings,
