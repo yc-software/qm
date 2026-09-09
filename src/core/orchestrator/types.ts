@@ -106,6 +106,8 @@ export interface OrchestratorDeps {
   defaultHarness?: string;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
+  /** The deployment's public web address, shown in user-facing connect prompts. */
+  publicUrl?: string;
   resolveBaseModelId?: () => string | undefined;
   sessionTapeMode?: "shadow" | "serve";
   sessions: SessionStore;

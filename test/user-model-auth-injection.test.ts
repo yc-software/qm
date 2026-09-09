@@ -10,7 +10,7 @@ import { createUserModelCredentialStore } from "../src/model/user-model-credenti
 import { readFileSync } from "node:fs";
 import { prepareCodexHome } from "../src/harness/codex-harness.ts";
 import { codexOAuthAuthFromValue } from "../src/harness/codex-auth-store.ts";
-import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
+import { connectAccountMessage, resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
 
@@ -207,6 +207,15 @@ test("codex-subscription model ids resolve to pi-ai's openai-codex provider", ()
 
 test("routing: no credentials -> null (falls through to gate, no deployment key)", () => {
   assert.equal(resolveIndividualAuthRouting(null, null, undefined), null);
+});
+
+test("the unconnected-user refusal names the deployment's public URL when configured", () => {
+  assert.equal(
+    connectAccountMessage("https://qm.example.com"),
+    "This organization has each person chat on their own AI account, and yours isn't connected yet. Connect Claude or ChatGPT at https://qm.example.com, then try again.",
+  );
+  // Without a configured URL the message still points somewhere actionable.
+  assert.match(connectAccountMessage(), /AI account panel in the web app/);
 });
 
 test("per-user codex child auth is derived material: valid chatgpt auth without the refresh token", () => {

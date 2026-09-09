@@ -159,7 +159,7 @@ import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orches
 import { isHarnessId, resolveModel, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { CodexTurnAuth } from "../harness/harness.ts";
-import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
+import { connectAccountMessage, resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
   approvalGrantId,
@@ -2655,9 +2655,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
           }
           if (!userHarnessOverride) {
-            throw new NonRetryableTurnError(
-              "This organization has each person chat on their own AI account, and yours isn't connected yet. Open the web app and connect Claude or ChatGPT from the AI account panel, then try again.",
-            );
+            // A refusal, not a turn failure: the surface delivers a refusal's
+            // reason verbatim, where a failed turn is wrapped in the generic
+            // "something went wrong" copy and the person never learns where
+            // to connect their account.
+            return { status: "refused", sessionId: session.id, reason: connectAccountMessage(deps.publicUrl) };
           }
         }
         const effectiveModel = userModelOverride ?? input.model;

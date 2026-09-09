@@ -18,6 +18,17 @@ export type IndividualAuthRouting =
   | { kind: "oauth"; provider: "openai"; harness: "pi"; model: string }
   | null;
 
+/**
+ * The refusal an unconnected person sees when the org requires individual
+ * model auth. With the deployment's public URL configured, the message names
+ * the exact address to visit; a person reading it in Slack has no other way
+ * to discover where "the web app" lives.
+ */
+export function connectAccountMessage(publicUrl?: string): string {
+  const where = publicUrl ? `at ${publicUrl}` : "from the AI account panel in the web app";
+  return `This organization has each person chat on their own AI account, and yours isn't connected yet. Connect Claude or ChatGPT ${where}, then try again.`;
+}
+
 export function resolveIndividualAuthRouting(
   anthCred: UserModelCredential | null,
   oaiCred: UserModelCredential | null,
