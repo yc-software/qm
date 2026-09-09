@@ -26,6 +26,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
   return createModalSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "modal-ws-"))), {
     client: fake.client,
     namePrefix: "qmt",
+    nativeSnapshotsEnabled: true,
     ...extra,
   });
 }
@@ -705,4 +706,70 @@ test("maintenance checkpoints an idle scope with a live background job without r
   assert.equal(result.reaped, 0);
   assert.equal(fake.current(scopeName())?.state, "running");
   assert.notEqual((await store.get(scope))?.nativeSnapshotId, checkpoint);
+});
+
+test("native capture requires activation and adopted native scopes remain native after flag rollback", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const portable = instrumentedSnapshotStore();
+  const first = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: undefined });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "working.txt", "portable generation");
+  await first.teardown(handle);
+  assert.equal((await store.get(scope))?.nativeSnapshotId, undefined);
+  assert.equal(portable.puts(), 1);
+
+  const activated = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: true });
+  const active = await activated.provision(layers);
+  await activated.writeFile(active, "working.txt", "native generation");
+  await store.merge(scope, { lastSnapshotMs: 0 });
+  await activated.teardown(active);
+  assert.ok((await store.get(scope))?.nativeSnapshotId);
+  assert.equal(portable.puts(), 1);
+  fake.terminate(scopeName());
+
+  const rollback = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: false });
+  const recovered = await rollback.provision(layers);
+  assert.equal(await rollback.readFile(recovered, "working.txt"), "native generation");
+  await rollback.writeFile(recovered, "working.txt", "reader rollback generation");
+  await store.merge(scope, { lastSnapshotMs: 0 });
+  await rollback.teardown(recovered);
+  assert.equal(portable.puts(), 1);
+  fake.terminate(scopeName());
+  const restarted = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: false });
+  const restored = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(restored, "working.txt"), "reader rollback generation");
+});
+
+test("interrupted hydration cannot expose a partially restored home through stored adoption", async () => {
+  const store = createMemoryMap<StoredModalSandbox>();
+  const first = make({ store });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "working.txt", "do not overwrite");
+  await store.merge(scope, { hydrationPending: true });
+  const restarted = make({ store });
+  await assert.rejects(restarted.provision(layers), /hydration was interrupted/);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  const status = await restarted.computerStatus!(scope);
+  assert.match(status.recovery?.error ?? "", /computer restart/);
+  assert.equal((await store.get(scope))?.hydrationPending, true);
+});
+
+test("explicit restart of interrupted hydration retains the checkpoint and retries it", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const first = make({ store });
+  const handle = await first.provision(layers);
+  await first.writeFile(handle, "working.txt", "last complete checkpoint");
+  await first.teardown(handle);
+  const checkpoint = (await store.get(scope))!.nativeSnapshotId;
+  await first.writeFile(handle, "working.txt", "incomplete replacement content");
+  await store.merge(scope, { hydrationPending: true });
+  const restarted = make({ store, nativeSnapshotsEnabled: false });
+  await restarted.restartComputer!(scope);
+  assert.equal((await store.get(scope))!.nativeSnapshotId, checkpoint);
+  const restored = await restarted.provision(layers);
+  assert.equal(await restarted.readFile(restored, "working.txt"), "last complete checkpoint");
 });

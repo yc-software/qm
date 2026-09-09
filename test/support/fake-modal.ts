@@ -119,6 +119,7 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
   });
 
   const client: ModalClient = {
+    nativeSnapshots: opts.native ?? false,
     async create(opts): Promise<ModalSession> {
       if (opts.name) {
         const existing = byName(opts.name);

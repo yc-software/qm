@@ -366,6 +366,7 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
 }
 
 interface ModalSandboxEnv {
+  nativeSnapshotsEnabled?: boolean;
   nativeSnapshotIntervalSec?: number;
   snapshotRetentionSec?: number;
   tokenId?: string;
@@ -389,6 +390,7 @@ interface ModalSandboxEnv {
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
   const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
   return {
+    ...(env.MODAL_NATIVE_SNAPSHOTS_ENABLED === "true" ? { nativeSnapshotsEnabled: true } : {}),
     ...(num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") !== undefined
       ? { nativeSnapshotIntervalSec: num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") }
       : {}),
