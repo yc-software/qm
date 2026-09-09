@@ -6999,7 +6999,6 @@ h3.ambient-field-label {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding-left: 10px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--background) 96%, transparent);
   opacity: 0;
