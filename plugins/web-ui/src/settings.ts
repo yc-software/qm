@@ -1,3 +1,4 @@
+import { COMPOSER_VARIANTS, composerVariant, setComposerVariant } from "./composer-variant";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, Trash2, Upload, type IconNode } from "lucide";
 import { icon } from "./ui";
@@ -305,7 +306,7 @@ function settingsPane(): TemplateResult {
     <div class="list-page-head">
       <h1 class="pane-title">Settings</h1>
     </div>
-    ${settingsCard("Appearance", nothing, [themeRow(), sidebarSurfaceRow()])}
+    ${settingsCard("Appearance", nothing, [themeRow(), sidebarSurfaceRow(), composerStyleRow()])}
     ${settingsCard("Account", signOutAction(), [accountRow(), can("admin") ? adminRow() : nothing, aboutRow()])}
   `;
 }
@@ -318,6 +319,38 @@ function drawSettings(): void {
     appState.mainEl.replaceChildren(settingsHost);
   }
   render(settingsPane(), settingsHost);
+}
+
+function composerStyleRow(): TemplateResult {
+  const current = composerVariant();
+  return html`
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <div class="settings-row-title">Composer style</div>
+        <div class="settings-row-note">
+          Try the prompt bar and model picker designs side by side. Open a chat to see it.
+        </div>
+      </div>
+      <div class="settings-choice" role="radiogroup" aria-label="Composer style">
+        ${COMPOSER_VARIANTS.map(
+          (option) => html`
+            <button
+              class="settings-choice-option ${current === option.id ? "selected" : ""}"
+              type="button"
+              role="radio"
+              aria-checked=${current === option.id ? "true" : "false"}
+              @click=${() => {
+                setComposerVariant(option.id);
+                drawSettings();
+              }}
+            >
+              <span>${option.label}</span>
+            </button>
+          `,
+        )}
+      </div>
+    </div>
+  `;
 }
 
 export function renderSettings(): void {

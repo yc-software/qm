@@ -10,13 +10,17 @@ import {
   Brain,
   Check,
   ChevronDown,
+  CornerDownLeft,
   CornerDownRight,
+  Paperclip,
   Plus,
+  Search,
   SlidersHorizontal,
+  Sparkles,
   Square,
+  type IconNode,
   X,
   Zap,
-  type IconNode,
 } from "lucide";
 import {
   api,
@@ -68,8 +72,9 @@ import { base64ToText, bytesToBase64, insertIntoDraft } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
+import { composerVariant, type ComposerVariant } from "./composer-variant";
 
-export type ComposerMenu = "effort" | "harness" | "model" | "settings";
+export type ComposerMenu = "actions" | "effort" | "harness" | "model" | "settings";
 
 interface ComposerMenuOption {
   value: string;
@@ -495,10 +500,67 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
 
     const compact = Boolean(ctx.pane) || isPhone();
+    const variant = composerVariant();
     const showRuntimeControls = !appState.me?.individualModelAuth;
     const runtimeControls = compact
       ? settingsControl(agent, selectedModel, inputBlocked)
-      : html`
+      : runtimeControlsFor(variant, selectedModel);
+    function runtimeControlsFor(kind: ComposerVariant, model: ModelOption): TemplateResult {
+      let out: TemplateResult;
+      const defaultButtons = html`
+        ${
+          runtimeToggled
+            ? html`<button
+                class="runtime-default-btn"
+                type="button"
+                aria-label="Make default"
+                data-mobile-label="Default"
+                ${tip("Use this harness, model, effort, and fast setting as the default for this scope")}
+                ?disabled=${inputBlocked}
+                @click=${() => changeScopeRuntime({ harnessId: model.harnessId, modelId: model.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}
+              >
+                Make default
+              </button>`
+            : nothing
+        }
+        ${
+          runtimeToggled && activeRuntimeConfig?.scopeOverride
+            ? html`<button
+                class="runtime-default-btn"
+                type="button"
+                aria-label="Use org default"
+                data-mobile-label="Org default"
+                ?disabled=${inputBlocked}
+                @click=${() => changeScopeRuntime({ inherit: true }, agent)}
+              >
+                Use org default
+              </button>`
+            : nothing
+        }
+      `;
+      const modelMenu = (searchable: boolean, glyph?: IconNode) =>
+        menuControl({
+          kind: "model",
+          glyph,
+          searchable,
+          label: model.buttonLabel,
+          title: "Model",
+          selected: model.value,
+          align: "right",
+          options: getModelOptionsForHarness(model.harnessId, scopeKey()).map((option) => ({
+            value: option.value,
+            label: option.label,
+          })),
+          disabled: inputBlocked,
+          onSelect: (value: string) => selectModel(value, agent),
+        });
+      if (kind === "assistant-ui") out = html`${defaultButtons} ${modelSelectorControl(agent, model, inputBlocked)}`;
+      else if (kind === "ai-elements")
+        out = html`${defaultButtons} ${modelMenu(true)} ${settingsControl(agent, model, inputBlocked)}`;
+      else if (kind === "prompt-kit")
+        out = html`${defaultButtons} ${modelMenu(false, Sparkles)} ${settingsControl(agent, model, inputBlocked)}`;
+      else
+        out = html`
           ${
             runtimeToggled
               ? html`<button
@@ -508,7 +570,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   data-mobile-label="Default"
                   ${tip("Use this harness, model, effort, and fast setting as the default for this scope")}
                   ?disabled=${inputBlocked}
-                  @click=${() => changeScopeRuntime({ harnessId: selectedModel.harnessId, modelId: selectedModel.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}
+                  @click=${() => changeScopeRuntime({ harnessId: model.harnessId, modelId: model.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}
                 >
                   Make default
                 </button>`
@@ -531,11 +593,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           ${menuControl({
             kind: "model",
             searchable: true,
-            label: selectedModel.buttonLabel,
+            label: model.buttonLabel,
             title: "Model",
-            selected: selectedModel.value,
+            selected: model.value,
             align: "right",
-            options: getModelOptionsForHarness(selectedModel.harnessId, scopeKey()).map((option) => ({
+            options: getModelOptionsForHarness(model.harnessId, scopeKey()).map((option) => ({
               value: option.value,
               label: option.label,
             })),
@@ -544,17 +606,70 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
           })}
           ${menuControl({
             kind: "harness",
-            label: selectedModel.harnessLabel,
+            label: model.harnessLabel,
             title: "Harness",
-            selected: selectedModel.harnessId,
+            selected: model.harnessId,
             align: "right",
             options: getHarnessOptions(scopeKey()),
             disabled: inputBlocked,
             onSelect: (value: string) => selectHarness(value, agent),
           })}
         `;
+      return out;
+    }
+    const attachButton = (glyph: IconNode) => html`
+      <button
+        class="icon-btn"
+        type="button"
+        aria-label="Attach files"
+        ${tip("Attach files")}
+        ?disabled=${attachingDisabled}
+        @click=${() => pickFiles()}
+      >
+        ${icon(glyph, 16)}
+      </button>
+    `;
+    const effortAndFast = compact
+      ? nothing
+      : html`
+          ${
+            effortAvailable
+              ? menuControl({
+                  kind: "effort",
+                  glyph: Brain,
+                  label: effortLabel(composerState.effortLevel),
+                  title: "Effort",
+                  selected: composerState.effortLevel,
+                  options: EFFORT_LEVELS,
+                  disabled: inputBlocked,
+                  onSelect: (value: string) => selectEffort(value as EffortLevel, agent),
+                })
+              : nothing
+          }
+          ${
+            fastSupported
+              ? html`<button
+                  class="fast-toggle ${fastOn ? "active" : ""} ${fastCharging ? "charging" : ""} ${fastAvailable ? "" : "unavailable"}"
+                  type="button"
+                  aria-label=${fastTitle}
+                  aria-pressed=${fastOn ? "true" : "false"}
+                  aria-disabled=${fastAvailable ? "false" : "true"}
+                  ?disabled=${inputBlocked}
+                  @click=${() => toggleFastMode(agent)}
+                >
+                  ${icon(Zap, 15)}
+                  <span class="fast-label">Fast</span>
+                </button>`
+              : nothing
+          }
+        `;
+    let leftControls: TemplateResult;
+    if (variant === "ai-elements") leftControls = actionsMenuControl(attachingDisabled);
+    else if (variant === "prompt-kit") leftControls = attachButton(Paperclip);
+    else if (variant === "assistant-ui") leftControls = attachButton(Plus);
+    else leftControls = html`${attachButton(Plus)} ${effortAndFast}`;
     return html`
-      <form class="composer-wrap" @submit=${(e: Event) => submitComposer(e, agent)}>
+      <form class="composer-wrap" data-composer=${variant} @submit=${(e: Event) => submitComposer(e, agent)}>
         ${header} ${slashMenu(agent)}
         ${
           activeRuntimeConfig?.upgradeAvailable
@@ -622,52 +737,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               ?disabled=${attachingDisabled}
               @change=${(e: Event) => void onFilesSelected(e, agent)}
             />
-            <button
-              class="icon-btn"
-              type="button"
-              aria-label="Attach files"
-              ${tip("Attach files")}
-              ?disabled=${attachingDisabled}
-              @click=${() => pickFiles()}
-            >
-              ${icon(Plus, 16)}
-            </button>
-            ${
-              compact
-                ? nothing
-                : html`
-                    ${
-                      effortAvailable
-                        ? menuControl({
-                            kind: "effort",
-                            glyph: Brain,
-                            label: effortLabel(composerState.effortLevel),
-                            title: "Effort",
-                            selected: composerState.effortLevel,
-                            options: EFFORT_LEVELS,
-                            disabled: inputBlocked,
-                            onSelect: (value: string) => selectEffort(value as EffortLevel, agent),
-                          })
-                        : nothing
-                    }
-                    ${
-                      fastSupported
-                        ? html`<button
-                            class="fast-toggle ${fastOn ? "active" : ""} ${fastCharging ? "charging" : ""} ${fastAvailable ? "" : "unavailable"}"
-                            type="button"
-                            aria-label=${fastTitle}
-                            aria-pressed=${fastOn ? "true" : "false"}
-                            aria-disabled=${fastAvailable ? "false" : "true"}
-                            ?disabled=${inputBlocked}
-                            @click=${() => toggleFastMode(agent)}
-                          >
-                            ${icon(Zap, 15)}
-                            <span class="fast-label">Fast</span>
-                          </button>`
-                        : nothing
-                    }
-                  `
-            }
+            ${leftControls}
           </div>
           <div class="composer-right">${showRuntimeControls ? runtimeControls : nothing} ${sendControls(agent)}</div>
         </div>
@@ -759,6 +829,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     });
   }
 
+  function sendGlyph(): IconNode {
+    return composerVariant() === "ai-elements" ? CornerDownLeft : ArrowUp;
+  }
+
   function sendControls(agent: Agent): TemplateResult {
     if (!agent.state.isStreaming) {
       return html`<button
@@ -768,7 +842,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         ${tip("Send")}
         ?disabled=${!composerCanSend()}
       >
-        ${icon(ArrowUp, 16)}
+        ${icon(sendGlyph(), 16)}
       </button>`;
     }
     const canQueue = Boolean(composerState.draft.trim() || composerState.attachments.length);
@@ -783,7 +857,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         aria-label="Queue for after this turn"
         ?disabled=${!canQueue}
       >
-        ${icon(ArrowUp, 16)}
+        ${icon(sendGlyph(), 16)}
       </button>
     `;
   }
@@ -1019,6 +1093,215 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                         `
                       : nothing
                   }
+                </div>
+              `
+            : nothing
+        }
+      </div>
+    `;
+  }
+
+  function harnessMark(harnessId: string, label: string): TemplateResult {
+    return html`<span class="ms-mark" data-harness=${harnessId} aria-hidden="true"
+      >${label.slice(0, 1).toUpperCase()}</span
+    >`;
+  }
+
+  function modelChips(model: ModelOption["model"]): TemplateResult {
+    const chips: string[] = [];
+    if (model.input.includes("image")) chips.push("Vision");
+    if (model.reasoning) chips.push("Reasoning");
+    if (model.contextWindow) chips.push(`${Math.round(model.contextWindow / 1000)}K`);
+    return html`<span class="ms-chips">${chips.map((c) => html`<span>${c}</span>`)}</span>`;
+  }
+
+  function keepModelMenuOpen(agent: Agent, act: () => void): void {
+    act();
+    composerState.openMenu = "model";
+    ctx.chat.drawActiveChat(agent);
+  }
+
+  function modelSelectorControl(agent: Agent, selected: ModelOption, disabled: boolean): TemplateResult {
+    const open = composerState.openMenu === "model";
+    const effortAvailable = harnessSupportsEffort(selected.harnessId);
+    const fastAvailable =
+      harnessSupportsFastMode(selected.harnessId) && modelSupportsFastMode(scopeKey(), selected.model.id);
+    const fastOn = fastAvailable && effectiveFastMode();
+    const query = composerState.menuQuery.trim().toLocaleLowerCase();
+    const all = getModelOptions(scopeKey());
+    const matches = query
+      ? all.filter((o) => `${o.label} ${o.harnessLabel} ${o.model.provider}`.toLocaleLowerCase().includes(query))
+      : all;
+    const groups = new Map<string, ModelOption[]>();
+    for (const option of matches) groups.set(option.harnessLabel, [...(groups.get(option.harnessLabel) ?? []), option]);
+    return html`
+      <div class="menu-control model-control" data-align="right">
+        <button
+          class="menu-button"
+          type="button"
+          ${tip("Model")}
+          aria-haspopup="menu"
+          aria-expanded=${open ? "true" : "false"}
+          aria-controls="composer-model-menu"
+          ?disabled=${disabled}
+          @click=${(e: Event) => toggleComposerMenu(e, "model")}
+        >
+          ${harnessMark(selected.harnessId, selected.harnessLabel)}
+          <span class="menu-label">${selected.buttonLabel}</span>
+          ${effortAvailable ? html`<span class="menu-suffix">${effortLabel(composerState.effortLevel)}</span>` : nothing}
+          ${icon(ChevronDown, 12)}
+        </button>
+        ${
+          open && !disabled
+            ? html`
+                <div
+                  class="menu-popover model-selector-popover"
+                  id="composer-model-menu"
+                  role="menu"
+                  @click=${(e: Event) => e.stopPropagation()}
+                >
+                  <label class="menu-search">
+                    ${icon(Search, 14)}<span class="sr-only">Search models</span>
+                    <input
+                      type="search"
+                      placeholder="Search models…"
+                      .value=${live(composerState.menuQuery)}
+                      @input=${(e: InputEvent) => {
+                        composerState.menuQuery = (e.currentTarget as HTMLInputElement).value;
+                        ctx.chat.drawActiveChat();
+                        requestAnimationFrame(() => placeComposerMenu("model"));
+                      }}
+                    />
+                  </label>
+                  <div class="ms-list">
+                    ${
+                      matches.length
+                        ? [...groups].map(
+                            ([label, options]) => html`
+                              <div class="menu-group-label">${label}</div>
+                              ${options.map(
+                                (option) => html`
+                                  <button
+                                    class="menu-option ${option.value === selected.value ? "active" : ""}"
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked=${option.value === selected.value ? "true" : "false"}
+                                    @click=${() => selectModel(option.value, agent)}
+                                  >
+                                    ${harnessMark(option.harnessId, option.harnessLabel)}
+                                    <span class="menu-option-copy">
+                                      <span class="menu-option-label">${option.label}</span>
+                                      <span class="ms-desc">${option.model.provider}</span>
+                                    </span>
+                                    ${modelChips(option.model)}
+                                    ${option.value === selected.value ? icon(Check, 15) : nothing}
+                                  </button>
+                                `,
+                              )}
+                            `,
+                          )
+                        : html`<div class="menu-empty">No matching models.</div>`
+                    }
+                  </div>
+                  ${
+                    effortAvailable || fastAvailable
+                      ? html`
+                          <div class="ms-footer">
+                            ${
+                              effortAvailable
+                                ? html`<span>Thinking</span>
+                                    <div class="settings-seg" role="group" aria-label="Effort">
+                                      ${EFFORT_LEVELS.map(
+                                        (option) => html`
+                                          <button
+                                            class="settings-chip ${option.value === composerState.effortLevel ? "active" : ""}"
+                                            type="button"
+                                            aria-pressed=${option.value === composerState.effortLevel ? "true" : "false"}
+                                            @click=${() => keepModelMenuOpen(agent, () => selectEffort(option.value, agent))}
+                                          >
+                                            ${option.label}
+                                          </button>
+                                        `,
+                                      )}
+                                    </div>`
+                                : nothing
+                            }
+                            ${
+                              fastAvailable
+                                ? html`<button
+                                    class="settings-chip ms-fast ${fastOn ? "active" : ""}"
+                                    type="button"
+                                    aria-pressed=${fastOn ? "true" : "false"}
+                                    @click=${() => keepModelMenuOpen(agent, () => toggleFastMode(agent))}
+                                  >
+                                    ${icon(Zap, 12)} Fast
+                                  </button>`
+                                : nothing
+                            }
+                          </div>
+                        `
+                      : nothing
+                  }
+                </div>
+              `
+            : nothing
+        }
+      </div>
+    `;
+  }
+
+  function actionsMenuControl(disabled: boolean): TemplateResult {
+    const open = composerState.openMenu === "actions";
+    return html`
+      <div class="menu-control actions-control" data-align="left">
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="Add"
+          ${tip("Add")}
+          aria-haspopup="menu"
+          aria-expanded=${open ? "true" : "false"}
+          aria-controls="composer-actions-menu"
+          ?disabled=${disabled}
+          @click=${(e: Event) => toggleComposerMenu(e, "actions")}
+        >
+          ${icon(Plus, 16)}
+        </button>
+        ${
+          open && !disabled
+            ? html`
+                <div
+                  class="menu-popover"
+                  id="composer-actions-menu"
+                  role="menu"
+                  @click=${(e: Event) => e.stopPropagation()}
+                >
+                  <button
+                    class="menu-option"
+                    type="button"
+                    role="menuitem"
+                    @click=${() => {
+                      composerState.openMenu = null;
+                      pickFiles();
+                    }}
+                  >
+                    <span class="menu-option-copy">
+                      <span class="menu-option-label">${icon(Paperclip, 14)} Attach files</span>
+                    </span>
+                  </button>
+                  <button
+                    class="menu-option"
+                    type="button"
+                    role="menuitem"
+                    @click=${() => {
+                      composerState.openMenu = null;
+                      insertText("/");
+                    }}
+                  >
+                    <span class="menu-option-copy">
+                      <span class="menu-option-label">${icon(Sparkles, 14)} Use a skill</span>
+                    </span>
+                  </button>
                 </div>
               `
             : nothing
