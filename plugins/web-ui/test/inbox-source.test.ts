@@ -208,8 +208,8 @@ test("draft header links stay together after the label", () => {
 });
 
 test("suggested draft actions yield to typed instructions without reflow", () => {
-  assert.match(inbox, /composer\?\.classList\.toggle\("has-text", !!box\.value\.trim\(\)\)/);
   assert.match(inbox, /inbox-chat-composer \$\{pending\.trim\(\) \? "has-text" : ""\}/);
+  assert.match(inbox, /if \(had !== Boolean\(box\.value\.trim\(\)\)\) drawAll\(\);/);
   assert.match(css, /\.inbox-chat-composer\.has-text \.inbox-chat-suggest \{\s*visibility: hidden;/);
   assert.doesNotMatch(inbox, /inbox-draft-actions|function sendLabel/);
 });

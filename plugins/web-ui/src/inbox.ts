@@ -720,7 +720,7 @@ export function slackTextTpl(item: InboxItem, text: string, opts: { links?: bool
   return html`${splitSlackWire(text).map((seg) => {
     if (seg.kind === "mention") return mentionChip(seg.handle);
     if (seg.kind === "link") {
-      if (opts.links === false) return html`<span title=${seg.href}>${withMentions(seg.label)}</span>`;
+      if (opts.links === false) return html`<span ${tip(seg.href)}>${withMentions(seg.label)}</span>`;
       return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
         >${withMentions(seg.label)}</a
       >`;
@@ -767,13 +767,6 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
       `;
     })}
   </div>`;
-}
-
-function syncAskEnabled(box: HTMLTextAreaElement): void {
-  const composer = box.closest(".inbox-chat-composer");
-  const send = composer?.querySelector<HTMLButtonElement>(".inbox-chat-send");
-  if (send) send.disabled = !box.value.trim();
-  composer?.classList.toggle("has-text", !!box.value.trim());
 }
 
 export function chatTpl(item: InboxItem): TemplateResult {
