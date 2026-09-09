@@ -686,7 +686,7 @@ export interface SessionStore {
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
-  listByParticipant(principalId: string): Promise<Session[]>;
+  listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;

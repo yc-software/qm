@@ -193,8 +193,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
        LEFT JOIN session_entries e ON e.session_id = s.id AND e.type = 'user'
       WHERE p.principal_id = $1${extraWhere}
       GROUP BY s.id, p.title, p.archived, p.pinned, p.color, p.valid_from, p.valid_to, p.valid_from_seq, p.valid_to_seq`;
-  const participantSessions = async (principalId: string): Promise<Session[]> => {
-    const rows = await q(participantSessionsSql(""), [principalId]);
+  const participantSessions = async (principalId: string, opts?: { limit: number }): Promise<Session[]> => {
+    const limit = opts ? Math.max(0, Math.floor(opts.limit)) : undefined;
+    const rows = await q(
+      participantSessionsSql("") +
+        (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
+      limit === undefined ? [principalId] : [principalId, limit],
+    );
     return rows.map(rowToParticipantSession);
   };
   const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
@@ -1068,8 +1073,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
-    async listByParticipant(principalId): Promise<Session[]> {
-      return participantSessions(principalId);
+    async listByParticipant(principalId, opts): Promise<Session[]> {
+      return participantSessions(principalId, opts);
     },
 
     async getForParticipant(sessionId, principalId): Promise<Session | null> {

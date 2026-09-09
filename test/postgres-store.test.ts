@@ -2133,3 +2133,21 @@ test("pg search: migration fills holes below the watermark and covers legacy-onl
     await pool.end();
   }
 });
+
+test("pg session store: bounded participant listing is recent and optional", { skip }, async () => {
+  let at = 1000;
+  const store = createPostgresSessionStore(URL!, { now: () => at });
+  const ids: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    at += 1000;
+    const session = await store.getOrCreateByThread(`bounded:${i}`, "dm", scopeId("personal", "bounded-user"));
+    ids.push(session.id);
+    await store.addParticipant(session.id, "bounded-user");
+  }
+  assert.equal((await store.listByParticipant("bounded-user")).length, 5);
+  assert.deepEqual(
+    (await store.listByParticipant("bounded-user", { limit: 2 })).map((s) => s.id),
+    ids.slice(-2).reverse(),
+  );
+  assert.deepEqual(await store.listByParticipant("bounded-user", { limit: 0 }), []);
+});

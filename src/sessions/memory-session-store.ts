@@ -442,7 +442,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       }
     },
 
-    async listByParticipant(principalId) {
+    async listByParticipant(principalId, opts) {
       const ids = participants.get(principalId);
       if (!ids) return [];
       const out: Session[] = [];
@@ -450,7 +450,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         const row = participantSession(id, principalId);
         if (row) out.push(row);
       }
-      return out;
+      return opts
+        ? out
+            .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
+            .slice(0, Math.max(0, Math.floor(opts.limit)))
+        : out;
     },
 
     async getForParticipant(sessionId, principalId) {

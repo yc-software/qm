@@ -1,4 +1,5 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
+import type { SharingPosture } from "./resolution/sharing-posture.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -126,6 +127,7 @@ export interface Resolution {
   egress: EgressPolicy;
   commandPolicy: CommandPolicy;
   securityPolicy: ResolvedSecurityPolicy;
+  sharingPosture?: SharingPosture;
   approvalGrantModes: ApprovalGrantModes;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
@@ -142,6 +144,7 @@ export interface Grant {
 }
 
 export interface GrantedHandle {
+  carried?: true;
   handlePath: string;
   ownerScopeId: ScopeId;
   ownerPath: string;

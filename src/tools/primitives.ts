@@ -450,6 +450,8 @@ export interface ToolContextDeps {
   files?: FileArtifactStore;
   auditLog?: AuditLog;
   createdBy: string;
+  sharingSourceScopes?: readonly ScopeId[];
+  sharingTargetScope?: ScopeId;
   publicWebUrl?: string;
   publishContext?: {
     conversationKind: ConversationKind;
@@ -867,8 +869,29 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ? await readGrantedArtifactBytes(granted.ownerScopeId, granted.ownerPath)
           : await deps.workspace.readBytes(granted.ownerScopeId, granted.ownerPath);
         if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
+        if (granted.carried && deps.sharingTargetScope) {
+          deps.auditLog?.record({
+            at: Date.now(),
+            principalId: deps.createdBy,
+            action: "sharing.cross_context_read",
+            resource: granted.ownerPath,
+            scopeLabel: deps.sharingTargetScope,
+            detail: JSON.stringify({
+              actor: deps.createdBy,
+              source: granted.ownerScopeId,
+              target: deps.sharingTargetScope,
+            }),
+          });
+        }
         const asText = tryDecodeUtf8(bytes);
         if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId, shared: true };
+        if (granted.carried) {
+          return {
+            content:
+              "Binary files require an explicit share before they can be copied into this conversation's computer.",
+            sourceScopeId: granted.ownerScopeId,
+          };
+        }
         const handle = await deps.provision();
         const name = granted.handlePath.split(/[\\/]/).pop() ?? granted.handlePath;
         const materializedPath = deps.sharedMaterializeDir
@@ -883,6 +906,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           shared: true,
         };
       }
+      if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
       const skillDir = skillTreeDirFor(path);
       if (skillDir && deps.ensureSkillTree) await deps.ensureSkillTree(skillDir);
       const handle = await deps.provision();
@@ -1100,6 +1124,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return timed("recall", async () => {
         const out: string[] = [];
         for (const scope of read) {
+          if (deps.sharingSourceScopes?.includes(scope) && deps.sharingTargetScope) {
+            deps.auditLog?.record({
+              at: Date.now(),
+              principalId: deps.createdBy,
+              action: "sharing.cross_context_read",
+              resource: "memory",
+              scopeLabel: deps.sharingTargetScope,
+              detail: JSON.stringify({ actor: deps.createdBy, source: scope, target: deps.sharingTargetScope }),
+            });
+          }
           for (const fact of await deps.memory!.query(scope, q, limit, { actorId: deps.createdBy })) {
             out.push(read.length > 1 ? `[${scope}] ${fact}` : fact);
           }

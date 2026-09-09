@@ -32,7 +32,7 @@ isn't tied to any single vendor.
   work with it collaboratively in Slack channels and projects.
 - **Slack and web.** The same identity and configuration carries between Slack and the
   web app.
-- **Admin control.** Set org-level configuration, a security posture, and which
+- **Admin control.** Set org-level configuration, security and sharing postures, and which
   harnesses and models are available.
 - **Web apps.** Spin up custom internal apps and publish them to the right people.
 - **Shared skills.** Skills are scope-owned and shareable by grant, with admin-gated
@@ -108,6 +108,26 @@ can only tighten:
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.
+
+Sharing posture is independent:
+
+- **Isolated** (default) — resources stay in their scope unless explicitly shared.
+- **Open** — on a live authenticated internal human turn, the speaker's opted-in personal
+  files, artifacts, skills, and memory may be read in an opted-in shared room. In the
+  speaker's DM, files and skills from up to 25 recent shared contexts where they are still
+  a member are available; their memory is searchable but not eagerly added to the prompt.
+  The candidate window is limited to 100 recent sessions and file discovery to 200 files.
+  Binary files still require explicit sharing before entering another conversation's computer.
+  Cross-context memory search is available only through the active turn's memory tool;
+  reusable sandbox API tokens retain their original memory scope.
+
+The organization value is a ceiling, and personal and room scopes can opt out; Isolated
+wins. “Follow organization” removes a personal or room override. Disabled memory recall
+and writable-only recall still apply. Open does not mount a personal workspace into a room, carry credentials or message
+history, widen writes, run in automation or ambient turns, cross organizations, add a
+teammate's entitlement, or weaken screening, command approvals, or egress. It can still
+reveal private information in a shared reply, so cross-context reads are provenance-labelled
+and audited.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.

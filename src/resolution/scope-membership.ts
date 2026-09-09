@@ -20,6 +20,7 @@ export interface ScopeMembershipDeps {
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     list?(): Promise<Array<{ principalId: string; displayName?: string }>>;
+    get?(principalId: string): Promise<{ principalId?: string; slackId?: string } | null>;
   };
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
@@ -39,11 +40,15 @@ async function currentSharedScopeMember(
   principalId: string,
 ): Promise<boolean> {
   if (!activePrincipal(deps, principalId)) return false;
+  const member = await deps.directory?.get?.(principalId).catch(() => null);
+  const ids = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
   if (kind === "group" && deps.managedGroups?.recognizes(ref)) {
-    return (await deps.managedGroups.membership(ref, principalId).catch(() => false)) === true;
+    for (const id of ids) if ((await deps.managedGroups.membership(ref, id).catch(() => false)) === true) return true;
+    return false;
   }
   const direct = kind === "channel" ? deps.directory?.channelMember : deps.directory?.groupMember;
-  return (await direct?.call(deps.directory, ref, principalId).catch(() => false)) === true;
+  for (const id of ids) if ((await direct?.call(deps.directory, ref, id).catch(() => false)) === true) return true;
+  return false;
 }
 
 async function sharedScopeMembership(

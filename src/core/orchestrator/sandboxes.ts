@@ -351,7 +351,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           (candidate) => candidate.skill && safeSkillDirName(candidate.skill.manifest.name) === skillDir,
         );
         if (!latest) return null;
-        const bundles = deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [latest]) : [];
+        const bundles =
+          latest.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [latest]) : []);
         return { resolution: latest, bundles };
       });
       laidTrees.add(treeKey);

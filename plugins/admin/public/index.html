@@ -5205,6 +5205,10 @@
                   <span class="k">Autonomy</span><span class="v">Loading</span
                   ><span class="detail">Security posture</span>
                 </div>
+                <div class="governance-status" id="governance-status-sharing">
+                  <span class="k">Sharing</span><span class="v">Loading</span
+                  ><span class="detail">Cross-context reads</span>
+                </div>
                 <div class="governance-status" id="governance-status-egress">
                   <span class="k">Network</span><span class="v">Loading</span
                   ><span class="detail">Outbound enforcement</span>
@@ -5456,6 +5460,54 @@
                   <h2>Data boundaries</h2>
                   <p>What can leave a scope, which audiences can see it, and how deployment authority is carried.</p>
                 </div>
+                <section class="card sv-governance setting-row hidden" id="card-sharing-posture">
+                  <div class="head">
+                    <h2>Sharing posture</h2>
+                    <p>
+                      The organization is a ceiling. Personal and room scopes can opt out, and Isolated always wins.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <p id="sharing-posture-effective"></p>
+                    <select id="sharing-posture" data-choice-state hidden>
+                      <option value="isolated">Isolated</option>
+                      <option value="open">Open</option>
+                    </select>
+                    <div class="choice-stack">
+                      <label class="posture-choice"
+                        ><input
+                          type="radio"
+                          name="sharing-posture-choice"
+                          value="isolated"
+                          data-choice-for="sharing-posture"
+                        /><span
+                          ><strong>Isolated</strong
+                          ><small>Resources stay in their own scope unless explicitly shared.</small></span
+                        ></label
+                      >
+                      <label class="posture-choice"
+                        ><input
+                          type="radio"
+                          name="sharing-posture-choice"
+                          value="open"
+                          data-choice-for="sharing-posture"
+                        /><span
+                          ><strong>Open</strong
+                          ><small
+                            >QM can use your saved memories, files, and skills across conversations when you ask it for
+                            help. In a group conversation, this could risk revealing private information to
+                            others.</small
+                          ></span
+                        ></label
+                      >
+                    </div>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="sharing-posture">Apply</button>
+                    <button type="button" id="sharing-posture-inherit" hidden>Follow organization</button>
+                    <span class="status" id="st-sharing-posture"></span>
+                  </div>
+                </section>
                 <section class="card sv-governance" id="card-egress">
                   <div class="head">
                     <h2>Egress policy</h2>
@@ -6290,6 +6342,7 @@
         [
           $("card-security-posture"),
           $("card-auto-flagger"),
+          $("card-sharing-posture"),
           governanceAmbient,
           $("card-external-slack"),
           $("card-command-policy"),
@@ -7760,6 +7813,13 @@
         if (posture === "dangerous") postureTone = "danger";
         else if (posture === "auto") postureTone = "warn";
         setGovernanceStatus("governance-status-posture", titleCase(posture), "Effective security posture", postureTone);
+        const sharingPosture = data.sharingPosture || "isolated";
+        setGovernanceStatus(
+          "governance-status-sharing",
+          titleCase(sharingPosture),
+          "Effective sharing posture",
+          sharingPosture === "open" ? "danger" : "ok",
+        );
         const allowCount = (data.egress?.allowedHosts || []).length;
         const denyCount = (data.egress?.deniedHosts || []).length;
         const enforcement = data.egressEnforcement || {
@@ -7921,6 +7981,9 @@
           syncAutoFlaggerModels();
           $("auto-flagger-rubric").value = current.rubric;
         }
+        const showSharingPosture = "sharingPosture" in (r.data || {});
+        $("card-sharing-posture").classList.toggle("hidden", !showSharingPosture);
+        if (showSharingPosture) renderSharingPosture(r.data);
         const showGrantModes = "approvalGrantModes" in (r.data || {});
         $("card-approval-grant-modes").classList.toggle("hidden", !showGrantModes);
         if (showGrantModes) {
@@ -10559,6 +10622,7 @@
           rubric: $("auto-flagger-rubric").value,
         }),
 
+        "sharing-posture": () => ({ posture: $("sharing-posture").value }),
         "approval-grant-modes": () => ({
           session: $("approval-grant-session").checked,
           always: $("approval-grant-always").checked,
@@ -10591,6 +10655,7 @@
       const SAVE_ST = {
         "security-posture": "st-security-posture",
         "auto-flagger": "st-auto-flagger",
+        "sharing-posture": "st-sharing-posture",
         "approval-grant-modes": "st-approval-grant-modes",
         "command-policy": "st-policy",
         soul: "st-soul",
@@ -10697,6 +10762,24 @@
             danger: dangerous,
           });
         }
+        if (key === "sharing-posture") {
+          const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "isolated";
+          const open = body.posture === "open";
+          return reviewGovernanceChange({
+            title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
+            subtitle: "This applies to future live human turns in the selected scope.",
+            facts: [
+              ["Scope", governanceScopeName()],
+              ["Current", titleCase(before)],
+              ["Proposed", titleCase(body.posture)],
+            ],
+            warning: open
+              ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
+              : "Cross-context resources will again require explicit shares or grants.",
+            confirmLabel: open ? "Enable Open" : "Use Isolated",
+            danger: open,
+          });
+        }
         if (key === "external-slack-participants") {
           const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
           return reviewGovernanceChange({
@@ -10716,6 +10799,43 @@
         }
         return Promise.resolve(true);
       }
+      function renderSharingPosture(data) {
+        const effective = data.sharingPosture || "isolated";
+        $("sharing-posture").value = effective;
+        $("sharing-posture-inherit").hidden = scope.startsWith("org:") || data.sharingPostureOverride == null;
+        $("sharing-posture-effective").textContent =
+          (data.sharingPostureOverride == null
+            ? scope.startsWith("org:")
+              ? "Default"
+              : "Following organization"
+            : "Configured: " + titleCase(data.sharingPostureOverride)) +
+          " · Effective: " +
+          titleCase(effective);
+        document
+          .querySelectorAll('[data-choice-for="sharing-posture"]')
+          .forEach((input) => (input.checked = input.value === effective));
+      }
+      $("sharing-posture-inherit").onclick = async () => {
+        const requestedScope = scope;
+        if (
+          !(await reviewGovernanceChange({
+            title: "Follow organization sharing?",
+            subtitle: "Remove this scope's sharing override.",
+            facts: [["Scope", governanceScopeName()]],
+            warning:
+              "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
+            confirmLabel: "Follow organization",
+          })) ||
+          requestedScope !== scope
+        )
+          return;
+        const result = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/sharing-posture", {
+          inherit: true,
+        });
+        if (requestedScope !== scope) return;
+        if (result.ok) await loadScope();
+        setStatus("st-sharing-posture", result.ok ? "Saved" : "Could not reset sharing.", result.ok ? "ok" : "err");
+      };
       let governanceSaveSeq = 0;
       $("auto-flagger-test").onclick = async () => {
         const requestedScope = scope;
@@ -10788,7 +10908,7 @@
           }
           if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
           if (r.ok) {
-            if (key === "security-posture" || key === "ambient-policy") {
+            if (key === "security-posture" || key === "sharing-posture" || key === "ambient-policy") {
               const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
               if (!fresh.ok) {
                 updateSectionDirty(key);
@@ -10797,6 +10917,7 @@
               }
               renderGovernanceOverview(fresh.data);
               if (key === "security-posture") $("security-posture").value = fresh.data.securityPosture || "auto";
+              else if (key === "sharing-posture") renderSharingPosture(fresh.data);
               else renderAmbientPolicy(fresh.data.ambientPolicy);
               captureSection(key);
             } else if (key === "branding") {
@@ -15211,6 +15332,7 @@
                     : "default",
                 ],
                 ["Security posture", cfg.securityPosture || "auto"],
+                ["Sharing posture", cfg.sharingPosture || "isolated"],
                 ["Egress overrides", allowN || denyN ? allowN + " allow · " + denyN + " deny" : "none"],
                 ["Base model", cfg.baseModel || "org default"],
                 ["Connectors linked", String((cfg.connectors || []).length)],

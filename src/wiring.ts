@@ -42,6 +42,7 @@ import {
   type PersistedSoulRevision,
   type PersistedCommandPolicy,
   type PersistedSecurityPosture,
+  type PersistedSharingPosture,
   type PersistedApprovalGrantModes,
   type PersistedEgressPolicy,
   type PersistedScopedFlag,
@@ -143,6 +144,7 @@ import {
   createCanManageScope,
   createCanWriteScope,
   createCurrentScopeMembers,
+  createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
   type CanReadScope,
   type CanManageScope,
@@ -563,6 +565,7 @@ export function buildApp(
     soulHistory: artifactMap<PersistedSoulRevision>("soul_history"),
     commandPolicies: artifactMap<PersistedCommandPolicy>("command_policies"),
     securityPostures: artifactMap<PersistedSecurityPosture>("security_postures"),
+    sharingPostures: artifactMap<PersistedSharingPosture>("sharing_postures"),
     approvalGrantModes: artifactMap<PersistedApprovalGrantModes>("approval_grant_modes"),
     egressPolicies: artifactMap<PersistedEgressPolicy>("egress_policies"),
     unfulfilledInsights: artifactMap<PersistedScopedFlag>("unfulfilled_insights_flag"),
@@ -585,6 +588,7 @@ export function buildApp(
     turnWallClocks: artifactMap<PersistedTurnWallClock>("turn_wall_clock_configs"),
     deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
     defaultSecurityPosture: config.securityPosture,
+    defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
   void configStore.hydrate?.();
@@ -1336,6 +1340,7 @@ export function buildApp(
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
   const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory }, canManageScope);
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
+  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -1542,6 +1547,7 @@ export function buildApp(
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     ...(config.sharedOwnerAuthIsolation ? { ownerAuthExec: true, sharedOwnerAuthIsolation: true } : {}),
     directory,
+    isCurrentSharedScopeMember,
     managedGroups: projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
