@@ -35,7 +35,8 @@ import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
-import { audit } from "./shared.ts";
+import { audit, orgScope } from "./shared.ts";
+import { ensureFactoryLoop } from "../../loops/factory/factory-loop.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
@@ -832,7 +833,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label: "The software factory: which repository and Linear team it works, and how it verifies.",
     readKey: "factoryConfig",
     get: (deps) => deps.config!.getFactoryConfig(),
-    apply: async (ctx, _actor, scope) => {
+    apply: async (ctx, actor, scope) => {
       const bad = orgOnly(scope, "the factory config is org-wide");
       if (bad) return bad;
       const body = ctx.body;
@@ -844,6 +845,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const parsed = parseFactoryConfig(body);
       if ("error" in parsed) return parsed;
       ctx.deps.config!.setFactoryConfig(parsed.value);
+      if (ctx.deps.loops)
+        await ensureFactoryLoop(ctx.deps.loops.store, { owner: actor.id, orgScopeId: orgScope(ctx.deps) });
       return { ok: true };
     },
   },
