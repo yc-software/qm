@@ -962,29 +962,40 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async listScreenSamples(limit): Promise<ScreenSample[]> {
-      const rows = await q(
-        `SELECT r.id, r.session_id, r.scope_label, r.created_at, r.model, e.body AS prompt_body
-           FROM session_llm_requests r JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash
-          WHERE r.step = $1
-          ORDER BY r.created_at DESC, r.id DESC
-          LIMIT $2`,
-        [SECURITY_SCREEN_STEP, Math.max(0, Math.trunc(limit))],
-      );
-      return rows.flatMap((r) => {
-        const payload = screenPayloadFromEnvelope(JSON.parse(r.prompt_body as string));
-        return payload
-          ? [
-              {
-                id: r.id as string,
-                sessionId: r.session_id as string,
-                scopeLabel: r.scope_label as ScopeId,
-                createdAt: Number(r.created_at),
-                model: r.model as string,
-                payload,
-              },
-            ]
-          : [];
-      });
+      const wanted = Math.max(0, Math.trunc(limit));
+      const pageSize = Math.max(wanted, 100);
+      const samples: ScreenSample[] = [];
+      let beforeAt: number | null = null;
+      let beforeId: string | null = null;
+      while (samples.length < wanted) {
+        const rows = await q(
+          `SELECT r.id, r.session_id, r.scope_label, r.created_at, r.model, e.body AS prompt_body
+             FROM session_llm_requests r JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash
+            WHERE r.step = $1
+              AND ($3::bigint IS NULL OR (r.created_at, r.id) < ($3::bigint, $4::text))
+            ORDER BY r.created_at DESC, r.id DESC
+            LIMIT $2`,
+          [SECURITY_SCREEN_STEP, pageSize, beforeAt, beforeId],
+        );
+        for (const r of rows) {
+          const payload = screenPayloadFromEnvelope(JSON.parse(r.prompt_body as string));
+          if (!payload) continue;
+          samples.push({
+            id: r.id as string,
+            sessionId: r.session_id as string,
+            scopeLabel: r.scope_label as ScopeId,
+            createdAt: Number(r.created_at),
+            model: r.model as string,
+            payload,
+          });
+          if (samples.length === wanted) return samples;
+        }
+        if (rows.length < pageSize) break;
+        const last = rows.at(-1)!;
+        beforeAt = Number(last.created_at);
+        beforeId = last.id as string;
+      }
+      return samples;
     },
 
     async addParticipant(sessionId, principalId, title, opts): Promise<void> {

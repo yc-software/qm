@@ -8,6 +8,7 @@ import {
   createPostgresSessionStore,
   rowToSession,
 } from "../src/sessions/postgres-session-store.ts";
+import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId, type Principal, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -84,6 +85,78 @@ test("pg session store: a bare failed acquire means the session is gone, not a l
   const reacquired = await s.acquireLease(session.id, "turn");
   assert.ok(reacquired.lease, "a released lease is immediately reacquirable");
   await s.releaseLease(reacquired.lease!);
+});
+
+test("pg session store: replay windows count usable payloads, not metadata-only screens", { skip }, async () => {
+  let now = Date.now();
+  const store = createPostgresSessionStore(URL!, { now: () => now });
+  const scope = scopeId("personal", "screen-window");
+  const session = await store.getOrCreateByThread("screen-window", "dm", scope);
+  const record = (promptEnvelope: unknown, step = SECURITY_SCREEN_STEP) =>
+    store.recordLlmRequest(session.id, {
+      turnSeq: step === SECURITY_SCREEN_STEP ? null : 1,
+      step,
+      model: "screen-test",
+      scopeLabel: scope,
+      promptEnvelope,
+      usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, costUsd: 0.01 },
+    });
+  const envelope = (content: unknown) => ({ messages: [{ role: "user", content }] });
+
+  const unusable = [
+    undefined,
+    null,
+    { system: "Claude configuration only" },
+    { threadStart: { model: "Codex" } },
+    { system: "OpenCode configuration without messages" },
+    { messages: [] },
+    { messages: { role: "user", content: "not an array" } },
+    { messages: [null] },
+    { messages: [{ role: "assistant", content: "not a user payload" }] },
+    { messages: [...envelope("one").messages, ...envelope("two").messages] },
+    envelope(42),
+    envelope(null),
+    envelope(["not string content"]),
+    envelope(""),
+    envelope(" \t\r\n\u00a0\u2003\ufeff "),
+  ];
+  for (const payload of unusable) await record(payload);
+  for (let i = 0; i < 205; i++) await record({ system: "metadata only" });
+  assert.deepEqual(await store.listScreenSamples(2), []);
+  now -= 2;
+  const oldest = await record(envelope("  older usable payload  "));
+  now++;
+  const newest = await record(envelope("newer usable payload"));
+  now += 2;
+  await record(envelope("ordinary turn, not a screening"), 0);
+  const before = await store.listLlmRequests(session.id);
+
+  assert.deepEqual(
+    (await store.listScreenSamples(2)).map((sample) => sample.id),
+    [newest.id, oldest.id],
+  );
+  assert.deepEqual(
+    (await store.listScreenSamples(1)).map((sample) => sample.id),
+    [newest.id],
+  );
+  assert.deepEqual(
+    (await store.listScreenSamples(1000)).map((sample) => sample.payload),
+    ["newer usable payload", "older usable payload"],
+  );
+  assert.deepEqual(await store.listScreenSamples(0), []);
+  assert.deepEqual(await store.listScreenSamples(-1), []);
+  assert.equal((await store.listScreenSamples(1.9)).length, 1);
+  assert.deepEqual(await store.listLlmRequests(session.id), before);
+  assert.equal(before.length, unusable.length + 208);
+
+  const tied = [await record(envelope("tied A")), await record(envelope("tied B"))];
+  assert.deepEqual(
+    (await store.listScreenSamples(2)).map((sample) => sample.id),
+    tied
+      .map((row) => row.id)
+      .sort()
+      .reverse(),
+  );
 });
 
 test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibility window", { skip }, async () => {
