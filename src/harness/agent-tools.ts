@@ -509,9 +509,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }),
     computer: Type.Optional(
       Type.String({
-        enum: ["status", "restart", ...(opts?.migrateTargets?.length ? ["migrate"] : [])],
+        enum: [
+          "status",
+          "restart",
+          "list",
+          "create",
+          "default",
+          "retire",
+          ...(opts?.migrateTargets?.length ? ["migrate"] : []),
+        ],
         description:
-          "Manage the scoped computer itself instead of running a command. " +
+          "Manage computers instead of running a command. list returns inventory; create provisions a blank computer using backend/name without changing the default; default changes only the default target using sandbox_id (null unsets it). retire permanently deletes the named computer and its local files; first unset its default and stop its jobs. Commands and status/restart can target an exact sandbox_id. " +
           '"status" and "restart" act out-of-band, so they work even when the computer is unresponsive: "status" reports the machine\'s health and whether its shell answers; "restart" reboots it (files survive; running processes don\'t, and an interrupted command may or may not have taken effect). ' +
           "Reach for these when commands hang or fail with transport errors that nothing you ran explains: check status first, restart only if the machine is up but its shell is not answering." +
           (opts?.migrateTargets?.length
@@ -530,6 +538,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ),
         }
       : {}),
+    sandbox_id: Type.Optional(
+      Type.Union([Type.String(), Type.Null()], {
+        description:
+          "Run on this exact sandbox ID. With computer:default choose this ID, or null to leave the scope without a default.",
+      }),
+    ),
+    backend: Type.Optional(
+      Type.String({
+        description: "Provider for computer:create. Creates a blank independent sandbox without changing the default.",
+      }),
+    ),
+    name: Type.Optional(Type.String({ description: "Human-readable sandbox name for computer:create." })),
     purpose: Type.String({
       description:
         "One short sentence on what this command accomplishes and why you're running it now — " +
@@ -581,6 +601,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     params: {
       command: string;
       computer?: string;
+      sandbox_id?: string | null;
+      backend?: string;
+      name?: string;
       to?: string;
       timeout_seconds?: number;
       purpose?: string;
@@ -601,8 +624,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       try {
+        if (["list", "create", "default", "retire"].includes(params.computer)) {
+          if (!tc.sandboxResources) throw new Error("sandbox inventory unavailable");
+          const result = await tc.sandboxResources(params.computer as "list" | "create" | "default" | "retire", {
+            backend: params.backend,
+            name: params.name,
+            sandboxId: params.sandbox_id,
+          });
+          return recordResult(callId, { tool: "execute", computer: params.computer }, text(JSON.stringify(result)));
+        }
+        if (params.sandbox_id === null) throw new Error("null only clears a default");
         if (params.computer === "restart") {
-          await tc.restartComputer();
+          await tc.restartComputer(params.sandbox_id);
           return recordResult(
             callId,
             { tool: "execute", computer: "restart", restarted: true },
@@ -627,7 +660,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ),
           );
         }
-        const s = await tc.computerStatus();
+        const s = await tc.computerStatus(params.sandbox_id);
         const verdict = computerVerdict(s);
         const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
         const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
@@ -681,7 +714,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }
     await recordCall(callId, { tool: "execute", command: params.command, ...scopeNote });
     try {
+      if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
+        ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
         ...(route?.ownerAuth ? { ownerAuth: true } : {}),
@@ -1383,6 +1418,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { description: "stop only: default TERM; use KILL to force." },
         ),
       ),
+      sandbox_id: Type.Optional(
+        Type.String({
+          description: "start only: exact sandbox to run on; later operations use the job’s saved target.",
+        }),
+      ),
       timeout_seconds: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -1410,10 +1450,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                 text("[error] background start requires `command`."),
                 true,
               );
-            const r = await tc.backgroundStart(
-              params.command,
-              params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : undefined,
-            );
+            const r = await tc.backgroundStart(params.command, {
+              ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
+              ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
+            });
             return recordResult(
               callId,
               { tool: "background", ...r },

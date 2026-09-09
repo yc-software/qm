@@ -481,11 +481,11 @@ test("migrate targets are advertised only when a deployment has somewhere to go"
   const without = createAgentTools(ref)[0]!;
   const enumOf = (tool: typeof withTargets) =>
     (tool.parameters as { properties: { computer: { enum: string[] } } }).properties.computer.enum;
-  assert.deepEqual(enumOf(withTargets), ["status", "restart", "migrate"]);
+  assert.deepEqual(enumOf(withTargets), ["status", "restart", "list", "create", "default", "retire", "migrate"]);
   const toEnum = (withTargets.parameters as { properties: { to: { enum: string[] } } }).properties.to.enum;
   assert.deepEqual(toEnum, ["e2b", "modal"]);
   assert.equal("to" in (without.parameters as { properties: object }).properties, false);
-  assert.deepEqual(enumOf(without), ["status", "restart"]);
+  assert.deepEqual(enumOf(without), ["status", "restart", "list", "create", "default", "retire"]);
 });
 
 test("computer migrate pauses the turn for human approval", async () => {
@@ -2646,4 +2646,25 @@ test("execute output from a reached room is external even for a local-looking co
   const [execute] = createAgentTools(ref, { reachExec: true });
   await call(execute, { command: "cat notes.md", scope: "channel:C2" });
   assert.deepEqual(seen, [{ provenance: "external", source: "reached room" }]);
+});
+
+test("sandbox management and explicit execution preserve independent target arguments", async () => {
+  const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
+  const operations: unknown[] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(sink),
+    sandboxResources: async (action, input) => {
+      operations.push({ action, input });
+      return { ok: true };
+    },
+  };
+  const [execute] = createAgentTools({ current: tc, emit: () => {}, scopeLabel: "personal:U1" });
+  await call(execute, { command: "", computer: "create", backend: "modal", name: "build", purpose: "p" });
+  await call(execute, { command: "", computer: "default", sandbox_id: null, purpose: "p" });
+  await call(execute, { command: "pwd", sandbox_id: "box-a", purpose: "p" });
+  assert.deepEqual(operations, [
+    { action: "create", input: { backend: "modal", name: "build", sandboxId: undefined } },
+    { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } },
+  ]);
+  assert.equal(sink.lastExecOpts?.sandboxId, "box-a");
 });

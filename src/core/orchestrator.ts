@@ -1524,6 +1524,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopedCommand,
         provision,
         provisionScratch,
+        provisionResource,
         provisionOwnerAuth,
         ensureSkillTree,
         provisionForReach,
@@ -1937,6 +1938,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? createBackgroundBroker({
                 sandbox: deps.sandbox,
                 registry: deps.processes,
+                provisionSandbox: provisionResource,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
@@ -1946,7 +1948,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const readOutputTail = backgroundBroker
           ? async (processId: string, maxBytes: number) => {
-              const handle = await provision();
+              const handle = (await backgroundBroker.handleFor?.(processId)) ?? (await provision());
               return readBackgroundOutputTail(maxBytes, async (cursor, readMaxBytes) => {
                 const read = await backgroundBroker.poll(handle, processId, {
                   sinceCursor: cursor,
@@ -2082,9 +2084,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tools = createToolContext({
           sandbox: deps.sandbox,
+          sandboxResources: deps.sandboxResources,
           ...(deps.sandboxMigration ? { sandboxMigration: deps.sandboxMigration, invalidateProvision } : {}),
           provision,
           provisionScratch,
+          provisionResource,
           ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           ...(scopedCommand ? { scopedCommand } : {}),
@@ -2552,7 +2556,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnEnvironment = turnEnv;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some((e) => e.type === "tool_call");
-        if (!strictReadOnly && deps.eagerProvision && sessionUsedTools && !isPollFire) {
+        if (
+          !strictReadOnly &&
+          deps.eagerProvision &&
+          sessionUsedTools &&
+          !isPollFire &&
+          (await deps.sandboxResources?.resolve(memoryScopeId)) !== null
+        ) {
           void provision(true).catch(swallowAs("orchestrator: eager provision", undefined));
         }
         const compactStart = Date.now();

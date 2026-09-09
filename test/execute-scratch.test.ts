@@ -84,7 +84,15 @@ const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): stri
 test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), ["command", "computer", "purpose", "timeout_seconds"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "computer",
+    "sandbox_id",
+    "backend",
+    "name",
+    "purpose",
+    "timeout_seconds",
+  ]);
   assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
   await call(execute, { command: "echo hi" });
   assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
@@ -94,7 +102,17 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   const { tc, seen } = sinkToolContext();
   const ref: ToolContextRef = { current: tc };
   const [execute] = createAgentTools(ref, { scratchExec: true });
-  assert.deepEqual(schemaProps(execute!), ["command", "computer", "purpose", "timeout_seconds", "scope", "durable"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "computer",
+    "sandbox_id",
+    "backend",
+    "name",
+    "purpose",
+    "timeout_seconds",
+    "scope",
+    "durable",
+  ]);
 
   await call(execute, { command: "echo hi" });
   assert.deepEqual(
@@ -274,7 +292,16 @@ test("execute rejects unavailable, conflicting, and scratch credential requests"
 test("execute schema lists exact command credential handles", async () => {
   const { tc, seen } = sinkToolContext();
   const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
-  assert.deepEqual(schemaProps(execute!), ["command", "computer", "purpose", "timeout_seconds", "credentials"]);
+  assert.deepEqual(schemaProps(execute!), [
+    "command",
+    "computer",
+    "sandbox_id",
+    "backend",
+    "name",
+    "purpose",
+    "timeout_seconds",
+    "credentials",
+  ]);
 
   await call(execute, { command: "gh api user", credentials: ["kc_github12345"] });
   assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });

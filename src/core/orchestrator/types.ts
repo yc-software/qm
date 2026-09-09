@@ -1,3 +1,4 @@
+import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
   CommandApprovalGrant,
@@ -113,6 +114,7 @@ export interface OrchestratorDeps {
   files: FileArtifactStore;
   sandbox: Sandbox;
   sandboxMigration?: SandboxMigrationRunner;
+  sandboxResources?: SandboxResources;
   modelGateway: ModelGateway;
   auditLog: AuditLog;
   rateLimiter: RateLimiter;

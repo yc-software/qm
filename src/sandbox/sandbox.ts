@@ -1,6 +1,7 @@
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
 
 export interface SandboxHandle {
+  resourceId?: string;
   id: string;
   rootDir: string;
   homeDir?: string;
@@ -61,6 +62,7 @@ export function visibleTools(tools: readonly string[]): string[] {
 }
 
 export interface ProvisionOptions {
+  sandboxId?: string;
   env?: Record<string, string>;
   egress?: EgressPolicy;
   egressToken?: string;

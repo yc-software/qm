@@ -96,7 +96,7 @@ test("profileFor returns the substrate the scope is actually on", async () => {
   assert.equal((await router.profileFor("personal:m")).backend, "sprites");
 });
 
-test("a route to an unconstructed backend falls back to default, surfaced not thrown", async () => {
+test("a route to an unconstructed backend refuses to substitute the default", async () => {
   const routes = createMemoryMap<SandboxRoute>();
   await routes.put("personal:x", { backend: "local" });
   const aws = fakeBackend("aws");
@@ -107,8 +107,8 @@ test("a route to an unconstructed backend falls back to default, surfaced not th
     defaultBackend: "aws",
     onError: (e) => errors.push(e.code),
   });
-  const h = await router.provision(layersFor("personal:x"));
-  assert.equal(h.backend, "aws");
+  await assert.rejects(router.provision(layersFor("personal:x")), /refusing to use a substitute/);
+  assert.deepEqual(aws.calls, []);
   assert.ok(errors.includes("backend_unavailable"));
 });
 

@@ -14,7 +14,7 @@ import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadow
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import { archiveAdminSkill, getAdminSkill, listAdminArtifacts, putAdminCronDestination } from "./admin/artifacts.ts";
 import { getAdminMemory, listMemoryScopes, putAdminMemory } from "./admin/memory.ts";
-import { listSandboxRoutes, migrateSandboxScope } from "./admin/sandbox.ts";
+import { listSandboxRoutes, migrateSandboxScope, manageSandboxResources } from "./admin/sandbox.ts";
 import {
   createAdminGrant,
   getUserDetail,
@@ -125,6 +125,8 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/memory/scopes", auth: "either", handle: listMemoryScopes },
   { method: "GET", path: "/v1/admin/memory", auth: "either", handle: getAdminMemory },
   { method: "PUT", path: "/v1/admin/memory", auth: "either", handle: putAdminMemory },
+  { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
+  { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
   { method: "GET", path: "/v1/admin/sandbox-routes", auth: "either", handle: listSandboxRoutes },
   { method: "POST", path: "/v1/admin/sandbox-routes/:scopeId/migrate", auth: "either", handle: migrateSandboxScope },
   { method: "GET", path: "/v1/admin/users", auth: "either", handle: listUsers },

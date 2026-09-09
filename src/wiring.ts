@@ -1,6 +1,12 @@
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxDefault,
+  type SandboxResources,
+} from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./harness/pi-harness.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
@@ -444,6 +450,7 @@ export interface BuiltApp {
   sandbox: Sandbox;
   advisoryLock: AdvisoryLock;
   sandboxMigration: SandboxMigrationRunner;
+  sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
@@ -500,6 +507,7 @@ export function buildApp(
   const membership: {
     canReadScope?: CanReadScope;
     canManageScope?: CanManageScope;
+    canUseSandboxScope?: CanManageScope;
     managesArtifactHome?: ManagesArtifactHome;
   } = {};
   const acl = createAclStore(config.databaseUrl ? createPostgresGrantStore(config.databaseUrl) : undefined, {
@@ -892,7 +900,46 @@ export function buildApp(
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
   const sandboxRoutes = artifactMap<SandboxRoute>("sandbox_routing");
+  const sandboxResources = createSandboxResources({
+    records: artifactMap<SandboxResource>("sandbox_resources"),
+    defaults: artifactMap<SandboxDefault>("sandbox_defaults"),
+    routes: sandboxRoutes,
+    backends: sandboxBackends,
+    defaultBackend: config.sandboxBackend,
+    lock: advisoryLock,
+    beforeRetire: async (record) => {
+      if (
+        (await processes?.liveByScope(record.ownerScopeId))?.some(
+          (process) => !process.sandboxId || process.sandboxId === record.id,
+        )
+      )
+        throw new Error("stop this sandbox's background jobs before retiring it");
+    },
+    beforeDefaultChange: async (scopeId) => {
+      if ((await processes?.liveByScope(scopeId))?.some((process) => !process.sandboxId))
+        throw new Error(
+          "legacy background work has no saved sandbox target; finish or stop it before changing the default",
+        );
+    },
+    provisionOptions: async (scopeId) => {
+      const secret = config.capabilitySecret ?? config.signingSecret;
+      if (!secret) return {};
+      const egressToken = await mintCapabilityToken(
+        {
+          actorId: "system:sandbox-create",
+          scopeId,
+          aud: EGRESS_PROXY_AUD,
+          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? "", true),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        secret,
+      );
+      return { egressToken };
+    },
+    canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
+  });
   const sandbox: Sandbox = createSandboxRouter({
+    resources: sandboxResources,
     backends: sandboxBackends,
     routes: sandboxRoutes,
     defaultBackend: config.sandboxBackend,
@@ -1274,6 +1321,9 @@ export function buildApp(
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
+  membership.canUseSandboxScope = async (actorId, scopeId) =>
+    identity.isInternal(identity.classify(actorId)) &&
+    ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
@@ -1415,6 +1465,7 @@ export function buildApp(
     files,
     sandbox,
     sandboxMigration,
+    sandboxResources,
     connectorTokens,
     modelGateway,
     auditLog,
@@ -2035,6 +2086,7 @@ export function buildApp(
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
     sandboxMigration,
+    sandboxResources,
     advisoryLock,
     blobTransfer,
     files,
@@ -2178,5 +2230,6 @@ export function serverDeps(
     sessionShareBytes: built.sessionShareBytes,
     environments: built.environments,
     sandboxMigration: built.sandboxMigration,
+    sandboxResources: built.sandboxResources,
   };
 }
