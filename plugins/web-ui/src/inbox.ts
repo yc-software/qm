@@ -593,7 +593,7 @@ export async function askAgent(item: InboxItem, message: string): Promise<void> 
     replaceItem(mapped);
   } catch (e) {
     notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
-    chatDrafts.set(item.id, text);
+    if (!chatDrafts.has(item.id)) chatDrafts.set(item.id, text);
   } finally {
     chatting.delete(item.id);
     drawAll();

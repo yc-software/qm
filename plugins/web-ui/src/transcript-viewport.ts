@@ -1,3 +1,5 @@
+import { markClampedPrompts } from "./prompt-clamp.ts";
+
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
   let pins: HTMLElement | null = null;
@@ -80,6 +82,7 @@ export function createTranscriptViewport() {
       scroller?.addEventListener("wheel", onWheel, { passive: true });
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver(() => {
+          markClampedPrompts(scroller);
           syncSticky();
           follow();
         });
