@@ -87,7 +87,7 @@ test("long prompts clamp to the pane and expand or collapse through their button
     assert.equal(f.toggle.getAttribute("aria-expanded"), "true");
     assert.equal(f.toggle.textContent, "Show less");
     f.toggle.click();
-    assert.equal(f.row.classList.contains("pin-clamped"), true);
+    assert.ok(f.bubble.scrollHeight > f.bubble.clientHeight);
     assert.equal(f.toggle.getAttribute("aria-expanded"), "false");
   } finally {
     f.close();
@@ -114,7 +114,7 @@ test("late content growth reveals the control without a scroll or redraw", () =>
     assert.equal(f.toggle.hidden, true);
     f.grow(800);
     assert.equal(f.toggle.hidden, false);
-    assert.equal(f.row.classList.contains("pin-clamped"), true);
+    assert.ok(f.bubble.scrollHeight > f.bubble.clientHeight);
   } finally {
     f.close();
   }
@@ -159,9 +159,11 @@ test("only the last prompt is measured and expansion survives an unchanged redra
     earlier.className = "user-row";
     earlier.removeAttribute("style");
     earlier.dataset.index = "0";
+    const earlierToggle = earlier.querySelector<HTMLButtonElement>(".pin-toggle")!;
+    earlierToggle.hidden = true;
     f.row.before(earlier);
     f.viewport.sync(f.scroller);
-    assert.equal(earlier.classList.contains("pin-clamped"), false);
+    assert.equal(earlierToggle.hidden, true);
     assert.equal(earlier.style.getPropertyValue("--pin-clamp"), "");
     f.toggle.click();
     f.viewport.sync(f.scroller);

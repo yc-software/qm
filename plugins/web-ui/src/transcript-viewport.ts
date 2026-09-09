@@ -23,7 +23,7 @@ export function createTranscriptViewport() {
   }
 
   function clearPrompt(): void {
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-clamped", "pin-expanded");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
     prompt?.style.removeProperty("--pin-clamp");
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
@@ -40,7 +40,6 @@ export function createTranscriptViewport() {
     prompt.classList.toggle("pin-expanded", expanded);
     const bubble = prompt.querySelector<HTMLElement>(".user-bubble");
     const clipped = !expanded && !!bubble && bubble.scrollHeight > bubble.clientHeight + 1;
-    prompt.classList.toggle("pin-clamped", clipped);
     const toggle = prompt.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) {
       toggle.hidden = !clipped && !expanded;

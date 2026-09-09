@@ -1779,9 +1779,6 @@ a.chat-row-open {
   max-height: var(--pin-clamp, 320px);
   overflow: hidden;
 }
-.message-stack .user-row.pin-clamped:not(:has(~ .user-row)) .user-bubble {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
-}
 .pin-toggle {
   display: none;
   pointer-events: auto;

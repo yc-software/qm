@@ -8,14 +8,13 @@ const shared = readFileSync(new URL("../src/shared-session.ts", import.meta.url)
 
 const pinned = String.raw`\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble`;
 
-test("only the collapsed pinned prompt is capped and overflow fades instead of nesting scrollbars", () => {
+test("only the collapsed pinned prompt is capped and overflow clips instead of nesting scrollbars", () => {
   const bubble =
     css.match(
       /\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble \{[^}]*\}/,
     )?.[0] ?? "";
   assert.match(bubble, /max-height: var\(--pin-clamp, 320px\);/);
   assert.match(bubble, /overflow: hidden;/);
-  assert.match(css, /\.user-row\.pin-clamped[^{}]*\{[^}]*mask-image:/);
   assert.doesNotMatch(css, /\.user-bubble > (?:markdown-block|\.slack-wire-text)\s*\{/);
   const base = css.match(/\n\.user-bubble \{[^}]*\}/)?.[0] ?? "";
   assert.doesNotMatch(base, /max-height|flex/);

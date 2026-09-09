@@ -132,6 +132,7 @@ test("resizing a settled transcript updates the prompt expansion control", () =>
     f.prompt.innerHTML =
       '<div class="user-bubble"><div class="pin-content"><markdown-block></markdown-block></div></div><button class="pin-toggle" hidden>Show more</button>';
     const bubble = f.prompt.querySelector<HTMLElement>(".user-bubble")!;
+    const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
     let availableHeight = 240;
     Object.defineProperties(bubble, {
       scrollHeight: { value: 240 },
@@ -139,13 +140,13 @@ test("resizing a settled transcript updates the prompt expansion control", () =>
     });
     f.viewport.sync(f.s);
     f.resize(30, 50);
-    assert.equal(f.prompt.classList.contains("pin-clamped"), false);
+    assert.equal(toggle.hidden, true);
     availableHeight = 160;
     f.resize(30, 50);
-    assert.equal(f.prompt.classList.contains("pin-clamped"), true);
+    assert.equal(toggle.hidden, false);
     availableHeight = 240;
     f.resize(30, 50);
-    assert.equal(f.prompt.classList.contains("pin-clamped"), false);
+    assert.equal(toggle.hidden, true);
   } finally {
     f.close();
   }
