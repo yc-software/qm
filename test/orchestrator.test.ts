@@ -104,7 +104,8 @@ test("the persisted assistant entry carries authoritative turn timing for transc
   assert.ok(p.workStartedAt! >= before && p.workFinishedAt! >= p.workStartedAt!);
 });
 
-test("org turn wall-clock governance reaches the harness and a per-turn cap only tightens", async () => {
+test("org turn wall-clock governance reaches the harness and a per-turn cap only tightens", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app, config } = freshApp();
   await config.setTurnWallClockSec(scopeId("org", "default-org"), 120);
   assert.equal((await app.turn(dm("!wallclock"))).reply, "wallclock:120000");
