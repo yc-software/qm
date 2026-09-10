@@ -30,7 +30,7 @@ export interface PgQueryOptions {
 }
 
 export interface PgPool {
-  pool(kind?: "query" | "session"): Promise<Pool>;
+  pool(kind?: "query" | "session" | "coordination"): Promise<Pool>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
@@ -212,15 +212,18 @@ export function configurePgPoolLimits(limits: { query: number; session: number }
   for (const limit of Object.values(limits)) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Postgres pool limits must be positive integers");
   }
+  if (limits.session < 2)
+    throw new Error("Postgres session budget must be at least 2 to reserve coordination capacity");
   poolLimits = { ...limits };
 }
 
 function acquirePool(
   connectionString: string,
-  kind: "query" | "session",
+  kind: "query" | "session" | "coordination",
 ): { instance: Promise<Pool>; release(): Promise<void> } {
   const ssl = pgCaOptions();
-  const max = poolLimits[kind];
+  const reserved = Math.min(4, poolLimits.session - 1);
+  const max = { query: poolLimits.query, session: poolLimits.session - reserved, coordination: reserved }[kind];
   const key = JSON.stringify([connectionString, ssl, kind, max]);
   let shared = sharedPools.get(key);
   if (!shared) {
@@ -355,15 +358,19 @@ export function createPgPool(
   let poolP: Promise<Pool> | null = null;
   let queryLease: ReturnType<typeof acquirePool> | null = null;
   let sessionLease: ReturnType<typeof acquirePool> | null = null;
+  let coordinationLease: ReturnType<typeof acquirePool> | null = null;
   let closing: Promise<void> | null = null;
   let closed = false;
-  async function pool(kind: "query" | "session" = "query"): Promise<Pool> {
+  async function pool(kind: "query" | "session" | "coordination" = "query"): Promise<Pool> {
     if (closed) throw new Error("Postgres store is closed");
-    if (kind === "session") {
+    if (kind !== "query") {
       await pool();
       if (closed) throw new Error("Postgres store is closed");
-      sessionLease ??= acquirePool(connectionString, "session");
-      return sessionLease.instance;
+      const lease =
+        kind === "coordination"
+          ? (coordinationLease ??= acquirePool(connectionString, kind))
+          : (sessionLease ??= acquirePool(connectionString, kind));
+      return lease.instance;
     }
     if (!poolP) {
       poolP = (async () => {
@@ -462,7 +469,7 @@ export function createPgPool(
     closed = true;
     closing ??= (async () => {
       await poolP?.catch(() => {});
-      await Promise.all([queryLease?.release(), sessionLease?.release()]);
+      await Promise.all([queryLease?.release(), sessionLease?.release(), coordinationLease?.release()]);
     })();
     return closing;
   }

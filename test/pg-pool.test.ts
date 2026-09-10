@@ -130,14 +130,21 @@ test("query and session budgets are separate, shared by purpose, and release onc
     assert.equal(await b.pool("session"), session);
     assert.notEqual(await other.pool(), query);
     assert.equal(query.options.max, 8);
-    assert.equal(session.options.max, 8);
+    assert.equal(session.options.max, 4);
+    const coordination = await a.pool("coordination");
+    assert.notEqual(coordination, session);
+    assert.notEqual(coordination, query);
+    assert.equal(coordination.options.max, 4);
+    assert.equal(await b.pool("coordination"), coordination);
     assert.equal(query.options.connectionTimeoutMillis, 5_000);
     await Promise.all([a.close(), a.close()]);
     assert.equal(query.ending, false);
     assert.equal(session.ending, false);
+    assert.equal(coordination.ending, false);
     await b.close();
     assert.equal(query.ended, true);
     assert.equal(session.ended, true);
+    assert.equal(coordination.ended, true);
     await assert.rejects(a.pool(), /closed/);
     const replacement = createPgPool(url);
     try {
@@ -156,13 +163,35 @@ test("pool budgets reject invalid limits instead of creating unbounded pools", a
       assert.throws(() => configurePgPoolLimits({ query: limit, session: 8 }), /positive integers/);
       assert.throws(() => configurePgPoolLimits({ query: 8, session: limit }), /positive integers/);
     }
+    assert.throws(() => configurePgPoolLimits({ query: 2, session: 1 }), /at least 2/);
     configurePgPoolLimits({ query: 2, session: 3 });
     const store = createPgPool("postgres://unused@127.0.0.1:1/valid");
     try {
       assert.equal((await store.pool()).options.max, 2);
-      assert.equal((await store.pool("session")).options.max, 3);
+      assert.equal((await store.pool("session")).options.max, 1);
+      assert.equal((await store.pool("coordination")).options.max, 2);
     } finally {
       await store.close();
+    }
+  } finally {
+    configurePgPoolLimits({ query: 8, session: 8 });
+  }
+});
+
+test("coordination reserve stays within the configured session budget", async () => {
+  try {
+    for (const session of [2, 3, 5, 8, 16]) {
+      configurePgPoolLimits({ query: 8, session });
+      const pg = createPgPool(`postgres://unused@127.0.0.1:1/reserve-${session}`);
+      try {
+        const operations = await pg.pool("session");
+        const coordination = await pg.pool("coordination");
+        assert.ok(operations.options.max! >= 1);
+        assert.equal(coordination.options.max, Math.min(4, session - 1));
+        assert.equal(operations.options.max! + coordination.options.max!, session);
+      } finally {
+        await pg.close();
+      }
     }
   } finally {
     configurePgPoolLimits({ query: 8, session: 8 });
