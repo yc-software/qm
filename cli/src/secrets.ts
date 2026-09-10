@@ -13,6 +13,7 @@ type SecretCondition =
   | { kind: "service-absent"; service: DeclaredServiceName }
   | { kind: "all"; conditions: SecretCondition[] }
   | { kind: "any"; conditions: SecretCondition[] }
+  | { kind: "not"; condition: SecretCondition }
   | { kind: "target"; target: QmConfig["target"] }
   | { kind: "model-provider"; provider: ModelProvider };
 
@@ -60,15 +61,30 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     service: "core",
     required: {
       when: {
-        kind: "any",
+        kind: "all",
         conditions: [
-          { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
-          { kind: "model-provider", provider: "openai" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
+              { kind: "model-provider", provider: "openai" },
+            ],
+          },
+          {
+            kind: "not",
+            condition: {
+              kind: "all",
+              conditions: [
+                { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
+                { kind: "env-present", service: "core", name: "CODEX_AUTH_CREDENTIAL" },
+              ],
+            },
+          },
         ],
       },
     },
     description:
-      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
+      'OpenAI API key: the Codex harness needs it unless a keychain credential supplies model auth, and it bills the base model when modelProvider is "openai".',
   },
   {
     name: "PUBLIC_API_URL",
@@ -478,22 +494,27 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
   if (condition.kind === "all") return condition.conditions.every((nested) => conditionMatches(config, nested));
   if (condition.kind === "any") return condition.conditions.some((nested) => conditionMatches(config, nested));
+  if (condition.kind === "not") return !conditionMatches(config, condition.condition);
   if (condition.kind === "target") return config.target === condition.target;
   if (condition.kind === "model-provider") return effectiveModelProvider(config) === condition.provider;
   if (condition.kind === "env-all-absent") {
-    return condition.names.every((name) => !config.env[condition.service]?.[name]?.trim());
+    return condition.names.every((name) => !configuredEnvPresent(config, condition.service, name));
   }
-  const configuredSandboxBackend =
-    condition.service === "core" && condition.name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined;
-  const value = (
-    config.env[condition.service]?.[condition.name] ??
-    configuredSandboxBackend ??
-    targetEnvDefault(config, condition.service, condition.name)
-  )?.trim();
-  if (condition.kind === "env-absent") return !value;
-  if (condition.kind === "env-present") return Boolean(value);
+  const value = configuredEnvValue(config, condition.service, condition.name);
+  if (condition.kind === "env-absent") return !configuredEnvPresent(config, condition.service, condition.name);
+  if (condition.kind === "env-present") return configuredEnvPresent(config, condition.service, condition.name);
   if (condition.kind === "env-in") return value !== undefined && condition.values.includes(value);
   return value === condition.value;
+}
+
+function configuredEnvValue(config: QmConfig, service: DeclaredServiceName, name: string): string | undefined {
+  const sandboxBackend = service === "core" && name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined;
+  return (config.env[service]?.[name] ?? sandboxBackend ?? targetEnvDefault(config, service, name))?.trim();
+}
+
+function configuredEnvPresent(config: QmConfig, service: DeclaredServiceName, name: string): boolean {
+  const value = configuredEnvValue(config, service, name);
+  return Boolean(value || config.secretEnv?.[service]?.[name]?.trim());
 }
 
 function targetEnvDefault(config: QmConfig, service: string, name: string): string | undefined {
@@ -684,6 +705,7 @@ function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;
   if (condition.kind === "all") return condition.conditions.map(conditionClause).join(" and ");
   if (condition.kind === "any") return condition.conditions.map(conditionClause).join(" or ");
+  if (condition.kind === "not") return `not (${conditionClause(condition.condition)})`;
   if (condition.kind === "target") return `the target is ${condition.target}`;
   if (condition.kind === "env-all-absent")
     return `none of env.${condition.service}.{${condition.names.join(", ")}} are set`;

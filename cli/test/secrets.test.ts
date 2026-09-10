@@ -223,6 +223,18 @@ test("an OpenAI base model and the Codex harness agree on one required key", () 
   assert.equal(matches[0]!.required, true);
 });
 
+test("a secret-backed Codex credential replaces the OpenAI API key requirement", () => {
+  const credentialBacked = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "codex" } },
+    secretEnv: { core: { CODEX_AUTH_CREDENTIAL: "CODEX_AUTH_CREDENTIAL" } },
+  });
+  assert.ok(!computedSecrets(credentialBacked).some((secret) => secret.name === "OPENAI_API_KEY"));
+  const credential = secretByName(credentialBacked, "CODEX_AUTH_CREDENTIAL");
+  assert.equal(credential.required, true);
+  assert.deepEqual(runtimeSecretNames("core", credential), ["CODEX_AUTH_CREDENTIAL"]);
+});
+
 test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavior", () => {
   const deferred = makeConfig();
   assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);
@@ -373,4 +385,54 @@ test("runtime model provider override controls the required billing key", () => 
   });
   assert.equal(secretByName(config, "OPENROUTER_API_KEY").required, true);
   assert.equal(secretByName(config, "ANTHROPIC_API_KEY").required, false);
+});
+
+for (const target of ["docker", "aws", "fly"] as const) {
+  for (const storage of ["env", "secretEnv"] as const) {
+    test(`${target} ${storage} subscription credentials only replace Codex API authentication`, () => {
+      for (const harness of ["codex", "pi"] as const) {
+        for (const credential of ["credential-id", "", "   "]) {
+          const config = makeConfig({
+            target,
+            modelProvider: "openai",
+            env: { core: { HARNESS: harness, ...(storage === "env" ? { CODEX_AUTH_CREDENTIAL: credential } : {}) } },
+            ...(storage === "secretEnv" ? { secretEnv: { core: { CODEX_AUTH_CREDENTIAL: credential } } } : {}),
+          });
+          assert.equal(
+            computedSecrets(config).some((secret) => secret.name === "OPENAI_API_KEY" && secret.required),
+            harness !== "codex" || !credential.trim(),
+          );
+        }
+      }
+    });
+  }
+}
+
+test("Codex still requires authentication independently of the selected model provider", () => {
+  for (const modelProvider of [undefined, "anthropic"] as const) {
+    const config = makeConfig({ modelProvider, env: { core: { HARNESS: "codex" } } });
+    assert.equal(secretByName(config, "OPENAI_API_KEY").required, true);
+  }
+});
+
+test("an explicit sandbox backend overrides the structured sandbox setting", () => {
+  const config = makeConfig({
+    target: "aws",
+    sandbox: { backend: "sprites" },
+    env: { core: { SANDBOX_BACKEND: "aws" } },
+  });
+  assert.ok(!computedSecrets(config).some((secret) => secret.name === "SPRITES_TOKEN"));
+});
+
+test("secret-backed portal trust satisfies the existing alternatives", () => {
+  for (const reference of ["TRUSTED_EMAILS", "", "   "]) {
+    const config = makeConfig({
+      services: ["core", "portal"],
+      secretEnv: { portal: { OIDC_ALLOWED_EMAILS: reference } },
+    });
+    assert.equal(
+      computedSecrets(config).some((secret) => secret.name === "PORTAL_EXPECTED_TEAM_ID"),
+      !reference.trim(),
+    );
+  }
 });
