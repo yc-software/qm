@@ -681,12 +681,19 @@ test("Docker custom headers use CSV syntax and replace rather than merge config 
       ['"X-Quoted=one""two",X-Equal=one=two', { "x-quoted": 'one"two', "x-equal": "one=two" }],
       [" X-Spaces = value  ,X-Empty=", { "x-spaces": " value  ", "x-empty": "" }],
       ["X-Case=first,x-case=second", { "x-case": "second" }],
+      ["__PROTO__=value", JSON.parse('{"__proto__":"value"}') as Record<string, string>],
     ] as const) {
       process.env.DOCKER_CUSTOM_HEADERS = input;
       assert.deepEqual(dockerClientDefaults().headers, expected);
       assert.ok(!Object.hasOwn(dockerClientDefaults().headers, "authorization"));
     }
+    delete process.env.DOCKER_CUSTOM_HEADERS;
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ HttpHeaders: { "X-Key": "synthetic-private-header" } }));
+    assert.throws(() => dockerClientDefaults(), /Cannot read Docker client defaults/);
+    writeFileSync(join(dir, "config.json"), "{}");
     for (const input of [
+      "X-Key=synthetic-private-header",
+      "\ufeffX-Test=synthetic-private-header",
       '"X-Bad=synthetic-private-header',
       'X-Bad=se"cret',
       "X-Bad=synthetic-private-header,",

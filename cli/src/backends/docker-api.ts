@@ -25,7 +25,7 @@ const dockerApiVersion = (): string | undefined => process.env.DOCKER_API_VERSIO
 
 function customHeadersFromEnv(value: string): Record<string, string> {
   if (/[\r\n]/.test(value)) throw new Error();
-  const headers: Record<string, string> = {};
+  const headers = new Map<string, string>();
   const field = /("(?:[^"]|"")*"|[^",]*)(,|$)/y;
   for (;;) {
     const match = field.exec(value);
@@ -33,9 +33,10 @@ function customHeadersFromEnv(value: string): Record<string, string> {
     const entry = match[1]!.startsWith('"') ? match[1]!.slice(1, -1).replaceAll('""', '"') : match[1]!;
     const separator = entry.indexOf("=");
     if (separator < 1) throw new Error();
-    const name = entry.slice(0, separator).trim().toLowerCase();
-    headers[name] = entry.slice(separator + 1);
-    if (match[2] !== ",") return headers;
+    const name = entry.slice(0, separator).replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+    validateHeaderName(name);
+    headers.set(name.toLowerCase(), entry.slice(separator + 1));
+    if (match[2] !== ",") return Object.fromEntries(headers);
   }
 }
 
@@ -48,7 +49,12 @@ export function dockerClientDefaults(): { env: Record<string, string>; headers: 
     };
     const headers = process.env.DOCKER_CUSTOM_HEADERS
       ? customHeadersFromEnv(process.env.DOCKER_CUSTOM_HEADERS)
-      : Object.fromEntries(Object.entries(config.HttpHeaders ?? {}).map(([key, value]) => [key.toLowerCase(), value]));
+      : Object.fromEntries(
+          Object.entries(config.HttpHeaders ?? {}).map(([key, value]) => {
+            validateHeaderName(key);
+            return [key.toLowerCase(), value];
+          }),
+        );
     for (const [key, value] of Object.entries(headers)) {
       if (typeof value !== "string") throw new Error();
       validateHeaderName(key);
