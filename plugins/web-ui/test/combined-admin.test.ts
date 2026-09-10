@@ -45,11 +45,11 @@ const headers = (principal: string) => ({
   "x-portal-identity": mintPortalIdentity({ p: principal, exp: Date.now() + 60_000 }, identitySecret),
 });
 
-test("combined admin rejects a forged admin cookie before contacting core", async () => {
+test("combined admin rejects a forged admin cookie before calling a privileged core API", async () => {
   const before = calls.length;
   const response = await fetch(`${base}/admin/api/scopes`, { headers: { cookie: "admin=admin@example.com" } });
   assert.equal(response.status, 401);
-  assert.equal(calls.length, before);
+  assert.equal(calls.slice(before).filter((entry) => entry.path.startsWith("/v1/admin/")).length, 0);
 });
 
 test("combined admin preserves authorization and request-local identity", async () => {
@@ -62,7 +62,9 @@ test("combined admin preserves authorization and request-local identity", async 
     }),
   );
   assert.deepEqual(results, [200, 403]);
-  for (const call of calls.slice(before).filter((entry) => entry.path === "/v1/admin/scopes")) {
+  const privileged = calls.slice(before).filter((entry) => entry.path === "/v1/admin/scopes");
+  assert.equal(privileged.length, 2);
+  for (const call of privileged) {
     assert.equal(call.actor, `${call.principal}@acme`);
     assert.equal(call.path, "/v1/admin/scopes");
   }

@@ -39,7 +39,13 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
-import { computedSecrets, runtimeSecretNames, secretDestinations, secretsForService } from "../secrets.ts";
+import {
+  computedSecrets,
+  validatedSecrets,
+  runtimeSecretNames,
+  secretDestinations,
+  secretsForService,
+} from "../secrets.ts";
 import { manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
@@ -1663,6 +1669,7 @@ export async function flyCheckLive(
 }
 
 export async function flySecretsPush(config: QmConfig, configDir: string, envFile?: string): Promise<void> {
+  validatedSecrets(config);
   const path = resolve(envFile ?? join(configDir, ".env"));
   const values = existsSync(path) ? readEnvFile(path) : new Map<string, string>();
   const prefix = appPrefixOf(config);

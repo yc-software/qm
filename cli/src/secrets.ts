@@ -613,6 +613,11 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
         : {}),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  return secrets;
+}
+
+export function validatedSecrets(config: QmConfig): ComputedSecret[] {
+  const secrets = computedSecrets(config);
   const delivered = new Map<string, string>();
   for (const secret of secrets) {
     for (const [workload, names] of secretDestinations(secret)) {
@@ -673,7 +678,7 @@ export function serviceSecretValue(
   values: ReadonlyMap<string, string>,
 ): string | undefined {
   let value = config.env[service]?.[name];
-  for (const secret of secretsForService(config, service)) {
+  for (const secret of validatedSecrets(config)) {
     if (!runtimeSecretNames(service, secret).includes(name)) continue;
     const supplied = deploymentSecretValue(secret.name, values.get(secret.name));
     if (supplied !== undefined) value = supplied;

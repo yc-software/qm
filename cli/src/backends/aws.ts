@@ -22,7 +22,13 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { manifestRef } from "../manifest.ts";
-import { computedSecrets, runtimeSecretNames, secretsForService, type ComputedSecret } from "../secrets.ts";
+import {
+  computedSecrets,
+  validatedSecrets,
+  runtimeSecretNames,
+  secretsForService,
+  type ComputedSecret,
+} from "../secrets.ts";
 import {
   brokerWiring,
   brandEnvOf,
@@ -2719,6 +2725,7 @@ function envValues(configDir: string, path: string | undefined): Map<string, str
 }
 
 export async function awsSecretsPush(config: QmConfig, configDir: string, envFile?: string): Promise<void> {
+  validatedSecrets(config);
   const { aws, workloads } = awsTopology(config, configDir);
   assertAwsCallerAccount(aws);
   const values = envValues(configDir, envFile);
