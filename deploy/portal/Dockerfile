@@ -14,5 +14,6 @@ COPY plugins/portal/tsconfig.json ./
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
+RUN apk add --no-cache util-linux
 USER node
 CMD ["node", "src/index.ts"]

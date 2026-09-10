@@ -23,5 +23,6 @@ COPY --from=build /app/dist-web ./dist-web
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
+RUN apk add --no-cache util-linux
 USER node
 CMD ["node", "server/index.ts"]
