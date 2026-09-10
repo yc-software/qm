@@ -93,6 +93,6 @@ test("live and historical rendering consume the same duration helper (source-lev
     "chat renders via the shared helper",
   );
 
-  assert.match(chat, /`Working for \$\{secs\}s` : workedLabel\("Worked", secs\)/);
+  assert.match(chat, /workedLabel\("Thought", secs\)/);
   assert.match(chat, /function segmentSummaryLabel[\s\S]{0,400}?workSeconds\(work\)/);
 });

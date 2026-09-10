@@ -2210,11 +2210,12 @@ a.chat-row-open {
 .work-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: fit-content;
   max-width: 100%;
-  height: 36px;
-  padding-right: 6px;
+  height: 30px;
+  margin: 0 -6px;
+  padding: 0 6px;
   border-radius: var(--radius-sm);
   font-size: 13px;
   line-height: 1.4;
@@ -2236,9 +2237,9 @@ summary.work-head:hover {
 .work-rows {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin: 0 0 4px 11px;
-  padding-left: 22px;
+  gap: 4px;
+  margin: 2px 0 6px 7px;
+  padding: 4px 0 4px 16px;
   border-left: 1px solid var(--line);
 }
 
@@ -2322,10 +2323,9 @@ summary.work-head:hover {
   font-size: 13px;
   line-height: 1.55;
 }
-.thinking-body > markdown-block {
-  display: block;
-  margin: 4px 0 6px 6px;
-  padding-left: 12px;
+.thinking-body {
+  margin: 2px 0 6px 7px;
+  padding: 2px 0 2px 16px;
   border-left: 1px solid var(--line);
 }
 .tool-row.tool-failed {

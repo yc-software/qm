@@ -18,26 +18,27 @@ import {
   Clock3,
   Copy,
   FileImage,
-  FileText,
   Files,
+  FileText,
   GitFork,
+  Globe,
   Lock,
   Maximize2,
-  Minus,
   Paperclip,
   Pause,
   Pencil,
   Pin,
   Radar,
   RefreshCw,
-  Target,
   Rocket,
   ScrollText,
+  Search,
   Sparkle,
+  Target,
   Terminal,
+  type IconNode,
   Wrench,
   X,
-  type IconNode,
 } from "lucide";
 import {
   continuableMessages,
@@ -1580,10 +1581,13 @@ export function createChatSurface(
     if (role === "assistant") {
       const msg = message as AssistantMessage;
       if ((msg as AssistantWork).retryableSend) return nothing;
-      const work = isStreaming ? null : (msg as AssistantWork).work;
+      const work = isStreaming ? chatState.liveWork : (msg as AssistantWork).work;
       const text = assistantDisplayText(messageText(msg)).trim();
       const hasText = Boolean(text);
-      const showWork = shouldShowApprovalWork(msg, work, text) && shouldShowWork(work, hasText);
+      const liveThinking = isStreaming ? thinkingParagraphs(msg) : [];
+      const showWork =
+        (shouldShowApprovalWork(msg, work, text) && shouldShowWork(work, hasText)) ||
+        (isStreaming && liveThinking.length > 0);
       const deliveredFiles = (msg as AssistantWork).deliveredFiles;
       const hasVisibleContent =
         showWork ||
@@ -1594,8 +1598,8 @@ export function createChatSurface(
       return html`
         <article class="message-row assistant-row ${isStreaming ? "streaming" : ""}" data-index=${index}>
           <div class="assistant-body">
-            ${showWork ? workBlock(work, isStreaming) : nothing} ${assistantContent(msg, isStreaming, showWork)}
-            ${assistantFileList(deliveredFiles)}
+            ${showWork ? workBlock(work ?? { status: "thinking", activity: [] }, isStreaming, liveThinking) : nothing}
+            ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
             ${msg.stopReason === "aborted" ? html`<div class="stopped-note">${icon(Ban, 13)}<span>Stopped</span></div>` : nothing}
             ${isStreaming ? nothing : messageMeta(msg, index)}
@@ -1783,7 +1787,7 @@ export function createChatSurface(
           );
         for (const link of links) parts.push(connectorWidget(link));
       }
-      if (chunk.type === "thinking" && chunk.thinking.trim()) parts.push(thinkingRow(chunk.thinking, isStreaming));
+      if (chunk.type === "thinking" && chunk.thinking.trim() && !isStreaming) parts.push(thinkingRow(chunk.thinking));
     }
     if (
       parts.length === 0 &&
@@ -1873,6 +1877,7 @@ export function createChatSurface(
 
   function clearLiveWork(): void {
     chatState.liveWork = null;
+    liveTraceOpen = null;
     chatState.pendingSend = null;
     syncWorkTicker();
   }
@@ -2261,27 +2266,82 @@ export function createChatSurface(
     return n > 0 ? ` (used ${n} tool${n === 1 ? "" : "s"})` : "";
   }
 
-  function workLabel(work: WorkBlock): string {
-    if (work.stale && (work.status === "thinking" || work.status === "working")) return "Interrupted, resuming…";
-    if (work.status === "thinking") return "Thinking";
-    const secs = workSeconds(work);
-    return work.status === "working" ? `Working for ${secs}s` : workedLabel("Worked", secs);
+  function thinkingParagraphs(message: AssistantMessage): string[] {
+    return message.content
+      .flatMap((chunk) => (chunk.type === "thinking" ? chunk.thinking.split(/\n\s*\n/) : []))
+      .map((p) => p.trim())
+      .filter(Boolean);
   }
 
-  function workBlock(work: WorkBlock, isStreaming: boolean): TemplateResult {
+  type TraceKind = "reason" | "search" | "tools";
+
+  function isSearchRow(row: ToolRowModel): boolean {
+    const call = (row.call?.payload ?? {}) as ToolPayload;
+    const tool = call.tool ?? ((row.result?.payload ?? {}) as ToolPayload).tool ?? "";
+    return typeof call.query === "string" || /search|recall|history|web|fetch/i.test(tool);
+  }
+
+  function traceKind(items: TimelineItem[]): TraceKind {
+    const tools = items.filter((it) => it.kind === "tool");
+    if (!tools.length) return "reason";
+    return tools.every((it) => it.kind === "tool" && isSearchRow(it.row)) ? "search" : "tools";
+  }
+
+  const TRACE_ACTIVE: Record<TraceKind, string> = {
+    reason: "Thinking",
+    search: "Searching the web",
+    tools: "Running tools",
+  };
+
+  function traceGlyph(status: SegmentStatus, live: boolean): TemplateResult {
+    if (status === "failed") return html`<span class="work-glyph work-glyph-failed">${icon(X, 14)}</span>`;
+    return html`<span class="work-glyph ${live ? "live" : ""}">${icon(Sparkle, 16)}</span>`;
+  }
+
+  function reasonRows(text: string): TemplateResult[] {
+    return text
+      .split(/\n\s*\n/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p, i) => html`<div class="trace-reason" style=${`--i:${i}`}>${p}</div>`);
+  }
+
+  let liveTraceOpen: boolean | null = null;
+
+  function workBlock(work: WorkBlock, isStreaming: boolean, liveThinking: string[] = []): TemplateResult {
     const live = isStreaming || work.status === "working" || work.status === "thinking";
     const timeline = buildTimeline(work);
-    if (live && !timeline.length) {
-      return html`<div class="work work-thinking">
-        <div class="work-head">
-          <span class="work-glyph">${icon(Sparkle, 16)}</span>
-          <span class="work-title">${sheenLabel(workLabel(work), true)}</span>
-        </div>
-      </div>`;
-    }
     if (live) {
-      return html`<details class="work work-working" ?data-task=${segmentToolCount(timeline) > 0} open>
-        ${workHead(timeline, work, sheenLabel(workLabel(work), true))} ${workRows(timeline, work)}
+      const rows = timeline.filter((it) => !(liveThinking.length && it.kind === "thinking"));
+      const kind = traceKind(rows);
+      if (!rows.length && !liveThinking.length) {
+        return html`<div class="work work-thinking">
+          <div class="work-head">
+            ${traceGlyph("running", true)}
+            <span class="work-title">${sheenLabel(work.stale ? "Interrupted, resuming…" : "Thinking", true)}</span>
+          </div>
+        </div>`;
+      }
+      return html`<details
+        class="work work-working"
+        ?open=${liveTraceOpen ?? true}
+        @toggle=${(e: Event) => {
+          liveTraceOpen = (e.currentTarget as HTMLDetailsElement).open;
+        }}
+      >
+        <summary class="work-head">
+          ${traceGlyph("running", true)}
+          <span class="work-title"
+            >${sheenLabel(work.stale ? "Interrupted, resuming…" : TRACE_ACTIVE[kind], true)}</span
+          >
+          ${icon(ChevronRight, 14)}
+        </summary>
+        <div class="work-body">
+          <div class="work-rows">
+            ${liveThinking.map((p) => html`<div class="trace-reason">${p}</div>`)}
+            ${rows.map((it) => html`<div class="trace-item">${renderTimelineItem(it, work)}</div>`)}
+          </div>
+        </div>
       </details>`;
     }
     const openFolds = !!work.pendingApprovals?.length;
@@ -2292,7 +2352,7 @@ export function createChatSurface(
       const items = seg;
       seg = [];
       parts.push(
-        html`<details class="work-fold" ?data-task=${segmentToolCount(items) > 0} ?open=${openFolds}>
+        html`<details class="work-fold" ?open=${openFolds}>
           ${workHead(items, work, segmentSummaryLabel(items, work))} ${workRows(items, work)}
         </details>`,
       );
@@ -2313,38 +2373,19 @@ export function createChatSurface(
   }
 
   function workHead(items: TimelineItem[], work: WorkBlock, label: string | TemplateResult): TemplateResult {
-    const tools = segmentToolCount(items);
-    const status = segmentStatus(items, work.status);
     return html`<summary class="work-head">
-      ${workGlyph(status, tools)}
+      ${traceGlyph(segmentStatus(items, work.status), false)}
       <span class="work-title">${label}</span>
-      ${tools ? html`<span class="work-meta">${tools} tool call${tools === 1 ? "" : "s"}</span>` : nothing}
-      ${status === "failed" ? html`<span class="work-pill work-pill-failed">Failed</span>` : nothing}
-      ${status === "stopped" ? html`<span class="work-pill work-pill-stopped">Stopped</span>` : nothing}
-      ${status === "ok" && tools ? html`<span class="work-pill">Completed</span>` : nothing} ${icon(ChevronRight, 14)}
+      ${icon(ChevronRight, 14)}
     </summary>`;
   }
 
   function workRows(items: TimelineItem[], work: WorkBlock): TemplateResult {
     return html`<div class="work-body">
-      <div class="work-rows">${items.map((it) => renderTimelineItem(it, work))}</div>
+      <div class="work-rows">
+        ${items.map((it, i) => html`<div class="trace-item" style=${`--i:${i}`}>${renderTimelineItem(it, work)}</div>`)}
+      </div>
     </div>`;
-  }
-
-  const SEGMENT_MARK: Record<Exclude<SegmentStatus, "running">, IconNode> = { ok: Check, failed: X, stopped: Minus };
-
-  function workGlyph(status: SegmentStatus, tools: number): TemplateResult {
-    if (!tools) return html`<span class="work-glyph">${icon(Sparkle, 16)}</span>`;
-    if (status === "running") {
-      return html`<span class="work-glyph work-glyph-running">
-        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-          <circle class="work-ring-track" cx="12" cy="12" r="11"></circle>
-          <circle class="work-ring-arc" cx="12" cy="12" r="11"></circle>
-        </svg>
-        <span class="work-count">${tools}</span>
-      </span>`;
-    }
-    return html`<span class="work-glyph work-glyph-${status}">${icon(SEGMENT_MARK[status], 13)}</span>`;
   }
 
   function segmentToolCount(items: TimelineItem[]): number {
@@ -2354,7 +2395,11 @@ export function createChatSurface(
   function segmentSummaryLabel(items: TimelineItem[], work: WorkBlock): string {
     const secs = workSeconds(work);
     if (segmentStatus(items, work.status) === "failed") return secs > 0 ? `Failed after ${secs}s` : "Failed";
-    return workedLabel(segmentToolCount(items) ? "Worked" : "Thought", secs);
+    const kind = traceKind(items);
+    if (kind === "search") return "Searched the web";
+    const tools = segmentToolCount(items);
+    if (kind === "tools") return `Ran ${tools} tool${tools === 1 ? "" : "s"}`;
+    return workedLabel("Thought", secs);
   }
 
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
@@ -2403,10 +2448,63 @@ export function createChatSurface(
     const status = work.status;
     const stale = work.stale === true;
     if (item.kind === "thinking")
-      return thinkingRow((item.activity.payload as { thinking?: string } | null)?.thinking ?? "");
+      return html`${reasonRows((item.activity.payload as { thinking?: string } | null)?.thinking ?? "")}`;
     if (item.kind === "text") return messageRow(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
+    if (item.kind === "tool" && isSearchRow(item.row)) return searchTrace(item.row, work, status, stale);
     return toolRow(item.row, work, status, stale);
+  }
+
+  interface SearchHit {
+    title: string;
+    url: string;
+  }
+
+  function searchHits(payload: unknown, depth = 0): SearchHit[] {
+    if (!payload || typeof payload !== "object" || depth > 2) return [];
+    if (Array.isArray(payload)) {
+      const hits = payload.filter(
+        (h): h is { url: string; title?: string; name?: string } =>
+          Boolean(h) && typeof h === "object" && typeof (h as { url?: unknown }).url === "string",
+      );
+      if (hits.length) return hits.map((h) => ({ url: h.url, title: h.title ?? h.name ?? h.url }));
+      return payload.flatMap((v) => searchHits(v, depth + 1));
+    }
+    return Object.values(payload as Record<string, unknown>).flatMap((v) => searchHits(v, depth + 1));
+  }
+
+  function hostOf(url: string): string {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return url;
+    }
+  }
+
+  function searchTrace(
+    row: ToolRowModel,
+    work: WorkBlock,
+    status: WorkBlock["status"],
+    stale: boolean,
+  ): TemplateResult {
+    const call = (row.call?.payload ?? {}) as ToolPayload;
+    const hits = searchHits(row.result?.payload ?? null);
+    if (!hits.length) return toolRow(row, work, status, stale);
+    const shown = hits.slice(0, 3);
+    return html`<div class="trace-search">
+      ${
+        call.query ? html`<div class="trace-search-query">${icon(Search, 14)}<span>${call.query}</span></div>` : nothing
+      }
+      ${shown.map(
+        (hit, i) =>
+          html`<a class="trace-search-result" style=${`--i:${i}`} href=${hit.url} target="_blank" rel="noreferrer">
+            <span class="trace-favicon" data-tone=${i % 3}>${icon(Globe, 9)}</span>
+            <span class="trace-search-title">${hit.title}</span>
+            <span class="trace-search-host">${hostOf(hit.url)}</span>
+          </a>`,
+      )}
+      ${hits.length > shown.length ? html`<span class="trace-more">+${hits.length - shown.length} more</span>` : nothing}
+    </div>`;
   }
 
   function thinkingRow(text: string, live = false): TemplateResult {
@@ -2416,7 +2514,7 @@ export function createChatSurface(
         ${live ? html`<span class="tool-label">${sheenLabel("Thinking", true)}</span>` : thinkingLabel(text)}
         ${icon(ChevronRight, 14)}
       </summary>
-      <div class="thinking-body">${markdown(text)}</div>
+      <div class="thinking-body">${reasonRows(text)}</div>
     </details>`;
   }
 
