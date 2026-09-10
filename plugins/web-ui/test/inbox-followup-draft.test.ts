@@ -45,6 +45,7 @@ test("a failed inbox followup preserves edits made while the request was pending
           rejectRequest = reject;
         });
       const request = askAgent(item, "Original instruction");
+      await new Promise((resolve) => setTimeout(resolve, 0));
       render(chatTpl(item), host);
       const box = host.querySelector<HTMLTextAreaElement>(".inbox-chat-input")!;
       assert.equal(box.disabled, false);
