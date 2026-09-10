@@ -314,6 +314,8 @@ a.chat-row-open {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  box-sizing: content-box;
+  min-height: 1lh;
   padding-right: 6px;
   overflow-x: hidden;
   scrollbar-gutter: stable;
