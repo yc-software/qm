@@ -1,3 +1,6 @@
+import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
+import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
+import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createDeviceFlowCutoverStore } from "../src/credentials/device-flow-cutover.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
@@ -732,4 +735,74 @@ test("retirement preserves core live-work and owning-scope guards before direct 
   await assert.rejects(guarded.retire("alice", record.id), /live background work/);
   assert.equal(destroyed, false);
   assert.equal((await records.get(record.id))?.state, "ready");
+});
+
+test("retirement waits for background startup to commit its live registry row", async () => {
+  const { options, backend, routes, layers } = fixture((sandbox) => {
+    sandbox.profile.processSessions = true;
+    sandbox.startProcess = async () => ({ processId: "job" });
+    sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
+    sandbox.writeStdin = async () => {};
+    sandbox.signalProcess = async () => {};
+    sandbox.listProcesses = async () => [];
+  });
+  const registry = createMemoryProcessRegistry();
+  const resources = createSandboxResources({
+    ...options,
+    beforeRetire: async (record) => {
+      if ((await registry.liveByScope(record.ownerScopeId)).some((r) => r.sandboxId === record.id))
+        throw new Error("live background work");
+    },
+  });
+  const router = createSandboxRouter({ resources, routes, backends: { local: backend }, defaultBackend: "local" });
+  assert.ok(supportsProcessSessions(router));
+  const record = await resources.create("alice", "personal:alice", "local");
+  const handle = await router.provision(layers, { sandboxId: record.id });
+  const entering = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const register = registry.register.bind(registry);
+  registry.register = async (row) => {
+    entering.resolve();
+    await release.promise;
+    return register(row);
+  };
+  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
+  const starting = broker.start(handle, "sleep 60");
+  await entering.promise;
+  let destroyed = false;
+  backend.destroyScope = async () => {
+    destroyed = true;
+  };
+  const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
+  release.resolve();
+  await Promise.all([starting, retiring]);
+  assert.equal(destroyed, false);
+  assert.equal((await registry.get("job"))?.sandboxId, record.id);
+});
+
+test("failed background registration kills its process and releases the resource lock", async () => {
+  const { resources, router, backend, layers } = fixture((sandbox) => {
+    sandbox.profile.processSessions = true;
+    sandbox.startProcess = async () => ({ processId: "unregistered" });
+    sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
+    sandbox.writeStdin = async () => {};
+    sandbox.signalProcess = async () => {};
+    sandbox.listProcesses = async () => [];
+  });
+  assert.ok(supportsProcessSessions(router));
+  const record = await resources.create("alice", "personal:alice", "local");
+  const handle = await router.provision(layers, { sandboxId: record.id });
+  const registry = createMemoryProcessRegistry();
+  registry.register = async () => {
+    throw new Error("registry unavailable");
+  };
+  const signals: string[] = [];
+  backend.signalProcess = async (_handle, id, signal) => {
+    signals.push(`${id}:${signal}`);
+  };
+  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
+  await assert.rejects(broker.start(handle, "sleep 60"), /registry unavailable/);
+  assert.deepEqual(signals, ["unregistered:KILL"]);
+  await resources.retire("alice", record.id);
+  assert.equal((await resources.get(record.id)).cleanupPending, false);
 });

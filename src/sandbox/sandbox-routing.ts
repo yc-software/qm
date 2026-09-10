@@ -197,6 +197,26 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
 
     ...(some(supportsProcessSessions)
       ? {
+          startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
+            useHandle(handle, async () => {
+              const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
+              const started = await sandbox.startProcess(handle, command, o);
+              try {
+                await register(started.processId);
+              } catch (error) {
+                try {
+                  await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
+                    handle,
+                    started.processId,
+                    "KILL",
+                  );
+                } catch (cleanupError) {
+                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed");
+                }
+                throw error;
+              }
+              return started;
+            }),
           startProcess: (handle: SandboxHandle, command: string, o?) => {
             const start = () =>
               requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);

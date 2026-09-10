@@ -189,6 +189,12 @@ export interface Sandbox {
   listDir(handle: SandboxHandle, relDir: string): Promise<string[]>;
   removeDir(handle: SandboxHandle, relDir: string): Promise<void>;
   exportFiles?(handle: SandboxHandle, opts?: AgentComputerExportOptions): Promise<AgentComputerExportEntry[]>;
+  startRegisteredProcess?(
+    handle: SandboxHandle,
+    command: string,
+    register: (processId: string) => Promise<void>,
+    opts?: StartProcessOptions,
+  ): Promise<{ processId: string }>;
   startProcess?(handle: SandboxHandle, command: string, opts?: StartProcessOptions): Promise<{ processId: string }>;
   readProcess?(handle: SandboxHandle, processId: string, opts?: ReadProcessOptions): Promise<ReadProcessResult>;
   writeStdin?(handle: SandboxHandle, processId: string, data: string): Promise<void>;

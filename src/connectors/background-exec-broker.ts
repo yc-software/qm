@@ -138,18 +138,24 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         return { processId, output: read.chunks, cursor: read.cursor, status: read.status, reattached: true };
       }
 
-      ({ processId } = await deps.sandbox.startProcess(handle, command, {
-        env: { PYTHONUNBUFFERED: "1" },
-      }));
-      await deps.registry.register({
-        processId,
-        scopeId: deps.scopeId,
-        ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
-        kind: "background",
-        command: redacted,
-        ttlMs: ttl,
-        ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
-      });
+      const register = async (id: string): Promise<void> => {
+        await deps.registry.register({
+          processId: id,
+          scopeId: deps.scopeId,
+          ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+          kind: "background",
+          command: redacted,
+          ttlMs: ttl,
+          ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+        });
+      };
+      const startOptions = { env: { PYTHONUNBUFFERED: "1" } };
+      if (deps.sandbox.startRegisteredProcess) {
+        ({ processId } = await deps.sandbox.startRegisteredProcess(handle, command, register, startOptions));
+      } else {
+        ({ processId } = await deps.sandbox.startProcess(handle, command, startOptions));
+        await register(processId);
+      }
 
       const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, { deadlineMs: POLL_MS });
       if (status.state === "exited") await deps.registry.markStatus(processId, "exited");
