@@ -108,6 +108,10 @@ test("send_email rejects malformed input before it reaches the ledger", async ()
   });
   const bad = await run({ to: ["not-an-address"], subject: "x", body: "y" });
   assert.match(bad.content[0]?.text ?? "", /not an email address/);
+  const badCc = await run({ to: ["Dana <dana@northwind.io>"], cc: ["priya at acme"], subject: "x", body: "y" });
+  assert.match(badCc.content[0]?.text ?? "", /"priya at acme" is not an email address/);
+  const noSubject = await run({ to: ["a@b.co"], subject: " ", body: "y" });
+  assert.match(noSubject.content[0]?.text ?? "", /needs a subject/);
   const empty = await run({ to: [], subject: "x", body: "y" });
   assert.match(empty.content[0]?.text ?? "", /at least one recipient/);
   assert.ok(emitted.filter((e) => e.type === "tool_result").every((e) => e.payload.isError === true));

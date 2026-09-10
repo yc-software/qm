@@ -428,8 +428,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
   const active = new Map<string, ActiveTurn>();
   const definitionRef: ToolContextRef = { current: null };
   const definitionTools = [
-    ...bridgedTools(definitionRef, harnessToolOptions(opts)),
-    ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), surfaceTools: false }),
+    ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), emailDrafts: true }),
+    ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), surfaceTools: false, emailDrafts: true }),
   ];
   const definitions = [
     ...new Map(

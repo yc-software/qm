@@ -1258,6 +1258,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           keychainInjected.push(m);
         }
       }
+      let gmailConnected = false;
       if (!strictReadOnly && deps.connectorTokens && conversation.kind === "dm") {
         for (const host of CONNECTOR_HOSTS) {
           const token =
@@ -1265,6 +1266,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
           if (token) connectorEnv[envKey(host)] = token;
+          if (token && host === GMAIL_HOST) gmailConnected = true;
         }
       }
       perf.credsMs += Date.now() - credsStart;
@@ -2117,7 +2119,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
-          ...(deps.emailDrafts && isWeb && connectorEnv[envKey(GMAIL_HOST)]
+          ...(deps.emailDrafts && isWeb && gmailConnected
             ? {
                 holdEmailDraft: (draft: EmailDraftInput) =>
                   holdEmailDraft(deps.emailDrafts!, actor.id, draft, session.id),

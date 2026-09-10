@@ -3111,7 +3111,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           "Gmail is not connected for this user here. Ask them to connect Google Workspace under Keychain in the web UI, then try again.",
         );
       }
-      const bad = [...to, ...cc].find((a) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a));
+      const bad = [...to, ...cc].find((a) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.match(/<([^>]*)>\s*$/)?.[1] ?? a));
       if (to.length === 0) return fail("send_email needs at least one recipient in `to`");
       if (bad) return fail(`"${bad}" is not an email address`);
       if (!subject) return fail("send_email needs a subject");
@@ -3122,7 +3122,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { ...summary, ok: true, itemId: held.itemId },
           text(
-            `Draft handed to the user for review. It is now shown in this conversation with Send, Edit and Discard; they decide, you cannot send it. Tell them it is ready and stop.`,
+            `Draft handed to the user for review. It is now shown in this conversation with Send, Edit and Discard; only they can send it, and the ledger refuses a send from you. Tell them it is ready and stop.`,
           ),
           false,
           undefined,

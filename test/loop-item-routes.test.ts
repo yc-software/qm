@@ -10,6 +10,7 @@ import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
+import { holdEmailDraft } from "../src/loops/email-draft.ts";
 import type { Cron, Loop, LoopItem } from "../src/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
@@ -748,6 +749,34 @@ test("an edit carrying the draft it was based on is refused when the agent redra
   assert.equal(stale.status, 409);
   assert.match((stale.body as { message: string }).message, /draft changed/);
   assert.deepEqual((await w.loops.items.get(item.id))!.proposal!.data, { body: "newer agent draft" });
+});
+
+test("a compose email is sent by the person alone; an agent capability is refused", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await holdEmailDraft(
+    { loops: w.loops.store, items: w.loops.items },
+    "josh",
+    { to: ["dana@northwind.io"], subject: "Q3", body: "Hi Dana" },
+  );
+  const item = (await w.loops.items.byLoop(loop.id))[0]!;
+  const asAgent = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
+    body: { kind: "send" },
+    capability: { ...CAP, actorId: "josh", scopeId: "personal:josh", privateScope: true },
+  });
+  assert.equal(asAgent.status, 403);
+  assert.equal((asAgent.body as { error: string }).error, "human_required");
+  assert.equal((await w.loops.items.get(item.id))?.status, "ready", "the draft stays held");
+  w.tokens = false;
+  const asPerson = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/action?principalId=josh`,
+    body: { kind: "send" },
+    capability: null,
+  });
+  assert.equal(asPerson.status, 404, "the person passes the gate and reaches the connector stage");
 });
 
 test("a person's own typed mention stays live, while a capability caller's is disarmed", async () => {
