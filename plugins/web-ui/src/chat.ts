@@ -81,7 +81,14 @@ import {
   type WorkBlock,
   fileContentUrl,
 } from "./core-bridge";
-import { buildTimeline, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline";
+import {
+  buildTimeline,
+  toolCategory,
+  toolRowKind,
+  type TimelineItem,
+  type ToolPayload,
+  type ToolRowModel,
+} from "./timeline";
 import { CONNECTOR_NAMES, connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
@@ -2410,7 +2417,7 @@ export function createChatSurface(
   }
 
   function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
-    switch (tool) {
+    switch (toolCategory({ ...result, ...call, tool })) {
       case "execute":
         return call.command ? firstLine(call.command) : "";
       case "read":
@@ -2512,7 +2519,8 @@ export function createChatSurface(
     activity: ToolActivity | null,
   ): TemplateResult {
     const input = toolPayloadText(call);
-    const hasExecOutput = tool === "execute" && Boolean(result.stdout || result.stderr);
+    const hasExecOutput =
+      toolCategory({ ...result, ...call, tool }) === "execute" && Boolean(result.stdout || result.stderr);
     const output = toolPayloadText(result, hasExecOutput ? ["stdout", "stderr", "code", "timedOut"] : []);
     return html`<div class="tool-disclosure">
       ${toolPayloadCard("Input", input)} ${hasExecOutput ? execOutputCard(result, work, activity) : nothing}
@@ -2534,7 +2542,7 @@ export function createChatSurface(
     const call = (row.call?.payload ?? {}) as ToolPayload;
     const result = (row.result?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? result.tool ?? "unknown";
-    const knownMeta = TOOL_META[tool];
+    const knownMeta = TOOL_META[toolCategory({ ...result, ...call, tool })];
     const meta = knownMeta ?? UNKNOWN_TOOL;
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);

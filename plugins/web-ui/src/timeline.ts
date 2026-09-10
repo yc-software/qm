@@ -21,6 +21,7 @@ export interface ToolPayload {
   timedOut?: boolean;
   action?: string;
   process_id?: string;
+  sandbox_id?: string | null;
   monitor_id?: string;
   added?: number;
 }
@@ -45,9 +46,27 @@ function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
 
 export type ToolRowKind = "running" | "ok" | "failed" | "attempted" | "approval";
 
+export function toolCategory(payload: ToolPayload): string {
+  if (payload.tool !== "sandbox") return payload.tool ?? "unknown";
+  if (payload.action === "exec") return "execute";
+  if (
+    [
+      "start_process",
+      "read_process",
+      "write_stdin",
+      "signal_process",
+      "list_processes",
+      "watch_process",
+      "unwatch_process",
+    ].includes(payload.action ?? "")
+  )
+    return "background";
+  return "sandbox";
+}
+
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {
   const result = (row.result?.payload ?? {}) as ToolPayload;
-  const tool = ((row.call?.payload ?? row.result?.payload ?? {}) as ToolPayload).tool ?? "unknown";
+  const tool = toolCategory({ ...result, ...((row.call?.payload ?? {}) as ToolPayload) });
   if (result.blocked === "needs_approval") return "approval";
   if (!row.result) {
     if (!isTerminalWorkStatus(status)) return "running";
@@ -70,6 +89,10 @@ function orphanCallSignature(row: ToolRowModel): string | null {
   const p = (row.call.payload ?? {}) as ToolPayload;
   return [
     p.tool ?? "unknown",
+    p.action ?? "",
+    p.sandbox_id ?? "",
+    p.process_id ?? "",
+    p.monitor_id ?? "",
     p.command ?? "",
     p.path ?? "",
     p.name ?? "",

@@ -2757,6 +2757,8 @@ test("unified sandbox rejects missing, mistyped and unrelated action fields befo
   });
   const tool = createAgentTools({ current: tc }, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
   for (const input of [
+    { action: "__proto__" },
+    { action: "constructor" },
     { action: "exec", purpose: "test" },
     { action: "start_process", command: " " },
     { action: "read_process", process_id: "job", sandbox_id: "other-box" },
@@ -2873,4 +2875,23 @@ test("unified sandbox keeps strict approval and quarantined output associated wi
   assert.equal(entries[1]?.tool, "sandbox");
   assert.equal(entries[1]?.action, "exec");
   assert.equal(entries[1]?.quarantined, true);
+});
+
+test("unscreened unified output retains the called action in the durable transcript", async () => {
+  const entries: Array<Record<string, unknown>> = [];
+  const tool = createAgentTools(
+    {
+      current: fakeToolContext(),
+      scopeLabel: "personal:U1",
+      emit: (entry) => {
+        entries.push(entry.payload as Record<string, unknown>);
+      },
+      screenToolResult: async () => ({ outcome: "unscreened" }),
+    },
+    { sandboxResources: true },
+  ).find((t) => t.name === "sandbox")!;
+  await call(tool, { action: "read_process", process_id: "job" });
+  assert.equal(entries[1]?.tool, "sandbox");
+  assert.equal(entries[1]?.action, "read_process");
+  assert.equal(entries[1]?.unscreened, true);
 });

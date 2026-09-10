@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolActivity, WorkBlock } from "../src/core-bridge.ts";
-import { buildTimeline, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
+import { buildTimeline, toolCategory, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
 
 function act(seq: number, type: ToolActivity["type"], payload: unknown): ToolActivity {
   return { seq, parentSeq: null, type, payload, createdAt: seq };
@@ -299,4 +299,42 @@ test("memoized output still reflects a mutated-then-replaced work correctly", ()
   const items = buildTimeline(work);
   assert.equal(items.length, 2);
   assert.equal(items[1]?.kind, "tool");
+});
+
+test("unified sandbox execution keeps legacy failure and display semantics", () => {
+  for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
+    assert.equal(toolCategory(identity), "execute");
+    assert.equal(toolRowKind(row(identity, { ...identity, code: 1, stdout: "failed" }), "complete"), "failed");
+    assert.equal(toolRowKind(row(identity, { ...identity, code: 0, stdout: "ok" }), "complete"), "ok");
+    assert.equal(
+      toolRowKind({ call: null, result: act(1, "tool_result", { ...identity, code: 2 }) }, "complete"),
+      "failed",
+    );
+  }
+  for (const action of [
+    "start_process",
+    "read_process",
+    "write_stdin",
+    "signal_process",
+    "list_processes",
+    "watch_process",
+    "unwatch_process",
+  ])
+    assert.equal(toolCategory({ tool: "sandbox", action }), "background");
+  assert.equal(toolCategory({ tool: "sandbox", action: "status" }), "sandbox");
+});
+
+test("different sandbox actions and process targets do not collapse into one orphan attempt", () => {
+  const actions = [
+    { action: "status", sandbox_id: "box-a" },
+    { action: "restart", sandbox_id: "box-a" },
+    { action: "status", sandbox_id: "box-b" },
+    { action: "read_process", process_id: "job-a" },
+    { action: "read_process", process_id: "job-b" },
+  ];
+  const items = buildTimeline({
+    status: "complete",
+    activity: actions.map((action, index) => act(index, "tool_call", { tool: "sandbox", ...action })),
+  });
+  assert.equal(items.length, actions.length);
 });

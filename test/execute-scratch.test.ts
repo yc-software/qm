@@ -86,10 +86,7 @@ test("flag OFF: the execute surface is exactly the legacy one (no scope/durable,
   const [execute] = createAgentTools({ current: tc });
   assert.deepEqual(schemaProps(execute!), [
     "command",
-    "computer",
     "sandbox_id",
-    "backend",
-    "name",
     "purpose",
     "timeout_seconds",
   ]);
@@ -104,10 +101,7 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   const [execute] = createAgentTools(ref, { scratchExec: true });
   assert.deepEqual(schemaProps(execute!), [
     "command",
-    "computer",
     "sandbox_id",
-    "backend",
-    "name",
     "purpose",
     "timeout_seconds",
     "scope",
@@ -294,10 +288,7 @@ test("execute schema lists exact command credential handles", async () => {
   const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
   assert.deepEqual(schemaProps(execute!), [
     "command",
-    "computer",
     "sandbox_id",
-    "backend",
-    "name",
     "purpose",
     "timeout_seconds",
     "credentials",

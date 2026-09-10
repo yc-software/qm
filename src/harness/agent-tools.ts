@@ -483,7 +483,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...ret.content.filter((c) => c.type !== "text"),
           ];
         }
-        persistedSummary = { tool: summary.tool, unscreened: true };
+        persistedSummary = {
+          tool: summary.tool,
+          ...(summary.action ? { action: summary.action } : {}),
+          unscreened: true,
+        };
       }
     }
     await log(
@@ -1786,7 +1790,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         async execute(callId, params, signal, onUpdate, ctx) {
           const action = params.action;
           const schema = Object.hasOwn(actionSchemas, action) ? actionSchemas[action] : undefined;
-          const missing = (requiredFields[action] ?? []).find((field) => {
+          const missing = (Object.hasOwn(requiredFields, action) ? requiredFields[action]! : []).find((field) => {
             const value = (params as Record<string, unknown>)[field];
             return value === undefined || (typeof value === "string" && field !== "data" && !value.trim());
           });

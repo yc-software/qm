@@ -75,7 +75,11 @@ export function captureSession(sessionId: string, entries: SessionEntry[]): Memo
     const payload = entry.payload as Record<string, unknown> | null;
     if (!payload || typeof payload.callId !== "string") continue;
     const ok = payload.isError !== true;
-    const code = payload.tool === "execute" && typeof payload.code === "number" ? payload.code : undefined;
+    const code =
+      (payload.tool === "execute" || (payload.tool === "sandbox" && payload.action === "exec")) &&
+      typeof payload.code === "number"
+        ? payload.code
+        : undefined;
     const outcome = { ok, ...(code !== undefined ? { exit_code: code } : {}) };
     const queue = outcomes.get(payload.callId);
     if (queue) queue.push(outcome);
