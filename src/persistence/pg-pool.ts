@@ -7,6 +7,29 @@ export type { Pool, PoolClient };
 
 export type Rows = Record<string, unknown>[];
 
+export interface PgPoolingConfig {
+  databaseUrl?: string;
+  poolUrl?: string;
+  caCert?: string;
+  queryMax?: number;
+  sessionMax?: number;
+}
+
+let poolingConfig: PgPoolingConfig = {};
+
+export function configurePgPooling(config: PgPoolingConfig): void {
+  if (config.poolUrl && !config.databaseUrl) throw new Error("DATABASE_POOL_URL requires DATABASE_URL");
+  for (const [name, value] of [
+    ["DATABASE_POOL_MAX", config.queryMax],
+    ["DATABASE_DIRECT_POOL_MAX", config.sessionMax],
+  ] as const) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 100)) {
+      throw new Error(`${name} must be an integer between 1 and 100`);
+    }
+  }
+  poolingConfig = { ...config };
+}
+
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
 async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
@@ -18,16 +41,17 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     return existing.pool;
   }
   const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max = kind === "migration" ? 1 : Number(process.env[setting] ?? (kind === "query" ? 10 : 32));
+  const max =
+    kind === "migration" ? 1 : kind === "query" ? (poolingConfig.queryMax ?? 10) : (poolingConfig.sessionMax ?? 32);
   if (!Number.isInteger(max) || max < 1 || max > 100)
     throw new Error(`${setting} must be an integer between 1 and 100`);
   let url = connectionString;
   let ssl = pgCaOptions();
-  if (kind === "query" && connectionString === process.env.DATABASE_POOL_URL && process.env.DATABASE_POOL_CA_CERT) {
+  if (kind === "query" && connectionString === poolingConfig.poolUrl && poolingConfig.caCert) {
     const parsed = new URL(connectionString);
     for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) parsed.searchParams.delete(key);
     url = parsed.toString();
-    ssl = { ssl: { ca: process.env.DATABASE_POOL_CA_CERT } };
+    ssl = { ssl: { ca: poolingConfig.caCert } };
   }
   const pool = new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 });
   pool.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
@@ -50,8 +74,8 @@ async function releasePool(
 }
 
 function pooledDatabaseUrl(connectionString: string): string {
-  const pooled = process.env.DATABASE_POOL_URL;
-  if (!pooled || connectionString !== process.env.DATABASE_URL) return connectionString;
+  const pooled = poolingConfig.poolUrl;
+  if (!pooled || connectionString !== poolingConfig.databaseUrl) return connectionString;
   const directUrl = new URL(connectionString);
   const pooledUrl = new URL(pooled);
   if (
