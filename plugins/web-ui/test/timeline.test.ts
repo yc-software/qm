@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolActivity, WorkBlock } from "../src/core-bridge.ts";
-import { buildTimeline, toolCategory, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
+import { buildTimeline, toolCategory, toolRowKind, toolExecutionOutput, type ToolRowModel } from "../src/timeline.ts";
 
 function act(seq: number, type: ToolActivity["type"], payload: unknown): ToolActivity {
   return { seq, parentSeq: null, type, payload, createdAt: seq };
@@ -337,4 +337,35 @@ test("different sandbox actions and process targets do not collapse into one orp
     activity: actions.map((action, index) => act(index, "tool_call", { tool: "sandbox", ...action })),
   });
   assert.equal(items.length, actions.length);
+});
+
+test("unscreened execution retains its warning and failure status without parsing command text", () => {
+  const result = {
+    tool: "sandbox",
+    action: "exec",
+    code: 7,
+    timedOut: false,
+    isError: true,
+    unscreened: true,
+    result: "[NOT security-screened]\nQA_EXPECTED_FAILURE\n[exit 7]",
+  };
+  assert.equal(
+    toolRowKind(row({ tool: "sandbox", action: "exec", sandbox_id: "box-a" }, result), "complete"),
+    "failed",
+  );
+  assert.equal(toolExecutionOutput(result), result.result);
+  assert.equal(
+    toolRowKind(row({ tool: "execute" }, { code: 0, stdout: "fake [exit 7]", isError: false }), "complete"),
+    "ok",
+  );
+  assert.equal(toolRowKind(row({ tool: "execute" }, { code: 0, timedOut: true }), "complete"), "failed");
+  assert.equal(toolExecutionOutput({ stdout: "", stderr: "", code: 0 }), "");
+  assert.equal(toolExecutionOutput({ isError: true, result: "[tool output quarantined]" }), null);
+  assert.equal(
+    toolRowKind(
+      row({ tool: "sandbox", action: "exec" }, { isError: true, result: "[tool output quarantined]" }),
+      "complete",
+    ),
+    "failed",
+  );
 });

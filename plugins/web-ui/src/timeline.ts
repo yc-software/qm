@@ -19,6 +19,9 @@ export interface ToolPayload {
   stderr?: string;
   code?: number;
   timedOut?: boolean;
+  isError?: boolean;
+  result?: string;
+  unscreened?: boolean;
   action?: string;
   process_id?: string;
   sandbox_id?: string | null;
@@ -64,6 +67,13 @@ export function toolCategory(payload: ToolPayload): string {
   return "sandbox";
 }
 
+export function toolExecutionOutput(result: ToolPayload): string | null {
+  if (result.unscreened && typeof result.result === "string") return result.result;
+  if (typeof result.stdout === "string" || typeof result.stderr === "string")
+    return [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
+  return null;
+}
+
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {
   const result = (row.result?.payload ?? {}) as ToolPayload;
   const tool = toolCategory({ ...result, ...((row.call?.payload ?? {}) as ToolPayload) });
@@ -73,9 +83,10 @@ export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): Too
     return status === "failed" ? "failed" : "attempted";
   }
   const failed =
+    result.isError === true ||
     !!result.error ||
     result.denied === true ||
-    (tool === "execute" && typeof result.code === "number" && result.code !== 0);
+    (tool === "execute" && (result.timedOut === true || (typeof result.code === "number" && result.code !== 0)));
   return failed ? "failed" : "ok";
 }
 

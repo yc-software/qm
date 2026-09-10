@@ -486,6 +486,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         persistedSummary = {
           tool: summary.tool,
           ...(summary.action ? { action: summary.action } : {}),
+          ...(originalTool === "execute" ? { code: summary.code, timedOut: summary.timedOut } : {}),
           unscreened: true,
         };
       }
@@ -612,7 +613,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       else if (route.scratch) scope = "scratch";
       scopeNote = { scope };
     }
-    await recordCall(callId, { tool: "execute", command: params.command, ...scopeNote });
+    await recordCall(callId, {
+      tool: "execute",
+      command: params.command,
+      ...scopeNote,
+      ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
+    });
     try {
       if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
@@ -644,7 +650,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ],
           details: r,
         },
-        false,
+        r.code !== 0 || r.timedOut,
         undefined,
         false,
         undefined,
@@ -849,7 +855,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "sandbox", action: params.action });
+      await recordCall(callId, {
+        tool: "sandbox",
+        action: params.action,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
+        ...(params.backend ? { backend: params.backend } : {}),
+        ...(params.name ? { name: params.name } : {}),
+      });
       try {
         if (!sandboxActions.includes(params.action)) throw new Error("unsupported sandbox action");
         if (["list", "create", "set_default", "retire"].includes(params.action)) {
@@ -1434,6 +1446,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         action: params.action,
         command: params.command,
         process_id: params.process_id,
+        ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
         ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
       });
       try {

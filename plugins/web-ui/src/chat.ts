@@ -85,6 +85,7 @@ import {
   buildTimeline,
   toolCategory,
   toolRowKind,
+  toolExecutionOutput,
   type TimelineItem,
   type ToolPayload,
   type ToolRowModel,
@@ -2520,8 +2521,8 @@ export function createChatSurface(
   ): TemplateResult {
     const input = toolPayloadText(call);
     const hasExecOutput =
-      toolCategory({ ...result, ...call, tool }) === "execute" && Boolean(result.stdout || result.stderr);
-    const output = toolPayloadText(result, hasExecOutput ? ["stdout", "stderr", "code", "timedOut"] : []);
+      toolCategory({ ...result, ...call, tool }) === "execute" && toolExecutionOutput(result) !== null;
+    const output = toolPayloadText(result, hasExecOutput ? ["stdout", "stderr", "code", "timedOut", "result"] : []);
     return html`<div class="tool-disclosure">
       ${toolPayloadCard("Input", input)} ${hasExecOutput ? execOutputCard(result, work, activity) : nothing}
       ${toolPayloadCard("Result", output)}
@@ -2570,12 +2571,12 @@ export function createChatSurface(
   }
 
   function execOutputCard(result: ToolPayload, work: WorkBlock, activity: ToolActivity | null): TemplateResult {
-    const out = [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
+    const out = toolExecutionOutput(result) ?? "";
     return html`<div class="code-card">
       <div class="code-card-head"><span class="code-card-lang">bash</span></div>
       <pre class="code-card-body">${out}</pre>
       <div class="code-card-foot">
-        exit ${result.code ?? 0}${result.timedOut ? " · timed out" : ""}
+        exit ${result.code ?? "unknown"}${result.timedOut ? " · timed out" : ""}
         ${
           activity?.truncated
             ? html`<button class="show-full-btn" type="button" @click=${() => void loadFullEntry(work, activity)}>

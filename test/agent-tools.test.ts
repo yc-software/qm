@@ -2942,3 +2942,63 @@ test("sandbox strict approvals remain action-scoped across resource activation",
   );
   assert.equal(ref.pendingApprovals?.at(-1)?.approvalKey, "tool:sandbox:retire");
 });
+
+for (const outcome of ["unscreened", "quarantine"] as const)
+  test(`sandbox command failure preserves safe transcript metadata when output is ${outcome}`, async () => {
+    const entries: Emitted[] = [];
+    const tool = createAgentTools(
+      {
+        current: {
+          ...fakeToolContext(),
+          execute: async () => ({ stdout: "PRIVATE_COMMAND_OUTPUT", stderr: "", code: 7, timedOut: false }),
+        },
+        scopeLabel: "personal:U1",
+        emit: (entry) => {
+          entries.push(entry as Emitted);
+        },
+        screenToolResult: async () => ({ outcome }),
+      },
+      { sandboxResources: true },
+    ).find((t) => t.name === "sandbox")!;
+    await call(tool, { action: "exec", command: "exit 7", sandbox_id: "box-a", purpose: "Check failure rendering" });
+    const input = entries.find((e) => e.type === "tool_call")!.payload;
+    const output = entries.find((e) => e.type === "tool_result")!.payload;
+    assert.equal(input.sandbox_id, "box-a");
+    assert.equal(output.isError, true);
+    assert.equal(output.stdout, undefined);
+    assert.equal(output.stderr, undefined);
+    if (outcome === "unscreened") {
+      assert.equal(output.code, 7);
+      assert.equal(output.timedOut, false);
+      assert.match(String(output.result), /NOT security-screened/);
+      assert.match(String(output.result), /PRIVATE_COMMAND_OUTPUT/);
+    } else {
+      assert.equal(output.code, undefined);
+      assert.doesNotMatch(JSON.stringify(output), /PRIVATE_COMMAND_OUTPUT/);
+    }
+  });
+
+test("sandbox call transcripts retain explicit process and lifecycle targets", async () => {
+  const entries: Emitted[] = [];
+  const tool = createAgentTools(
+    {
+      current: { ...fakeToolContext(), sandboxResources: async () => ({}) },
+      scopeLabel: "personal:U1",
+      emit: (entry) => {
+        entries.push(entry as Emitted);
+      },
+    },
+    { sandboxResources: true },
+  ).find((t) => t.name === "sandbox")!;
+  for (const action of ["start_process", "status", "restart", "retire", "set_default"]) {
+    await call(tool, {
+      action,
+      sandbox_id: "box-a",
+      purpose: "Inspect target",
+      ...(action === "start_process" ? { command: "sleep 1" } : {}),
+    });
+    assert.equal(entries.filter((e) => e.type === "tool_call").at(-1)!.payload.sandbox_id, "box-a");
+  }
+  await call(tool, { action: "set_default", sandbox_id: null, purpose: "Clear default" });
+  assert.equal(entries.filter((e) => e.type === "tool_call").at(-1)!.payload.sandbox_id, null);
+});
