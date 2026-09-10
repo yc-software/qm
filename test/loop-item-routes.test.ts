@@ -827,3 +827,23 @@ test("legacy and canonical item URLs serialize a concurrent send", async () => {
   assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
   assert.equal(w.sent.length, 1);
 });
+
+test("a conversational send refuses a stale draft before starting an agent turn", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const out = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
+    body: { message: "Send it", expectedProposalAt: item.proposal!.at - 1 },
+  });
+  assert.equal(out.status, 409);
+  assert.deepEqual(w.followUps, []);
+  assert.deepEqual(w.sent, []);
+  const accepted = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
+    body: { message: "Send it", expectedProposalAt: item.proposal!.at },
+  });
+  assert.equal(accepted.status, 200);
+  assert.equal(w.followUps.length, 1);
+});
