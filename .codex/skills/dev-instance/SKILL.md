@@ -48,8 +48,8 @@ the slot has a `CANARY_CHANNEL` — a posted canary message must arrive back ove
 socket. If Slack reports multiple connections, `up` flags the slot for 30 minutes and
 auto-rotates to the next one. The count is a snapshot from the last hello frame, not
 a continuously refreshed inventory. Its `debug_info.host` identifies Slack's server,
-not another client's machine; it cannot locate a competing instance. A canary that never returns on a clean socket
-means a stale Slack app; `up` flags and rotates past that too.
+not another client's machine; it cannot locate a competing instance. A canary that
+never returns leaves delivery unverified; `up` flags and rotates past that too.
 
 **Re-running `up` on a live instance is a reload, not a no-op**: it re-reads your shell
 env, dev.env, and `.env`, diffs against what the children are running, and does a rolling
@@ -190,19 +190,22 @@ boot: multiple reported connections to the same app (flags the slot and auto-rot
 and a Slack app whose events never arrive (canary fails → flags the slot and rotates).
 Check local processes and other deployments before attributing a connection count to
 a live competitor. After cleanup, reconnect to obtain a fresh hello count; rereading
-health alone returns the previous snapshot. If
-deafness appears mid-session, the 10s health probe logs `DEGRADED: num_connections=N` in
-`supervisor.log` and the periodic canary flags delivery loss; `dev canary` gives you an
-on-demand proof either way. `dev up --rotate` moves to a fresh slot.
+health alone returns the previous snapshot. The 10s health probe logs
+`DEGRADED: num_connections=N` in `supervisor.log` when it observes a count transition
+above one, but cannot detect a new competitor while the hello snapshot is unchanged.
+Periodic canaries can detect delivery loss; `dev canary` tests delivery on demand.
+A successful canary does not establish exclusivity. `dev up --rotate` moves to a fresh slot.
 
-For a slot flagged `canary-failed`, the app itself is stale and needs rebuilding (~5 min):
-at api.slack.com **signed into the example workspace** (the dev console is
+For a slot flagged `canary-failed`, check networking, event subscriptions, permissions,
+and competing connections first. If the app configuration needs rebuilding, use
+api.slack.com **signed into the example workspace** (the dev console is
 per-workspace-identity — use "Sign in to another workspace" if it lists the wrong one):
 Create New App → From a manifest → paste `src/slack/manifest.json` (give it a unique
 `name` and bot `display_name`; old handles stay taken) → Install to Workspace → Basic
 Information → App-Level Tokens → Generate with the `connections:write` scope. Write the Bot
 token (`xoxb-…`) and app-level token (`xapp-…`) into `poolN.env`, delete `poolN.flag.json`,
-then run `up` again. (If you own the existing app, just reinstalling it also works.)
+then run `up` again to verify the replacement. Reinstalling an existing app may also
+resolve configuration drift; verify delivery afterward.
 
 Two smaller gotchas: a freshly-created bot isn't in Slack's "New message" people search for a
 minute or two — open its DM deterministically via `conversations.open` (bot token + your user
