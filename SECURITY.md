@@ -87,8 +87,8 @@ Sharing posture defaults to Isolated. Open is a deliberate disclosure tradeoff f
 authenticated internal human turns: core may expose the speaker's opted-in personal files,
 artifacts, skills, and memory to an opted-in shared conversation, and may expose files and
 skills from up to 25 recent shared contexts in that speaker's DM after rechecking current
-membership. Shared-context memory is searchable through the active turn's memory tool, not
-eagerly recalled or added to reusable sandbox API tokens. Candidate discovery
+membership. Included memories are loaded in full with source-scope labels and searchable through the active
+turn's memory tool; they are not added to reusable sandbox API tokens. Candidate discovery
 is limited to 100 recent sessions and 200 files, and binary files require explicit sharing
 before being copied into a different conversation's computer. Organization, personal, room, and source-room policy compose fail-closed, with
 Isolated winning. These reads are labelled and audited, but model output is not a disclosure

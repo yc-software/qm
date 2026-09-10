@@ -55,7 +55,6 @@ function toolCtx(opts: {
   layers?: WorkspaceLayer[];
   grantedHandles?: Awaited<ReturnType<ReturnType<typeof createAclStore>["handlesFor"]>>;
   sharedMaterializeDir?: string;
-  sharingSourceScopes?: string[];
   createdBy?: string;
 }) {
   return createToolContext({
@@ -67,7 +66,6 @@ function toolCtx(opts: {
     grantedHandles: opts.grantedHandles ?? [],
     ...(opts.sharedMaterializeDir ? { sharedMaterializeDir: opts.sharedMaterializeDir } : {}),
     workspace: opts.workspace,
-    sharingSourceScopes: opts.sharingSourceScopes,
     deploy: {} as never,
     acl: opts.acl,
     ...(opts.auditLog ? { auditLog: opts.auditLog } : {}),
@@ -143,7 +141,6 @@ test("a binary shared file materializes in the current turn's private directory"
     acl,
     grantedHandles: await acl.handlesFor([grantee]),
     sharedMaterializeDir: "shared/turn-1",
-    sharingSourceScopes: [owner],
   }).read("shared/orange.jpg");
 
   assert.match(got.content ?? "", /shared\/turn-1\/orange\.jpg/);
@@ -158,7 +155,6 @@ test("a binary shared file materializes in the current turn's private directory"
     sandbox: carriedBox.sandbox,
     acl,
     grantedHandles: [openHandle],
-    sharingSourceScopes: [owner],
   }).read(openHandle.handlePath);
   assert.match(blocked.content ?? "", /Binary files require an explicit share/);
   assert.equal(carriedBox.files.size, 0);
@@ -170,7 +166,6 @@ test("a binary shared file materializes in the current turn's private directory"
     sandbox: carriedBox.sandbox,
     acl,
     grantedHandles: [textHandle],
-    sharingSourceScopes: [owner],
   }).read(textHandle.handlePath);
   assert.equal(text.shared, true);
 });

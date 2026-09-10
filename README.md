@@ -115,7 +115,8 @@ Sharing posture is independent:
 - **Open** — on a live authenticated internal human turn, the speaker's opted-in personal
   files, artifacts, skills, and memory may be read in an opted-in shared room. In the
   speaker's DM, files and skills from up to 25 recent shared contexts where they are still
-  a member are available; their memory is searchable but not eagerly added to the prompt.
+  a member are available. Included memories are loaded into the prompt in full with source-scope
+  labels and are also searchable; relevance ranking is not applied.
   The candidate window is limited to 100 recent sessions and file discovery to 200 files.
   Binary files still require explicit sharing before entering another conversation's computer.
   Cross-context memory search is available only through the active turn's memory tool;

@@ -16,7 +16,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { parseScopeId, scopeId as toScopeId, personalScope } from "../types.ts";
+import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -24,7 +24,7 @@ import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
-import { carriedFileHandles, sharingSourcesForTurn } from "../resolution/sharing-access.ts";
+import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { renderSharingPosturePrompt } from "../resolution/sharing-posture.ts";
 import { resolveReachableChannel } from "../resolution/scope-reach.ts";
 import { reachEnqueue } from "../reach/reach.ts";
@@ -94,7 +94,7 @@ import {
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
-import { DEFAULT_MEMORY_POLICY, recallMemoryScopes, writableMemoryScope } from "../memory/policy.ts";
+import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
 import { createSkillMaterializer, skillsIndex, SKILLS_DIR } from "../skills/materialize.ts";
@@ -157,7 +157,7 @@ import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { SkillResolution, GrantedSkillRef } from "../skills/skill-store.ts";
+import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { isHarnessId, resolveModel, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
@@ -180,7 +180,6 @@ import {
   stripAckPrefix,
   stripTurnBoilerplate,
   turnPostKeys,
-  visibleSkillScopes,
 } from "./orchestrator/turn-helpers.ts";
 import {
   currentTimeBlock,
@@ -587,16 +586,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const resolution = await deps.resolution.resolve(conversation, actor);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
-      const sharingSources = await sharingSourcesForTurn({
-        posture: resolution.sharingPosture,
-        actor,
-        origin: input.origin,
-        trustedLiveHuman: liveTurn,
-        targetScope: scopeId,
-        config: deps.config,
-        sessions: deps.sessions,
-        isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-      });
       let participantHistorySeqs: Set<number> | undefined;
       let participantHistoryMaxSeq = -1;
       const filterHistory = (entries: SessionEntry[]): SessionEntry[] =>
@@ -941,66 +930,30 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
       for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
 
-      const memoryScopeId = writableMemoryScope(resolution.layers, scopeId);
-      const baseRecallScopes = useMemory ? recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId) : [];
-      const sharedMemoryScopes = useMemory && memoryPolicy.recall === "visible" ? sharingSources : [];
-      const eagerSharingScopes = parseScopeId(scopeId).kind === "personal" ? [] : sharedMemoryScopes;
-      const recallScopes = [...new Set([...baseRecallScopes, ...eagerSharingScopes])];
-      const memoryReadScopes = [...new Set([...baseRecallScopes, ...sharedMemoryScopes])];
-      const memoryAccess =
-        (useMemory && memoryPolicy.capture !== "off") || memoryReadScopes.length > 0
-          ? {
-              ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
-              read: memoryReadScopes,
-            }
-          : undefined;
-      const baseSkillScopes = visibleSkillScopes(resolution, scopeId);
-      const skillScopes = [
-        ...baseSkillScopes.filter((candidate) => candidate !== resolution.orgScopeId),
-        ...sharingSources,
-        resolution.orgScopeId,
-      ];
-      const openHandles = await carriedFileHandles(sharingSources, deps.workspace, deps.files);
-      resolution.grantedHandles = [...resolution.grantedHandles, ...openHandles];
-      const grantedSkills: GrantedSkillRef[] = (
-        await deps.acl
-          .sharedOfKindForAudience(
-            "skill",
-            conversation.audience,
-            scopeId,
-            resolution.orgScopeId,
-            principalEntitledToScope,
-          )
-          .catch(swallowAs("orchestrator: skill grants for audience", []))
-      ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
-      const recalledSections: string[] = [];
-      let recallMs = 0;
-      for (const recallScope of recallScopes) {
-        const recallStart = Date.now();
-        const body = (
-          await deps.memory.recall(recallScope, {
-            query: input.text,
-            actorId: actor.id,
-            conversationScopeId: scopeId,
-            maxChars: 6_000,
-            ...(automatedTurn ? { autonomous: true } : {}),
-          })
-        ).trim();
-        recallMs += Date.now() - recallStart;
-        if (sharingSources.includes(recallScope)) {
-          deps.auditLog.record({
-            at: Date.now(),
-            principalId: actor.id,
-            action: "sharing.cross_context_read",
-            resource: "memory",
-            scopeLabel: scopeId,
-            detail: JSON.stringify({ actor: actor.id, source: recallScope, target: scopeId }),
-          });
-        }
-        if (!body) continue;
-        recalledSections.push(recallScopes.length === 1 ? body : `### ${recallScope}\n${body}`);
-      }
-      const recalled = recalledSections.join("\n\n");
+      const context = await resolveTurnContext({
+        actor,
+        audience: conversation.audience,
+        acl: deps.acl,
+        origin: input.origin,
+        trustedLiveHuman: liveTurn,
+        targetScope: scopeId,
+        config: deps.config,
+        sessions: deps.sessions,
+        isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
+        resolution,
+        memoryPolicy,
+        useMemory,
+        memory: deps.memory,
+        workspace: deps.workspace,
+        files: deps.files,
+        skills: deps.skills,
+        auditLog: deps.auditLog,
+      });
+      const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
+      resolution.grantedHandles = context.listFiles();
+      const recallStart = Date.now();
+      const recalled = await context.recall();
+      const recallMs = Date.now() - recallStart;
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
@@ -1071,10 +1024,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (): Promise<SkillResolution[]> => {
-        const resolved = filterConnectorSkills(
-          (await deps.skills?.visibleFor(skillScopes, grantedSkills)) ?? [],
-          configuredProviders,
-        );
+        const resolved = filterConnectorSkills(await context.listSkills(), configuredProviders);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
           const skill = entry.skill;
@@ -2206,6 +2156,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           layerCommandRules: () => layerCommandRules,
           authorizeCommand,
           grantedHandles: resolution.grantedHandles,
+          context,
           sharedMaterializeDir: turnSharedDir,
           workspace: deps.workspace,
           deploy: deps.deploy,
@@ -2213,7 +2164,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
-          ...(sharingSources.length ? { sharingSourceScopes: sharingSources, sharingTargetScope: scopeId } : {}),
           ...(() => {
             const available =
               strictReadOnly || actor.type !== "internal"

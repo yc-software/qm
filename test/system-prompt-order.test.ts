@@ -361,7 +361,7 @@ test("Open labels and audits a carried personal skill without granting it to the
   assert.deepEqual(await acl.list(), []);
 });
 
-test("Open memory is eager personal-to-room, search-only room-to-DM, and capture stays in the room", async () => {
+test("Open loads included memories in both directions with provenance and capture stays in the room", async () => {
   let member = true;
   const { orchestrator, config, memory, workspace } = buildOrchestrator({
     sandbox: readSandbox(),
@@ -417,7 +417,7 @@ test("Open memory is eager personal-to-room, search-only room-to-DM, and capture
       origin: { kind: "human" },
     }),
   );
-  assert.doesNotMatch(dmPrompt.reply ?? "", /ROOM_ONLY_MEMORY/);
+  assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
 
   member = false;
   const revoked = await orchestrator.handleTurn(

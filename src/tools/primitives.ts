@@ -1,4 +1,6 @@
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
+import { readContextFile } from "../resolution/context-files.ts";
+import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
 import { randomUUID } from "node:crypto";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";
@@ -45,7 +47,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { mimeFromName } from "../core/attachments.ts";
 import { swallow, errMessage } from "../util/errors.ts";
-import { fileArtifactId, isArtifactPath, type FileArtifactStore } from "../files/file-artifact-store.ts";
+import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
 import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -439,6 +441,7 @@ export interface ToolContextDeps {
   layerCommandRules?: () => readonly CommandRule[];
   authorizeCommand: (command: string, approvalKey?: string) => boolean;
   grantedHandles: GrantedHandle[];
+  context?: TurnContext;
   sharedMaterializeDir?: string;
   sandboxMigration?: SandboxMigrationRunner;
   sandboxResources?: SandboxResources;
@@ -450,8 +453,6 @@ export interface ToolContextDeps {
   files?: FileArtifactStore;
   auditLog?: AuditLog;
   createdBy: string;
-  sharingSourceScopes?: readonly ScopeId[];
-  sharingTargetScope?: ScopeId;
   publicWebUrl?: string;
   publishContext?: {
     conversationKind: ConversationKind;
@@ -541,41 +542,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     if (!deps.surface) return Promise.resolve({ ok: false, message: SURFACE_UNAVAILABLE_MESSAGE });
     const call = () => run(deps.surface!);
     return cache ? once(call, cache) : call();
-  }
-
-  const MAX_SHARED_ARTIFACT_BYTES = 10 * 1024 * 1024;
-
-  async function readGrantedArtifactBytes(ownerScopeId: ScopeId, ownerPath: string): Promise<Buffer | null> {
-    if (!deps.files) return null;
-    const rows = await deps.files.resolveByOwnerPaths([{ ownerScopeId, path: ownerPath }]);
-    // Re-assert the tuple: the (owner_scope_id, path) index isn't unique and
-    // neither implementation orders results.
-    const row = rows.find((r) => r.ownerScopeId === ownerScopeId && r.path === ownerPath);
-    if (!row) return null;
-    const opened = await deps.files.open(row.id);
-    if (!opened) return null;
-    // The advertised size can be absent on some backends (fails open at 0), so
-    // the collector enforces the cap on actual bytes read.
-    if (opened.sizeBytes > MAX_SHARED_ARTIFACT_BYTES) {
-      opened.stream.destroy();
-      throw new Error(
-        `shared file ${ownerPath.split("/").pop()} is ${opened.sizeBytes} bytes — larger than the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`,
-      );
-    }
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for await (const chunk of opened.stream) {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
-      total += buf.length;
-      if (total > MAX_SHARED_ARTIFACT_BYTES) {
-        opened.stream.destroy();
-        throw new Error(
-          `shared file ${ownerPath.split("/").pop()} exceeds the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`,
-        );
-      }
-      chunks.push(buf);
-    }
-    return Buffer.concat(chunks);
   }
 
   return {
@@ -850,39 +816,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const content = await deps.memory.read(deps.memoryScopeId);
         if (content) return { content, sourceScopeId: deps.memoryScopeId };
       }
-      const matches = deps.grantedHandles.filter((h) => h.handlePath === path);
-      if (matches.length > 0) {
-        const distinct = new Set(matches.map((h) => `${h.ownerScopeId}\0${h.ownerPath}`));
-        if (distinct.size > 1) {
-          return {
-            content: `ERROR: ambiguous shared handle "${path}" maps to ${distinct.size} different files`,
-            sourceScopeId: null,
-          };
-        }
-        const granted = matches[0]!;
-        // Two producers create grants: the write tool (workspace-backed, real
-        // workspace path) and viewer uploads / inbound attachments (artifact
-        // store only, artifacts/<id>/<name>). The namespace decides which
-        // store serves the read — never a precedence rule, because a
-        // workspace-backed path can also have a stale artifact snapshot.
-        const bytes = isArtifactPath(granted.ownerPath)
-          ? await readGrantedArtifactBytes(granted.ownerScopeId, granted.ownerPath)
-          : await deps.workspace.readBytes(granted.ownerScopeId, granted.ownerPath);
+      const sharedFile = deps.context
+        ? await deps.context.readFile(path)
+        : await readContextFile(path, deps.grantedHandles, deps.workspace, deps.files);
+      if (sharedFile && "error" in sharedFile) return { content: sharedFile.error, sourceScopeId: null };
+      if (sharedFile) {
+        const { grant: granted, bytes } = sharedFile;
         if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
-        if (granted.carried && deps.sharingTargetScope) {
-          deps.auditLog?.record({
-            at: Date.now(),
-            principalId: deps.createdBy,
-            action: "sharing.cross_context_read",
-            resource: granted.ownerPath,
-            scopeLabel: deps.sharingTargetScope,
-            detail: JSON.stringify({
-              actor: deps.createdBy,
-              source: granted.ownerScopeId,
-              target: deps.sharingTargetScope,
-            }),
-          });
-        }
         const asText = tryDecodeUtf8(bytes);
         if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId, shared: true };
         if (granted.carried) {
@@ -1119,27 +1059,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async memorySearch(q: string, limit?: number): Promise<string[] | null> {
+      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit));
       const read = deps.memoryAccess?.read ?? [];
       if (!deps.memory || read.length === 0) return null;
-      return timed("recall", async () => {
-        const out: string[] = [];
-        for (const scope of read) {
-          if (deps.sharingSourceScopes?.includes(scope) && deps.sharingTargetScope) {
-            deps.auditLog?.record({
-              at: Date.now(),
-              principalId: deps.createdBy,
-              action: "sharing.cross_context_read",
-              resource: "memory",
-              scopeLabel: deps.sharingTargetScope,
-              detail: JSON.stringify({ actor: deps.createdBy, source: scope, target: deps.sharingTargetScope }),
-            });
-          }
-          for (const fact of await deps.memory!.query(scope, q, limit, { actorId: deps.createdBy })) {
-            out.push(read.length > 1 ? `[${scope}] ${fact}` : fact);
-          }
-        }
-        return out.slice(0, limit ?? 20);
-      });
+      return timed("recall", () =>
+        contextMemory({ memory: deps.memory!, scopes: read, actorId: deps.createdBy }).search(q, limit),
+      );
     },
 
     async memoryRead(): Promise<string | null> {
