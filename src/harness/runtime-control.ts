@@ -1,5 +1,5 @@
 import type { RuntimeChoice } from "./harness.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { RuntimeService } from "./runtime-types.ts";
 import type { App } from "../api/app.ts";
 import {
   runtimeConfigBody,
@@ -17,38 +17,6 @@ import {
   modelSupportedByHarness,
 } from "../model/pi-models.ts";
 import { isObj } from "../util/objects.ts";
-
-export interface RuntimeRequest {
-  action: "get" | "set" | "inherit";
-  model?: string;
-  harness?: string;
-  effort?: string;
-  fastMode?: boolean;
-  lifetime?: "task" | "scope";
-}
-
-export interface RuntimeHandoff {
-  choice: RuntimeChoice;
-  lifetime: "task" | "scope";
-}
-
-export type RuntimeResult =
-  | { ok: false; error: string; message?: string; candidates?: string[] }
-  | { ok: true; handoff?: RuntimeHandoff; [key: string]: unknown };
-
-export type RuntimeControl = (
-  active: RuntimeChoice,
-  request: RuntimeRequest,
-  signal?: AbortSignal,
-) => Promise<RuntimeResult>;
-export type RuntimeService = (
-  claims: CapabilityClaims,
-  active: RuntimeChoice,
-  request: RuntimeRequest,
-  authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
-  individualAuth?: boolean,
-  signal?: AbortSignal,
-) => Promise<RuntimeResult>;
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
   return async (claims, active, request, authorizeChoice, individualAuth, signal) => {
@@ -68,7 +36,8 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     if (individualAuth && authorizeChoice) {
       if (snapshot.approvedHarnesses.includes("pi")) {
         const piModels = snapshot.modelsByHarness.pi ?? [];
-        for (const id of [...piModels]) {
+        for (const id of piModels) {
+          if (id.startsWith("codex/")) continue;
           const subscriptionId = `codex/${id}`;
           if (modelSupportedByHarness(subscriptionId, "pi") && !piModels.includes(subscriptionId)) {
             piModels.push(subscriptionId);

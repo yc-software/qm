@@ -1,4 +1,4 @@
-import type { RuntimeControl, RuntimeHandoff } from "./runtime-control.ts";
+import type { RuntimeControl, RuntimeHandoff } from "./runtime-types.ts";
 import type { AttachmentMeta, ConversationTurn, ScopeId, Session, SessionEntry } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
 import type {

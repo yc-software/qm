@@ -1,4 +1,4 @@
-import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-control.ts";
+import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { randomUUID } from "node:crypto";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";

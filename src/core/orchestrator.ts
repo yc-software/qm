@@ -2762,7 +2762,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? {
                   runtimeControl: (
                     active: RuntimeChoice,
-                    request: import("../harness/runtime-control.ts").RuntimeRequest,
+                    request: import("../harness/runtime-types.ts").RuntimeRequest,
                     signal?: AbortSignal,
                   ) => deps.runtime!(runtimeClaims, active, request, checkRuntimeAuth, !!userHarnessOverride, signal),
                 }

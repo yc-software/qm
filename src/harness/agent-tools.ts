@@ -1,5 +1,5 @@
 import { createGrindMeter, grindState } from "./grind.ts";
-import type { RuntimeHandoff, RuntimeRequest } from "./runtime-control.ts";
+import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
@@ -3731,7 +3731,7 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
       if (mutation) {
         ref.runtimeMutationPending = true;
         try {
-          await Promise.allSettled([...(ref.runtimeInFlight ?? [])]);
+          await Promise.allSettled(ref.runtimeInFlight ?? []);
           if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
             return {
               content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],

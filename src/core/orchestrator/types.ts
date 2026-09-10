@@ -1,4 +1,4 @@
-import type { RuntimeService } from "../../harness/runtime-control.ts";
+import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
