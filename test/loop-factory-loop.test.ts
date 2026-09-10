@@ -4,7 +4,7 @@ import { createLoopStore } from "../src/loops/loop-store.ts";
 import { ensureFactoryLoop, findFactoryLoop } from "../src/loops/factory/factory-loop.ts";
 import { ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { FACTORY_LOOP_SURFACE } from "../src/loops/factory/effects.ts";
-import { buildShipGrant, decideShip, undeclaredShipActions } from "../src/loops/ship-gate.ts";
+import { decideShip, undeclaredShipActions } from "../src/loops/ship-gate.ts";
 import { scopeId } from "../src/types.ts";
 
 const ORG = scopeId("org", "default-org");
@@ -32,8 +32,8 @@ test("ensureFactoryLoop mints one org-scoped factory loop the human admin can ad
   assert.equal(loop.createdBy, "admin-alice");
   assert.equal(loop.name, "Software factory");
   assert.deepEqual(loop.shipActions, [
-    { action: "open_pr", gate: "hold" },
-    { action: "close_already_fixed", gate: "hold" },
+    { action: "open_pr", gate: "auto" },
+    { action: "close_already_fixed", gate: "auto" },
   ]);
   assert.equal(loop.runAs, undefined);
   assert.equal(loop.sources, undefined);
@@ -67,20 +67,14 @@ test("ensureFactoryLoop is idempotent across repeat calls, other admins, and con
   for (const loop of raced) assert.equal(loop.surface, FACTORY_LOOP_SURFACE);
 });
 
-test("the factory's declared ship actions are the ones its outputs carry, and autopilot grants clear them", async () => {
+test("the factory's declared ship actions are the ones its outputs carry, and both ship without a grant", async () => {
   const store = createLoopStore();
   const loop = await ensureFactoryLoop(store, { owner: "admin-alice", orgScopeId: ORG });
 
   assert.deepEqual(undeclaredShipActions(loop, [{ shipAction: "open_pr" }, { shipAction: "close_already_fixed" }]), []);
 
+  // No human sits between a converged run and its pull request: the policy itself ships, no grant needed.
   for (const shipAction of ["open_pr", "close_already_fixed"]) {
-    assert.deepEqual(decideShip(loop, { shipAction }), { outcome: "hold" }, shipAction);
-    const grant = buildShipGrant({
-      loopId: loop.id,
-      shipAction,
-      actorId: "admin-alice",
-      policyVersion: loop.policyVersion ?? 1,
-    });
-    assert.equal(decideShip(loop, { shipAction }, [grant]).outcome, "auto", shipAction);
+    assert.deepEqual(decideShip(loop, { shipAction }), { outcome: "auto", via: "policy" }, shipAction);
   }
 });

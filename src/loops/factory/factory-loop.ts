@@ -33,8 +33,8 @@ export async function ensureFactoryLoop(
     playbook: FACTORY_LOOP_PLAYBOOK,
     successCondition: FACTORY_SUCCESS_CONDITION,
     shipActions: [
-      { action: "open_pr", gate: "hold" },
-      { action: "close_already_fixed", gate: "hold" },
+      { action: "open_pr", gate: "auto" },
+      { action: "close_already_fixed", gate: "auto" },
     ],
   });
   return loop;
