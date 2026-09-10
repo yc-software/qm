@@ -191,6 +191,18 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     managedBy: "terraform",
   },
   {
+    name: "DATABASE_POOL_URL",
+    service: "core",
+    required: false,
+    description: "Transaction-mode PgBouncer URL using the direct database's company credentials and database name.",
+  },
+  {
+    name: "DATABASE_POOL_CA_CERT",
+    service: "core",
+    required: false,
+    description: "PEM CA certificate used to verify the transaction pooler's TLS identity.",
+  },
+  {
     name: "DATABASE_CA_CERT",
     service: "core",
     required: false,
