@@ -1,5 +1,6 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
+import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
@@ -349,6 +350,26 @@ export function pauseStampAfterToolCall(
 }
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
+  const processActions = {
+    start_process: "start",
+    read_process: "poll",
+    write_stdin: "write",
+    signal_process: "stop",
+    list_processes: "list",
+    watch_process: "watch",
+    unwatch_process: "unwatch",
+  } as const;
+  const sandboxLog = (payload: Record<string, unknown>): Record<string, unknown> => {
+    if (!opts?.sandboxResources) return payload;
+    if (payload.tool === "execute") return { ...payload, tool: "sandbox", action: "exec" };
+    if (payload.tool === "background")
+      return {
+        ...payload,
+        tool: "sandbox",
+        action: Object.entries(processActions).find(([, action]) => action === payload.action)?.[0],
+      };
+    return payload;
+  };
   const scratchExec = !!opts?.scratchExec;
   const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
@@ -379,7 +400,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   };
 
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...payload, callId });
+    log("tool_call", { ...sandboxLog(payload), callId });
 
   const recordResult = async <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
     callId: string,
@@ -391,6 +412,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     display?: Record<string, unknown>,
     screenAs?: { provenance: ToolResultProvenance; source?: string },
   ): Promise<T> => {
+    const originalTool = String(summary.tool ?? "");
+    summary = sandboxLog(summary);
     const t = ret.content
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")
@@ -405,7 +428,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }
     let persistedSummary = summary;
     const tool = String(summary.tool ?? "");
-    const provenance = screenAs?.provenance ?? toolResultProvenance(tool);
+    const provenance = screenAs?.provenance ?? toolResultProvenance(originalTool);
     const screenExempt =
       isPolicyNotice(summary) ||
       coreAuthored ||
@@ -436,6 +459,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         (ret as { details?: unknown }).details = {};
         persistedSummary = {
           tool: summary.tool,
+          ...(summary.action ? { action: summary.action } : {}),
           quarantined: true,
           quarantineReason: "screen_verdict",
           ...(screen.reason ? { securityReason: screen.reason } : {}),
@@ -802,7 +826,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "restart",
     ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
   ];
-  const sandbox = defineTool({
+  const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
     description:
@@ -1337,6 +1361,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "start a long command, poll its output by id, write to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
         },
       ),
+      purpose: Type.Optional(
+        Type.String({ description: "Brief intent for a process operation that may require approval." }),
+      ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
       process_id: Type.Optional(Type.String({ description: "poll/write/stop/watch only: the id start returned." })),
       data: Type.Optional(
@@ -1411,7 +1438,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.command)
               return recordResult(
                 callId,
-                { tool: "background", error: "start requires command" },
+                { tool: "background", action: params.action, error: "start requires command" },
                 text("[error] background start requires `command`."),
                 true,
               );
@@ -1421,7 +1448,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             });
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   {
@@ -1442,7 +1469,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "poll requires process_id" },
+                { tool: "background", action: params.action, error: "poll requires process_id" },
                 text("[error] background poll requires `process_id`."),
                 true,
               );
@@ -1453,7 +1480,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             });
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   { type: "text" as const, text: `${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]` },
@@ -1471,14 +1498,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "stop requires process_id" },
+                { tool: "background", action: params.action, error: "stop requires process_id" },
                 text("[error] background stop requires `process_id`."),
                 true,
               );
             const r = await tc.backgroundStop(params.process_id, params.signal);
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   { type: "text" as const, text: `signalled ${r.processId}; status now ${fmtStatus(r.status)}` },
@@ -1491,7 +1518,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "watch requires process_id" },
+                { tool: "background", action: params.action, error: "watch requires process_id" },
                 text("[error] background watch requires `process_id`."),
                 true,
               );
@@ -1508,7 +1535,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                   : `job already ${status} — no watch armed; it produced no output.`;
                 return recordResult(
                   callId,
-                  { tool: "background", ...r },
+                  { tool: "background", action: params.action, ...r },
                   {
                     content: [{ type: "text" as const, text: result }],
                     details: r,
@@ -1523,7 +1550,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
               return recordResult(
                 callId,
-                { tool: "background", ...r },
+                { tool: "background", action: params.action, ...r },
                 {
                   content: [
                     {
@@ -1541,7 +1568,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const msg = errMessage(e);
               return recordResult(
                 callId,
-                { tool: "background", action: "watch", error: msg },
+                { tool: "background", action: params.action, error: msg },
                 text(`[watch failed] ${msg}`),
                 true,
               );
@@ -1551,7 +1578,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.monitor_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "unwatch requires monitor_id" },
+                { tool: "background", action: params.action, error: "unwatch requires monitor_id" },
                 text("[error] background unwatch requires `monitor_id`."),
                 true,
               );
@@ -1559,7 +1586,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const r = await tc.backgroundUnwatch(params.monitor_id);
               return recordResult(
                 callId,
-                { tool: "background", ...r },
+                { tool: "background", action: params.action, ...r },
                 text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
                 !r.removed,
               );
@@ -1567,7 +1594,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const msg = errMessage(e);
               return recordResult(
                 callId,
-                { tool: "background", action: "unwatch", error: msg },
+                { tool: "background", action: params.action, error: msg },
                 text(`[unwatch failed] ${msg}`),
                 true,
               );
@@ -1577,21 +1604,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "write requires process_id" },
+                { tool: "background", action: params.action, error: "write requires process_id" },
                 text("[error] background write requires `process_id`."),
                 true,
               );
             if (params.data === undefined)
               return recordResult(
                 callId,
-                { tool: "background", error: "write requires data" },
+                { tool: "background", action: params.action, error: "write requires data" },
                 text("[error] background write requires `data` (the text to send to the job's stdin)."),
                 true,
               );
             const r = await tc.backgroundWrite(params.process_id, params.data);
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   { type: "text" as const, text: `wrote ${r.bytes}B to ${r.processId} stdin; ${fmtStatus(r.status)}` },
@@ -1604,7 +1631,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             const jobs = await tc.backgroundList();
             return recordResult(
               callId,
-              { tool: "background", jobs },
+              { tool: "background", action: params.action, jobs },
               {
                 content: [
                   {
@@ -1631,12 +1658,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             reason: e.approvalReason,
             kind: e.kind,
             matched: e.matched,
+            ...(params.purpose ? { purpose: params.purpose } : {}),
             ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
           });
           ref.pausedOnApproval = true;
           return recordResult(
             callId,
-            { tool: "background", blocked: "needs_approval", reason: e.approvalReason },
+            { tool: "background", action: params.action, blocked: "needs_approval", reason: e.approvalReason },
             { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
             true,
           );
@@ -1644,7 +1672,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (e instanceof CommandDenied) {
           return recordResult(
             callId,
-            { tool: "background", denied: true, reason: e.message },
+            { tool: "background", action: params.action, denied: true, reason: e.message },
             text(`[denied by policy] ${e.message}`),
             true,
           );
@@ -1653,6 +1681,150 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
     },
   });
+
+  const processFieldDescription = (description: string) =>
+    description.replace(
+      /\b(start|poll|write|stop|watch|unwatch)\b/g,
+      (action) => Object.entries(processActions).find(([, legacy]) => legacy === action)?.[0] ?? action,
+    );
+  const schemas = (tool: ToolDefinition) => (tool.parameters as { properties: Record<string, TSchema> }).properties;
+  const sandboxProperties = {
+    ...Object.fromEntries(
+      Object.entries(schemas(background)).map(([key, schema]) => {
+        const description = (schema as TSchema & { description?: string }).description;
+        return [key, description ? { ...schema, description: processFieldDescription(description) } : schema];
+      }),
+    ),
+    ...schemas(execute),
+    ...schemas(sandboxManagement),
+    command: Type.Optional(executeBaseParams.command),
+    purpose: Type.Optional(
+      Type.String({
+        description: "Required for exec and management actions: briefly explain why. Optional for process actions.",
+      }),
+    ),
+    timeout_seconds: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description: `exec: wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s). start_process: job lifetime (default ${bgTtlSec}s, max ${bgTtlMaxSec}s).`,
+      }),
+    ),
+    action: Type.String({ enum: [...sandboxActions, "exec", ...Object.keys(processActions)] }),
+  };
+  const actionFields: Record<string, string[]> = {
+    status: ["sandbox_id"],
+    restart: ["sandbox_id"],
+    list: [],
+    create: ["backend", "name"],
+    set_default: ["sandbox_id"],
+    retire: ["sandbox_id"],
+    exec: Object.keys(schemas(execute)),
+    start_process: ["command", "sandbox_id", "timeout_seconds"],
+    read_process: ["process_id", "since_cursor", "wait_seconds", "max_bytes"],
+    write_stdin: ["process_id", "data"],
+    signal_process: ["process_id", "signal"],
+    list_processes: [],
+    watch_process: ["process_id", "since_cursor", "pattern", "instructions"],
+    unwatch_process: ["monitor_id"],
+  };
+  const requiredFields: Record<string, string[]> = {
+    status: ["purpose"],
+    restart: ["purpose"],
+    list: ["purpose"],
+    create: ["purpose", "backend"],
+    set_default: ["purpose", "sandbox_id"],
+    retire: ["purpose", "sandbox_id"],
+    exec: ["purpose", "command"],
+    start_process: ["command"],
+    read_process: ["process_id"],
+    write_stdin: ["process_id", "data"],
+    signal_process: ["process_id"],
+    watch_process: ["process_id"],
+    unwatch_process: ["monitor_id"],
+  };
+  const actionSchemas = Object.fromEntries(
+    Object.entries(actionFields).map(([action, fields]) => [
+      action,
+      Type.Object(
+        Object.fromEntries(
+          [...new Set(["action", "purpose", ...fields])].map((field) => [
+            field,
+            sandboxProperties[field as keyof typeof sandboxProperties],
+          ]),
+        ),
+        { additionalProperties: false },
+      ),
+    ]),
+  );
+  const describeSandbox = (description: string) =>
+    description
+      .replaceAll("action=start", "action=start_process")
+      .replaceAll("action=poll", "action=read_process")
+      .replaceAll("action=write", "action=write_stdin")
+      .replaceAll("action=stop", "action=signal_process")
+      .replaceAll("action=list", "action=list_processes")
+      .replaceAll("action=watch", "action=watch_process")
+      .replaceAll("action=unwatch", "action=unwatch_process")
+      .replaceAll("`execute`", "sandbox action=exec")
+      .replaceAll("`background`", "sandbox action=start_process")
+      .replaceAll("execute and background", "exec and start_process")
+      .replaceAll("`watch`", "watch_process")
+      .replaceAll("`poll`", "read_process")
+      .replaceAll("`stop`", "signal_process");
+  const sandbox = opts?.sandboxResources
+    ? defineTool({
+        name: "sandbox",
+        label: "sandbox",
+        description:
+          sandboxManagement.description +
+          "\nexec: " +
+          describeSandbox(execute.description) +
+          "\nProcess actions: " +
+          describeSandbox(background.description) +
+          "\nProcess IDs retain their original sandbox target; route changes do not move running jobs. Fields are action-specific; do not pass a sandbox_id to process operations after start_process.",
+        parameters: Type.Object(sandboxProperties, { additionalProperties: false }),
+        async execute(callId, params, signal, onUpdate, ctx) {
+          const action = params.action;
+          const schema = Object.hasOwn(actionSchemas, action) ? actionSchemas[action] : undefined;
+          const missing = (requiredFields[action] ?? []).find((field) => {
+            const value = (params as Record<string, unknown>)[field];
+            return value === undefined || (typeof value === "string" && field !== "data" && !value.trim());
+          });
+          if (
+            !schema ||
+            missing ||
+            !Check(schema, params) ||
+            ((params as Record<string, unknown>).sandbox_id === null && action !== "set_default")
+          ) {
+            await recordCall(callId, { tool: "sandbox", action });
+            return recordResult(
+              callId,
+              { tool: "sandbox", action, invalid: true },
+              text(
+                !schema
+                  ? "[error] unsupported sandbox action"
+                  : `[error] sandbox ${action}: ${missing ? `requires ${missing}` : "invalid or unrelated parameters"}`,
+              ),
+              true,
+            );
+          }
+          const { action: _, ...input } = params;
+          if (action === "exec") return execute.execute(callId, input, signal, onUpdate, ctx);
+          if (Object.hasOwn(processActions, action))
+            return background.execute(
+              callId,
+              {
+                ...input,
+                action: processActions[action as keyof typeof processActions],
+              },
+              signal,
+              onUpdate,
+              ctx,
+            );
+          return sandboxManagement.execute(callId, params, signal, onUpdate, ctx);
+        },
+      })
+    : sandboxManagement;
 
   const unavailable = (callId: string, tool: string) =>
     recordResult(
@@ -3350,14 +3522,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     );
 
   const tools = [
-    execute,
+    ...(!opts?.sandboxResources ? [execute] : []),
     ...(credentialExecServices.length ? [credentialExec] : []),
     read,
     write,
     publish,
     memory,
     history,
-    background,
+    ...(!opts?.sandboxResources ? [background] : []),
     sandbox,
     registerLogin,
     ...(controlTools ? [cron, webhook, share] : []),
@@ -3405,12 +3577,18 @@ function withToolApprovalGate(
         ref.pausedOnApproval = true;
         await rec.recordCall(callId, {
           tool: tool.name,
+          ...(tool.name === "sandbox" && isObj(params) ? { action: params.action } : {}),
           blocked: "needs_approval",
           reason: STRICT_TOOL_APPROVAL_REASON,
         });
         return rec.recordResult(
           callId,
-          { tool: tool.name, blocked: "needs_approval", reason: STRICT_TOOL_APPROVAL_REASON },
+          {
+            tool: tool.name,
+            ...(tool.name === "sandbox" && isObj(params) ? { action: params.action } : {}),
+            blocked: "needs_approval",
+            reason: STRICT_TOOL_APPROVAL_REASON,
+          },
           {
             content: [
               { type: "text" as const, text: `[blocked: needs human approval] ${STRICT_TOOL_APPROVAL_REASON}` },

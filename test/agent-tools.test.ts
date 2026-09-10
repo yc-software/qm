@@ -462,8 +462,24 @@ test("sandbox advertises available management actions and retires migrate", asyn
   const enabled = createAgentTools(ref, { sandboxResources: true });
   const sandbox = enabled.find((t) => t.name === "sandbox")!;
   const properties = (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties;
-  assert.deepEqual(properties.action!.enum, ["status", "restart", "list", "create", "set_default", "retire"]);
-  const execute = enabled.find((t) => t.name === "execute")!;
+  assert.deepEqual(properties.action!.enum, [
+    "status",
+    "restart",
+    "list",
+    "create",
+    "set_default",
+    "retire",
+    "exec",
+    "start_process",
+    "read_process",
+    "write_stdin",
+    "signal_process",
+    "list_processes",
+    "watch_process",
+    "unwatch_process",
+  ]);
+  assert.ok(!enabled.some((t) => t.name === "execute" || t.name === "background"));
+  const execute = createAgentTools(ref).find((t) => t.name === "execute")!;
   assert.equal("computer" in (execute.parameters as { properties: object }).properties, false);
   assert.equal("to" in (execute.parameters as { properties: object }).properties, false);
   const disabled = createAgentTools(ref).find((t) => t.name === "sandbox")!;
@@ -2646,14 +2662,215 @@ test("sandbox management and explicit execution preserve independent target argu
     { current: tc, emit: () => {}, scopeLabel: "personal:U1" },
     { sandboxResources: true },
   );
-  const execute = tools.find((t) => t.name === "execute")!;
   const sandbox = tools.find((t) => t.name === "sandbox")!;
   await call(sandbox, { action: "create", backend: "modal", name: "build", purpose: "p" });
   await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
-  await call(execute, { command: "pwd", sandbox_id: "box-a", purpose: "p" });
+  await call(sandbox, { action: "exec", command: "pwd", sandbox_id: "box-a", purpose: "p" });
   assert.deepEqual(operations, [
     { action: "create", input: { backend: "modal", name: "build", sandboxId: undefined } },
     { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } },
   ]);
   assert.equal(sink.lastExecOpts?.sandboxId, "box-a");
+});
+
+test("unified sandbox dispatches every process action and preserves cursors, signals, targets and watches", async () => {
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+  const entries: Array<Record<string, unknown>> = [];
+  const screens: Array<{ tool: string; provenance: string }> = [];
+  const tc = new Proxy(fakeToolContext(), {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (typeof key !== "string" || !key.startsWith("background") || typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        calls.push({ method: key, args });
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
+  const tool = createAgentTools(
+    {
+      current: tc,
+      scopeLabel: "personal:U1",
+      emit: (entry) => {
+        entries.push(entry.payload as Record<string, unknown>);
+      },
+      screenToolResult: async ({ tool, provenance }) => {
+        screens.push({ tool, provenance });
+        return { outcome: "allow" };
+      },
+    },
+    { sandboxResources: true },
+  ).find((t) => t.name === "sandbox")!;
+  const actions = [
+    { action: "start_process", command: "npm test", sandbox_id: "box-a", timeout_seconds: 123 },
+    { action: "read_process", process_id: "bg-1", since_cursor: 7, wait_seconds: 2, max_bytes: 99 },
+    { action: "write_stdin", process_id: "bg-1", data: "yes\n" },
+    { action: "signal_process", process_id: "bg-1", signal: "INT" },
+    { action: "list_processes" },
+    {
+      action: "watch_process",
+      process_id: "bg-1",
+      since_cursor: 18,
+      pattern: "FAILED",
+      instructions: "Report failures",
+    },
+    { action: "unwatch_process", monitor_id: "mon-1" },
+  ];
+  for (const action of actions) assert.doesNotMatch(textOut(await call(tool, action)), /\[error\]/);
+  assert.deepEqual(calls, [
+    { method: "backgroundStart", args: ["npm test", { ttlSeconds: 123, sandboxId: "box-a" }] },
+    { method: "backgroundPoll", args: ["bg-1", { sinceCursor: 7, waitSeconds: 2, maxBytes: 99 }] },
+    { method: "backgroundWrite", args: ["bg-1", "yes\n"] },
+    { method: "backgroundStop", args: ["bg-1", "INT"] },
+    { method: "backgroundList", args: [] },
+    {
+      method: "backgroundWatch",
+      args: ["bg-1", { instructions: "Report failures", pattern: "FAILED", sinceCursor: 18 }],
+    },
+    { method: "backgroundUnwatch", args: ["mon-1"] },
+  ]);
+  assert.deepEqual(
+    entries.map((e) => [e.tool, e.action]),
+    actions.flatMap((a) => [
+      ["sandbox", a.action],
+      ["sandbox", a.action],
+    ]),
+  );
+  assert.ok(screens.every((s) => s.tool === "sandbox"));
+  assert.deepEqual(
+    screens.slice(0, 2).map((s) => s.provenance),
+    ["external", "external"],
+  );
+});
+
+test("unified sandbox rejects missing, mistyped and unrelated action fields before dispatch", async () => {
+  let dispatched = 0;
+  const tc = new Proxy(fakeToolContext(), {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (typeof value !== "function") return value;
+      return () => {
+        dispatched++;
+        throw new Error("must not dispatch");
+      };
+    },
+  });
+  const tool = createAgentTools({ current: tc }, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  for (const input of [
+    { action: "exec", purpose: "test" },
+    { action: "start_process", command: " " },
+    { action: "read_process", process_id: "job", sandbox_id: "other-box" },
+    { action: "write_stdin", process_id: "job" },
+    { action: "signal_process", process_id: "job", signal: "NOPE" },
+    { action: "watch_process", process_id: "job", since_cursor: -1 },
+    { action: "unwatch_process", monitor_id: null },
+    { action: "list_processes", command: "ignored" },
+    { action: "start_process", command: "echo ok", scope: "scratch" },
+    { action: "retire", sandbox_id: null, purpose: "test" },
+    { action: "create", backend: "modal", command: "ignored", purpose: "test" },
+  ])
+    assert.match(textOut(await call(tool, input)), /\[error\]/);
+  assert.equal(dispatched, 0);
+});
+
+test("unified exec preserves routing, credentials, abort and external output provenance", async () => {
+  const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
+  const abort = new AbortController();
+  const screens: unknown[] = [];
+  const tool = createAgentTools(
+    {
+      current: fakeToolContext(sink),
+      abortSignal: abort.signal,
+      screenToolResult: async ({ tool, provenance }) => {
+        screens.push([tool, provenance]);
+        return { outcome: "allow" };
+      },
+    },
+    {
+      sandboxResources: true,
+      scratchExec: true,
+      ownerAuthExec: true,
+      reachExec: true,
+      commandCredentialHandles: ["git"],
+    },
+  ).find((t) => t.name === "sandbox")!;
+  for (const [scope, route] of [
+    ["scoped", {}],
+    ["scratch", { scratch: true }],
+    ["owner", { ownerAuth: true }],
+    ["#room", { reachTarget: "#room" }],
+  ] as const) {
+    await call(tool, {
+      action: "exec",
+      scope,
+      command: "pwd",
+      purpose: "verify routing",
+      timeout_seconds: 12,
+      credentials: ["git"],
+    });
+    assert.deepEqual(sink.lastExecOpts, { ...route, timeoutSeconds: 12, credentials: ["git"], signal: abort.signal });
+  }
+  assert.deepEqual(
+    screens,
+    Array.from({ length: 4 }, () => ["sandbox", "external"]),
+  );
+});
+
+test("unified exec and process approvals preserve intent and action identity", async () => {
+  for (const action of ["exec", "start_process"]) {
+    const entries: Array<Record<string, unknown>> = [];
+    const tc = fakeToolContext();
+    tc.execute = tc.backgroundStart = async () => {
+      throw new NeedsApproval("danger", "Review this", "approval");
+    };
+    const ref: ToolContextRef = {
+      current: tc,
+      pendingApprovals: [],
+      scopeLabel: "personal:U1",
+      emit: (entry) => {
+        entries.push(entry.payload as Record<string, unknown>);
+      },
+    };
+    const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+    assert.match(
+      textOut(await call(tool, { action, command: "danger", purpose: "Verify protected operation" })),
+      /needs human approval/,
+    );
+    assert.equal(ref.pausedOnApproval, true);
+    assert.equal(ref.pendingApprovals?.[0]?.command, "danger");
+    assert.ok(entries.every((e) => e.tool === "sandbox" && e.action === action));
+    assert.equal(ref.pendingApprovals?.[0]?.purpose, "Verify protected operation");
+  }
+});
+
+test("unified sandbox keeps strict approval and quarantined output associated with the called action", async () => {
+  const entries: Array<Record<string, unknown>> = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    pendingApprovals: [],
+    scopeLabel: "personal:U1",
+    emit: (entry) => {
+      entries.push(entry.payload as Record<string, unknown>);
+    },
+    toolApprovalGate: () => false,
+  };
+  const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  await call(tool, { action: "start_process", command: "test" });
+  assert.equal(ref.pendingApprovals?.[0]?.approvalKey, "tool:sandbox");
+  assert.deepEqual(
+    entries.map((e) => [e.tool, e.action]),
+    [
+      ["sandbox", "start_process"],
+      ["sandbox", "start_process"],
+    ],
+  );
+  ref.toolApprovalGate = () => true;
+  ref.pausedOnApproval = false;
+  ref.screenToolResult = async () => ({ outcome: "quarantine", reason: "untrusted output" });
+  entries.length = 0;
+  const result = await call(tool, { action: "exec", command: "cat untrusted.txt", purpose: "inspect input" });
+  assert.match(textOut(result), /quarantined/);
+  assert.equal(entries[1]?.tool, "sandbox");
+  assert.equal(entries[1]?.action, "exec");
+  assert.equal(entries[1]?.quarantined, true);
 });
