@@ -49,7 +49,7 @@ export function contextMemory({ memory, scopes, actorId, onRead }: MemoryReaderI
       for (const scope of scopes) {
         const facts = await memory.query(scope, query, limit, { actorId });
         onRead?.(scope);
-        hits.push(...facts.map((fact) => `[${scope}] ${fact}`));
+        hits.push(...facts.map((fact) => (scopes.length > 1 ? `[${scope}] ${fact}` : fact)));
       }
       return hits.slice(0, limit);
     },
