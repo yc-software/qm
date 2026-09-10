@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { dockerUp } from "../src/backends/docker.ts";
+import { dockerClientDefaults } from "../src/backends/docker-api.ts";
 
 const SECRETS = {
   ANTHROPIC_API_KEY: "anthropic-supersecret",
@@ -644,7 +645,7 @@ test("Docker proxy defaults, explicit overrides, custom headers and default plat
       assert.ok(requests[0]!.path.startsWith("/v1.47/containers/create?"));
       assert.ok(requests[0]!.path.endsWith("&platform=linux%2Farm64"));
       for (const request of requests) assert.match(request.headers, /X-Launcher-Test: launcher-header-sentinel/i);
-      for (const request of requests) assert.match(request.headers, /X-Docker-Test: header-sentinel/i);
+      for (const request of requests) assert.doesNotMatch(request.headers, /X-Docker-Test:/i);
       const env = requests[0]!.body.Env;
       assert.ok(env.includes("HTTP_PROXY=http://default-proxy"));
       assert.ok(env.includes("http_proxy=http://default-proxy"));
@@ -661,4 +662,53 @@ test("Docker proxy defaults, explicit overrides, custom headers and default plat
       else process.env.DOCKER_CUSTOM_HEADERS = priorHeaders;
     }
   });
+});
+
+test("Docker custom headers use CSV syntax and replace rather than merge config headers", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-docker-headers-"));
+  const priorConfig = process.env.DOCKER_CONFIG;
+  const priorHeaders = process.env.DOCKER_CUSTOM_HEADERS;
+  try {
+    process.env.DOCKER_CONFIG = dir;
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ HttpHeaders: { Authorization: "old-credential", "X-Config": "config-value" } }),
+    );
+    delete process.env.DOCKER_CUSTOM_HEADERS;
+    assert.deepEqual(dockerClientDefaults().headers, { authorization: "old-credential", "x-config": "config-value" });
+    for (const [input, expected] of [
+      ['"X-Comma=one,two",X-Plain=value', { "x-comma": "one,two", "x-plain": "value" }],
+      ['"X-Quoted=one""two",X-Equal=one=two', { "x-quoted": 'one"two', "x-equal": "one=two" }],
+      [" X-Spaces = value  ,X-Empty=", { "x-spaces": " value  ", "x-empty": "" }],
+      ["X-Case=first,x-case=second", { "x-case": "second" }],
+    ] as const) {
+      process.env.DOCKER_CUSTOM_HEADERS = input;
+      assert.deepEqual(dockerClientDefaults().headers, expected);
+      assert.ok(!Object.hasOwn(dockerClientDefaults().headers, "authorization"));
+    }
+    for (const input of [
+      '"X-Bad=synthetic-private-header',
+      'X-Bad=se"cret',
+      "X-Bad=synthetic-private-header,",
+      "=synthetic-private-header",
+      "X-Bad",
+      "X-Bad=synthetic-private-header\r\nInjected: value",
+    ]) {
+      process.env.DOCKER_CUSTOM_HEADERS = input;
+      assert.throws(
+        () => dockerClientDefaults(),
+        (error: Error) => {
+          assert.match(error.message, /Cannot read Docker client defaults/);
+          assert.ok(!error.message.includes("synthetic-private-header"));
+          return true;
+        },
+      );
+    }
+  } finally {
+    if (priorConfig === undefined) delete process.env.DOCKER_CONFIG;
+    else process.env.DOCKER_CONFIG = priorConfig;
+    if (priorHeaders === undefined) delete process.env.DOCKER_CUSTOM_HEADERS;
+    else process.env.DOCKER_CUSTOM_HEADERS = priorHeaders;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

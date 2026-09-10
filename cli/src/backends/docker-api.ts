@@ -21,6 +21,22 @@ export interface DockerContainer {
   port?: { host: number; container: number };
 }
 
+function customHeadersFromEnv(value: string): Record<string, string> {
+  if (/[\r\n]/.test(value)) throw new Error();
+  const headers: Record<string, string> = {};
+  const field = /("(?:[^"]|"")*"|[^",]*)(,|$)/y;
+  for (;;) {
+    const match = field.exec(value);
+    if (!match) throw new Error();
+    const entry = match[1]!.startsWith('"') ? match[1]!.slice(1, -1).replaceAll('""', '"') : match[1]!;
+    const separator = entry.indexOf("=");
+    if (separator < 1) throw new Error();
+    const name = entry.slice(0, separator).trim().toLowerCase();
+    headers[name] = entry.slice(separator + 1);
+    if (match[2] !== ",") return headers;
+  }
+}
+
 export function dockerClientDefaults(): { env: Record<string, string>; headers: Record<string, string> } {
   const path = join(process.env.DOCKER_CONFIG || join(homedir(), ".docker"), "config.json");
   try {
@@ -28,12 +44,9 @@ export function dockerClientDefaults(): { env: Record<string, string>; headers: 
       HttpHeaders?: Record<string, string>;
       proxies?: Record<string, Record<string, string>>;
     };
-    const headers = { ...config.HttpHeaders };
-    for (const entry of process.env.DOCKER_CUSTOM_HEADERS?.split(",").filter(Boolean) ?? []) {
-      const separator = entry.indexOf("=");
-      if (separator < 1) throw new Error();
-      headers[entry.slice(0, separator)] = entry.slice(separator + 1);
-    }
+    const headers = process.env.DOCKER_CUSTOM_HEADERS
+      ? customHeadersFromEnv(process.env.DOCKER_CUSTOM_HEADERS)
+      : Object.fromEntries(Object.entries(config.HttpHeaders ?? {}).map(([key, value]) => [key.toLowerCase(), value]));
     for (const [key, value] of Object.entries(headers)) {
       if (typeof value !== "string") throw new Error();
       validateHeaderName(key);
@@ -132,9 +145,9 @@ async function requestThroughDocker({ path, body, expectedStatus, headers }: Api
           method: "POST",
           headers: {
             ...headers,
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(json),
-            Connection: "close",
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(json),
+            connection: "close",
           },
           createConnection: () => socket as Socket,
         },
