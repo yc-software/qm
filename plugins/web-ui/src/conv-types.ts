@@ -125,6 +125,7 @@ export interface ComposerSurface {
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
   focusComposerEnd(): void;
+  insertText(text: string): void;
   resizeComposer(): void;
   currentModelOption(): ModelOption | undefined;
   carryModelPick(fromThreadRef: string | null, toThreadRef: string): void;

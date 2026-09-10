@@ -3,6 +3,7 @@ import "./shell.css";
 import { bootSafely, closeUserMenu } from "./shell";
 import "./draft-review";
 import { registerChatSearchHotkey } from "./search";
+import { registerSelectionActions } from "./selection-actions";
 import { registerSessionJumpHotkeys } from "./session-jump";
 import { closeFormMenus } from "./ui";
 import { allConversations } from "./conversations";
@@ -105,5 +106,9 @@ document.addEventListener(
 );
 
 registerChatSearchHotkey();
+registerSelectionActions((stack) => {
+  const conv = allConversations().find((c) => c.state.host?.contains(stack));
+  return conv?.state.agent ? conv.composer : null;
+});
 registerSessionJumpHotkeys();
 void bootSafely();

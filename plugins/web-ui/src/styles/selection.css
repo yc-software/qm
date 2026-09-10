@@ -1,0 +1,112 @@
+.message-stack ::selection {
+  background: var(--selection, color-mix(in oklch, var(--blue) 28%, transparent));
+}
+.selection-toolbar {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  user-select: none;
+  animation: pop-in 160ms var(--ease-out-strong) both;
+}
+.selection-toolbar-input {
+  width: 140px;
+  height: 28px;
+  padding: 0 10px 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+.selection-toolbar-input::placeholder {
+  color: var(--ink-3);
+}
+.selection-toolbar-divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--line-strong);
+}
+.selection-toolbar-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease-out,
+    transform 150ms ease-out;
+}
+.selection-toolbar-btn:hover {
+  background: var(--hover);
+}
+.selection-toolbar-btn:active {
+  transform: scale(0.96);
+}
+.selection-toolbar-btn:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.selection-toolbar-send {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+  background: var(--ink);
+  color: var(--surface);
+}
+.selection-toolbar-send:hover {
+  background: var(--ink-2);
+}
+.selection-toolbar-input:focus-visible,
+.selection-toolbar-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.chat-scroll[data-quiet-focus]:focus-visible {
+  outline: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .selection-toolbar {
+    animation: none;
+  }
+  .selection-toolbar-btn {
+    transition: none;
+  }
+  .selection-toolbar-btn:active {
+    transform: none;
+  }
+}
+@media (max-width: 560px) {
+  .selection-toolbar {
+    height: 44px;
+  }
+  .selection-toolbar-btn {
+    height: 36px;
+  }
+  .selection-toolbar-input,
+  .selection-toolbar-input + .selection-toolbar-divider,
+  .selection-toolbar-btn[data-action="ask"],
+  .selection-toolbar-send {
+    display: none;
+  }
+}
