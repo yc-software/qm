@@ -10782,6 +10782,12 @@ h3.ambient-field-label {
   margin: 0;
   padding-left: 22px;
 }
+.email-draft-body ul {
+  list-style: disc;
+}
+.email-draft-body ol {
+  list-style: decimal;
+}
 .email-draft-body code {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 13px;
