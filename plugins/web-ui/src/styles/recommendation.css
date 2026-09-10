@@ -1,0 +1,61 @@
+.connector-widget-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.connector-widget-body {
+  margin: 0;
+  line-height: 1.6;
+}
+.connector-widget-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 2px;
+  padding: 1px 6px 1px 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.connector-widget-chip .connector-logo {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--surface);
+}
+.connector-widget-chip .connector-logo svg {
+  width: 10px;
+  height: 10px;
+}
+.connector-widget-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.connector-widget-state {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in oklch, var(--orange) 28%, transparent);
+  border-radius: 999px;
+  background: var(--orange-tint);
+  color: var(--orange-ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.connector-widget.connected .connector-widget-state {
+  border-color: color-mix(in oklch, var(--green) 28%, transparent);
+  background: var(--green-tint);
+  color: var(--green-ink);
+}

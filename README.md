@@ -2,7 +2,7 @@
 
 A multiplayer agent harness for work. In Slack and on the web.
 
-![The QM web UI: two concurrent sessions, a sidebar of personal files, crons, keychain, deploys, memory, and skills](./docs/screenshots/web-ui-hero.png)
+![The QM web UI: two concurrent sessions side by side, one with a completed tool run, a markdown table and code, the other waiting on a command approval](./docs/screenshots/web-ui-hero.png)
 
 ## Setup
 
