@@ -13,6 +13,7 @@ import { asError, swallow } from "../util/errors.ts";
 import { countTokens } from "../util/tokens.ts";
 import { CodexAppServer, CodexRpcError, redactCodexDiagnostics } from "./codex-app-server.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./codex-auth.ts";
+import { codexOAuthJwtAccountId } from "./codex-auth-file.ts";
 import {
   childCodexAuthFromDerived,
   childCodexOAuthAuth,
@@ -808,6 +809,19 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         } finally {
           if (startTimer) clearTimeout(startTimer);
         }
+        await awaitSetup(
+          server.request(
+            "account/login/start",
+            {
+              type: "chatgptAuthTokens",
+              accessToken: turn.codexAuth.accessToken,
+              chatgptAccountId: codexOAuthJwtAccountId(userAuth),
+            },
+            (value): value is { type: "chatgptAuthTokens" } =>
+              Boolean(value && typeof value === "object" && "type" in value && value.type === "chatgptAuthTokens"),
+            AbortSignal.timeout(opts.appServerStartTimeoutMs ?? CODEX_START_TIMEOUT_MS),
+          ),
+        );
         rt = ephemeral;
       } catch (error) {
         if (!ephemeral) rmSync(jail, { recursive: true, force: true });
