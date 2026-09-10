@@ -13,6 +13,7 @@ import { isPollSurface, isSilentPollReply } from "../src/triggers/run-trigger.ts
 import { createDirectoryStore, type DirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Cron } from "../src/types.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -790,7 +791,9 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     const session = await sessions.getOrCreateByThread(req.conversation.threadRef!, "dm", scope);
     sessionIds.push(session.id);
-    priorAssistantSeen.push((await sessions.getEntries(session.id)).filter((e) => e.type === "assistant").length);
+    priorAssistantSeen.push(
+      (await projectedEntries(sessions, session.id)).filter((e) => e.type === "assistant").length,
+    );
     texts.push(req.text);
     const { lease } = await sessions.acquireLease(session.id);
     assert.ok(lease, "fires are serial, so the lease is always free");

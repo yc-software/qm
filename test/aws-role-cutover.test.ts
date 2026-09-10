@@ -9,6 +9,7 @@ import { scopeId } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -104,7 +105,9 @@ test("personal ephemeral-only credentials run only through credential_exec and a
   assert.match(brokered.reply ?? "", /<redacted:AWS_SECRET_ACCESS_KEY>/);
   assert.match(brokered.reply ?? "", /<redacted:AWS_SESSION_TOKEN>/);
   for (const value of Object.values(sentinels)) assert.doesNotMatch(brokered.reply ?? "", new RegExp(value));
-  const durable = JSON.stringify(await built.sessions.getEntries(brokered.sessionId!));
+  const durableEntries = await projectedEntries(built.sessions, brokered.sessionId!);
+  assert.ok(durableEntries.length > 0, "the durable transcript is non-empty, so the redaction check checks something");
+  const durable = JSON.stringify(durableEntries);
   for (const value of Object.values(sentinels)) assert.doesNotMatch(durable, new RegExp(value));
   assert.equal(
     ff.names().some((name) => name.includes("credential-exec")),

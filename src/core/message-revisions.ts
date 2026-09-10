@@ -1,11 +1,8 @@
 import type { ScopeId, SessionEntry } from "../types.ts";
-import {
-  appendEntryOutsideTurn,
-  type Lease,
-  type SessionStore,
-  type TranscriptAppendSessions,
-} from "../sessions/session-store.ts";
+import { type Lease, type SessionStore, type TranscriptAppendSessions } from "../sessions/session-store.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../slack/message-gating.ts";
+import { createTranscriptSource, type TranscriptStore } from "../harness/tape-projection.ts";
+import { appendEntryOutsideTurn } from "../harness/tape-import.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
@@ -25,7 +22,8 @@ interface MessageRevisionSource {
 }
 
 export type RevisionSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "sessionsByThreadRefs" | "acquireLease" | "releaseLease" | "getEntries">;
+  TranscriptStore &
+  Pick<SessionStore, "sessionsByThreadRefs" | "acquireLease" | "releaseLease">;
 
 interface RevisionSession {
   id: string;
@@ -136,13 +134,14 @@ async function recordWhenIdle(
   source: MessageRevisionSource,
   retry: IdleRetry,
 ): Promise<void> {
-  if (!revisionToRecord(await sessions.getEntries(session.id), source)) return;
+  const transcripts = createTranscriptSource(sessions);
+  if (!revisionToRecord((await transcripts.forRender(session.id)).entries, source)) return;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
     if (attempt > 0) await sleep(retry.retryMs, { unref: true });
     const { lease } = await sessions.acquireLease(session.id, "backfill");
     if (!lease) continue;
     try {
-      await recordRevision(sessions, lease, session, await sessions.getEntries(session.id), source);
+      await recordRevision(sessions, lease, session, (await transcripts.forRender(session.id)).entries, source);
       return;
     } finally {
       await sessions.releaseLease(lease);
@@ -163,14 +162,10 @@ export async function recordMessageRevisions(
 
 const ANCHOR_WALK_BACK = 8;
 
-export async function revisionAnchorAt(
-  sessions: Pick<SessionStore, "latestEntrySeq" | "getEntry">,
-  sessionId: string,
-): Promise<number | undefined> {
-  let seq = await sessions.latestEntrySeq(sessionId);
-  for (let steps = 0; seq >= 0 && steps < ANCHOR_WALK_BACK; steps++, seq--) {
-    const entry = await sessions.getEntry(sessionId, seq);
-    if (!entry) return undefined;
+export async function revisionAnchorAt(sessions: TranscriptStore, sessionId: string): Promise<number | undefined> {
+  const tail = (await createTranscriptSource(sessions).forRender(sessionId, { limit: ANCHOR_WALK_BACK })).entries;
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const entry = tail[i]!;
     if (entry.type === "user" || entry.type === "assistant") return entry.createdAt;
   }
   return undefined;
@@ -182,7 +177,7 @@ export function slackTsToMs(ts: string | undefined): number | undefined {
 }
 
 export async function reconcileMessageRevisions(opts: {
-  sessions: TranscriptAppendSessions & Pick<SessionStore, "getEntries">;
+  sessions: TranscriptAppendSessions & TranscriptStore;
   surfaceCache: Pick<SurfaceCache, "revisedSince">;
   lease: Lease;
   session: RevisionSession & { threadRef: string };
@@ -195,7 +190,7 @@ export async function reconcileMessageRevisions(opts: {
   const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
   const revised = await opts.surfaceCache.revisedSince(ref.container, since, ref.root ? { thread: ref.root } : {});
   if (!revised.length) return 0;
-  const entries = await opts.sessions.getEntries(opts.session.id);
+  const entries = (await createTranscriptSource(opts.sessions).forRender(opts.session.id)).entries;
   let recorded = 0;
   for (const row of revised) {
     if (await recordRevision(opts.sessions, opts.lease, opts.session, entries, row)) recorded++;

@@ -1,12 +1,15 @@
 import type { ScopeId, Session, SessionEntry } from "../../types.ts";
 import { parseScopeId } from "../../types.ts";
-import type { Lease } from "../../sessions/session-store.ts";
+import type { Lease, NewEntry } from "../../sessions/session-store.ts";
 import {
   acquireLeaseWithin,
   contextSummaryPayload,
+  contextWindowFromEntries,
   createContextSummaryPayload,
+  createEntryAllocator,
   tapeCheckpointPayload,
 } from "../../sessions/session-store.ts";
+import { projectedSessionHistory } from "../../harness/tape-projection.ts";
 import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
@@ -38,6 +41,7 @@ export interface CompactionContext {
   compactContextIfNeeded(input: {
     session: Session;
     lease: Lease;
+    allocate: (entry: NewEntry) => SessionEntry;
     visibleHistory: SessionEntry[];
     scopeId: string;
     orgScopeId: string;
@@ -122,10 +126,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   async function writeCompaction(input: {
     session: Session;
     lease: Lease;
+    allocate: (entry: NewEntry) => SessionEntry;
     summarized: Summarized;
   }): Promise<SessionEntry> {
     const { text, summaryLabel, throughSeq, securityTainted } = input.summarized;
-    const summary = await deps.sessions.append(input.lease, {
+    const summary = input.allocate({
       type: "system",
       payload: {
         ...createContextSummaryPayload(throughSeq, text),
@@ -159,6 +164,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   async function applyCompaction(input: {
     session: Session;
     lease: Lease;
+    allocate: (entry: NewEntry) => SessionEntry;
     visibleHistory: SessionEntry[];
     scopeId: string;
     orgScopeId: string;
@@ -177,6 +183,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   async function compactContextIfNeeded(input: {
     session: Session;
     lease: Lease;
+    allocate: (entry: NewEntry) => SessionEntry;
     visibleHistory: SessionEntry[];
     scopeId: string;
     orgScopeId: string;
@@ -213,7 +220,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         const session = await deps.sessions.get(input.sessionId);
         if (!session) return;
         const maxContextTokens = tokenBudgetFor(input.scopeId, input.model);
-        const entries = (await deps.sessions.getContextWindow(input.sessionId)).entries;
+        const projected = await projectedSessionHistory(deps.sessions, input.sessionId);
+        const entries = contextWindowFromEntries(projected.entries).entries;
         const history = forModelContext(entries, { includeSecurityTainted: input.includeSecurityTainted });
         if (!overBudgetFraction(history, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
         const snapshotSeq = entries.at(-1)?.seq ?? -1;
@@ -228,9 +236,14 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         if (!summarized) return;
         lease = (await acquireLeaseWithin(deps.sessions, input.sessionId, "compaction", WRITE_LEASE_WAIT_MS)).lease;
         if (!lease) return;
-        const since = await deps.sessions.getEntries(input.sessionId, { sinceSeq: snapshotSeq + 1 });
+        const reread = await projectedSessionHistory(deps.sessions, input.sessionId);
+        const since = reread.entries.filter((entry) => entry.seq > snapshotSeq);
         if (!since.some((entry) => !!contextSummaryPayload(entry))) {
-          await writeCompaction({ session, lease, summarized });
+          const allocate = createEntryAllocator(
+            input.sessionId,
+            Math.max(reread.latestSeq, reread.entries.at(-1)?.seq ?? -1),
+          );
+          await writeCompaction({ session, lease, allocate, summarized });
         }
       } catch (e) {
         deps.errors?.record({

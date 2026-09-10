@@ -46,11 +46,22 @@ test("forking copies the transcript into a fresh independent web session", async
     (await sessions.tapeCoverage(fork.session.id)) >= fork.entries.at(-1)!.seq,
     "the fork is born tape-covered — its first turn needs no heal import",
   );
-  const imports = (await sessions.getTape(fork.session.id)).filter(
-    (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
+  assert.ok(
+    (await sessions.searchEntries("U1", "rollbacks")).some((hit) => hit.sessionId === fork.session.id),
+    "the copied history is searchable at fork time, not at the fork's first turn",
   );
-  assert.equal(imports.length, 1);
-  assert.ok(Array.isArray((imports[0]!.payload as { scopes?: unknown }).scopes), "the import carries its scopes");
+  const forkRows = await sessions.getTape(fork.session.id);
+  assert.equal(
+    forkRows.filter(
+      (row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "legacy_import",
+    ).length,
+    0,
+    "a full-prefix fork copies tape rows natively instead of writing a legacy_import",
+  );
+  const strip = (rows: Awaited<ReturnType<typeof sessions.getTape>>) =>
+    rows.map(({ sessionId: _s, seq: _q, createdAt: _c, ...rec }) => rec);
+  const sourceRows = await sessions.getTape(sid);
+  assert.deepEqual(strip(forkRows), strip(sourceRows.slice(0, forkRows.length)), "copied rows are verbatim");
 });
 
 test("upToSeq truncates the copy at the cut point", async () => {
@@ -117,4 +128,25 @@ test("a stranger cannot fork someone else's conversation", async () => {
   const r = await app.turn(dm("Private planning", "web:U1:f4"));
   assert.equal(await app.forkSession(r.sessionId!, "intruder"), null);
   assert.equal(await app.forkSession("does-not-exist", "U1"), null);
+});
+
+test("a fork cut at a user message falls back to a render-import block with mirrors", async () => {
+  const { app, sessions } = freshApp();
+  await app.turn(dm("First turn", "web:U1:f5"));
+  const r2 = await app.turn(dm("Second turn", "web:U1:f5"));
+  const sid = r2.sessionId!;
+  const entries = (await app.getSession(sid))!.entries;
+  const secondUser = entries.filter((e) => e.type === "user")[1]!;
+
+  const fork = await app.forkSession(sid, "U1", { upToSeq: secondUser.seq });
+  assert.ok(fork);
+  const copiedTexts = fork.entries.filter((e) => e.type === "user").map((e) => (e.payload as { text?: string }).text);
+  assert.ok(copiedTexts.includes("Second turn"), "the cut keeps the user message it points at");
+  assert.equal(fork.entries.at(-1)!.type, "user", "nothing after the cut is copied");
+  const rows = await sessions.getTape(fork.session.id);
+  assert.ok(
+    rows.some((row) => row.kind === "context_event" && (row.payload as { event?: unknown }).event === "render_import"),
+    "a non-boundary cut is written as a render-import block",
+  );
+  assert.equal(fork.session.forkBoundarySeq, fork.entries.at(-1)!.seq);
 });

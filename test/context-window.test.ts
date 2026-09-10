@@ -2,7 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { createContextSummaryPayload, type SessionStore } from "../src/sessions/session-store.ts";
+import {
+  contextWindowFromEntries,
+  createContextSummaryPayload,
+  type SessionStore,
+} from "../src/sessions/session-store.ts";
 import { forModelContext } from "../src/harness/context-compaction.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -28,7 +32,7 @@ async function seed(store: SessionStore, threadRef: string) {
 
 async function exerciseWindow(store: SessionStore, threadRef: string) {
   const { session, freshSummarySeq } = await seed(store, threadRef);
-  const window = await store.getContextWindow(session.id);
+  const window = contextWindowFromEntries(await store.getEntries(session.id));
 
   assert.equal(window.totalEntries, 7, "full count preserved for guards");
   assert.equal(window.hasSecurityTaint, true, "taint in the discarded prefix still surfaces");
@@ -46,7 +50,7 @@ async function exerciseWindow(store: SessionStore, threadRef: string) {
   );
 
   const untouched = await store.getOrCreateByThread(`${threadRef}-empty`, "channel", scopeId("channel", "C1"));
-  const empty = await store.getContextWindow(untouched.id);
+  const empty = contextWindowFromEntries(await store.getEntries(untouched.id));
   assert.deepEqual(empty, { entries: [], totalEntries: 0, hasSecurityTaint: false });
 }
 
@@ -61,7 +65,7 @@ test("memory store: sessions without a summary return the full history", async (
   const { lease } = await store.acquireLease(s.id);
   await store.append(lease!, { type: "user", payload: { text: "a" }, scopeLabel: scope });
   await store.append(lease!, { type: "assistant", payload: { text: "b" }, scopeLabel: scope });
-  const window = await store.getContextWindow(s.id);
+  const window = contextWindowFromEntries(await store.getEntries(s.id));
   assert.equal(window.entries.length, 2);
   assert.equal(window.totalEntries, 2);
   assert.equal(window.hasSecurityTaint, false);
@@ -95,7 +99,7 @@ test(
       payload: { text: 'quoting "kind":"context_summary" in chat' },
       scopeLabel: scope,
     });
-    const window = await store.getContextWindow(s.id);
+    const window = contextWindowFromEntries(await store.getEntries(s.id));
     assert.equal(window.entries.length, 3, "decoys fall back to the full history, never a wrong slice");
     assert.equal(window.totalEntries, 3);
   },
@@ -130,7 +134,7 @@ test(
     ]);
     assert.match(rewritten.rows[0].payload, /"kind": "context_summary"/, "round-trip produced the spaced format");
 
-    const window = await store.getContextWindow(s.id);
+    const window = contextWindowFromEntries(await store.getEntries(s.id));
     assert.deepEqual(
       window.entries.map((e) => e.seq),
       [summary.seq, summary.seq + 1],

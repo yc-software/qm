@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -58,7 +59,7 @@ test("exemplar (piratey X-link): the worker gets the standing order verbatim and
 
     const workerSession = await built.sessions.getByThread(`slack:${container}:ambient:${X_LINK_TS}`);
     assert.ok(workerSession, "the ambient worker ran as its own sub-conversation");
-    const entries = await built.sessions.getEntries(workerSession!.id);
+    const entries = await projectedEntries(built.sessions, workerSession!.id);
     const wake = entries.find(
       (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("<standing-orders"),
     );

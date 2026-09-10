@@ -43,7 +43,9 @@ import type {
   TapeMeta,
   TapeRecord,
 } from "../sessions/session-store.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { tapeEntryMirrorRecord } from "../sessions/session-store.ts";
+import { tapeReplyCheckpoint } from "./harness-shared.ts";
+import { RENDER_IMPORT_EVENT } from "./tape-projection.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
@@ -79,7 +81,6 @@ import {
   planColdStartSeed,
   reconstructMessagesFromHistory,
   recordedMessageTimestamps,
-  replayPreamble,
   seedPriorTurns,
   zeroUsage,
   type PiReplayMessage,
@@ -1504,7 +1505,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     }
     const seedSource = foldSeed ?? reconstructed;
     const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
-    const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
+    const composedPrompt = systemPrompt;
 
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
@@ -1565,11 +1566,18 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       }
       if (seeded && tape) {
         try {
-          await tape({
+          const imported = (await tape({
             kind: "context_event",
-            payload: { event: "legacy_import", messages: seeded },
+            payload: { event: "legacy_import", messages: seeded, scopes: [turnScope!] },
             scopeLabel: turnScope!,
-          });
+          })) as { seq?: number };
+          if (typeof imported?.seq === "number") {
+            await tape({
+              kind: "context_event",
+              payload: { event: RENDER_IMPORT_EVENT, firstTapeSeq: imported.seq + 1 },
+              scopeLabel: turnScope!,
+            });
+          }
         } catch (err) {
           removeIsolatedDirs({ cwd, agentDir });
           throw err;
@@ -1798,6 +1806,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
+            const resultMirror = typeof callId === "string" ? entry.ref.tapeResultMirrors?.get(callId) : undefined;
+            if (typeof callId === "string") entry.ref.tapeResultMirrors?.delete(callId);
             const steerStamp = role === "user" && !isTrigger ? steerTapeStamp(message) : undefined;
             const rec: NewTapeRecord = {
               kind: "message",
@@ -1816,9 +1826,21 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   }
                 : {}),
               ...(steerStamp ? { meta: steerStamp } : {}),
+              ...(resultMirror ? { entrySeq: resultMirror.seq } : {}),
             };
             try {
               await turn.tape(rec);
+              if (resultMirror) {
+                await turn.tape(
+                  tapeEntryMirrorRecord({
+                    seq: resultMirror.seq,
+                    createdAt: resultMirror.createdAt,
+                    type: "tool_result",
+                    payload: resultMirror.payload,
+                    scopeLabel: resultMirror.scopeLabel,
+                  }),
+                );
+              }
             } catch (err) {
               tapeError = asError(err);
               toolAbort.abort();
@@ -1970,22 +1992,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               });
             }
           };
-          const checkpointSubturn = async (
-            finalEntry: { seq: number; createdAt: number },
-            reply: string,
-          ): Promise<void> => {
+          const checkpointSubturn = async (finalEntry: SessionEntry): Promise<void> => {
             if (!turn.tape) return;
             await tapeLeftoverSteers();
-            await turn.tape({
-              kind: "annotation",
-              payload: tapeCheckpointPayload("subturnEnd", {
-                type: "assistant",
-                payload: { text: reply },
-                at: finalEntry.createdAt,
-              }),
-              scopeLabel: turn.scopeLabel,
-              entrySeq: finalEntry.seq,
-            });
+            await tapeReplyCheckpoint(turn, finalEntry);
           };
           let wallClock!: TurnWallClockOutcome;
           const messagesBefore = entry.agentSession.messages.length;
@@ -2293,7 +2303,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 scopeLabel: turn.scopeLabel,
               });
             }
-            await checkpointSubturn(finalEntry, reply);
+            await checkpointSubturn(finalEntry);
             const cacheUsage = sumCacheUsage(callStats);
             const base = {
               reply,
@@ -2324,7 +2334,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             payload: { text: reply },
             scopeLabel: turn.scopeLabel,
           });
-          await checkpointSubturn(finalEntry, reply);
+          await checkpointSubturn(finalEntry);
           const pendingApprovals = entry.ref.pendingApprovals ?? [];
           const modelCalls = entry.ref.modelCalls ?? 0;
           const cacheUsage = sumCacheUsage(callStats);

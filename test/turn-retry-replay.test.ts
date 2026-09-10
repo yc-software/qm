@@ -23,6 +23,8 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { tapeCheckpointPayload } from "../src/sessions/session-store.ts";
+import { sessionHistoryEntries } from "./support/projected-entries.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 const ORG = "default-org";
@@ -90,7 +92,11 @@ function buildScenario() {
         });
         await turn.tape?.({
           kind: "annotation",
-          payload: { subturnEnd: true },
+          payload: tapeCheckpointPayload("subturnEnd", {
+            type: "assistant",
+            payload: { text: reply },
+            at: finalEntry.createdAt,
+          }),
           scopeLabel: turn.scopeLabel,
           entrySeq: finalEntry.seq,
         });
@@ -109,7 +115,6 @@ function buildScenario() {
   const orchestrator = createOrchestrator({
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
-    sessionTapeMode: "serve",
     sessions,
     runs,
     workspace,
@@ -140,7 +145,7 @@ function buildScenario() {
   });
   const asks = async (): Promise<SessionEntry[]> => {
     const session = (await sessions.getByThread(conversation.threadRef))!;
-    return (await sessions.getEntries(session.id, { limit: 200 })).filter(
+    return (await sessionHistoryEntries(sessions, session.id)).filter(
       (e) => e.type === "user" && String((e.payload as { text?: string }).text ?? "").startsWith(ASK),
     );
   };
@@ -240,11 +245,65 @@ async function seedTurn(
 ): Promise<number> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
   const { lease } = await sessions.acquireLease(session.id);
+  let seq = await sessions.latestEntrySeq(session.id);
   let first = -1;
   try {
     for (const e of entries) {
-      const appended = await sessions.append(lease!, { type: e.type, payload: e.payload, scopeLabel: session.scopeId });
-      if (first < 0) first = appended.seq;
+      seq += 1;
+      if (first < 0) first = seq;
+      const at = Date.now();
+      if (e.type === "user") {
+        const text = String(e.payload.text ?? "");
+        await sessions.appendTape(lease!, {
+          kind: "message",
+          harness: "pi",
+          payload: { role: "user", content: [{ type: "text", text }], timestamp: at },
+          scopeLabel: session.scopeId,
+          ...(e.payload.steered ? {} : { entrySeq: seq }),
+          meta: {
+            bareText: text,
+            ...(typeof e.payload.ts === "string" ? { ts: e.payload.ts } : {}),
+            entryCreatedAt: at,
+          },
+        });
+      } else if (e.type === "tool_call") {
+        await sessions.appendTape(lease!, {
+          kind: "message",
+          harness: "pi",
+          payload: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: String(e.payload.callId),
+                name: String(e.payload.tool),
+                arguments: { command: e.payload.command },
+              },
+            ],
+            timestamp: at,
+            stopReason: "stop",
+          },
+          scopeLabel: session.scopeId,
+        });
+      } else {
+        await sessions.appendTape(lease!, {
+          kind: "message",
+          harness: "pi",
+          payload: {
+            role: "assistant",
+            content: [{ type: "text", text: String(e.payload.text ?? "") }],
+            timestamp: at,
+            stopReason: "stop",
+          },
+          scopeLabel: session.scopeId,
+        });
+        await sessions.appendTape(lease!, {
+          kind: "annotation",
+          payload: tapeCheckpointPayload("subturnEnd", { type: "assistant", payload: e.payload, at }),
+          scopeLabel: session.scopeId,
+          entrySeq: seq,
+        });
+      }
     }
   } finally {
     await sessions.releaseLease(lease!);

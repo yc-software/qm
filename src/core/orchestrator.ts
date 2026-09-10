@@ -34,10 +34,15 @@ import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.t
 import { CONFIG_DEFAULTS } from "../config.ts";
 import {
   acquireLeaseWithin,
+  contextWindowFromEntries,
+  createEntryAllocator,
+  entryWithinTenure,
   isOverheardEntry,
-  TAPE_IMPORT_MAX_ENTRIES,
+  mirrorsUserEntry,
   tapeCheckpointPayload,
   tapeEntryMirrorRecord,
+  tapeTaintMarkers,
+  transcriptEntries,
 } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
@@ -109,14 +114,13 @@ import {
   filterTapeForAudience,
   foldTape,
   healFoldInterrupt,
-  lastImportLacksScopes,
   lintFold,
   rehydrateFoldImages,
   tapeEventsEntitled,
   tapeNeedsInterruptHeal,
 } from "../harness/tape-fold.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
-import { createTranscriptSource } from "../harness/tape-projection.ts";
+import { createTranscriptSource, projectedSessionHistory, syncSearchIndex } from "../harness/tape-projection.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
@@ -140,7 +144,6 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { findTrailingPartialTurn, resumeNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
-  appendCoverageImport,
   recordedMessageTimestamps,
   renderOverheard,
   selectOverheardToImport,
@@ -232,6 +235,29 @@ const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
+
+async function syncSearchIndexAtTurnExit(deps: OrchestratorDeps, lease: Lease, scopeLabel: ScopeId): Promise<void> {
+  try {
+    const sync = await syncSearchIndex(deps.sessions, lease);
+    if (!sync.servable) {
+      deps.errors?.record({
+        category: "search",
+        code: "search_sync_unservable",
+        message: `search index sync skipped: the session tape does not project (index covers seq ${sync.coveredSeq})`,
+        scopeLabel,
+        sessionId: lease.sessionId,
+      });
+    }
+  } catch (e) {
+    deps.errors?.record({
+      category: "search",
+      code: "search_sync_failed",
+      message: errMessage(e),
+      scopeLabel,
+      sessionId: lease.sessionId,
+    });
+  }
+}
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   if (deps.sessions.leaseTtlMs < MIN_SESSION_LEASE_TTL_MS) {
@@ -598,11 +624,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .map((principalId) => deps.sessions.removeParticipant(sessionId, principalId)),
         );
         await Promise.all(participantIds.map((principalId) => deps.sessions.addParticipant(sessionId, principalId)));
-        const snapshot = await deps.sessions.getEntries(sessionId);
+        const snapshot = (await projectedSessionHistory(deps.sessions, sessionId)).entries;
         participantHistoryMaxSeq = snapshot.reduce((max, entry) => Math.max(max, entry.seq), -1);
-        const views = await Promise.all(
-          participantIds.map((principalId) => deps.sessions.visibleEntries(sessionId, principalId)),
-        );
+        const windows = await deps.sessions.participantWindowsOf(sessionId);
+        const views = participantIds.map((principalId) => {
+          const window = windows.find((w) => w.principalId === principalId);
+          return window ? snapshot.filter((entry) => entryWithinTenure(entry, window)) : [];
+        });
         participantHistorySeqs = new Set(views[0]!.map((entry) => entry.seq));
         for (const view of views.slice(1)) {
           const visible = new Set(view.map((entry) => entry.seq));
@@ -643,9 +671,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let screenedOverheard: OverheardEntryPayload[] = [];
       if (screenInbound) {
         const existingSession = await deps.sessions.getByThread(conversation.threadRef);
-        const existingEntries = existingSession ? await deps.sessions.getEntries(existingSession.id) : [];
-        const quarantinedAttachmentSourceIds = new Set(
-          existingEntries.flatMap((entry) => {
+        const existingEntries = existingSession ? (await transcripts.forRender(existingSession.id)).entries : [];
+        const tapeMarkers = tapeTaintMarkers(existingSession ? await deps.sessions.getTape(existingSession.id) : []);
+        const quarantinedAttachmentSourceIds = new Set([
+          ...existingEntries.flatMap((entry) => {
             const payload = entry.payload as {
               securityTainted?: unknown;
               quarantinedAttachmentSourceIds?: unknown;
@@ -654,13 +683,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? payload.quarantinedAttachmentSourceIds.filter((id): id is string => typeof id === "string")
               : [];
           }),
-        );
+          ...tapeMarkers.quarantinedAttachmentSourceIds,
+        ]);
         if (quarantinedAttachmentSourceIds.size && input.attachments?.length) {
           input.attachments = input.attachments.filter(
             (attachment) => !attachment.sourceId || !quarantinedAttachmentSourceIds.has(attachment.sourceId),
           );
         }
-        const recorded = recordedMessageTimestamps(existingEntries);
+        const recorded = new Set([...recordedMessageTimestamps(existingEntries), ...tapeMarkers.messageTimestamps]);
         screenedOverheard = conversation.kind === "dm" ? [] : selectOverheardToImport(input.overheard ?? [], recorded);
       }
       let hasUnscreenableAttachment = false;
@@ -815,8 +845,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await withManagedRosterVersion(async () => {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
+            const flaggedView = await projectedSessionHistory(deps.sessions, session.id);
+            const flaggedBase = Math.max(flaggedView.latestSeq, flaggedView.entries.at(-1)?.seq ?? -1);
+            const allocate = createEntryAllocator(session.id, flaggedBase);
             for (const overheard of screenedOverheard) {
-              const imported = await deps.sessions.append(lease, {
+              const imported = allocate({
                 type: "user",
                 payload: { ...overheard, securityTainted: true },
                 scopeLabel: scopeId,
@@ -855,14 +888,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
               ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
             };
-            const taintedEntry = await deps.sessions.append(lease, {
+            const taintedEntry = allocate({
               type: "user",
               payload: taintedPayload,
               scopeLabel: scopeId,
             });
-            await deps.sessions
-              .appendTape(lease, tapeEntryMirrorRecord(taintedEntry))
-              .catch(swallowAs("orchestrator: tainted input mirror", undefined));
+            await deps.sessions.appendTape(lease, tapeEntryMirrorRecord(taintedEntry));
+            await deps.sessions.appendTape(lease, {
+              kind: "annotation",
+              payload: tapeCheckpointPayload("turnEnd", undefined, flaggedBase + 1),
+              scopeLabel: scopeId,
+              entrySeq: taintedEntry.seq,
+            });
             const command = "security-screen";
             const requestId = inputApprovalId(session.id, replayableRequest(input));
             const grantModesField =
@@ -893,6 +930,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           throw err;
         } finally {
+          await syncSearchIndexAtTurnExit(deps, lease, scopeId);
           await deps.sessions.releaseLease(lease);
         }
         return {
@@ -1098,7 +1136,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!input.runId || !deps.runs) return null;
         const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
         if (seq == null) return null;
-        return turnAtSeq(await deps.sessions.getEntries(session.id, { sinceSeq: seq }), seq);
+        const view = await projectedSessionHistory(deps.sessions, session.id);
+        const trigger = view.entries.find((entry) => entry.seq === seq);
+        const triggerText = String((trigger?.payload as { text?: unknown } | null)?.text ?? "").trim();
+        if (!trigger || trigger.type !== "user" || !triggerText.startsWith(input.text.trim())) return null;
+        return turnAtSeq(
+          view.entries.filter((entry) => entry.seq >= seq),
+          seq,
+        );
       };
       const recordedTurn = isRetry ? await recordedTurnForRun() : null;
       if (recordedTurn?.answer) {
@@ -1599,6 +1644,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         onStalled: () => turnAbort.abort(),
       });
       let failureUserPayload: Record<string, unknown> | undefined;
+      let turnTapeAppends = 0;
       try {
         await withManagedRosterVersion(async () => {
           await reconcileSessionParticipants(session.id);
@@ -1881,9 +1927,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         ) {
           const detectHistory = filterHistory(
-            (await deps.sessions.getEntries(session.id, { limit: DETECT_HISTORY_TAIL })).filter(
-              (e) => e.type !== "soul",
-            ),
+            transcriptEntries((await transcripts.forRender(session.id, { limit: DETECT_HISTORY_TAIL })).entries),
           );
           const detectStart = Date.now();
           const decision = await deps.harness.models.shouldRespond({
@@ -2290,7 +2334,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           sessionHistory: (() => {
-            const historyView = async () => filterHistory(forSearchView(await deps.sessions.getEntries(session.id)));
+            const historyView = async () =>
+              filterHistory(forSearchView((await projectedSessionHistory(deps.sessions, session.id)).entries));
             return {
               search: async (q: string, limit?: number) => searchSessionEntries(await historyView(), q, limit),
               open: async (seq: number) => openSessionEntry(await historyView(), seq),
@@ -2319,10 +2364,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
         });
 
+        const projected = await projectedSessionHistory(deps.sessions, session.id);
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(
             input.attachments,
-            (await deps.sessions.getContextWindow(session.id)).entries,
+            contextWindowFromEntries(projected.entries).entries,
           );
         }
         const inbound =
@@ -2360,44 +2406,40 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ],
         });
         const preAppendedSeqs: number[] = [];
+        const liveRows = projected.rows;
+        const liveTapeMarkers = tapeTaintMarkers(liveRows);
+        const projectedEntries: SessionEntry[] = [...projected.entries];
+        const allocateEntry = createEntryAllocator(
+          session.id,
+          Math.max(projected.latestSeq, projectedEntries.at(-1)?.seq ?? -1),
+        );
+        const recordPreAppended = (entry: SessionEntry, row: Awaited<ReturnType<SessionStore["appendTape"]>>): void => {
+          turnTapeAppends++;
+          projectedEntries.push(entry);
+          preAppendedSeqs.push(entry.seq);
+          liveRows.push(row);
+        };
         if (inboundIssues.length) {
-          const appended = await withManagedRosterVersion(() =>
-            deps.sessions.append(lease, {
-              type: "system",
-              payload: fileEventPayload("in", inboundIssues),
-              scopeLabel: scopeId,
-            }),
-          ).catch(swallowAs("orchestrator: inbound file-event log", undefined));
-          if (appended) {
-            preAppendedSeqs.push(appended.seq);
-            await withManagedRosterVersion(() => deps.sessions.appendTape(lease, tapeEntryMirrorRecord(appended)));
-          }
+          const appended = allocateEntry({
+            type: "system",
+            payload: fileEventPayload("in", inboundIssues),
+            scopeLabel: scopeId,
+          });
+          const row = await withManagedRosterVersion(() =>
+            deps.sessions.appendTape(lease, tapeEntryMirrorRecord(appended)),
+          );
+          recordPreAppended(appended, row);
         }
 
         const importedOverheard: OverheardEntryPayload[] = [];
         if (!input.envelopeWrapped && input.overheard?.length) {
-          const toImport = await transcripts
-            .forRender(session.id)
-            .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
-            .catch(swallowAs("orchestrator: overheard catch-up import", [] as OverheardEntryPayload[]));
+          const toImport = selectOverheardToImport(
+            input.overheard,
+            new Set([...recordedMessageTimestamps(projectedEntries), ...liveTapeMarkers.messageTimestamps]),
+          );
           for (const p of toImport) {
-            let imported;
-            try {
-              imported = await withManagedRosterVersion(() =>
-                deps.sessions.append(lease, {
-                  type: "user",
-                  payload: p,
-                  scopeLabel: scopeId,
-                }),
-              );
-            } catch (e) {
-              if (e instanceof ProjectRosterChanged) throw e;
-              swallow("orchestrator: overheard catch-up import", e);
-              break;
-            }
-            importedOverheard.push(p);
-            preAppendedSeqs.push(imported.seq);
-            await withManagedRosterVersion(() =>
+            const imported = allocateEntry({ type: "user", payload: p, scopeLabel: scopeId });
+            const row = await withManagedRosterVersion(() =>
               deps.sessions.appendTape(lease, {
                 kind: "message",
                 payload: {
@@ -2418,12 +2460,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
               }),
             );
+            importedOverheard.push(p);
+            recordPreAppended(imported, row);
           }
         }
 
-        const contextWindow = await deps.sessions.getContextWindow(session.id);
+        const contextWindow = contextWindowFromEntries(projectedEntries);
         const rawEntries = contextWindow.entries;
-        const historyHasSecurityTaint = contextWindow.hasSecurityTaint;
+        const historyHasSecurityTaint = contextWindow.hasSecurityTaint || liveTapeMarkers.tainted;
         const priorTurns = historyHasSecurityTaint ? undefined : input.priorTurns;
         if (historyHasSecurityTaint) {
           await deps.harness.turns.resetSession?.(session.id);
@@ -2462,44 +2506,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         };
         const tapeRows = await (async () => {
-          if (historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES) return undefined;
           try {
-            const preAppended = new Set(preAppendedSeqs);
-            const priorMaxSeq = rawEntries.reduce((m, e) => (preAppended.has(e.seq) ? m : Math.max(m, e.seq)), -1);
-            let covered = priorMaxSeq < 0 || (await deps.sessions.tapeCoverage(session.id)) >= priorMaxSeq;
-            let rows = filterTapeForAudience(
-              await deps.sessions.getTape(session.id),
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-            );
+            let rows = filterTapeForAudience(liveRows, conversation.audience, scopeId, resolution.orgScopeId);
             const sameHarness = rows.every(
               (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
             );
-            if (
-              (!covered || lastImportLacksScopes(rows)) &&
-              deps.sessionTapeMode === "serve" &&
-              sameHarness &&
-              participantHistorySeqs === undefined
-            ) {
-              const imported = await appendCoverageImport(deps.sessions, lease, rawEntries, scopeId);
-              if (imported) {
-                console.log(
-                  `[tape-heal] session=${session.id} covers=${imported.coversEntrySeq} messages=${
-                    (imported.payload as { messages: unknown[] }).messages.length
-                  }`,
-                );
-                rows = [...rows, imported];
-                covered = true;
-              }
-            }
             const eventsEntitled = tapeEventsEntitled(rows, conversation.audience, scopeId, resolution.orgScopeId);
-            const eligible =
-              deps.sessionTapeMode === "serve" &&
-              covered &&
-              sameHarness &&
-              eventsEntitled &&
-              participantHistorySeqs === undefined;
+            const eligible = sameHarness && eventsEntitled && participantHistorySeqs === undefined;
             let fold = eligible ? await rehydrateTape(foldTape(rows)) : undefined;
             if (eligible && rows.length && fold && tapeNeedsInterruptHeal(rows, fold)) {
               const interrupt = await deps.sessions.appendTape(lease, {
@@ -2511,9 +2524,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               fold = healFoldInterrupt(fold, interrupt.createdAt);
             }
             const serve = eligible && !!fold?.length && lintFold(fold).ok;
-            return { rows, serve, covered, fold };
+            return { rows, serve, fold };
           } catch (e) {
-            swallow("tape: read/heal", e);
+            swallow("tape: read", e);
             return undefined;
           }
         })();
@@ -2570,6 +2583,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const history = await compactContextIfNeeded({
           session,
           lease,
+          allocate: allocateEntry,
           visibleHistory,
           scopeId,
           orgScopeId: resolution.orgScopeId,
@@ -2914,7 +2928,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tape: (rec) => {
               turnProgress++;
               if (rec.kind !== "message" || rec.meta?.bareText === undefined) {
-                return withManagedRosterVersion(() => deps.sessions.appendTape(lease, rec));
+                return withManagedRosterVersion(async () => {
+                  const row = await deps.sessions.appendTape(lease, rec);
+                  turnTapeAppends++;
+                  if (mirrorsUserEntry(rec)) failureUserPayload = undefined;
+                  return row;
+                });
               }
               const meta = {
                 ...rec.meta,
@@ -2924,7 +2943,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ? { display: input.displayText }
                   : {}),
               };
-              return withManagedRosterVersion(() => deps.sessions.appendTape(lease, { ...rec, meta }));
+              return withManagedRosterVersion(async () => {
+                const row = await deps.sessions.appendTape(lease, { ...rec, meta });
+                turnTapeAppends++;
+                if (meta.overheard !== true) failureUserPayload = undefined;
+                return row;
+              });
             },
             emit: async (entry) => {
               turnProgress++;
@@ -2948,7 +2972,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   if (syntheticPrompt || continuation) payload.hidden = true;
                   return { ...tainted, payload };
                 })();
-                const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
+                const appended = allocateEntry(stored);
                 emittedEntries.push(appended);
                 if (input.runId && deps.turnStream) {
                   const goalView = goalViewFromEntry(appended.type, appended.payload);
@@ -2961,7 +2985,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       .noteTurnUserSeq(input.runId, appended.seq)
                       .catch(swallowAs("orchestrator: record turn boundary", false));
                 }
-                if (appended.type === "user") failureUserPayload = undefined;
                 if (appended.type === "tool_call") {
                   toolCalls += 1;
                   if (toolCalls === 1 && input.runId) {
@@ -3104,7 +3127,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
         const primarySubturnEndSeq = emittedEntries.at(-1)?.seq;
-        const preTurnCovered = tapeRows ? tapeRows.covered : false;
         let latchedCoverageSeq = -1;
         const latchCoverage = async (): Promise<void> => {
           const lastSeq = [...emittedEntries.map((e) => e.seq), ...preAppendedSeqs].reduce(
@@ -3112,7 +3134,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             -1,
           );
           const stoppedUnsafe = !!result.stopped && !result.stoppedTapeComplete;
-          if (lastSeq <= latchedCoverageSeq || !preTurnCovered || stoppedUnsafe) return;
+          if (lastSeq <= latchedCoverageSeq || stoppedUnsafe) return;
           const spanStart = [...emittedEntries.map((e) => e.seq), ...preAppendedSeqs].reduce(
             (m, s2) => Math.min(m, s2),
             lastSeq,
@@ -3129,7 +3151,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           } catch (e) {
             if (e instanceof ProjectRosterChanged || e instanceof NonRetryableTurnError) throw e;
             throw new NonRetryableTurnError(
-              `turn-end coverage append failed after the turn's effects landed (coverage withheld, heal covers it): ${errMessage(e)}`,
+              `turn-end coverage append failed after the turn's effects landed (coverage withheld; the next turn's read continues past it): ${errMessage(e)}`,
             );
           }
           latchedCoverageSeq = lastSeq;
@@ -3170,16 +3192,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
           }
           if (spine.surfaceOutboundCount === 0 && !silentPollNarration) {
+            const nudgeView = await projectedSessionHistory(deps.sessions, session.id).catch((e) => {
+              swallow("tape: nudge read", e);
+              return null;
+            });
+            const nudgeEntries =
+              nudgeView && !nudgeView.fromArchive ? nudgeView.entries : [...projectedEntries, ...emittedEntries];
             const nudgeHistory = filterHistory(
-              forModelContext((await deps.sessions.getContextWindow(session.id)).entries, {
-                includeSecurityTainted: false,
-              }),
+              forModelContext(contextWindowFromEntries(nudgeEntries).entries, { includeSecurityTainted: false }),
             );
-            const nudgeTape = tapeRows
-              ? await deps.sessions
-                  .getTape(session.id)
-                  .then(async (allRows) => {
-                    const rows = filterTapeForAudience(allRows, conversation.audience, scopeId, resolution.orgScopeId);
+            const nudgeTape =
+              tapeRows && nudgeView
+                ? await (async () => {
+                    const rows = filterTapeForAudience(
+                      nudgeView.rows,
+                      conversation.audience,
+                      scopeId,
+                      resolution.orgScopeId,
+                    );
                     const sameHarness = rows.every(
                       (row) => row.kind !== "message" || row.harness === undefined || row.harness === "pi",
                     );
@@ -3202,12 +3232,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       if (fold.length && lintFold(fold).ok) return { rows, mode: "serve" as const, fold };
                     }
                     return { rows, mode: "shadow" as const };
-                  })
-                  .catch((e) => {
+                  })().catch((e) => {
                     swallow("tape: nudge read", e);
                     return undefined;
                   })
-              : undefined;
+                : undefined;
             result = await runHarnessTurn(
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
               {
@@ -3509,6 +3538,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         if (input.background && finalResult.status !== "pending_approval") {
           tailOwnsCleanup = true;
+          await syncSearchIndexAtTurnExit(deps, lease, scopeId);
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
           leaseReleased = true;
@@ -3520,11 +3550,56 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
+        const recordTurnFailure = (message: string): Promise<void> =>
+          (async () => {
+            const failureView = await projectedSessionHistory(deps.sessions, session.id);
+            const allocate = createEntryAllocator(
+              session.id,
+              Math.max(failureView.latestSeq, failureView.entries.at(-1)?.seq ?? -1),
+            );
+            let spanStart: number | undefined;
+            if (failureUserPayload) {
+              const userEntry = allocate({ type: "user", payload: failureUserPayload, scopeLabel: scopeId as ScopeId });
+              spanStart = userEntry.seq;
+              await deps.sessions.appendTape(lease, {
+                kind: "message",
+                payload: {
+                  role: "user",
+                  content: [{ type: "text", text: String(failureUserPayload.text ?? "") }],
+                  timestamp: userEntry.createdAt,
+                },
+                scopeLabel: scopeId as ScopeId,
+                entrySeq: userEntry.seq,
+                meta: {
+                  bareText: String(failureUserPayload.text ?? ""),
+                  ...(typeof failureUserPayload.ts === "string" ? { ts: failureUserPayload.ts } : {}),
+                  ...(typeof failureUserPayload.name === "string" ? { author: failureUserPayload.name } : {}),
+                  ...(typeof failureUserPayload.display === "string" ? { display: failureUserPayload.display } : {}),
+                  entryCreatedAt: userEntry.createdAt,
+                },
+              });
+            }
+            const payload: TurnFailurePayload = {
+              kind: "turn_failure",
+              message,
+              ...(input.runId ? { runId: input.runId } : {}),
+            };
+            const failureEntry = allocate({ type: "system", payload, scopeLabel: scopeId as ScopeId });
+            await deps.sessions.appendTape(lease, tapeEntryMirrorRecord(failureEntry));
+            await deps.sessions.appendTape(lease, {
+              kind: "annotation",
+              payload: tapeCheckpointPayload("turnEnd", undefined, spanStart ?? failureEntry.seq),
+              scopeLabel: scopeId as ScopeId,
+              entrySeq: failureEntry.seq,
+            });
+          })().catch(swallowAs("orchestrator: terminal turn failure record", undefined));
+        const rosterChangedRefusal = "project membership changed; retry from the current project";
         if (err instanceof ProjectRosterChanged) {
+          if (turnTapeAppends > 0) await recordTurnFailure(rosterChangedRefusal);
           return {
             status: "refused",
             sessionId: session.id,
-            reason: "project membership changed; retry from the current project",
+            reason: rosterChangedRefusal,
           };
         }
         if (err instanceof NeedsApproval) {
@@ -3553,10 +3628,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             });
           } catch (writeErr) {
             if (writeErr instanceof ProjectRosterChanged) {
+              if (turnTapeAppends > 0) await recordTurnFailure(rosterChangedRefusal);
               return {
                 status: "refused",
                 sessionId: session.id,
-                reason: "project membership changed; retry from the current project",
+                reason: rosterChangedRefusal,
               };
             }
             throw writeErr;
@@ -3593,27 +3669,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         markErrorRecorded(err);
         if ((err instanceof NonRetryableTurnError || input.finalAttempt) && !input.cancel?.aborted) {
-          const mirrorFailureEntry = async (entry: SessionEntry | undefined): Promise<void> => {
-            if (!entry) return;
-            await deps.sessions
-              .appendTape(lease, tapeEntryMirrorRecord(entry))
-              .catch(swallowAs("orchestrator: turn failure mirror", undefined));
-          };
-          if (failureUserPayload) {
-            await deps.sessions
-              .append(lease, { type: "user", payload: failureUserPayload, scopeLabel: scopeId as ScopeId })
-              .then(mirrorFailureEntry)
-              .catch(swallowAs("orchestrator: turn failure user back-fill", undefined));
-          }
-          const payload: TurnFailurePayload = {
-            kind: "turn_failure",
-            message: turnFailureMessage(err),
-            ...(input.runId ? { runId: input.runId } : {}),
-          };
-          await deps.sessions
-            .append(lease, { type: "system", payload, scopeLabel: scopeId as ScopeId })
-            .then(mirrorFailureEntry)
-            .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
+          await recordTurnFailure(turnFailureMessage(err));
         }
         throw err;
       } finally {
@@ -3621,6 +3677,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         stopLeaseKeepalive();
         if (!tailOwnsCleanup) await reclaimBox();
         if (!leaseReleased) {
+          await syncSearchIndexAtTurnExit(deps, lease, scopeId);
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }

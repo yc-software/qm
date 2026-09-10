@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -66,7 +67,7 @@ test("exemplar: a thread reply addressed to a teammate arrives author-attributed
     while (Date.now() < deadline && !trigger) {
       const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
       if (sub) {
-        const entries = await built.sessions.getEntries(sub.id);
+        const entries = await projectedEntries(built.sessions, sub.id);
         trigger = entries.find(
           (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("review these drafts"),
         );

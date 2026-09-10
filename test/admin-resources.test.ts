@@ -102,7 +102,7 @@ test("security flags are visible and legacy session taint can be released by an 
     });
     assert.equal(released.status, 200);
     const payload = (await srv.built.sessions.getEntries(session.id))[0]!.payload as Record<string, unknown>;
-    assert.equal(payload.securityTainted, undefined);
+    assert.equal(payload.securityTainted, undefined, "the archive row itself is cleared for pre-cutover reads");
   } finally {
     await srv.close();
   }

@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { stoppedPartialTapeMessage, stripImageBytes } from "../src/harness/pi-harness.ts";
+import { foldTape } from "../src/harness/tape-fold.ts";
+import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../src/sessions/session-store.ts";
+import { appendEntryOutsideTurn } from "../src/harness/tape-import.ts";
+import { createTranscriptSource, projectTapeEntries } from "../src/harness/tape-projection.ts";
+import { scopeId } from "../src/types.ts";
 import type { ScopeId } from "../src/types.ts";
 
 const scope = "personal:test@example.com" as ScopeId;
@@ -174,4 +179,202 @@ test("an expired lease refuses tape and entry appends — one validity rule with
     store.append(lease!, { type: "user", payload: { text: "late" }, scopeLabel: scope }),
     /append without a valid session lease/,
   );
+});
+
+test("clearSecurityTaint clears tape meta and mirrored payloads, and the fold re-admits the rows", async () => {
+  const store = createMemorySessionStore();
+  const session = await store.getOrCreateByThread("dm:U1:taint", "dm", scope);
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  await store.appendTape(lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "quarantined overheard" }], timestamp: 1 },
+    scopeLabel: scope,
+    meta: { overheard: true, bareText: "quarantined overheard", ts: "1.1", securityTainted: true },
+  });
+  const tainted = await store.appendTape(
+    lease,
+    tapeEntryMirrorRecord({
+      seq: 0,
+      createdAt: 1,
+      type: "user",
+      payload: { text: "flagged input", securityTainted: true, hidden: true },
+      scopeLabel: scope,
+    }),
+  );
+  assert.equal(
+    (tainted.payload as { entry: { payload: { securityTainted?: boolean } } }).entry.payload.securityTainted,
+    true,
+  );
+
+  assert.deepEqual(foldTape(await store.getTape(session.id)), [], "tainted message rows never fold");
+
+  assert.equal(await store.clearSecurityTaint(session.id), true);
+  const rows = await store.getTape(session.id);
+  assert.ok(
+    rows.every((r) => r.meta?.securityTainted !== true),
+    "the meta flag is gone",
+  );
+  const mirror = rows.find((r) => r.kind === "annotation")!;
+  assert.equal(
+    "securityTainted" in (mirror.payload as { entry: { payload: Record<string, unknown> } }).entry.payload,
+    false,
+    "the mirrored payload sheds the flag too",
+  );
+  assert.equal(foldTape(rows).length, 1, "the cleared row folds back into model context");
+  await store.releaseLease(lease);
+});
+
+test("a stamped user entry counts one turn no matter how many rows carry it, in either order", async () => {
+  const store = createMemorySessionStore();
+  const scopeC = scopeId("channel", "C-turns");
+  const mk = async (thread: string, first: "mirror" | "message") => {
+    const session = await store.getOrCreateByThread(thread, "channel", scopeC);
+    const { lease } = await store.acquireLease(session.id);
+    const mirror = tapeEntryMirrorRecord({
+      seq: 0,
+      createdAt: 5,
+      type: "user",
+      payload: { text: "hi there" },
+      scopeLabel: scopeC,
+    });
+    const message = {
+      kind: "message" as const,
+      payload: { role: "user", content: [{ type: "text", text: "hi there" }], timestamp: 5 },
+      scopeLabel: scopeC,
+      entrySeq: 0,
+      meta: { bareText: "hi there", entryCreatedAt: 5 },
+    };
+    for (const rec of first === "mirror" ? [mirror, message] : [message, mirror]) {
+      await store.appendTape(lease!, rec);
+    }
+    await store.releaseLease(lease!);
+    return session.id;
+  };
+  const a = await mk("ch:C-turns:a", "mirror");
+  const b = await mk("ch:C-turns:b", "message");
+  const summaries = await store.scopeSessionSummaries(scopeC, false);
+  assert.equal(summaries.find((s) => s.id === a)!.turns, 1);
+  assert.equal(summaries.find((s) => s.id === b)!.turns, 1);
+});
+
+test("an out-of-turn append lands past a dead turn's unsettled tail instead of colliding", async () => {
+  const store = createMemorySessionStore();
+  const scopeD = scopeId("channel", "C-dead");
+  const session = await store.getOrCreateByThread("ch:C-dead:1", "channel", scopeD);
+  const { lease } = await store.acquireLease(session.id);
+  await store.appendTape(lease!, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "crashed ask" }], timestamp: 1 },
+    scopeLabel: scopeD,
+    entrySeq: 0,
+    meta: { bareText: "crashed ask", entryCreatedAt: 1 },
+  });
+  await store.appendTape(lease!, {
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "execute", arguments: {} }],
+      timestamp: 2,
+      stopReason: "stop",
+    },
+    scopeLabel: scopeD,
+  });
+  const receipt = await appendEntryOutsideTurn(store, lease!, {
+    type: "system",
+    payload: { kind: "turn_failure", message: "died" },
+    scopeLabel: scopeD,
+  });
+  assert.equal(receipt.seq, 2, "allocation continues past the dead turn's dense-filled tail");
+  const projection = projectTapeEntries(session.id, await store.getTape(session.id), { openTail: true });
+  assert.ok(projection, "the tape stays projectable after the out-of-turn append");
+  assert.deepEqual(
+    projection!.entries.map((e) => [e.seq, e.type]),
+    [
+      [0, "user"],
+      [1, "tool_call"],
+      [2, "system"],
+    ],
+  );
+  await store.releaseLease(lease!);
+});
+
+test("the prior-turns seed import is fold-entitled and does not block rendering", async () => {
+  const store = createMemorySessionStore();
+  const scopeP = scopeId("channel", "C-seed");
+  const session = await store.getOrCreateByThread("ch:C-seed:1", "channel", scopeP);
+  const { lease } = await store.acquireLease(session.id);
+  const seeded = [{ role: "user", content: [{ type: "text", text: "earlier thread chatter" }], timestamp: 1 }];
+  const imported = await store.appendTape(lease!, {
+    kind: "context_event",
+    payload: { event: "legacy_import", messages: seeded, scopes: [scopeP] },
+    scopeLabel: scopeP,
+  });
+  await store.appendTape(lease!, {
+    kind: "context_event",
+    payload: { event: "render_import", firstTapeSeq: imported.seq + 1 },
+    scopeLabel: scopeP,
+  });
+  await store.appendTape(lease!, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "first real ask" }], timestamp: 2 },
+    scopeLabel: scopeP,
+    entrySeq: 0,
+    meta: { bareText: "first real ask", entryCreatedAt: 2 },
+  });
+  await store.appendTape(lease!, {
+    kind: "annotation",
+    payload: tapeCheckpointPayload("turnEnd", undefined, 0),
+    scopeLabel: scopeP,
+    entrySeq: 0,
+  });
+  const rows = await store.getTape(session.id);
+  const projection = projectTapeEntries(session.id, rows);
+  assert.ok(projection, "the anchored seed never blocks the projection");
+  assert.deepEqual(
+    projection!.entries.map((e) => e.type),
+    ["user"],
+  );
+  assert.ok(JSON.stringify(foldTape(rows)).includes("earlier thread chatter"), "the seed still feeds the fold");
+  await store.releaseLease(lease!);
+});
+
+test("a mid-turn read serves the settled prefix, never an empty archive fallback", async () => {
+  const store = createMemorySessionStore();
+  const scopeM = scopeId("channel", "C-midturn");
+  const session = await store.getOrCreateByThread("ch:C-midturn:1", "channel", scopeM);
+  const { lease } = await store.acquireLease(session.id);
+  await store.appendTape(lease!, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "settled ask" }], timestamp: 1 },
+    scopeLabel: scopeM,
+    entrySeq: 0,
+    meta: { bareText: "settled ask", entryCreatedAt: 1 },
+  });
+  await store.appendTape(lease!, {
+    kind: "annotation",
+    payload: tapeCheckpointPayload("turnEnd", undefined, 0),
+    scopeLabel: scopeM,
+    entrySeq: 0,
+  });
+  await store.appendTape(lease!, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "in-flight ask" }], timestamp: 2 },
+    scopeLabel: scopeM,
+    entrySeq: 1,
+    meta: { bareText: "in-flight ask", entryCreatedAt: 2 },
+  });
+  const read = await createTranscriptSource(store).forRender(session.id);
+  assert.deepEqual(
+    read.entries.map((e) => (e.payload as { text?: string }).text),
+    ["settled ask"],
+    "the settled prefix serves while a turn is in flight",
+  );
+  await store.releaseLease(lease!);
 });

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -59,7 +60,7 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
     let entries: any[] = [];
     while (Date.now() < deadline) {
       const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-      if (sub) entries = await built.sessions.getEntries(sub.id);
+      if (sub) entries = await projectedEntries(built.sessions, sub.id);
       if (
         entries.some(
           (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("time constraints"),
@@ -113,7 +114,7 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
     while (Date.now() < d2 && !pulled) {
       const sub2 = await built.sessions.getByThread(`ch:${channel}:${root2}`);
       if (sub2) {
-        const e2 = await built.sessions.getEntries(sub2.id);
+        const e2 = await projectedEntries(built.sessions, sub2.id);
         pulled = e2.some(
           (e: any) =>
             e.type === "tool_result" && (e.payload as any)?.tool === "whats_new" && (e.payload as any)?.ok === true,

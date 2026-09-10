@@ -3,9 +3,10 @@ import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
-import { createTranscriptSource } from "../harness/tape-projection.ts";
-import { appendCoverageImport } from "../harness/replay.ts";
-import { swallowAs } from "../util/errors.ts";
+import { createTranscriptSource, syncSearchIndex } from "../harness/tape-projection.ts";
+import { coverageImportViable } from "../harness/replay.ts";
+import { swallow } from "../util/errors.ts";
+import { appendRenderImport, nativeForkTapeRows } from "../harness/tape-import.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
@@ -769,20 +770,28 @@ export function createSessionMethods(
         if (!lease) throw new Error(`fork: could not lease fresh session ${forked.id}`);
         let forkBoundarySeq: number | null = null;
         try {
-          const copiedEntries = [];
-          for (const entry of copied) {
-            const appended = await deps.sessions.append(lease, {
-              type: entry.type,
-              payload: entry.payload,
-              scopeLabel: entry.scopeLabel,
-            });
-            copiedEntries.push(appended);
-            forkBoundarySeq = appended.seq;
-          }
-          if (forkBoundarySeq !== null) {
-            await appendCoverageImport(deps.sessions, lease, copiedEntries, source.scopeId).catch(
-              swallowAs("fork: tape import", undefined),
-            );
+          if (copied.length) {
+            const native = nativeForkTapeRows(forked.id, await deps.sessions.getTape(sessionId), copied);
+            if (native) {
+              for (const rec of native) await deps.sessions.appendTape(lease, rec);
+              forkBoundarySeq = copied[copied.length - 1]!.seq;
+            } else {
+              const renumbered = copied.map((entry, i) => ({
+                ...entry,
+                sessionId: forked.id,
+                seq: i,
+                parentSeq: i === 0 ? null : i - 1,
+              }));
+              await appendRenderImport(
+                deps.sessions,
+                lease,
+                renumbered,
+                source.scopeId,
+                coverageImportViable(renumbered),
+              );
+              forkBoundarySeq = renumbered[renumbered.length - 1]!.seq;
+            }
+            await syncSearchIndex(deps.sessions, lease).catch((e) => swallow("tape-search: fork sync", e));
           }
         } finally {
           await deps.sessions.releaseLease(lease);

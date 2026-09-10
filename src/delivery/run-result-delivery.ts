@@ -8,12 +8,14 @@ import { standaloneFailureText, userFacingFailureClause } from "../core/failure-
 import { conversationScope } from "../resolution/resolution-service.ts";
 import {
   acquireLeaseWithin,
-  appendEntryOutsideTurn,
   entryDeliveryKey,
+  tapeRecordedEntries,
   type SessionStore,
   type TranscriptAppendSessions,
 } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
+import { createTranscriptSource, type TranscriptStore } from "../harness/tape-projection.ts";
+import { appendEntryOutsideTurn } from "../harness/tape-import.ts";
 import { errMessage } from "../util/errors.ts";
 
 export interface RunResultDelivery {
@@ -95,7 +97,8 @@ export function runResultDelivery(
 }
 
 export type TurnFailureSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries">;
+  TranscriptStore &
+  Pick<SessionStore, "getByThread" | "acquireLease" | "peekLease" | "releaseLease">;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
@@ -115,7 +118,11 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     return false;
   }
   try {
-    const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
+    const rendered = (
+      await createTranscriptSource(sessions).forRender(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT })
+    ).entries;
+    const taped = tapeRecordedEntries(await sessions.getTape(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT }));
+    const tail = [...rendered, ...taped];
     if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
     if (tail.some((entry) => entryDeliveryKey(entry) === `run:${run.id}`)) return false;
     const payload: TurnFailurePayload = {

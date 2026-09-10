@@ -16,6 +16,7 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
   type ToolResultScreen,
 } from "../security/security-posture.ts";
+import { withTapedEntryMirrors } from "./harness-shared.ts";
 
 const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
@@ -89,10 +90,11 @@ export function createMockHarness(): Harness {
       controlTransport: "mock",
       toolTransport: "mock",
       transcriptFormat: "qm",
-      capabilities: new Set(),
+      capabilities: new Set(["native-tape"]),
     },
     {
-      async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
+      async runTurn(rawTurn: HarnessTurnInput): Promise<HarnessTurnResult> {
+        const turn = withTapedEntryMirrors(rawTurn);
         const userEntry = await turn.emit({
           type: "user",
           payload: {

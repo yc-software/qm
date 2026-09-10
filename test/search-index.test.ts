@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { searchRowsFromEntries } from "../src/harness/tape-projection.ts";
+import { searchRowsFromEntries, syncSearchIndex } from "../src/harness/tape-projection.ts";
 import { TAPE_RENDER_VERSION, type Lease, type SessionStore } from "../src/sessions/session-store.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 
@@ -104,6 +104,84 @@ async function simTurn(
     scopeLabel: scope,
     entrySeq: finalEntry.seq,
   });
+}
+
+async function tapeOnlyTurn(
+  sim: Sim,
+  turn: { input: string; author?: string; reply: string; toolResult?: string; thinking?: string; envFooter?: string },
+  baseSeq: number,
+): Promise<number> {
+  const { store, lease } = sim;
+  const tape = (rec: Parameters<SessionStore["appendTape"]>[1]) => store.appendTape(lease, rec);
+  const userSeq = baseSeq;
+  const replySeq = baseSeq + 1 + (turn.thinking ? 1 : 0) + (turn.toolResult ? 2 : 0);
+  const at = Date.now();
+  await tape({
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "user",
+      content: [{ type: "text", text: [turn.input, turn.envFooter].filter(Boolean).join("\n\n") }],
+    },
+    scopeLabel: scope,
+    entrySeq: userSeq,
+    meta: {
+      bareText: turn.input,
+      ...(turn.author ? { author: turn.author } : {}),
+      entryCreatedAt: at,
+    },
+  });
+  if (turn.toolResult || turn.thinking) {
+    const content: unknown[] = [
+      ...(turn.thinking ? [{ type: "thinking", thinking: turn.thinking }] : []),
+      ...(turn.toolResult
+        ? [{ type: "toolCall", id: "call_1", name: "execute", arguments: { command: "fetch" } }]
+        : []),
+    ];
+    await tape({
+      kind: "message",
+      harness: "pi",
+      payload: { role: "assistant", content, stopReason: "stop" },
+      scopeLabel: scope,
+    });
+    if (turn.toolResult) {
+      await tape({
+        kind: "message",
+        harness: "pi",
+        payload: {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "execute",
+          content: [{ type: "text", text: turn.toolResult }],
+          isError: false,
+        },
+        scopeLabel: scope,
+      });
+    }
+  }
+  await tape({
+    kind: "message",
+    harness: "pi",
+    payload: { role: "assistant", content: [{ type: "text", text: turn.reply }], stopReason: "stop" },
+    scopeLabel: scope,
+  });
+  await tape({
+    kind: "annotation",
+    payload: {
+      subturnEnd: true,
+      render: TAPE_RENDER_VERSION,
+      entry: { type: "assistant", payload: { text: turn.reply }, at },
+    },
+    scopeLabel: scope,
+    entrySeq: replySeq,
+  });
+  await tape({
+    kind: "annotation",
+    payload: { turnEnd: true, render: TAPE_RENDER_VERSION },
+    scopeLabel: scope,
+    entrySeq: replySeq,
+  });
+  return replySeq + 1;
 }
 
 async function secretTurn(sim: Sim): Promise<void> {
@@ -240,4 +318,259 @@ test("a foreign-harness turn indexes its trigger and reply from the coarse proje
   assert.deepEqual(await sim.store.searchEntries(VIEWER, TOOL_SECRET), []);
   assert.equal((await sim.store.searchEntries(VIEWER, "codex please")).length, 1);
   assert.equal((await sim.store.searchEntries(VIEWER, "summary")).length, 1);
+});
+
+test("turn-end sync indexes a tape-only turn: only conversational text, never raw tape payloads", async () => {
+  const sim = await simSession();
+  await tapeOnlyTurn(
+    sim,
+    {
+      input: "please check the deploy status",
+      author: "Alex",
+      reply: "The deploy finished cleanly.",
+      toolResult: `credential response: ${TOOL_SECRET}`,
+      thinking: `weighing options ${THINKING_SECRET}`,
+      envFooter: `[env: ${FOOTER_SECRET}]`,
+    },
+    0,
+  );
+  assert.deepEqual(await sim.store.searchEntries(VIEWER, "deploy status"), []);
+  const sync = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(sync.servable, true);
+  assert.ok(sync.indexed >= 2);
+  assert.deepEqual(await sim.store.searchEntries(VIEWER, TOOL_SECRET), []);
+  assert.deepEqual(await sim.store.searchEntries(VIEWER, THINKING_SECRET), []);
+  assert.deepEqual(await sim.store.searchEntries(VIEWER, FOOTER_SECRET), []);
+  assert.equal((await sim.store.searchEntries(VIEWER, "finished cleanly")).length, 1);
+  const userHits = await sim.store.searchEntries(VIEWER, "deploy status");
+  assert.ok(userHits.some((h) => h.type === "user" && h.author === "Alex"));
+});
+
+test("syncSearchIndex is idempotent and advances the watermark across tape-only turns", async () => {
+  const sim = await simSession();
+  const base = await tapeOnlyTurn(sim, { input: "first question", reply: "first answer" }, 0);
+  const first = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(first.servable, true);
+  assert.ok(first.indexed > 0);
+  const again = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(again.indexed, 0);
+  await tapeOnlyTurn(sim, { input: "second question", reply: "second answer" }, base);
+  const next = await syncSearchIndex(sim.store, sim.lease);
+  assert.ok(next.indexed > 0);
+  assert.equal(await sim.store.searchIndexCoverage(sim.session.id), next.coveredSeq);
+  assert.equal((await sim.store.searchEntries(VIEWER, "second question")).length, 1);
+});
+
+test("an unservable projection leaves the index untouched and reports it", async () => {
+  const sim = await simSession();
+  await sim.store.append(sim.lease, { type: "user", payload: { text: "legacy body" }, scopeLabel: scope });
+  await sim.store.appendTape(sim.lease, {
+    kind: "context_event",
+    payload: { event: "legacy_import", messages: [{ role: "user", content: "legacy body" }], scopes: [scope] },
+    scopeLabel: scope,
+    coversEntrySeq: 0,
+  });
+  const before = await sim.store.searchIndexCoverage(sim.session.id);
+  const sync = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(sync.servable, false);
+  assert.equal(sync.indexed, 0);
+  assert.equal(sync.coveredSeq, before);
+  assert.equal(await sim.store.searchIndexCoverage(sim.session.id), before);
+  assert.equal((await sim.store.searchEntries(VIEWER, "legacy body")).length, 1);
+});
+
+test("a permanently unservable session is memoized: the next sync never re-reads the tape", async () => {
+  const sim = await simSession();
+  await sim.store.append(sim.lease, { type: "user", payload: { text: "legacy fork body" }, scopeLabel: scope });
+  await sim.store.appendTape(sim.lease, {
+    kind: "context_event",
+    payload: { event: "legacy_import", messages: [{ role: "user", content: "legacy fork body" }], scopes: [scope] },
+    scopeLabel: scope,
+    coversEntrySeq: 0,
+  });
+  const first = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(first.servable, false);
+  let tapeReads = 0;
+  const spy = {
+    ...sim.store,
+    getTape: (sessionId: string, opts?: { limit?: number; sinceSeq?: number }) => {
+      tapeReads++;
+      return sim.store.getTape(sessionId, opts);
+    },
+  } as SessionStore;
+  const second = await syncSearchIndex(spy, sim.lease);
+  assert.equal(second.servable, false);
+  assert.equal(tapeReads, 0, "the memoized unservable session is never re-read");
+  const other = await simSession("dm:search-index-memo-other");
+  await tapeOnlyTurn(other, { input: "unrelated question", reply: "unrelated answer" }, 0);
+  const otherSync = await syncSearchIndex(other.store, other.lease);
+  assert.ok(otherSync.servable, "the memo is per session, not global");
+});
+
+test("a stamped trigger in an open span is searchable before the turn settles", async () => {
+  const sim = await simSession();
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "please approve this push" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "please approve this push", entryCreatedAt: Date.now() },
+  });
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "execute", arguments: { command: "git push" } }],
+      stopReason: "stop",
+    },
+    scopeLabel: scope,
+  });
+  const sync = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(sync.servable, true);
+  assert.equal(sync.indexed, 1);
+  assert.equal((await sim.store.searchEntries(VIEWER, "approve this push")).length, 1);
+});
+
+test("a parked trigger in a channel with ambient traffic is searchable: overheard carriers advance the tail", async () => {
+  const sim = await simSession();
+  const at = Date.now();
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "[overheard] bystander chatter about lunch" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "bystander chatter about lunch", author: "Bea", overheard: true, entryCreatedAt: at },
+  });
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "please approve the channel push" }] },
+    scopeLabel: scope,
+    entrySeq: 1,
+    meta: { bareText: "please approve the channel push", author: "Alex", entryCreatedAt: at },
+  });
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "execute", arguments: { command: "git push" } }],
+      stopReason: "stop",
+    },
+    scopeLabel: scope,
+  });
+  const sync = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(sync.servable, true);
+  assert.equal(sync.indexed, 2);
+  assert.equal((await sim.store.searchEntries(VIEWER, "approve the channel push")).length, 1);
+  assert.equal((await sim.store.searchEntries(VIEWER, "bystander chatter")).length, 1);
+});
+
+test("a parked coarse-harness trigger is searchable: nested-role carriers are indexed by the tail", async () => {
+  const at = Date.now();
+  const claude = await simSession("dm:search-index-park-claude");
+  await claude.store.appendTape(claude.lease, {
+    kind: "message",
+    harness: "claude",
+    payload: {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "please approve the claude push" }] },
+    },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "please approve the claude push", entryCreatedAt: at },
+  });
+  const claudeSync = await syncSearchIndex(claude.store, claude.lease);
+  assert.equal(claudeSync.servable, true);
+  assert.equal(claudeSync.indexed, 1);
+  assert.equal((await claude.store.searchEntries(VIEWER, "approve the claude push")).length, 1);
+
+  const opencode = await simSession("dm:search-index-park-opencode");
+  await opencode.store.appendTape(opencode.lease, {
+    kind: "message",
+    harness: "opencode",
+    payload: { info: { role: "user" }, parts: [{ type: "text", text: "please approve the opencode push" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "please approve the opencode push", entryCreatedAt: at },
+  });
+  const opencodeSync = await syncSearchIndex(opencode.store, opencode.lease);
+  assert.equal(opencodeSync.servable, true);
+  assert.equal(opencodeSync.indexed, 1);
+  assert.equal((await opencode.store.searchEntries(VIEWER, "approve the opencode push")).length, 1);
+});
+
+test("open-tail indexing stops at a draft gap so a later settle still indexes the drafts", async () => {
+  const sim = await simSession();
+  const tape = (rec: Parameters<SessionStore["appendTape"]>[1]) => sim.store.appendTape(sim.lease, rec);
+  const at = Date.now();
+  await tape({
+    kind: "message",
+    harness: "pi",
+    payload: { role: "user", content: [{ type: "text", text: "kick off the deploy" }] },
+    scopeLabel: scope,
+    entrySeq: 0,
+    meta: { bareText: "kick off the deploy", entryCreatedAt: at },
+  });
+  await tape({
+    kind: "message",
+    harness: "pi",
+    payload: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "starting the deploy runbook" },
+        { type: "toolCall", id: "c1", name: "execute", arguments: { command: "deploy" } },
+      ],
+      stopReason: "stop",
+    },
+    scopeLabel: scope,
+  });
+  await tape({
+    kind: "annotation",
+    payload: { entry: { type: "assistant", payload: { text: "deploy note landed" }, at } },
+    scopeLabel: scope,
+    entrySeq: 3,
+  });
+  const early = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(early.indexed, 1, "only the contiguous stamped trigger is indexed while the span is open");
+  assert.equal((await sim.store.searchEntries(VIEWER, "kick off")).length, 1);
+  assert.deepEqual(await sim.store.searchEntries(VIEWER, "deploy note"), []);
+  await tape({
+    kind: "annotation",
+    payload: { turnEnd: true, render: TAPE_RENDER_VERSION },
+    scopeLabel: scope,
+    entrySeq: 3,
+  });
+  const settled = await syncSearchIndex(sim.store, sim.lease);
+  assert.equal(settled.indexed, 2);
+  assert.equal((await sim.store.searchEntries(VIEWER, "deploy runbook")).length, 1);
+  assert.equal((await sim.store.searchEntries(VIEWER, "deploy note")).length, 1);
+});
+
+test("a settled session's turn-end sync reads a bounded tape suffix, not the whole tape", async () => {
+  const sim = await simSession();
+  let base = 0;
+  for (let i = 0; i < 100; i++) base = await tapeOnlyTurn(sim, { input: `question ${i}`, reply: `answer ${i}` }, base);
+  await syncSearchIndex(sim.store, sim.lease);
+  await tapeOnlyTurn(sim, { input: "one more question", reply: "one more answer" }, base);
+  const calls: Array<{ limit?: number } | undefined> = [];
+  const spy = {
+    ...sim.store,
+    getTape: (sessionId: string, opts?: { limit?: number; sinceSeq?: number }) => {
+      calls.push(opts);
+      return sim.store.getTape(sessionId, opts);
+    },
+  } as SessionStore;
+  const sync = await syncSearchIndex(spy, sim.lease);
+  assert.ok(sync.servable);
+  assert.equal(sync.indexed, 2);
+  assert.ok(calls.length > 0);
+  assert.ok(
+    calls.every((c) => c?.limit !== undefined),
+    "the settled hot path never reads the tape unbounded",
+  );
+  assert.equal((await sim.store.searchEntries(VIEWER, "one more question")).length, 1);
 });

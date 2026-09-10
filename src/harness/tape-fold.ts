@@ -230,6 +230,7 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
         f.out.push(...healLegacyAssistantVoice(ev.messages ?? []));
         if (row.coversEntrySeq !== undefined) f.boundaries.push({ pos: f.out.length, entrySeq: row.coversEntrySeq });
       } else if (ev.event === "compaction") {
+        if (row.meta?.securityTainted === true) continue;
         const cut =
           row.coversEntrySeq !== undefined
             ? [...f.boundaries].reverse().find((b) => b.entrySeq <= row.coversEntrySeq!)
@@ -253,7 +254,7 @@ export function foldTape(rows: readonly TapeRecord[]): unknown[] {
       }
       continue;
     }
-    if (row.kind === "message" && row.payload != null) f.out.push(row.payload);
+    if (row.kind === "message" && row.payload != null && row.meta?.securityTainted !== true) f.out.push(row.payload);
   }
   return f.out;
 }

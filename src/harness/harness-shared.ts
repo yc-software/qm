@@ -11,7 +11,6 @@ import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from ".
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { swallow } from "../util/errors.ts";
 
 export interface HarnessToolPlumbing {
   scratchExec?: boolean;
@@ -57,11 +56,7 @@ export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput 
     ...turn,
     emit: async (entry) => {
       const saved = await emit(entry);
-      try {
-        await tape(tapeEntryMirrorRecord(saved));
-      } catch (error) {
-        swallow("harness: entry mirror", error);
-      }
+      await tape(tapeEntryMirrorRecord(saved));
       return saved;
     },
   };

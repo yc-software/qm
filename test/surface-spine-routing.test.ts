@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -117,7 +118,7 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
       "no per-container ambient session is created",
     );
 
-    const subEntries = await built.sessions.getEntries(sub!.id);
+    const subEntries = await projectedEntries(built.sessions, sub!.id);
     assert.ok(
       subEntries.some((e) => e.type === "assistant"),
       "the sub-conversation session did the work + reply",
@@ -294,7 +295,7 @@ test("addressed + no post → exactly one nudge → the agent posts on the conti
     const all = (await built.deliveries.pending("slack")) as any[];
     assert.equal(all.filter((d) => d.text === "nudged reply").length, 1, "the nudge fires at most once");
     const session = await built.sessions.getByThread("ch:C-nudge:700.1");
-    const entries = await built.sessions.getEntries(session!.id);
+    const entries = await projectedEntries(built.sessions, session!.id);
     assert.equal(
       await built.sessions.tapeCoverage(session!.id),
       entries.at(-1)!.seq,
@@ -385,7 +386,7 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
     assert.equal(request.images?.[0]?.mimeType, "image/png");
     assert.equal(request.images?.[0]?.dataBase64, image.toString("base64"));
     assert.match(request.messages?.at(-1)?.content ?? "", /QA-IMAGE-ENVIRONMENT/);
-    const entries = await built.sessions.getEntries(session!.id);
+    const entries = await projectedEntries(built.sessions, session!.id);
     assert.equal(
       entries.filter((entry) => Array.isArray((entry.payload as { attachments?: unknown[] }).attachments)).length,
       1,
@@ -403,11 +404,15 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
     assert.ok(await pollFor(built.deliveries, (d) => d.text === "prior"));
 
     const originalGetTape = built.sessions.getTape.bind(built.sessions);
-    let reads = 0;
-    built.sessions.getTape = async (sessionId) => {
-      reads++;
-      if (reads >= 2) throw new Error("nudge tape read failed");
-      return originalGetTape(sessionId);
+    let sawTurnEndSync = false;
+    let nudgeReadsFailed = 0;
+    built.sessions.getTape = async (sessionId, opts) => {
+      if (opts?.limit === 500) sawTurnEndSync = true;
+      else if (sawTurnEndSync) {
+        nudgeReadsFailed++;
+        throw new Error("nudge tape read failed");
+      }
+      return originalGetTape(sessionId, opts);
     };
 
     await built.app.turn(mention("!shedmute", "C-nudge-read", "711.1"));
@@ -422,7 +427,7 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
       ),
       "a failed reread reconstructs from history containing the first sub-turn",
     );
-    assert.ok(reads >= 2, "the nudge attempted a fresh tape read");
+    assert.ok(nudgeReadsFailed >= 1, "the nudge attempted a fresh tape read");
   } finally {
     await built.runtime.stop();
   }
@@ -584,7 +589,7 @@ test('Door 2: an addressed @mention opens the sub-conversation with a <wake reas
     assert.equal(posted.text, "ahoy");
 
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-    const entries = await built.sessions.getEntries(sub!.id);
+    const entries = await projectedEntries(built.sessions, sub!.id);
     const userText = String((entries.find((e) => e.type === "user")?.payload as any)?.text ?? "");
     assert.match(userText, /^<wake reason="addressed"/, "the addressed turn opens with a wake envelope");
     assert.match(
@@ -619,7 +624,7 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
     );
     assert.ok(posted, "the thread-follow still routes + posts");
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-    const entries = await built.sessions.getEntries(sub!.id);
+    const entries = await projectedEntries(built.sessions, sub!.id);
     const userText = String((entries.find((e) => e.type === "user")?.payload as any)?.text ?? "");
     assert.doesNotMatch(
       userText,

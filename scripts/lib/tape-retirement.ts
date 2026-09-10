@@ -4,14 +4,14 @@ import {
   renderableTapeSlice,
   RENDER_IMPORT_EVENT,
 } from "../../src/harness/tape-projection.ts";
-import { appendCoverageImport, coverageImportViable } from "../../src/harness/replay.ts";
+import { coverageImportViable } from "../../src/harness/replay.ts";
+export { appendRenderImport } from "../../src/harness/tape-import.ts";
 import { lastImportLacksScopes } from "../../src/harness/tape-fold.ts";
 import {
   TAPE_IMPORT_MAX_ENTRIES,
   tapeCheckpointPayload,
   tapeEntryMirrorRecord,
   type GetEntriesOptions,
-  type Lease,
   type SessionStore,
   type TapeRecord,
 } from "../../src/sessions/session-store.ts";
@@ -66,7 +66,7 @@ export function assertProjectionUnderstandsRenderImports(): void {
   }
 }
 
-type RenderImportSkip = "empty" | "covered" | "oversize" | "gapped" | "unservable-fold";
+type RenderImportSkip = "empty" | "covered" | "tape-ahead" | "oversize" | "gapped" | "unservable-fold";
 
 export type RenderImportAssessment =
   | { action: "skip"; reason: RenderImportSkip }
@@ -86,43 +86,13 @@ export async function assessRenderImport(
     if (projection && projection.coveredSeq >= latest) return { action: "skip", reason: "covered" };
   }
   const entries = await store.getEntries(sessionId);
+  const stampHighWater = rows.reduce((max, row) => Math.max(max, row.entrySeq ?? -1, row.coversEntrySeq ?? -1), -1);
+  if (stampHighWater > (entries.at(-1)?.seq ?? -1)) return { action: "skip", reason: "tape-ahead" };
   if (entries.length > RENDER_IMPORT_MAX_ENTRIES) return { action: "skip", reason: "oversize" };
   if (entries.some((e, i) => e.seq !== i)) return { action: "skip", reason: "gapped" };
   const needsFoldImport = coverage < latest || lastImportLacksScopes(rows);
   if (needsFoldImport && !coverageImportViable(entries)) return { action: "skip", reason: "unservable-fold" };
   return { action: "import", entries, latestSeq: latest, needsFoldImport };
-}
-
-export async function appendRenderImport(
-  store: Pick<SessionStore, "appendTape">,
-  lease: Lease,
-  entries: readonly SessionEntry[],
-  scopeLabel: ScopeId,
-  needsFoldImport: boolean,
-): Promise<"imported" | "unservable-fold"> {
-  const last = entries[entries.length - 1];
-  if (!last) return "unservable-fold";
-  if (needsFoldImport && !(await appendCoverageImport(store, lease, entries, scopeLabel))) {
-    return "unservable-fold";
-  }
-  let firstMirror: TapeRecord | undefined;
-  for (const entry of entries) {
-    const mirror = await store.appendTape(lease, tapeEntryMirrorRecord(entry));
-    firstMirror ??= mirror;
-  }
-  await store.appendTape(lease, {
-    kind: "annotation",
-    payload: tapeCheckpointPayload("turnEnd", undefined, 0),
-    scopeLabel,
-    entrySeq: last.seq,
-  });
-  await store.appendTape(lease, {
-    kind: "context_event",
-    payload: { event: RENDER_IMPORT_EVENT, firstTapeSeq: firstMirror!.seq },
-    scopeLabel,
-    coversEntrySeq: last.seq,
-  });
-  return "imported";
 }
 
 export type DivergenceClass =

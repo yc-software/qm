@@ -9,6 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -52,9 +53,11 @@ async function subToolResult(built: any, root: string, tool: string, deadlineMs 
   while (Date.now() < deadline) {
     const sub = await built.sessions.getByThread(`ch:${root}`);
     if (sub) {
-      const entries = await built.sessions.getEntries(sub.id);
-      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
-      if (hit) return hit.payload.text as string;
+      const entries = await projectedEntries(built.sessions, sub.id);
+      const hit = entries.find(
+        (e) => e.type === "assistant" && typeof (e.payload as { text?: unknown } | null)?.text === "string",
+      );
+      if (hit) return (hit.payload as { text: string }).text;
     }
     await sleep(50);
   }

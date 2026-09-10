@@ -22,6 +22,7 @@ import {
 } from "../src/resolution/scope-membership.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { projectedEntries } from "./support/projected-entries.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
@@ -448,7 +449,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.match(JSON.stringify(forked.entries), /after joining/);
   assert.equal((await built.sessions.get(forked.session.id))?.title ?? null, null);
 
-  const appendForFork = built.sessions.append.bind(built.sessions);
+  const appendTapeForFork = built.sessions.appendTape.bind(built.sessions);
   let releaseForkCopy!: () => void;
   const forkCopyReleased = new Promise<void>((resolve) => {
     releaseForkCopy = resolve;
@@ -458,13 +459,13 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     forkCopyStarted = resolve;
   });
   let copyingSessionId: string | undefined;
-  built.sessions.append = async (lease, entry) => {
+  built.sessions.appendTape = async (lease, rec) => {
     if (!copyingSessionId && lease.sessionId !== first.id && lease.sessionId !== forked.session.id) {
       copyingSessionId = lease.sessionId;
       forkCopyStarted();
       await forkCopyReleased;
     }
-    return appendForFork(lease, entry);
+    return appendTapeForFork(lease, rec);
   };
   const racingForkPromise = built.app.forkSession(first.id, "owner");
   await forkCopyStart;
@@ -476,7 +477,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(addSettled, false);
   releaseForkCopy();
   const [racingFork, addedDuringFork] = await Promise.all([racingForkPromise, addDuringFork]);
-  built.sessions.append = appendForFork;
+  built.sessions.appendTape = appendTapeForFork;
   assert.ok(racingFork);
   assert.equal(addedDuringFork.status, "ok");
   assert.equal(racingFork.session.id, copyingSessionId);
@@ -677,7 +678,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     await turnPaused;
     const session = await built.sessions.getByThread(threadRef);
     assert.ok(session);
-    assert.match(JSON.stringify(await built.sessions.getEntries(session.id)), /old-roster-prompt/);
+    assert.match(JSON.stringify(await projectedEntries(built.sessions, session.id)), /old-roster-prompt/);
 
     const added = await built.app.addProjectMember(project.id, "owner", "late-member");
     assert.equal(added.status, "ok");
@@ -694,7 +695,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
       false,
     );
     assert.equal(
-      (await built.sessions.getEntries(session.id)).some((entry) => entry.type === "assistant"),
+      (await projectedEntries(built.sessions, session.id)).some((entry) => entry.type === "assistant"),
       false,
     );
   } finally {
@@ -793,7 +794,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   assert.deepEqual(new Set(await built.sessions.participantsOf(session.id)), new Set(["owner", "member"]));
-  const entriesBeforeRace = await built.sessions.getEntries(session.id);
+  const entriesBeforeRace = await projectedEntries(built.sessions, session.id);
   const tapeBeforeRace = await built.sessions.getTape(session.id);
   const llmRequestsBeforeRace = await built.sessions.listLlmRequests(session.id);
 
@@ -814,7 +815,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     assert.equal(raced.status, "refused");
     assert.match(raced.reason ?? "", /membership changed/);
     assert.equal(changed, true);
-    assert.deepEqual(await built.sessions.getEntries(session.id), entriesBeforeRace);
+    assert.deepEqual(await projectedEntries(built.sessions, session.id), entriesBeforeRace);
     assert.deepEqual(await built.sessions.getTape(session.id), tapeBeforeRace);
     assert.deepEqual(await built.sessions.listLlmRequests(session.id), llmRequestsBeforeRace);
     assert.doesNotMatch(JSON.stringify(await built.sessions.visibleEntries(session.id, "late-member")), /race-marker/);

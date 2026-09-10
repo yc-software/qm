@@ -44,6 +44,7 @@ test("withTapedEntryMirrors tapes one mirror annotation per emitted entry", asyn
     payload: { entry: { type: "user", payload: { text: "hi" }, at: user.createdAt } },
     scopeLabel: scope,
     entrySeq: user.seq,
+    meta: { entryCreatedAt: user.createdAt },
   });
   assert.equal(taped[1]!.entrySeq, call.seq);
   assert.equal((taped[1]!.payload as { entry: { type: string } }).entry.type, "tool_call");
@@ -66,7 +67,7 @@ test("withTapedEntryMirrors is a no-op without a tape", async () => {
   assert.equal(withTapedEntryMirrors(turn), turn);
 });
 
-test("a failed mirror write is swallowed, not surfaced through emit", async () => {
+test("a failed mirror write fails the emit — the mirror is the entry's only durable record", async () => {
   const base = stubTurn([]);
   const turn = withTapedEntryMirrors({
     ...base,
@@ -74,8 +75,10 @@ test("a failed mirror write is swallowed, not surfaced through emit", async () =
       throw new Error("tape unavailable");
     },
   } as HarnessTurnInput);
-  const saved = await turn.emit({ type: "user", payload: { text: "still lands" }, scopeLabel: scope });
-  assert.equal((saved.payload as { text: string }).text, "still lands");
+  await assert.rejects(
+    turn.emit({ type: "user", payload: { text: "must not vanish silently" }, scopeLabel: scope }),
+    /tape unavailable/,
+  );
 });
 
 test("the harness router mirrors for foreign adapters and leaves native-tape adapters alone", async () => {
