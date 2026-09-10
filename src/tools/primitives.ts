@@ -873,6 +873,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
                 const name = path.split(/[\\/]/).pop() || path;
                 await deps.files.put({
                   id: priorArtifact?.id ?? fileArtifactId(randomUUID(), "out", 0),
+                  reuseExistingPath: true,
                   ownerScopeId: writableScopeId,
                   createdBy: author,
                   name,

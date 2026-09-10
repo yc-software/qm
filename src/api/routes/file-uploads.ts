@@ -14,6 +14,8 @@ async function handleUpload(ctx: ApiCtx): Promise<void> {
   const actorId = capability?.actorId ?? actor?.p;
   if (!actorId) return sendJson(res, 401, { error: "actor_required" });
   try {
+    if (!deps.filesDirectUploadsEnabled && !params.id && pathname !== "/v1/files/upload-client")
+      return sendJson(res, 503, { error: "uploads_disabled", message: "new direct uploads are disabled" });
     if (pathname === "/v1/files/upload-client") {
       const script = await readFile(new URL("../../files/upload-client.py", import.meta.url), "utf8");
       res.writeHead(200, { "content-type": "text/x-python; charset=utf-8", "cache-control": "private, max-age=300" });

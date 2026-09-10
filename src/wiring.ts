@@ -2153,6 +2153,7 @@ export function serverDeps(
     workspace: built.workspace,
     files: built.files,
     ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
+    filesDirectUploadsEnabled: config.filesDirectUploadsEnabled,
     memory: built.memory,
     blobTransfer: built.blobTransfer,
     sandboxBackend: built.sandbox.profile.backend,

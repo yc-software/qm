@@ -675,3 +675,10 @@ test("Modal native activation is default-off and uses strict boolean configurati
     assert.equal(loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: value }).modalSandbox.nativeSnapshotsEnabled, true);
   assert.throws(() => loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: "enable" }), /not a recognized boolean/);
 });
+
+test("direct Files initiation defaults off and requires explicit activation", () => {
+  assert.equal(loadConfig({}).filesDirectUploadsEnabled, false);
+  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "true" }).filesDirectUploadsEnabled, true);
+  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "false" }).filesDirectUploadsEnabled, false);
+  assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
+});

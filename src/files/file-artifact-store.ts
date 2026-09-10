@@ -42,6 +42,7 @@ export interface PutFileInput {
   createdInScope?: ScopeId;
   createdAt?: number;
   maxBytes?: number;
+  reuseExistingPath?: boolean;
 }
 
 export type PublishFileInput = Omit<PutFileInput, "data" | "maxBytes"> & {
@@ -194,6 +195,12 @@ export function createMemoryFileArtifactStore(byteStore: DurableByteStore): File
     },
 
     async publish(input) {
+      if (input.reuseExistingPath) {
+        const existing = [...rows.values()].find(
+          (row) => row.enabled && row.ownerScopeId === input.ownerScopeId && row.path === input.path,
+        );
+        if (existing) return { artifact: existing, created: false };
+      }
       if (deleted.has(input.id)) throw new FileArtifactDeletedError();
       const existing = rows.get(input.id);
       if (existing) return { artifact: existing, created: false };

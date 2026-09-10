@@ -236,3 +236,21 @@ test("pg concurrent deletion and recovery publication always leave the file dele
   ]);
   assert.equal(await first.get(artifact.id, { includeDisabled: true }), null);
 });
+
+test("pg concurrent first shares reuse one path generation and republish after deletion", { skip }, async () => {
+  const bytes = createMemoryDurableByteStore();
+  const first = createPostgresFileArtifactStore(URL!, bytes);
+  const second = createPostgresFileArtifactStore(URL!, bytes);
+  const input = { ...put(), reuseExistingPath: true };
+  const initial = await Promise.all([
+    first.put({ ...input, id: "share-one" }),
+    second.put({ ...input, id: "share-two" }),
+  ]);
+  assert.equal(initial[0].artifact.id, initial[1].artifact.id);
+  assert.equal(initial.filter((result) => result.created).length, 1);
+  await first.delete(initial[0].artifact.id);
+  const current = await second.put({ ...input, id: "share-three", data: Buffer.from("new content") });
+  assert.equal(current.created, true);
+  assert.equal(current.artifact.id, "share-three");
+  assert.equal((await first.resolveByOwnerPaths([{ ownerScopeId: owner, path: input.path }])).length, 1);
+});

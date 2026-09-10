@@ -81,8 +81,12 @@ def main():
     else:
         state = {"id": uuid.uuid4().hex, "manifest": manifest, "destination": destination, "next": 1}
         save(state_path, state)
-    api("POST", "/v1/files/uploads", {**manifest, "requestId": state["id"]})
-    status = api("GET", f"/v1/files/uploads/{state['id']}")["upload"]
+    try:
+        status = api("GET", f"/v1/files/uploads/{state['id']}")["upload"]
+    except RequestError as error:
+        if error.status != 404:
+            raise
+        status = api("POST", "/v1/files/uploads", {**manifest, "requestId": state["id"]})["upload"]
     if status["state"] == "pending":
         with args.file.open("rb") as source:
             for number in range(state["next"], len(checksums) + 1):

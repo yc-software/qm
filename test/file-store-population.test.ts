@@ -217,7 +217,11 @@ test("intentional write+share after deletion creates a fresh visible artifact ge
     persistWritesToStore: { excludeDirs: ["inbox"] },
   });
   const share = [{ scope: grantee, permission: "read" as const }];
-  await ctx.write("report.txt", "first generation", share);
+  await Promise.all([
+    ctx.write("report.txt", "first generation", share),
+    ctx.write("report.txt", "first generation", share),
+  ]);
+  assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }])).length, 1);
   const first = (await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }]))[0]!;
   await ctx.write("report.txt", undefined, share);
   assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }])).length, 1);

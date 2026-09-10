@@ -117,6 +117,7 @@ export interface Config {
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
+  filesDirectUploadsEnabled: boolean;
   snapshotStore: "local" | "s3";
   transferStore: "local" | "s3";
   s3Bucket?: string;
@@ -1328,6 +1329,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) !== undefined
       ? { memoryCaptureMaxTurns: numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) }
       : {}),
+    filesDirectUploadsEnabled: boolEnvStrict("FILES_DIRECT_UPLOADS_ENABLED", env.FILES_DIRECT_UPLOADS_ENABLED) ?? false,
     snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
     transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),

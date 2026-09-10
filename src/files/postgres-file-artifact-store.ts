@@ -150,6 +150,16 @@ export function createPostgresFileArtifactStore(
       const { blobKey, sizeBytes, sha256 } = input;
       const at = input.createdAt ?? Date.now();
       return withPgTransaction(await pool(), async (client) => {
+        if (input.reuseExistingPath) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+            `file-path:${input.ownerScopeId}:${input.path}`,
+          ]);
+          const existing = await client.query(
+            "SELECT * FROM file_artifacts WHERE owner_scope_id=$1 AND path=$2 AND enabled=TRUE ORDER BY created_at DESC,id DESC LIMIT 1",
+            [input.ownerScopeId, input.path],
+          );
+          if (existing.rows[0]) return { artifact: rowToArtifact(existing.rows[0]), created: false };
+        }
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${input.id}`]);
         const deleted = await client.query("SELECT id FROM file_artifact_deletions WHERE id=$1", [input.id]);
         if (deleted.rows.length) throw new FileArtifactDeletedError();
