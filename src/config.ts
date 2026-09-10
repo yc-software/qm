@@ -602,16 +602,13 @@ function deployAppsEnv(
 ): { deployAppsSessionSecret?: string; deployAppsLoginUrl?: string } {
   const explicit = env.DEPLOY_APPS_SESSION_SECRET;
   const shared = env.PORTAL_SESSION_SECRET;
-  const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? (explicit || shared ? defaultLoginUrl : undefined);
-  if (loginUrl && !explicit && !shared) {
-    throw new Error("DEPLOY_APPS_LOGIN_URL requires DEPLOY_APPS_SESSION_SECRET");
-  }
+  const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? defaultLoginUrl;
   if (explicit && !loginUrl) {
     throw new Error("DEPLOY_APPS_SESSION_SECRET needs a sign-in address — set DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL");
   }
   const secret = explicit ?? (loginUrl ? shared : undefined);
-  if (!secret || !loginUrl) return {};
-  return { deployAppsSessionSecret: secret, deployAppsLoginUrl: loginUrl.replace(/\/$/, "") };
+  if (!loginUrl) return {};
+  return { ...(secret ? { deployAppsSessionSecret: secret } : {}), deployAppsLoginUrl: loginUrl.replace(/\/$/, "") };
 }
 
 const SHARED_PLATFORM_SUFFIXES = [
@@ -642,7 +639,7 @@ function sharedPlatformSuffixOf(domain: string): string | undefined {
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+$`);
 
-function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): string | undefined {
+function deployAppsDomainEnv(env: NodeJS.ProcessEnv): string | undefined {
   const raw = env.DEPLOY_APPS_DOMAIN?.trim();
   if (raw) {
     const canonical = raw.toLowerCase().replace(/\.$/, "");
@@ -654,12 +651,11 @@ function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): st
     const suffix = sharedPlatformSuffixOf(canonical);
     if (suffix) {
       throw new Error(
-        `DEPLOY_APPS_DOMAIN (${canonical}) is under ${suffix}, a shared platform domain that cannot carry per-app subdomains — attach a custom domain you control (set DEPLOY_APPS_DOMAIN=apps.<your-domain> with a wildcard DNS record pointing at this instance), or unset it to keep serving apps signed-in at /d/<app>/.`,
+        `DEPLOY_APPS_DOMAIN (${canonical}) is under ${suffix}, a shared platform domain that cannot carry per-app subdomains — attach a custom domain you control (set DEPLOY_APPS_DOMAIN=apps.<your-domain> with a wildcard DNS record pointing at this instance), or use explicit non-production loopback development; /d/<app>/ is a launch alias, not a full isolated app origin.`,
       );
     }
     return canonical;
   }
-  if (deployProvider === "porter" && env.PORTER_DEPLOY_APPS_DOMAIN) return env.PORTER_DEPLOY_APPS_DOMAIN;
   return env.AWS_DEPLOY_APPS_DOMAIN;
 }
 
@@ -979,7 +975,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     codexOAuthConfigured && codexAuthCandidate
       ? { ...env, CODEX_AUTH_FILE: codexAuthCandidate }
       : { ...env, CODEX_AUTH_FILE: undefined };
-  const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
+  const deployAppsDomain = deployAppsDomainEnv(env);
   const missingSecrets = validateCoreSecretEnv(secretEnv);
   if (missingSecrets.length) {
     throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);

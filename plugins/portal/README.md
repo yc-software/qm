@@ -19,13 +19,13 @@ surfaces, and it does **not** import the core.
 ## How a request flows
 
 1. **Sign in** — `GET /auth/login` starts an OIDC Authorization-Code flow with PKCE(S256) +
-   `state` + `nonce`, all sealed into a short-lived signed `portal_oidc_tmp` cookie.
+   `state` + `nonce`, all sealed into a short-lived signed `__Host-portal_oidc_tmp` cookie.
 2. **Callback** — `GET /auth/callback` exchanges the code over the TLS back-channel
    (confidential client, `client_secret_basic` + the PKCE verifier), then binds the id_token
    signature and payload (`nonce`/`aud`/`iss`/`sub`/timestamps and, for Slack, the `team_id`
    workspace pin) against the configured HTTPS JWKS, then reads
    the subject from userinfo. The verified `sub` **is** the core principal id. It mints a
-   signed `portal_session` cookie (`{sub, org, auth, exp}`, HMAC, 7-day sliding lifetime with a
+   signed `__Host-portal_session` cookie (`{sub, org, auth, exp}`, HMAC, 7-day sliding lifetime with a
    30-day absolute maximum by default).
 3. **Proxy** — every other path requires a valid session. The portal picks the upstream by the
    **exact first path segment**, strips the prefix, and proxies to the private upstream,
@@ -100,7 +100,7 @@ disposable test deployment: the test redeems real links for its configured admin
 
 `PORTAL_PLAYGROUND=1` turns the deployment into a public try-it instance: an
 unauthenticated browser navigation (a `GET` that accepts HTML) mints an anonymous
-principal (`playground-<random>`), seals it into the ordinary `portal_session`
+principal (`playground-<random>`), seals it into the ordinary `__Host-portal_session`
 cookie, and continues — so each visitor's sessions, files, memory, and sandbox are
 pinned to their browser through the same scoping that isolates real teammates.
 Non-HTML requests without a session still get `401`, so the SPA's API calls ride
@@ -134,11 +134,14 @@ would hand anonymous sessions to surfaces that never see the `anon` flag. The
 deployment proxy (`/d/<app>/`), on by default for signed-in portals, turns
 itself off under the playground, and anonymous sessions are refused it at
 request time too. Outside the playground, `PORTAL_APPS_DOMAIN` defaults to
-`DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN` to the portal host itself when
-the apps domain sits directly under it (`apps.<portal host>`), so one core-side
-variable configures both processes. Any other layout needs an explicit
-`PORTAL_COOKIE_DOMAIN` — deriving a shared parent by guesswork risks landing on
-a public suffix browsers refuse. Anonymous sessions are also refused the `/connect/*` and
+`DEPLOY_APPS_DOMAIN`. Portal session, login-state and impersonation cookies use Secure `__Host-` names,
+HttpOnly and Path=/, with no Domain. Users must sign in again after upgrading:
+old unprefixed cookies are ignored for authentication and cleared on sign-in/logout.
+`PORTAL_COOKIE_DOMAIN` is retained only to clear old state. Application SSO uses
+a browser-bound app handoff and works with unrelated portal/app domains. Environment values are per process; setting
+core's environment does not configure another service automatically. See
+[published app serving](../../docs/published-app-serving.md) for DNS/TLS, local dev,
+session-lifetime and release requirements. Anonymous sessions are also refused the `/connect/*` and
 `/drop/*` flows, so a visitor can't attach real OAuth tokens or dropped secrets
 to a throwaway principal that a cleared cookie orphans.
 

@@ -107,7 +107,7 @@ const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, ageS = 0): string {
   const now = Math.floor(Date.now() / 1000);
   const iat = now - ageS;
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `__Host-portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 test.after(() => {
@@ -373,7 +373,7 @@ test("auth/login sets the tmp cookie and 302s to the IdP with PKCE+state+nonce",
   assert.ok(u.searchParams.get("state"));
   assert.ok(u.searchParams.get("nonce"));
   assert.equal(u.searchParams.get("code_challenge_method"), "S256");
-  assert.match(r.headers.get("set-cookie") ?? "", /portal_oidc_tmp=/);
+  assert.match(r.headers.get("set-cookie") ?? "", /__Host-portal_oidc_tmp=/);
 });
 
 test("auth/callback with no tmp cookie fails closed (400, no token exchange)", async () => {
@@ -386,7 +386,7 @@ test("auth/logout requires same-origin and clears the session cookie", async () 
   assert.equal(denied.status, 403);
   const ok = await fetch(`${base}/auth/logout`, { method: "POST", headers: { origin: PUBLIC } });
   assert.equal(ok.status, 200);
-  assert.match(ok.headers.get("set-cookie") ?? "", /portal_session=;[^,]*Max-Age=0/);
+  assert.match(ok.headers.get("set-cookie") ?? "", /__Host-portal_session=;[^,]*Max-Age=0/);
 });
 
 test("auth/logout: a no-JS HTML form POST gets a 303 redirect to / (cookies still cleared)", async () => {
@@ -397,7 +397,7 @@ test("auth/logout: a no-JS HTML form POST gets a 303 redirect to / (cookies stil
   });
   assert.equal(r.status, 303);
   assert.equal(r.headers.get("location"), "/");
-  assert.match(r.headers.get("set-cookie") ?? "", /portal_session=;[^,]*Max-Age=0/);
+  assert.match(r.headers.get("set-cookie") ?? "", /__Host-portal_session=;[^,]*Max-Age=0/);
 });
 
 test("root: a signed-in session proxies straight to the web UI; signed-out bounces to login", async () => {
@@ -454,7 +454,7 @@ test("capability-authenticated agent memory and blob requests reach core with on
       "x-signature": "must-not-cross",
       "x-timestamp": "123",
       "x-as-principal": "spoofed",
-      cookie: "portal_session=spoofed",
+      cookie: "__Host-portal_session=spoofed",
     },
   });
   assert.equal(memory.status, 200);
@@ -512,7 +512,7 @@ test("the exact deployment-layer route carries source auth to core without widen
       "x-timestamp": "123",
       "x-signature": VALID_SOURCE_SIGNATURE,
       "x-as-principal": "must-not-cross",
-      cookie: "portal_session=must-not-cross",
+      cookie: "__Host-portal_session=must-not-cross",
     },
     body: payload,
   });
@@ -556,12 +556,16 @@ test("agent capabilities do not bypass the connect/drop browser session gates", 
 test("sliding renewal: a fresh session is NOT re-stamped, an aged one is re-issued with a full TTL (and survives the proxy)", async () => {
   const fresh = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: sessionCookie("U1") } });
   assert.equal(fresh.status, 200);
-  assert.doesNotMatch(fresh.headers.get("set-cookie") ?? "", /portal_session=/, "a fresh session is not re-stamped");
+  assert.doesNotMatch(
+    fresh.headers.get("set-cookie") ?? "",
+    /__Host-portal_session=/,
+    "a fresh session is not re-stamped",
+  );
 
   const aged = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: sessionCookie("U1", 20000) } });
   assert.equal(aged.status, 200);
   const setCookie = aged.headers.get("set-cookie") ?? "";
-  const m = setCookie.match(/portal_session=([^;]+)/);
+  const m = setCookie.match(/__Host-portal_session=([^;]+)/);
   assert.ok(m, "an aged session is re-stamped through the proxy");
   assert.match(setCookie, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`), "the renewed cookie carries a full TTL");
   const claims = open(decodeURIComponent(m![1] ?? ""), sessionKey) as { sub: string; exp: number } | null;
@@ -607,9 +611,9 @@ test("impersonate: an admin starts it; the web-ui hop carries target + impersona
   const startBody = (await start.json()) as { ok: boolean; target: string; displayName: string };
   assert.equal(startBody.target, "alice@acme");
   assert.equal(startBody.displayName, "Alice Example", "the display name resolved by core is echoed back");
-  const m = (start.headers.get("set-cookie") ?? "").match(/portal_impersonate=([^;]+)/);
+  const m = (start.headers.get("set-cookie") ?? "").match(/__Host-portal_impersonate=([^;]+)/);
   assert.ok(m, "the impersonation cookie is set");
-  const impCookie = `portal_impersonate=${m![1]}`;
+  const impCookie = `__Host-portal_impersonate=${m![1]}`;
 
   const web = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: `${sessionCookie("U-admin")}; ${impCookie}` } });
   assert.equal(((await web.json()) as { cookie: string }).cookie, "webuiuser=alice%40acme; webui_impersonator=U-admin");
@@ -627,5 +631,5 @@ test("impersonate: an admin starts it; the web-ui hop carries target + impersona
     headers: { cookie: `${sessionCookie("U-admin")}; ${impCookie}`, origin: PUBLIC },
   });
   assert.equal(stop.status, 200);
-  assert.match(stop.headers.get("set-cookie") ?? "", /portal_impersonate=;[^,]*Max-Age=0/);
+  assert.match(stop.headers.get("set-cookie") ?? "", /__Host-portal_impersonate=;[^,]*Max-Age=0/);
 });

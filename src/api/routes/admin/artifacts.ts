@@ -1,5 +1,5 @@
 import { parseScopeId, type Destination } from "../../../types.ts";
-import { publicUrlOf } from "../../../deploy/deploy-store.ts";
+import { deploymentLaunchUrl } from "../../../deploy/deploy-store.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -59,7 +59,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         createdBy: d.createdBy,
         createdAt: d.versions[0]?.createdAt,
         lastAccessAt: d.lastAccessAt,
-        publicUrl: publicUrlOf(d.endpoint),
+        publicUrl: deploymentLaunchUrl(d, deps.portalUrl ?? deps.publicUrl),
       }));
     return sendJson(res, 200, { scopeId: scope, deployments });
   }

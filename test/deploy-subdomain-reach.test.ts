@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request as httpRequest, createServer as createHttpServer } from "node:http";
-import { createHmac } from "node:crypto";
+import { mintAppSession } from "../src/deploy/app-session.ts";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
@@ -34,19 +34,12 @@ const auditLog = {
   events: async () => [],
   tail: async () => [],
 };
-const SESSION_SECRET = "portal-session-secret";
 const SESSION_DEPS = {
-  deployAppsSessionSecret: SESSION_SECRET,
   deployAppsLoginUrl: "https://portal.example.com",
 } as const;
 
-function mintPortalSession(sub: string): string {
-  const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
-  const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + 3600 })).toString(
-    "base64url",
-  );
-  return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
+async function scopedCookie(host: string, sub: string): Promise<string> {
+  return `__Host-qm_app_session=${await mintAppSession("gate-secret", { type: "session", orgId: "default-org", deploymentId: host.split(".")[0]!, origin: `https://${host}`, sub, iat: Date.now(), exp: Date.now() + 60_000 })}`;
 }
 
 function serviceWithProvider(provider: DeployProvider) {
@@ -197,6 +190,7 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
     name: "mysite",
   });
   const server = createInsecureTestServer(app, {
+    identity: createIdentityService(),
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
@@ -204,38 +198,42 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
-  const host = "mysite.apps.example.com";
+  const host = `${(await app.getDeployment("mysite"))!.id}.apps.example.com`;
 
   try {
     const anon = await httpGet(port, "/", { Host: host });
     assert.equal(anon.status, 401, "anonymous ⇒ sign-in required");
 
     const staleLink = await httpGet(port, "/?access=any-old-token&x=1", { Host: host, Accept: "text/html" });
-    assert.equal(staleLink.status, 302, "a stale ?access= link is swallowed, not honoured");
-    assert.equal(staleLink.headers.location, "/?x=1", "the token leaves the URL; nothing else is lost");
+    assert.equal(staleLink.status, 302, "a legacy access query never authenticates the browser");
+    assert.equal(
+      staleLink.headers.location,
+      `https://portal.example.com/d/${host.split(".")[0]}/?access=any-old-token&x=1`,
+      "ordinary app query keys survive login",
+    );
     assert.ok(!String(staleLink.headers["set-cookie"] ?? "").includes("dpl_access"), "no access cookie is minted");
 
     const staleCookie = await httpGet(port, "/", { Host: host, Cookie: "dpl_access=any-old-token" });
     assert.equal(staleCookie.status, 401, "a dpl_access cookie from an old link grants nothing");
 
-    const owner = await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U1")}` });
+    const owner = await httpGet(port, "/", { Host: host, Cookie: await scopedCookie(host, "U1") });
     assert.equal(owner.status, 200, "a signed-in person the ACL allows is proxied");
     assert.equal(owner.body, "UPSTREAM OK");
 
-    const stranger = await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U9")}` });
+    const stranger = await httpGet(port, "/", { Host: host, Cookie: await scopedCookie(host, "U9") });
     assert.equal(stranger.status, 403, "a signed-in stranger is denied by the ACL");
 
-    await httpGet(port, "/", { Host: host, Cookie: `portal_session=${mintPortalSession("U9")}` });
+    await httpGet(port, "/", { Host: host, Cookie: await scopedCookie(host, "U9") });
 
     const unknownSlug = await httpGet(port, "/", {
       Host: "nope.apps.example.com",
-      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      Cookie: await scopedCookie(host, "U1"),
     });
     assert.equal(unknownSlug.status, 404, "a session on a non-existent deployment is a 404");
 
     assert.deepEqual(
       denials.map((e) => [e.principalId, e.resource, e.status, e.scopeLabel]),
-      [["U9", "mysite", "denied", scopeId("personal", "U1")]],
+      [["U9", (await app.getDeployment("mysite"))!.id, "denied", scopeId("personal", "U1")]],
       "one row per person+app+hour, filed under the app's OWNER scope; not_found is never audited",
     );
   } finally {
@@ -263,14 +261,15 @@ test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing th
     name: "throttled",
   });
   const server = createInsecureTestServer(app, {
+    identity: createIdentityService(),
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
-  const host = "throttled.apps.example.com";
-  const cookie = `portal_session=${mintPortalSession("U1")}`;
+  const host = `${(await app.getDeployment("throttled"))!.id}.apps.example.com`;
+  const cookie = await scopedCookie(host, "U1");
 
   try {
     const first = await httpGet(port, "/", { Host: host, Cookie: cookie });
@@ -304,14 +303,15 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
     name: "ratelimited",
   });
   const server = createInsecureTestServer(app, {
+    identity: createIdentityService(),
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
-  const host = "ratelimited.apps.example.com";
-  const cookie = `portal_session=${mintPortalSession("U1")}`;
+  const host = `${(await app.getDeployment("ratelimited"))!.id}.apps.example.com`;
+  const cookie = await scopedCookie(host, "U1");
 
   try {
     const first = await httpGet(port, "/", { Host: host, Cookie: cookie });
@@ -333,6 +333,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
 test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)", async () => {
   const app = appServingUpstream(1);
   const server = createInsecureTestServer(app, {
+    identity: createIdentityService(),
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
   });
@@ -366,6 +367,7 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
   const signingSecret = "s".repeat(64);
   const server = createServer(app, {
     signingSecret,
+    identity: createIdentityService(),
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
@@ -373,12 +375,12 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
-  const host = "idsite.apps.example.com";
+  const host = `${(await app.getDeployment("idsite"))!.id}.apps.example.com`;
 
   try {
     const res = await httpGet(port, "/", {
       Host: host,
-      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      Cookie: await scopedCookie(host, "U1"),
       [PORTAL_IDENTITY_HEADER]: "forged-by-client",
     });
     assert.equal(res.status, 200);

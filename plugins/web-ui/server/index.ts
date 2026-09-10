@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+import { deploymentPath, isDeploymentPath, proxyToDeployment } from "../../chassis/src/deployment-proxy.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -568,6 +570,7 @@ async function coreFetch(
   pathWithQuery: string,
   rawBody = "",
   timeoutMs?: number,
+  launchOrigin?: string,
 ): Promise<{ status: number; text: string }> {
   const signedPath = withSourceAuthNonce(pathWithQuery, CORE_SIGNING_SECRET);
   const portalTok = portalTokenStore.getStore();
@@ -575,6 +578,7 @@ async function coreFetch(
     method,
     headers: {
       ...signedHeaders(CORE_SIGNING_SECRET, method, signedPath, rawBody),
+      ...(launchOrigin ? { "x-qm-launch-origin": launchOrigin } : {}),
       ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
     },
     ...(rawBody ? { body: rawBody } : {}),
@@ -868,7 +872,7 @@ function pipeFile(res: ServerResponse, filePath: string): void {
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
   const slug = (url.searchParams.get("slug") ?? "").toLowerCase();
-  if (!APPS_FRAME_DOMAIN || !/^[a-z0-9-]{1,63}$/.test(slug)) return false;
+  if (!/^[a-z0-9-]{1,63}$/.test(slug)) return false;
   let html: string;
   if (vite) {
     const raw = readFileSync(join(ROOT, "index.html"), "utf8").replace("%BASE_URL%favicon.svg", "favicon.svg");
@@ -879,8 +883,7 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     html = readFileSync(filePath, "utf8");
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-  const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
-  sendBuffered(res, 200, framedByOwnSurfaces(res, headers, csp), await brandIndexHtml(html));
+  sendBuffered(res, 200, framedByOwnSurfaces(res, headers, SPA_CSP), await brandIndexHtml(html));
   return true;
 }
 
@@ -1915,11 +1918,16 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, user } = c;
       const id = c.params.id!;
       if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
-      return relayCore(
-        res,
+      const result = await coreFetch(
         "GET",
         `/v1/deployments/${encodeURIComponent(id)}/owner-url?principalId=${encodeURIComponent(user)}`,
+        "",
+        undefined,
+        deploymentLaunchOrigin(c.req),
       );
+      if (result.status !== 200) return relay(res, result);
+      const url = new URL((JSON.parse(result.text) as { url: string }).url);
+      return json(res, 200, { url: url.pathname + url.search });
     },
   },
   {
@@ -2884,31 +2892,20 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return found.route.handle({ req, res, url, user, params: found.params });
   }
 
-  if (method === "GET" && path.startsWith("/deployments/")) {
+  if ((method === "GET" || method === "HEAD") && isDeploymentPath(path)) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
-    const rest = path.slice("/deployments/".length);
-    const slash = rest.indexOf("/");
-    const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
-    const subPath = slash === -1 ? "/" : rest.slice(slash);
-    const corePath = `/d/${encodeURIComponent(id)}${subPath}${url.search}`;
-    const portalTok = portalTokenStore.getStore();
-    const headers: Record<string, string> = {
-      ...signedHeaders(CORE_SIGNING_SECRET, method, corePath, "", user),
-      "x-as-principal": user,
-      ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
-    };
-    delete headers["content-type"];
-    const up = await fetch(`${CORE}${corePath}`, { method, headers, redirect: "manual" });
-    const outHeaders = Object.fromEntries(up.headers.entries());
-    delete outHeaders["content-encoding"];
-    delete outHeaders["content-length"];
-    res.writeHead(up.status, {
-      ...outHeaders,
-      "content-security-policy": UNTRUSTED_CONTENT_SANDBOX_CSP,
-      "x-content-type-options": "nosniff",
+    const parts = deploymentPath(path);
+    if (!parts) return json(res, 400, { error: "invalid_deployment_path" });
+    return proxyToDeployment(req, res, {
+      coreBase: CORE,
+      launchOrigin: deploymentLaunchOrigin(req),
+      ...parts,
+      search: url.search,
+      principal: user,
+      signingSecret: CORE_SIGNING_SECRET,
+      identityToken: portalTokenStore.getStore(),
     });
-    return res.end(Buffer.from(await up.arrayBuffer()));
   }
 
   if (method === "GET" && path === "/app-edit" && (await serveAppEditHtml(req, res, url))) return;
@@ -2921,6 +2918,28 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   json(res, 404, { error: "not found" });
 };
+
+function deploymentLaunchOrigin(req: IncomingMessage): string {
+  const peer = req.socket.remoteAddress?.replace(/^::ffff:/, "") ?? "";
+  if (process.env.NODE_ENV !== "production" && (peer === "::1" || (isIP(peer) === 4 && peer.startsWith("127.")))) {
+    try {
+      const host = req.headers.host ?? "";
+      const url = new URL(`http://${host}`);
+      const hostname = url.hostname.replace(/^\[|\]$/g, "");
+      if (
+        url.host === host.toLowerCase() &&
+        !url.username &&
+        !url.password &&
+        url.pathname === "/" &&
+        (hostname === "localhost" || hostname === "::1" || (isIP(hostname) === 4 && hostname.startsWith("127.")))
+      )
+        return url.origin;
+    } catch {
+      return new URL(PUBLIC_URL).origin;
+    }
+  }
+  return new URL(PUBLIC_URL).origin;
+}
 
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");

@@ -162,17 +162,20 @@ function derivedValues(
       const apiHost = new URL(config.apiUrl).hostname.toLowerCase();
       if (apiHost !== publicHost) corePublicHosts.push(apiHost);
     }
-    const appsDomain = config.env.core?.AWS_DEPLOY_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
+    const appsDomain = (config.env.core?.DEPLOY_APPS_DOMAIN?.trim() || config.env.core?.AWS_DEPLOY_APPS_DOMAIN)
+      ?.trim()
+      .toLowerCase()
+      .replace(/\.$/, "");
     if (appsDomain) {
       if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(appsDomain)) {
-        throw new CliError(`env.core.AWS_DEPLOY_APPS_DOMAIN ${JSON.stringify(appsDomain)} is not a valid DNS domain`);
+        throw new CliError(`app gateway domain ${JSON.stringify(appsDomain)} is not a valid DNS domain`);
       }
       corePublicHosts.push(`*.${appsDomain}`);
     }
   }
   if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
     throw new CliError(
-      "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
+      "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or DEPLOY_APPS_DOMAIN",
     );
   }
   const services = Object.fromEntries(

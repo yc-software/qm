@@ -753,3 +753,31 @@ test("the deploy role lists tasks only within its cluster", () => {
   assert.match(listing, /ecs:ListTasks/);
   assert.match(listing, /"ecs:cluster" = aws_ecs_cluster\.this\.arn/);
 });
+
+test("generic app domain wins in wildcard ingress just as it does in the core gateway", () => {
+  const rendered = terraformVars(
+    {
+      ...config,
+      services: ["core", "portal"],
+      env: { core: { DEPLOY_APPS_DOMAIN: "apps.acme.example", AWS_DEPLOY_APPS_DOMAIN: "old.acme.example" } },
+    },
+    "",
+    declared,
+  );
+  assert.match(rendered, /core_public_hosts\s+= \[\s+"\*\.apps\.acme\.example"\s+\]/);
+  assert.doesNotMatch(rendered, /\*\.old\.acme\.example/);
+});
+
+for (const generic of ["", "   "])
+  test(`empty generic app domain ${JSON.stringify(generic)} falls back consistently to AWS alias`, () => {
+    const rendered = terraformVars(
+      {
+        ...config,
+        services: ["core", "portal"],
+        env: { core: { DEPLOY_APPS_DOMAIN: generic, AWS_DEPLOY_APPS_DOMAIN: "apps.acme.example" } },
+      },
+      "",
+      declared,
+    );
+    assert.match(rendered, /core_public_hosts\s+= \[\s+"\*\.apps\.acme\.example"\s+\]/);
+  });

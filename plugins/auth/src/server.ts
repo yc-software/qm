@@ -177,8 +177,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     const values = (req.headers.cookie ?? "")
       .split(";")
       .map((part) => part.trim())
-      .filter((part) => part.startsWith("qm_idp_session="));
-    const value = values.length === 1 ? values[0]!.slice("qm_idp_session=".length) : "";
+      .filter((part) => part.startsWith("__Host-qm_idp_session="));
+    const value = values.length === 1 ? values[0]!.slice("__Host-qm_idp_session=".length) : "";
     const [token, signature] = value.split(".");
     return /^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(value) &&
       token &&
@@ -189,7 +189,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   };
 
   const sessionCookie = (token: string, session: RememberedSession): string =>
-    `qm_idp_session=${token}.${cookieSignature(token)}; HttpOnly; Secure; SameSite=Lax; Path=${cfg.publicPath || "/"}; Max-Age=${Math.max(0, Math.floor((session.expiresAtMs - now()) / 1000))}`;
+    `__Host-qm_idp_session=${token}.${cookieSignature(token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${Math.max(0, Math.floor((session.expiresAtMs - now()) / 1000))}`;
 
   async function issueCode(
     res: ServerResponse,

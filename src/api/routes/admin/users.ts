@@ -1,5 +1,5 @@
 import { scopeId as makeScopeId } from "../../../types.ts";
-import { publicUrlOf } from "../../../deploy/deploy-store.ts";
+import { deploymentLaunchUrl } from "../../../deploy/deploy-store.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
 import { personKey, samePerson } from "../../../directory/person.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
@@ -403,7 +403,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
       versions: d.versions.length,
       createdBy: d.createdBy,
       lastAccessAt: d.lastAccessAt,
-      publicUrl: publicUrlOf(d.endpoint),
+      publicUrl: deploymentLaunchUrl(d, deps.portalUrl ?? deps.publicUrl),
     }));
   const config = deps.config
     ? {

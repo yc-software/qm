@@ -1,5 +1,4 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const IDENTITY_TTL_MS = 60_000;
@@ -171,39 +170,7 @@ export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
 
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
-export interface DeploymentTarget {
-  coreBase: string;
-  id: string;
-  subPath: string;
-  search: string;
-  principal: string;
-  signingSecret: string | undefined;
-  identitySecret?: string;
-}
-
-export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: DeploymentTarget): void {
-  const method = req.method ?? "GET";
-  const corePath = `/d/${encodeURIComponent(t.id)}${t.subPath}${t.search}`;
-  const core = new URL(t.coreBase);
-  const signed = signedHeaders(t.signingSecret, method, corePath, "", t.principal);
-  const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
-  if (t.identitySecret)
-    base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
-      t.identitySecret,
-    );
-  const headers = safeForwardHeaders(req, base);
-  delete headers["content-type"];
-  const ct = req.headers["content-type"];
-  if (typeof ct === "string") headers["content-type"] = ct;
-  relay(req, res, {
-    protocol: core.protocol,
-    hostname: core.hostname,
-    port: requestPort(core),
-    path: corePath,
-    headers,
-  });
-}
+export { proxyToDeployment, type DeploymentTarget } from "../../chassis/src/deployment-proxy.ts";
 
 export interface UpstreamTarget {
   forwardCookies?: boolean;

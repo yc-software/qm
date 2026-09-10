@@ -1,0 +1,39 @@
+{{- if .Values.appsIngress.enabled }}
+{{- $core := index .Values.services "core" }}
+{{- if not $core.enabled }}{{ fail "appsIngress requires services.core.enabled" }}{{ end }}
+{{- $effective := mergeOverwrite (dict) (.Values.secretEnv | default dict) (.Values.env | default dict) ($core.env | default dict) }}
+{{- $generic := trim (get $effective "DEPLOY_APPS_DOMAIN" | default "") }}
+{{- $domain := trimSuffix "." (lower (trim (coalesce $generic (get $effective "AWS_DEPLOY_APPS_DOMAIN") | default ""))) }}
+{{- if not $domain }}{{ fail "appsIngress requires DEPLOY_APPS_DOMAIN in the effective core environment" }}{{ end }}
+{{- if or (gt (len $domain) 251) (not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$" $domain)) }}{{ fail "appsIngress domain must be a valid DNS name without a wildcard or port" }}{{ end }}
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "qm.fullname" . }}-apps
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+  {{- with .Values.appsIngress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ printf "*.%s" $domain | quote }}
+      secretName: {{ required "appsIngress.tlsSecretName must name a wildcard TLS certificate secret" .Values.appsIngress.tlsSecretName }}
+  rules:
+    - host: {{ printf "*.%s" $domain | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "qm.fullname" . }}-core
+                port:
+                  number: {{ $core.port }}
+{{- end }}

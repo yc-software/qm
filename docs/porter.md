@@ -174,21 +174,19 @@ principal with `AmazonEKSClusterAdminPolicy`, then `aws eks update-kubeconfig`.
 
 ## Giving published apps stable hostnames
 
-App serving is tiered so the zero-config path works first. With nothing set, every
-published app is reachable signed-in at `/d/<app>/` on the portal, private to its owner
-and whoever the deployment is shared with; proxied HTML is served under a sandbox CSP so
-app code cannot act on the portal's origin. Setting `DEPLOY_APPS_DOMAIN` to a wildcard
-domain you control (e.g. `apps.example.com`, with `*.apps.example.com` pointed at the
-instance) upgrades every app to its own origin — `https://<app>.apps.example.com/` — with
-portal single sign-on, the request-access flow, and live editing; the portal derives its
-cookie and returnTo settings from it, and boot probes the wildcard record and prints the
-exact DNS record to add when it is missing. Point the wildcard at the ingress that fronts
-core, never at Porter's sandbox ingress — the gate runs in core, so DNS that skips core
-skips the gate. `PORTER_DEPLOY_APPS_DOMAIN` is the separate, ungated mechanism: it
-registers each app's domain on Porter's own sandbox ingress and is deliberately NOT
-defaulted from `DEPLOY_APPS_DOMAIN`.
+Published app links use `/d/<app>/` to authenticate and launch the app on an isolated
+origin. Production requires `DEPLOY_APPS_DOMAIN` (an owned wildcard domain), wildcard
+TLS, gateway signing configuration and a trusted sign-in surface. Execution hosts use
+immutable deployment IDs, not reusable friendly names. Local loopback development uses
+`<id>.apps.localhost:<core-port>` without wildcard DNS. See
+[published app serving](published-app-serving.md) for configuration and the HTTP contract.
 
-Published apps get their address from the cluster, not from qm. Declare the sandbox load
+Point the wildcard at the ingress that fronts **core**, never at Porter's sandbox ingress:
+DNS that skips core skips the QM gate. `PORTER_DEPLOY_APPS_DOMAIN` is the separate,
+ungated provider mechanism; it is deliberately not promoted to the QM gateway domain.
+The publish tool returns an authenticated launch link rather than the runtime URL.
+
+Provider runtimes get their internal transport address from the cluster. Declare the sandbox load
 balancer with a root domain at cluster creation and **Porter names every published app
 itself**: `<app>.<root domain>`, served on a wildcard Let's Encrypt certificate that Porter
 also obtains. `PORTER_DEPLOY_APPS_DOMAIN` is then only for choosing a different name — leave

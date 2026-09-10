@@ -13,7 +13,7 @@ import { CapabilityUnsupportedError } from "../src/sandbox/sandbox.ts";
 import type { AgentComputerExportEntry, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 
-function svc() {
+function svc(publicUrl?: string) {
   const deployStore: DeployStore = createDeployStore();
   const acl: AclStore = createAclStore();
   let starts = 0;
@@ -23,7 +23,7 @@ function svc() {
       profile: { managedScaleToZero: false },
       apply: async () => {
         starts++;
-        return { host: "127.0.0.1", port: 20000 };
+        return { host: "127.0.0.1", port: 20000, ...(publicUrl ? { publicUrl } : {}) };
       },
       destroy: async () => {},
     },
@@ -656,4 +656,13 @@ test("publish drops git metadata on the per-file fallback path too", async () =>
     (await s.deployStore.treeOf(d.id, 1))?.map((f) => f.path),
     ["server.js"],
   );
+});
+
+test("publish returns the authenticated launch URL, never the provider endpoint URL", async () => {
+  const s = svc("https://private-runtime.provider.example/");
+  const result = await ctx(s.deploy, { files: appFile() }).publish({
+    name: "private-app",
+    entrypoint: "node server.js",
+  });
+  assert.equal(result.url, "/d/private-app/");
 });

@@ -59,7 +59,7 @@ const base = `http://localhost:${port}`;
 const sessionKey = deriveKey("proxy-errors-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, name?: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 3600, ...(name ? { name } : {}) }, sessionKey))}`;
+  return `__Host-portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 3600, ...(name ? { name } : {}) }, sessionKey))}`;
 }
 
 test.after(() => {

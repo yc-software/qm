@@ -44,7 +44,7 @@ if (config.deployAppsDomain) {
   void lookup(probe).catch(() => {
     console.warn(
       `[qm] app subdomains are configured but *.${domain} does not resolve (probed ${probe}) — ` +
-        `add a wildcard DNS record for *.${domain} pointing at this instance's ingress, or apps will only be reachable at /d/<app>/`,
+        `add wildcard DNS and TLS routing for *.${domain} to core; /d/<app>/ launch links cannot serve full apps until this origin works`,
     );
   });
 }

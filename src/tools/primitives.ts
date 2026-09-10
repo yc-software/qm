@@ -39,7 +39,7 @@ import type {
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
 import type { DeployService, DeployFile } from "../deploy/deploy-service.ts";
-import { publicUrlOf, type Deployment } from "../deploy/deploy-store.ts";
+import { deploymentLaunchUrl, type Deployment } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -1069,7 +1069,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             : {}),
           ...(resolvedShare?.length ? { share: resolvedShare } : {}),
         });
-        const ref = d.name ?? d.id;
         const grantees = await deps.deploy.deploymentGrantees(d.id);
         const base = audienceFromGrantees(
           grantees.map((g) => g.scope),
@@ -1079,8 +1078,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           aud.incomplete && effectiveEntrypoint !== undefined && input.share === undefined && aud.reason
             ? { ...base, note: aud.reason }
             : base;
-        const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
-        const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
+        const url = deploymentLaunchUrl(d, deps.publicWebUrl);
         const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
         return {
           id: d.id,
