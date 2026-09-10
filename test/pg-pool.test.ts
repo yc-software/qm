@@ -163,13 +163,12 @@ test("pool budgets reject invalid limits instead of creating unbounded pools", a
       assert.throws(() => configurePgPoolLimits({ query: limit, session: 8 }), /positive integers/);
       assert.throws(() => configurePgPoolLimits({ query: 8, session: limit }), /positive integers/);
     }
-    assert.throws(() => configurePgPoolLimits({ query: 2, session: 1 }), /at least 2/);
     configurePgPoolLimits({ query: 2, session: 3 });
     const store = createPgPool("postgres://unused@127.0.0.1:1/valid");
     try {
       assert.equal((await store.pool()).options.max, 2);
-      assert.equal((await store.pool("session")).options.max, 1);
-      assert.equal((await store.pool("coordination")).options.max, 2);
+      assert.equal((await store.pool("session")).options.max, 3);
+      assert.equal(await store.pool("coordination"), await store.pool("session"));
     } finally {
       await store.close();
     }
@@ -180,17 +179,46 @@ test("pool budgets reject invalid limits instead of creating unbounded pools", a
 
 test("coordination reserve stays within the configured session budget", async () => {
   try {
-    for (const session of [2, 3, 5, 8, 16]) {
+    for (const session of [5, 8, 16]) {
       configurePgPoolLimits({ query: 8, session });
       const pg = createPgPool(`postgres://unused@127.0.0.1:1/reserve-${session}`);
       try {
         const operations = await pg.pool("session");
         const coordination = await pg.pool("coordination");
         assert.ok(operations.options.max! >= 1);
-        assert.equal(coordination.options.max, Math.min(4, session - 1));
+        assert.equal(coordination.options.max, 4);
         assert.equal(operations.options.max! + coordination.options.max!, session);
       } finally {
         await pg.close();
+      }
+    }
+  } finally {
+    configurePgPoolLimits({ query: 8, session: 8 });
+  }
+});
+
+test("small budgets preserve one shared session pool and close ownership", async (t) => {
+  const warning = t.mock.method(console, "warn", () => {});
+  try {
+    for (const session of [1, 2, 3, 4]) {
+      configurePgPoolLimits({ query: 8, session });
+      assert.equal(warning.mock.callCount(), session);
+      assert.match(String(warning.mock.calls.at(-1)!.arguments[0]), /configured budget is unchanged/);
+      const a = createPgPool(`postgres://unused@127.0.0.1:1/small-${session}`);
+      const b = createPgPool(`postgres://unused@127.0.0.1:1/small-${session}`);
+      try {
+        const operations = await a.pool("session");
+        const coordination = await a.pool("coordination");
+        assert.equal(coordination, operations);
+        assert.equal(await b.pool("coordination"), operations);
+        assert.equal(operations.options.max, session);
+        assert.notEqual(await a.pool(), operations);
+        await a.close();
+        assert.equal(operations.ending, false);
+        await b.close();
+        assert.equal(operations.ended, true);
+      } finally {
+        await Promise.all([a.close(), b.close()]);
       }
     }
   } finally {

@@ -212,8 +212,10 @@ export function configurePgPoolLimits(limits: { query: number; session: number }
   for (const limit of Object.values(limits)) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Postgres pool limits must be positive integers");
   }
-  if (limits.session < 2)
-    throw new Error("Postgres session budget must be at least 2 to reserve coordination capacity");
+  if (limits.session < 5)
+    console.warn(
+      `[pg] PG_SESSION_POOL_MAX=${limits.session}: using one shared session pool; coordination isolation requires at least 5 connections. The configured budget is unchanged.`,
+    );
   poolLimits = { ...limits };
 }
 
@@ -222,7 +224,8 @@ function acquirePool(
   kind: "query" | "session" | "coordination",
 ): { instance: Promise<Pool>; release(): Promise<void> } {
   const ssl = pgCaOptions();
-  const reserved = Math.min(4, poolLimits.session - 1);
+  const reserved = poolLimits.session >= 5 ? 4 : 0;
+  if (kind === "coordination" && reserved === 0) kind = "session";
   const max = { query: poolLimits.query, session: poolLimits.session - reserved, coordination: reserved }[kind];
   const key = JSON.stringify([connectionString, ssl, kind, max]);
   let shared = sharedPools.get(key);

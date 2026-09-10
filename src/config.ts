@@ -958,10 +958,9 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
-function positiveIntegerEnv(name: string, value: string | undefined, fallback: number, minimum = 1): number {
+function positiveIntegerEnv(name: string, value: string | undefined, fallback: number): number {
   const parsed = numEnvStrict(name, value) ?? fallback;
-  if (!Number.isSafeInteger(parsed) || parsed < minimum)
-    throw new Error(`${name} must be an integer at least ${minimum}`);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer`);
   return parsed;
 }
 
@@ -1188,7 +1187,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     pgQueryPoolMax: positiveIntegerEnv("PG_QUERY_POOL_MAX", env.PG_QUERY_POOL_MAX, 8),
-    pgSessionPoolMax: positiveIntegerEnv("PG_SESSION_POOL_MAX", env.PG_SESSION_POOL_MAX, 8, 2),
+    pgSessionPoolMax: positiveIntegerEnv("PG_SESSION_POOL_MAX", env.PG_SESSION_POOL_MAX, 8),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),

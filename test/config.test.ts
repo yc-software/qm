@@ -659,7 +659,7 @@ test("retired brain environment does not configure a runtime integration and war
 });
 
 test("Postgres query and session budgets are bounded independently", () => {
-  assert.throws(() => loadConfig({ PG_SESSION_POOL_MAX: "1" }), /at least 2/);
+  assert.equal(loadConfig({ PG_SESSION_POOL_MAX: "1" }).pgSessionPoolMax, 1);
   const defaults = loadConfig({});
   assert.equal(defaults.pgQueryPoolMax, 8);
   assert.equal(defaults.pgSessionPoolMax, 8);
