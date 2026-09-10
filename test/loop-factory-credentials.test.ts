@@ -12,6 +12,11 @@ import {
 const LINEAR_SECRET = "lin_FAKE_SECRET_1";
 const GITHUB_SECRET = "ghp_FAKE_SECRET_2";
 const ANTHROPIC_SECRET = "sk-ant-FAKE_SECRET_3";
+const SECRET_BY_SLUG: Record<string, string> = {
+  [FACTORY_LINEAR_SLUG]: LINEAR_SECRET,
+  [FACTORY_GITHUB_SLUG]: GITHUB_SECRET,
+  [FACTORY_ANTHROPIC_SLUG]: ANTHROPIC_SECRET,
+};
 const ORG = "org:acme";
 
 function record(slug: string, over: Partial<DecryptedServiceCredential> = {}): DecryptedServiceCredential {
