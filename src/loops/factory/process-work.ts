@@ -15,16 +15,18 @@ export interface FactoryEnvInput {
   guidance?: string;
   linearApiKey: string;
   githubToken: string;
+  anthropicApiKey: string;
   repoDir: string;
   factorySourceDir: string;
 }
 
 export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string> {
-  const { config, guidance, linearApiKey, githubToken, repoDir, factorySourceDir } = input;
+  const { config, guidance, linearApiKey, githubToken, anthropicApiKey, repoDir, factorySourceDir } = input;
   return {
     ...(guidance !== undefined ? { IO_FEEDBACK: guidance } : {}),
     IO_LINEAR_API_KEY: linearApiKey,
     IO_GITHUB_TOKEN: githubToken,
+    ANTHROPIC_API_KEY: anthropicApiKey,
     IO_PUBLISH_FORGE: config.forge,
     IO_PUBLISH_PROJECT: config.publishProject,
     IO_PUBLISH_TARGET: config.targetBranch,

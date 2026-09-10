@@ -68,6 +68,7 @@ export interface FactoryContext {
   config: FactoryConfig;
   linearApiKey: string;
   githubToken: string;
+  anthropicApiKey: string;
 }
 
 export type FactoryWorkEffects = Pick<LoopRunnerEffects, "enumerate" | "work" | "captureOutputs" | "evaluate">;
@@ -126,7 +127,12 @@ export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<Fact
   if (!config) throw new Error("factory_config_missing");
   const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId);
   if (!credentials.ok) throw new Error(`factory_credentials_missing: ${credentials.missing.join(", ")}`);
-  return { config, linearApiKey: credentials.linearApiKey, githubToken: credentials.githubToken };
+  return {
+    config,
+    linearApiKey: credentials.linearApiKey,
+    githubToken: credentials.githubToken,
+    anthropicApiKey: credentials.anthropicApiKey,
+  };
 }
 
 export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkEffects {
@@ -158,7 +164,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
     },
 
     async work({ loop, item, guidance }) {
-      const { config, linearApiKey, githubToken } = await loadFactoryContext(deps);
+      const { config, linearApiKey, githubToken, anthropicApiKey } = await loadFactoryContext(deps);
 
       const preflightHandle = await provisionWorkspace(loop.ownerScopeId);
       let preflight: PreflightResult;
@@ -175,6 +181,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
         guidance,
         linearApiKey,
         githubToken,
+        anthropicApiKey,
         repoDir,
         factorySourceDir: FACTORY_SOURCE_DIR,
       });

@@ -1117,7 +1117,7 @@ test("applying a factory config mints one factory loop owned by the acting admin
 
     const fired = await srv.built.loops.fire!.fire(loop.id, "apply-fire-1");
     assert.equal(fired.status, "failed");
-    assert.match(fired.note ?? "", /factory_credentials_missing: factory-linear, factory-github/);
+    assert.match(fired.note ?? "", /factory_credentials_missing: factory-linear, factory-github, factory-anthropic/);
   } finally {
     await srv.close();
   }

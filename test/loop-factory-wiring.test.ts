@@ -41,5 +41,8 @@ test("a booted instance drives a factory loop through the factory dependencies i
 
   const uncredentialed = await built.loops.fire!.fire(loop.id, "f2");
   assert.equal(uncredentialed.status, "failed");
-  assert.match(uncredentialed.note ?? "", /factory_credentials_missing: factory-linear, factory-github/);
+  assert.match(
+    uncredentialed.note ?? "",
+    /factory_credentials_missing: factory-linear, factory-github, factory-anthropic/,
+  );
 });
