@@ -15,6 +15,9 @@ import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.t
 import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 
+import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
+import { installFakeAgent37 } from "./support/fake-agent37.ts";
+
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
 
 test("Local scope deletion removes deterministic resources without provisioning, tolerates absence and propagates failures", async () => {
@@ -108,3 +111,33 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   assert.equal(calls.length, 6);
   assert.equal(calls.at(-1)?.at(-1), localVolumeName("scope"));
 });
+
+for (const [name, create, install] of [
+  ["Smolmachines", createSmolmachinesSandbox, installFakeSmolmachines],
+  ["Agent37", createAgent37Sandbox, installFakeAgent37],
+] as const) {
+  test(`${name} stale adapter deletes another adapter's replacement for the same scope`, async () => {
+    const fake = install();
+    try {
+      const options = { token: "test-token", fetchImpl: fake.fetchImpl };
+      const a = create(workspace(), options);
+      const b = create(workspace(), options);
+      const layers = [{ scopeId: "replaced", mountPath: "", mode: "rw" as const }];
+      await a.provision(layers);
+      await b.destroyScope!("replaced");
+      await b.provision(layers);
+      assert.equal(fake.names().length, 1);
+      const callsBefore = fake.calls.length;
+      await a.destroyScope!("replaced");
+      assert.deepEqual(fake.names(), []);
+      assert.deepEqual(
+        fake.calls.slice(callsBefore).map((call) => call.method),
+        ["GET", "DELETE"],
+      );
+      await a.destroyScope!("replaced");
+      assert.deepEqual(fake.names(), []);
+    } finally {
+      fake.cleanup();
+    }
+  });
+}

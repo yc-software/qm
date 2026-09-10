@@ -153,8 +153,11 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   }
 
   async function deleteMachine(name: string): Promise<void> {
-    const found = idByName.get(name) ?? (await findMachine(name))?.id;
-    if (!found) return;
+    const found = (await findMachine(name))?.id;
+    if (!found) {
+      idByName.delete(name);
+      return;
+    }
     const res = await api("DELETE", `/v1/machines/${encodeURIComponent(found)}`);
     if (!res.ok && res.status !== 404) {
       throw new Error(`smolmachines delete ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
