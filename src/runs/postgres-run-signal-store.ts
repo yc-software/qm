@@ -65,7 +65,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     if (closed || connecting || listenClient || listeners.size === 0) return;
     connecting = true;
     void (async () => {
-      const client = await (await pg.pool()).connect();
+      const client = await (await pg.sessionPool()).connect();
       client.on("notification", (msg) => {
         if (msg.channel === CHANNEL && msg.payload) ring(msg.payload);
       });

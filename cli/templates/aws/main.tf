@@ -858,7 +858,7 @@ resource "aws_cloudfront_distribution" "portal" {
 
     forwarded_values {
       query_string = true
-      headers      = ["Accept", "Authorization", "CloudFront-Forwarded-Proto", "Content-Type", "Origin", "Referer", "Sec-Fetch-Site"]
+      headers      = ["Accept", "Authorization", "CloudFront-Forwarded-Proto", "Content-Type", "Origin", "Referer", "Sec-Fetch-Site", "X-Timestamp", "X-Signature", "X-Agent-Capability"]
       cookies { forward = "all" }
     }
   }

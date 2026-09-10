@@ -4741,6 +4741,58 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
   }
 });
 
+test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is configured", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-proxy-"));
+  const fake = fakeAws(dir, "console.log('')");
+  const priorSecret = process.env.CORE_SIGNING_SECRET;
+  const priorProtocol = process.env.AWS_FAKE_LISTENER_PROTOCOL;
+  process.env.AWS_FAKE_LISTENER_PROTOCOL = "HTTP";
+  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(https, "request", () => {
+    throw new Error("must not dial the HTTP origin with TLS");
+  });
+  t.mock.method(globalThis, "fetch", async (url: URL, init: RequestInit) => {
+    calls.push({ url: url.href, init });
+    return new Response("applied", { status: 200 });
+  });
+  try {
+    const configured = {
+      ...config,
+      publicUrl: "https://test.cloudfront.net",
+      env: { ...config.env, core: { ...config.env.core, AWS_PUBLIC_ORIGIN_URL: "http://acme-qm.elb.example" } },
+    };
+    for (const method of ["GET", "PUT"] as const) {
+      const body = method === "PUT" ? '{"contract":1}' : "";
+      assert.equal(
+        (await awsDeploymentLayerTransport({ config: configured, configDir: dir, method, body })).status,
+        200,
+      );
+    }
+    assert.equal(calls.length, 2);
+    for (const { url, init } of calls) {
+      assert.equal(url, "https://test.cloudfront.net/v1/deployment-layer");
+      assert.equal(init.redirect, "error");
+      assert.ok(init.signal instanceof AbortSignal);
+      const headers = init.headers as Record<string, string>;
+      assert.equal(
+        headers["x-signature"],
+        `v0=${createHmac("sha256", TEST_SECRET_VALUE)
+          .update(`v0:${headers["x-timestamp"]}:${init.method}\n/v1/deployment-layer\n${init.body ?? ""}`)
+          .digest("hex")}`,
+      );
+    }
+  } finally {
+    t.mock.restoreAll();
+    fake.restore();
+    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+    else process.env.CORE_SIGNING_SECRET = priorSecret;
+    if (priorProtocol === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
+    else process.env.AWS_FAKE_LISTENER_PROTOCOL = priorProtocol;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS layer transport rejects invalid targets and propagates TLS and body failures without fallback", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-failure-"));
   const fake = fakeAws(dir, "console.log('')");

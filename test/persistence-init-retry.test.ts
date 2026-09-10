@@ -15,9 +15,13 @@ function flakyPgPool(failures: number): PgPool {
       remaining--;
       throw new Error("transient pg failure");
     }
-    return { rows: [{ token: "t", json: { n: 1 } }], rowCount: 1 };
+    return {
+      rows: [{ token: "t", json: { n: 1 } }],
+      rowCount: 1,
+    };
   }
   return {
+    sessionPool: () => Promise.reject(new Error("not backed by a real pool")),
     pool: () => Promise.reject(new Error("not backed by a real pool")),
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
