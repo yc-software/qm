@@ -456,7 +456,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
 
     const compact = Boolean(ctx.pane) || isPhone();
-    const showRuntimeControls = !appState.me?.individualModelAuth;
     const runtimeControls = compact
       ? settingsControl(agent, selectedModel, inputBlocked)
       : html`
@@ -653,7 +652,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   `
             }
           </div>
-          <div class="composer-right">${showRuntimeControls ? runtimeControls : nothing} ${sendControls(agent)}</div>
+          <div class="composer-right">${runtimeControls} ${sendControls(agent)}</div>
         </div>
         ${composerNotice}
       </form>

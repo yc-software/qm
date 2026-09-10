@@ -1125,7 +1125,7 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
-  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope, target.actorId));
 }
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
@@ -1163,6 +1163,11 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
     if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
+    if (ctx.deps.userModelCredentials && (await config.getIndividualModelAuthDurable())) {
+      const available = await runtimeConfigBody(ctx, target.scope, target.actorId);
+      if (!available.modelsByHarness[harnessId]?.includes(modelId))
+        return sendJson(ctx.res, 400, { error: "model_not_available_for_account" });
+    }
     const effortLevel = ctx.body.effortLevel ?? "auto";
     if (typeof effortLevel !== "string" || !(THINKING_LEVELS as readonly string[]).includes(effortLevel))
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
@@ -1177,7 +1182,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     resource: "runtime-config",
     scopeLabel: target.scope,
   });
-  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope));
+  return sendJson(ctx.res, 200, await runtimeConfigBody(ctx, target.scope, target.actorId));
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
