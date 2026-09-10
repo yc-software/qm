@@ -86,6 +86,11 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
   request: async (config, url, init) => {
     const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
     if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
+    if (awsPublicOrigin(config).protocol === "http:") {
+      assertCloudFrontLayerTarget(config, url, target);
+      const response = await fetch(url, init);
+      return { status: response.status, body: await response.text() };
+    }
     return new Promise((resolve, reject) => {
       const request = https.request(
         url,
@@ -3188,6 +3193,57 @@ const validAlbHostname = (value: string): boolean =>
   value
     .split(".")
     .every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
+
+function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string): void {
+  interface Distribution {
+    DomainName?: string;
+    Status?: string;
+    Enabled?: boolean;
+    ContinuousDeploymentPolicyId?: string;
+    CacheBehaviors?: { Quantity?: number };
+    DefaultCacheBehavior?: {
+      TargetOriginId?: string;
+      MaxTTL?: number;
+      CachePolicyId?: string;
+      FunctionAssociations?: { Quantity?: number };
+      LambdaFunctionAssociations?: { Quantity?: number };
+    };
+    Origins?: {
+      Items?: Array<{
+        Id?: string;
+        DomainName?: string;
+        OriginPath?: string;
+        CustomOriginConfig?: { OriginProtocolPolicy?: string; HTTPPort?: number };
+      }>;
+    };
+  }
+  const distributions =
+    awsJson<{ DistributionList?: { Items?: Distribution[] } }>(requireAws(config), ["cloudfront", "list-distributions"])
+      .DistributionList?.Items ?? [];
+  const matches = distributions.filter((distribution) => distribution.DomainName === url.hostname);
+  const distribution = matches.length === 1 ? matches[0] : undefined;
+  const behavior = distribution?.DefaultCacheBehavior;
+  const origin = distribution?.Origins?.Items?.find((item) => item.Id === behavior?.TargetOriginId);
+  if (
+    !distribution?.Enabled ||
+    distribution.Status !== "Deployed" ||
+    distribution.ContinuousDeploymentPolicyId ||
+    behavior?.MaxTTL !== 0 ||
+    behavior.CachePolicyId ||
+    distribution.CacheBehaviors?.Quantity !== 0 ||
+    (behavior?.FunctionAssociations?.Quantity ?? 0) !== 0 ||
+    (behavior?.LambdaFunctionAssociations?.Quantity ?? 0) !== 0 ||
+    origin?.DomainName?.toLowerCase().replace(/\.$/, "") !== target ||
+    origin.OriginPath ||
+    origin.CustomOriginConfig?.OriginProtocolPolicy !== "http-only" ||
+    origin.CustomOriginConfig.HTTPPort !== 80 ||
+    (url.port && url.port !== "443")
+  ) {
+    throw new CliError(
+      "AWS deployment-layer HTTPS proxy must be a deployed CloudFront distribution routing directly to the selected ALB without alternate behaviors, origin paths, or edge functions",
+    );
+  }
+}
 
 function awsCoreHostnames(config: QmConfig): string[] {
   const hosts: string[] = [];
