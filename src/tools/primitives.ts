@@ -67,6 +67,7 @@ import type { Cron, Webhook } from "../types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
+import type { EmailDraftInput, HeldEmailDraft } from "../loops/email-draft.ts";
 
 const SKILL_SKILLMD_RE = /^(?:\.\/)?skills\/([^/]+)\/SKILL\.md$/;
 function skillTreeDirFor(path: string): string | null {
@@ -213,6 +214,7 @@ export interface ToolContext extends SurfaceToolDeps {
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
+  holdEmailDraft?(draft: EmailDraftInput): Promise<HeldEmailDraft>;
   memorySearch(q: string, limit?: number): Promise<string[] | null>;
   memoryRead(): Promise<string | null>;
   memoryRemember(facts: string[]): Promise<number | null>;
@@ -486,6 +488,7 @@ export interface ToolContextDeps {
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
+  holdEmailDraft?: (draft: EmailDraftInput) => Promise<HeldEmailDraft>;
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -896,6 +899,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return { content: null, sourceScopeId: null };
       });
     },
+
+    ...(deps.holdEmailDraft ? { holdEmailDraft: deps.holdEmailDraft } : {}),
 
     async createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact> {
       if (!deps.files || !writableScopeId) throw new Error("playgrounds require a writable artifact store");

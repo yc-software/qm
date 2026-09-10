@@ -1,4 +1,6 @@
 import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
+import { emailDraftsIn } from "./email-draft";
+import { emailDraftCard } from "./email-draft-card";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -1763,6 +1765,9 @@ export function createChatSurface(
       parts.push(typingRow());
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
+    }
+    for (const draft of emailDraftsIn((message as AssistantWork).work?.activity)) {
+      parts.push(html`${emailDraftCard(draft)}`);
     }
     return parts;
   }

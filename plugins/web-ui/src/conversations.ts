@@ -65,10 +65,10 @@ export function onExitCanvas(fn: () => void): void {
   exitCanvas = fn;
 }
 
-let inboxItemHandler: ((event: { loopId: string; itemId: string; op: string }) => void) | null = null;
+const inboxItemHandlers = new Set<(event: { loopId: string; itemId: string; op: string }) => void>();
 
 export function onInboxItemEvent(fn: (event: { loopId: string; itemId: string; op: string }) => void): void {
-  inboxItemHandler = fn;
+  inboxItemHandlers.add(fn);
 }
 
 let inboxResyncHandler: (() => void) | null = null;
@@ -102,7 +102,9 @@ export function ensureDeliveryStream(): void {
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
     },
     () => void refreshSessions({ silent: true }),
-    (event) => inboxItemHandler?.(event),
+    (event) => {
+      for (const fn of inboxItemHandlers) fn(event);
+    },
     () => inboxResyncHandler?.(),
   );
   document.addEventListener("visibilitychange", () => {

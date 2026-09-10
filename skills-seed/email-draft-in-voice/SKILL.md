@@ -30,6 +30,12 @@ memory or from this conversation's tone. The profile's **Hard rules** and
    could appear in anyone's email, rewrite it or cut it.
 4. Show the user the exact text and ask for approval before creating any draft.
 
+## Hand it over
+
+If the `send_email` tool is available, call it with the finished to/cc/subject/body and
+stop: the draft appears in the conversation for the user to edit and send themselves.
+Otherwise fall back to Gmail Drafts below.
+
 ## Gmail
 
 Use the google-workspace skill's helper (the user's OAuth token is already on your

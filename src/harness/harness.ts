@@ -95,6 +95,7 @@ export interface HarnessTurnInput {
   tools: ToolContext;
   credentialExecServices?: readonly { service: string; binary: string }[];
   commandCredentialHandles?: readonly string[];
+  emailDrafts?: boolean;
   toolApprovalGate?(tool: string): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;
   tape?(rec: NewTapeRecord): Promise<unknown>;

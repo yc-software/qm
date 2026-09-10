@@ -16,7 +16,7 @@ import {
   type SourceActionResult,
 } from "./adapter.ts";
 
-const GMAIL_HOST = "gmail.googleapis.com";
+export const GMAIL_HOST = "gmail.googleapis.com";
 
 interface GmailMeta {
   threadId: string;
@@ -74,7 +74,9 @@ function wrap76(s: string): string {
 export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   const explicit = draft.subject?.trim();
   if (explicit) return explicit;
-  const original = metaOf(item)?.subject?.trim() ?? titleOf(item).trim();
+  const meta = metaOf(item);
+  const original = meta?.subject?.trim() ?? titleOf(item).trim();
+  if (!meta) return original;
   if (!original) return "Re:";
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }

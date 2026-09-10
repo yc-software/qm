@@ -194,6 +194,8 @@ import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
+import { holdEmailDraft, type EmailDraftInput } from "../loops/email-draft.ts";
+import { GMAIL_HOST } from "../loops/sources/gmail.ts";
 
 export {
   egressClaimAllowingControlPlane,
@@ -2115,6 +2117,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
+          ...(deps.emailDrafts && isWeb && connectorEnv[envKey(GMAIL_HOST)]
+            ? {
+                holdEmailDraft: (draft: EmailDraftInput) =>
+                  holdEmailDraft(deps.emailDrafts!, actor.id, draft, session.id),
+              }
+            : {}),
           ...(() => {
             const available =
               strictReadOnly || actor.type !== "internal"
@@ -2904,6 +2912,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tools,
             ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
+            ...(tools.holdEmailDraft ? { emailDrafts: true } : {}),
             ...(selectedTape
               ? {
                   tapeRows: selectedTape.rows,
