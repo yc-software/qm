@@ -239,13 +239,14 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     assert.equal(result.reply, "Here are the previews.");
     assert.equal(calls, 2);
     const original = (await store.getEntries(session.id)).find((e) => e.type === "tool_result");
-    assert.deepEqual((original?.payload as { files?: unknown[] }).files, files);
+    assert.ok(original);
+    assert.deepEqual((original.payload as { files?: unknown[] }).files, files);
     const source = createTranscriptSource(store);
     for (const read of [await source.forRender(session.id), await source.forViewer(session.id, "tester")]) {
-      assert.deepEqual(
-        read.entries.find((e) => e.type === "tool_result"),
-        original,
-      );
+      const restored = read.entries.find((e) => e.type === "tool_result");
+      assert.ok(restored);
+      assert.deepEqual((restored.payload as { files?: unknown[] }).files, files);
+      assert.deepEqual(restored, original);
     }
   } finally {
     globalThis.fetch = realFetch;
