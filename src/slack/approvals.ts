@@ -32,7 +32,7 @@ import { resolveAgentRequestTarget } from "./approval-context.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import type { SlackAgentRequestContext, SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
-import { userFacingFailureClause } from "../core/failure-copy.ts";
+import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -822,14 +822,11 @@ export function createApprovals(deps: {
         return;
       }
 
+      const standalone = standaloneFailureText(result);
       const failLink = isBoundaryRefusal(result.reason) ? null : (result.adminUrl ?? null);
       const failDetail = failLink ? ` Full error: ${failLink}` : "";
-      await updateSlackMessage(
-        client,
-        cardChannel,
-        messageTs,
-        `I can't continue — ${userFacingFailureClause(result)}.${failDetail}`,
-      );
+      const failureText = standalone ?? `${userFacingFailureClause(result)}.${failDetail}`;
+      await updateSlackMessage(client, cardChannel, messageTs, `I can't continue — ${failureText}`);
       ackConveyedQuarantine(outcome);
     } catch (err) {
       console.error("%s", `[slack] approval ${requestId} action failed:`, errMessage(err));

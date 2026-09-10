@@ -18,8 +18,39 @@ test("the shared failure policy renders quarantine canned, refused reasons verba
   } as const;
   assert.equal(userFacingFailureText(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
   assert.doesNotMatch(userFacingFailureText(quarantine), /internal screening details/);
+  assert.doesNotMatch(userFacingFailureText(quarantine), /ask an admin/i);
   assert.equal(userFacingFailureClause(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
   assert.equal(standaloneFailureText(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
+
+  const linkedQuarantine = { ...quarantine, adminUrl: "https://portal.example.com/admin/history/s/s-1" };
+  assert.equal(
+    userFacingFailureText(linkedQuarantine),
+    "I couldn't act because my security screen flagged part of this message or its conversation context. Please retry without the flagged context, or ask an admin to review this quarantine in session history: https://portal.example.com/admin/history/s/s-1",
+  );
+  assert.doesNotMatch(userFacingFailureText(linkedQuarantine), /internal screening details/);
+  assert.equal(userFacingFailureText(linkedQuarantine).match(/https:\/\//g)?.length, 1);
+  assert.match(
+    userFacingFailureText({
+      ...quarantine,
+      adminUrl: "HTTPS://PORTAL.EXAMPLE.COM/admin/history/s/s-1",
+    }),
+    /https:\/\/portal\.example\.com\/admin\/history\/s\/s-1$/,
+  );
+  for (const adminUrl of [
+    "javascript:alert(1)",
+    "ftp://portal.example.com/admin/history/s/s-1",
+    "not a URL",
+    "http:portal.example.com/admin/history/s/s-1",
+    "\nhttps://portal.example.com/admin/history/s/s-1",
+    "https://portal.example.com/admin/history/s/s-1\nspoofed",
+    "https://portal.example.com/admin/history/s/<s-1>",
+    'https://portal.example.com/admin/history/s/"s-1"',
+    "https://portal.example.com/admin/history/s/'s-1'",
+  ]) {
+    const text = userFacingFailureText({ ...quarantine, adminUrl });
+    assert.equal(text, SECURITY_QUARANTINE_REFUSAL_TEXT);
+    assert.doesNotMatch(text, /admin|review|internal screening details/i);
+  }
 
   const busy = { status: "refused", refusalKind: "session_busy", reason: SESSION_BUSY_USER_TEXT } as const;
   assert.equal(userFacingFailureText(busy), SESSION_BUSY_USER_TEXT);
