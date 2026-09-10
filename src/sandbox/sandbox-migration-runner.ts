@@ -21,6 +21,7 @@ export interface SandboxMigrationOptions {
   advisoryLock?: AdvisoryLock;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   settleMs?: number;
+  withLegacyMutation?: <T>(scopeId: string, action: () => Promise<T>) => Promise<T>;
   hasLiveWork?: (scopeId: string) => Promise<boolean>;
 }
 
@@ -213,10 +214,13 @@ export function createSandboxMigrationRunner(opts: SandboxMigrationOptions): San
   const park = (s: Sandbox, h: SandboxHandle) => s.teardown(h).catch(() => {});
 
   return {
-    migrateScope: (scopeId, to, reason?, migrateOpts?) =>
-      opts.advisoryLock
-        ? opts.advisoryLock.withLock(`sandbox-migration:${scopeId}`, () => migrate(scopeId, to, reason, migrateOpts))
-        : migrate(scopeId, to, reason, migrateOpts),
+    migrateScope: (scopeId, to, reason?, migrateOpts?) => {
+      const run = () =>
+        opts.advisoryLock
+          ? opts.advisoryLock.withLock(`sandbox-migration:${scopeId}`, () => migrate(scopeId, to, reason, migrateOpts))
+          : migrate(scopeId, to, reason, migrateOpts);
+      return opts.withLegacyMutation ? opts.withLegacyMutation(scopeId, run) : run();
+    },
     listRoutes: () => routes.entries(),
     availableBackends: () =>
       Object.entries(backends)

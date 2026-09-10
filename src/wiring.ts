@@ -981,13 +981,8 @@ export function buildApp(
       );
       return { egressToken };
     },
-    hasLiveWork: async (scope) => {
-      if ((await sandboxResources.resolve(scope)) !== undefined)
-        throw new Error(
-          "sandbox migration is retired for explicit defaults; create a sandbox and set its default instead",
-        );
-      return !!processes && (await processes.liveByScope(scope)).length > 0;
-    },
+    withLegacyMutation: (scope, action) => sandboxResources.withLegacyMutation(scope, action),
+    hasLiveWork: async (scope) => !!processes && (await processes.liveByScope(scope)).length > 0,
   });
   const secretSource =
     config.secretsBackend === "aws"

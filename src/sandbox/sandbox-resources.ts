@@ -55,6 +55,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null | undefined>;
   get(id: string): Promise<SandboxResource>;
+  withLegacyMutation<T>(scopeId: string, action: () => Promise<T>): Promise<T>;
   recordLegacy(scopeId: string, backend: SandboxBackendName, handle: SandboxHandle): Promise<string>;
 }
 
@@ -167,26 +168,38 @@ export function createSandboxResources(opts: {
       if (record.state === "retired") throw new Error("sandbox has been retired");
       return action();
     });
+  const recordLegacy = async (scopeId: string, backend: SandboxBackendName, handle: SandboxHandle): Promise<string> => {
+    const id = legacyId(scopeId, backend);
+    await opts.records.putIfAbsent(id, {
+      id,
+      backend,
+      ownerScopeId: scopeId,
+      backingScopeId: scopeId,
+      name: "Existing scoped computer",
+      createdBy: "system",
+      createdAt: new Date().toISOString(),
+      legacy: true,
+      state: "ready",
+      machineId: handle.id,
+      spec: opts.backends[backend]?.profile.spec,
+    });
+    if (await isActivated()) await opts.defaults.putIfAbsent(scopeId, { sandboxId: id });
+    return id;
+  };
   return {
     initialize,
     get,
-    async recordLegacy(scopeId, backend, handle) {
-      const id = legacyId(scopeId, backend);
-      await opts.records.putIfAbsent(id, {
-        id,
-        backend,
-        ownerScopeId: scopeId,
-        backingScopeId: scopeId,
-        name: "Existing scoped computer",
-        createdBy: "system",
-        createdAt: new Date().toISOString(),
-        legacy: true,
-        state: "ready",
-        machineId: handle.id,
-        spec: opts.backends[backend]?.profile.spec,
+    recordLegacy: (scopeId, backend, handle) =>
+      opts.lock.withLock("sandbox-resources:activation", () => recordLegacy(scopeId, backend, handle)),
+    async withLegacyMutation(scopeId, action) {
+      await initialize();
+      return opts.lock.withLock("sandbox-resources:activation", async () => {
+        if ((await isActivated()) || (await opts.defaults.get(scopeId)))
+          throw new Error(
+            "sandbox migration is retired for explicit defaults; create a sandbox and set its default instead",
+          );
+        return action();
       });
-      if (await isActivated()) await opts.defaults.putIfAbsent(scopeId, { sandboxId: id });
-      return id;
     },
     use,
     async retire(actorId, id) {

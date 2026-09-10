@@ -32,9 +32,9 @@ Execution and process handlers retain their existing approval and output-screeni
 
 ## Staged activation
 
-The feature defaults off. Deploy this reader-compatible version to every core and worker and retain a compatible rollback release before enabling it. Drain old cores and in-flight legacy migrations before activation. An older binary cannot be made safe by a lock introduced in a newer binary.
+The feature defaults off. Deploy this reader-compatible version to every core and worker and retain a compatible rollback release before enabling it. Drain pre-feature cores and their in-flight work before activation. Compatible readers coordinate legacy record publication and migrations with the activation lock; ordinary provider provisioning remains concurrent. An older binary cannot be made safe by a lock introduced in a newer binary.
 
-On activation, startup completes a durable, locked backfill before accepting new work. It preserves explicit defaults, existing routing, session scopes, provider records, and original backing identities. It makes no provider calls or disk copies. Inferred resources start unverified. The activation marker is written last, so an interrupted backfill can be retried.
+On activation, startup completes a durable, locked backfill before accepting new work. It preserves explicit defaults, existing routing, session scopes, provider records, and original backing identities. It makes no provider calls or disk copies. Inferred resources start unverified. The activation marker is written last, so an interrupted backfill can be retried. Legacy provisioning selected before activation may complete afterward: its inventory publication fills only a missing default and preserves an explicit selection or null. Legacy migrations complete before backfill or are refused after activation.
 
 The activation marker is permanent: after it exists, a missing default means no default even when the feature flag is turned off again. Turning the flag off restores the legacy `execute` and `background` tool names and hides new management operations; it does not restore implicit computer creation or move running jobs. Rollback must use a reader-compatible release.
 

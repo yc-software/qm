@@ -557,3 +557,81 @@ test("boot activation freezes legacy scope adoption before a new session arrives
   assert.ok((await resources.resolve("personal:old"))?.id);
   assert.deepEqual(provisioned, []);
 });
+
+test("activation and a compatible reader publish a late legacy computer without losing its default", async () => {
+  const { options, defaults, records } = fixture(undefined, []);
+  const enumerating = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<string[]>();
+  const active = createSandboxResources({
+    ...options,
+    legacyScopes: () => {
+      enumerating.resolve();
+      return resume.promise;
+    },
+  });
+  const reader = createSandboxResources({ ...options, enabled: false });
+  const activation = active.initialize();
+  await enumerating.promise;
+  const publication = reader.recordLegacy("personal:late", "local", { id: "late-machine", rootDir: "/workspace" });
+  resume.resolve([]);
+  await activation;
+  const id = await publication;
+  assert.deepEqual(await defaults.get("personal:late"), { sandboxId: id });
+  assert.equal((await reader.resolve("personal:late"))?.id, id);
+  assert.equal((await records.get(id))?.machineId, "late-machine");
+  await defaults.put("personal:cleared", { sandboxId: null });
+  await reader.recordLegacy("personal:cleared", "local", { id: "in-flight", rootDir: "/workspace" });
+  assert.equal(await reader.resolve("personal:cleared"), null);
+});
+
+test("activation waits for a compatible legacy route mutation and rejects later mutations", async () => {
+  const { options, routes } = fixture(undefined, []);
+  const reader = createSandboxResources({ ...options, enabled: false });
+  const active = createSandboxResources(options);
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const mutation = reader.withLegacyMutation("personal:moving", async () => {
+    entered.resolve();
+    await resume.promise;
+    await routes.put("personal:moving", { backend: "modal" });
+  });
+  await entered.promise;
+  const activation = active.initialize();
+  resume.resolve();
+  await Promise.all([mutation, activation]);
+  assert.equal((await active.resolve("personal:moving"))?.backend, "modal");
+  let changed = false;
+  await assert.rejects(
+    reader.withLegacyMutation("personal:moving", async () => {
+      changed = true;
+    }),
+    /retired/,
+  );
+  assert.equal(changed, false);
+});
+
+test("a legacy migration queued behind activation fails before its action runs", async () => {
+  const { options } = fixture(undefined, []);
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<string[]>();
+  const active = createSandboxResources({
+    ...options,
+    legacyScopes: () => {
+      entered.resolve();
+      return resume.promise;
+    },
+  });
+  const reader = createSandboxResources({ ...options, enabled: false });
+  const activation = active.initialize();
+  await entered.promise;
+  let changed = false;
+  const rejected = assert.rejects(
+    reader.withLegacyMutation("personal:late", async () => {
+      changed = true;
+    }),
+    /retired/,
+  );
+  resume.resolve([]);
+  await Promise.all([activation, rejected]);
+  assert.equal(changed, false);
+});
