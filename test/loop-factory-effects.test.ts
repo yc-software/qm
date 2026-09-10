@@ -137,6 +137,7 @@ function fakeSandbox(
     stdout?: string;
     teardownError?: Error;
     bootstrapExit?: number;
+    bootstrapOutput?: string;
     read?: (n: number, calls: Call[]) => Promise<ReadProcessResult>;
   } = {},
 ): FakeSandbox {
@@ -188,7 +189,12 @@ function fakeSandbox(
       calls.push({ op: "readProcess", handle, processId });
       const start = calls.find((call) => call.op === "startProcess" && call.processId === processId);
       if (start?.op === "startProcess" && !start.command.includes(FACTORY_WRAPPER)) {
-        return Promise.resolve({ chunks: "", cursor: 0, status: { state: "exited", code: opts.bootstrapExit ?? 0 } });
+        const chunks = opts.bootstrapOutput ?? "";
+        return Promise.resolve({
+          chunks,
+          cursor: chunks.length,
+          status: { state: "exited", code: opts.bootstrapExit ?? 0 },
+        });
       }
       const n = calls.filter((call) => call.op === "readProcess" && call.processId === processId).length;
       return (opts.read ?? defaultRead)(n, calls);
@@ -593,6 +599,21 @@ test("a bootstrap that exits non-zero fails the run loudly, starts no wrapper an
   assert.ok(teardown?.op === "teardown");
   assert.deepEqual(teardown.opts, { keepWarm: true });
   assert.deepEqual(await effects.captureOutputs({ loop: LOOP, item: ITEM, runId: "factory:loop-1:item-1:1" }), []);
+});
+
+test("a failed bootstrap names git's reason in the error and masks the token", async () => {
+  const fake = fakeSandbox({
+    bootstrapExit: 128,
+    bootstrapOutput: `Cloning into '/workspace/qm-yc'...\nfatal: could not read Username for 'https://github.com/': terminal prompts disabled\nremote: ${GITHUB_TOKEN}\n`,
+  });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox }));
+
+  const error = await rejection(workedRunId(effects));
+
+  assert.match(error.message, /^factory_source_bootstrap_failed: exit 128 — /);
+  assert.match(error.message, /could not read Username/);
+  assert.equal(error.message.includes(GITHUB_TOKEN), false);
+  assert.match(error.message, /\*\*\*/);
 });
 
 test("the bootstrap authenticates through the process env alone and never puts the token in a command", async () => {

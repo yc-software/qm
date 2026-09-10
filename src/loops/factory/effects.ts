@@ -13,7 +13,7 @@ import type { SuccessVerdict } from "../success-evaluation.ts";
 import { createSweeper } from "../../util/sweeper.ts";
 import { swallow } from "../../util/errors.ts";
 import { shq } from "../../util/shell.ts";
-import { awaitProcessExit } from "../../sandbox/await-process-exit.ts";
+import { pollProcess } from "../../sandbox/process-poll.ts";
 import { enumerateFactoryCandidates } from "./linear-intake.ts";
 import { readFactoryCredentials } from "./credentials.ts";
 import { preflightFactorySandbox, type PreflightResult } from "./preflight.ts";
@@ -107,12 +107,18 @@ async function bootstrapFactorySource(sandbox: Sandbox, handle: SandboxHandle, g
   const { processId } = await sandbox.startProcess(handle, FACTORY_SOURCE_BOOTSTRAP_SCRIPT, {
     env: factorySourceGitEnv(githubToken),
   });
-  const status = await awaitProcessExit(sandbox, handle, processId, FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS);
+  const { output, status } = await pollProcess(sandbox, handle, processId, {
+    deadlineMs: FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS,
+    collect: true,
+  });
+  // Auth failures, a missing branch, and a missing repository all exit 128; only git's own words tell them apart.
+  const tail = output.replaceAll(githubToken, "***").trim().split("\n").slice(-5).join(" | ");
+  const detail = (reason: string): string => `factory_source_bootstrap_failed: ${reason}${tail ? ` — ${tail}` : ""}`;
   if (status.state !== "exited") {
     await sandbox.signalProcess(handle, processId, "TERM").catch((e: unknown) => swallow("factory bootstrap term", e));
-    throw new Error("factory_source_bootstrap_failed: timeout");
+    throw new Error(detail("timeout"));
   }
-  if (status.code !== 0) throw new Error(`factory_source_bootstrap_failed: exit ${status.code}`);
+  if (status.code !== 0) throw new Error(detail(`exit ${status.code}`));
 }
 
 export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<FactoryContext> {
