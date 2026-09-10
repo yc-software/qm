@@ -15,7 +15,10 @@ test("transcript top spacing and prompt gap stay compact at every density", () =
 });
 
 test("editable background activity is rendered inside the composer surface", () => {
-  assert.match(chat, /composerForm\(agent, backgroundActivityStrip\(\)\)/);
+  assert.match(
+    chat,
+    /composerForm\(agent, html`\$\{glanceTier \? nothing : liveWorkStatus\(agent\)\} \$\{backgroundActivityStrip\(\)\}`\)/,
+  );
   assert.match(composer, /<form class="composer-wrap[^]*?\$\{header\}/);
   assert.match(
     css,

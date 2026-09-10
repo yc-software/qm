@@ -386,7 +386,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ??
         defaultModelValue(scopeKey());
       return html`<div class="composer-wrap">
-        ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
+        ${header} ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
         <p role="status">
           ${composerState.error || activeRuntimeConfig?.unavailableReason || "Selected model is unavailable. Choose a replacement to continue."}
           ${selected}
