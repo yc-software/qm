@@ -339,7 +339,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
       const prune = prunePaths.length
         ? `\\( ${prunePaths.map((p) => `-path ${shq(p)}`).join(" -o ")} \\) -prune -o `
         : "";
-      const script = `cd ${shq(homeDir)} 2>/dev/null || exit 0; find . ${prune}-print0 > ${shq(listPath)} 2>/dev/null; tar --no-recursion --null -T ${shq(listPath)} -cf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(listPath)}; exit $rc`;
+      const script = `cd ${shq(homeDir)} 2>/dev/null || exit 0; find . ${prune}\\( ! -type d -o -exec test -r {} \\; \\) -print0 > ${shq(listPath)} 2>/dev/null; tar --no-recursion --null -T ${shq(listPath)} -cf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(listPath)}; exit $rc`;
       try {
         const made = await run(session, script, 180_000, left);
         if (made.exitCode !== 0) throw new Error(`${label} snapshot tar failed: ${made.stderr.slice(0, 200)}`);
