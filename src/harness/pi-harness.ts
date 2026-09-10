@@ -125,7 +125,7 @@ export interface PiHarnessOptions {
   reachExec?: boolean;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
-  migrateTargets?: readonly string[];
+  sandboxResources?: boolean;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -1524,7 +1524,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
           ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
           ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
-          ...(opts?.migrateTargets?.length ? { migrateTargets: opts.migrateTargets } : {}),
+          sandboxResources: opts?.sandboxResources,
         }),
         noTools: "builtin",
         sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),

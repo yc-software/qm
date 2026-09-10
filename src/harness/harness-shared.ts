@@ -19,7 +19,7 @@ export interface HarnessToolPlumbing {
   reachExec?: boolean;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
-  migrateTargets?: readonly string[];
+  sandboxResources?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
@@ -89,7 +89,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
     reachExec: opts.reachExec,
     ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
     controlTools: opts.controlTools,
-    ...(opts.migrateTargets?.length ? { migrateTargets: opts.migrateTargets } : {}),
+    sandboxResources: opts.sandboxResources,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,

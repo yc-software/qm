@@ -407,7 +407,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   );
 });
 
-test("execute's computer param manages the box out-of-band instead of running a command", async () => {
+test("sandbox manages the box out-of-band instead of running a command", async () => {
   const restarted: number[] = [];
   const tc = {
     ...fakeToolContext(),
@@ -423,9 +423,9 @@ test("execute's computer param manages the box out-of-band instead of running a 
     }),
   };
   const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
-  const [execute] = createAgentTools(ref);
+  const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
 
-  const status = (await call(execute, { command: "", computer: "status", purpose: "p" })) as {
+  const status = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.match(
@@ -439,7 +439,7 @@ test("execute's computer param manages the box out-of-band instead of running a 
     "a provisioned machine with a dead guest is called out as wedged, not left as two contradicting fields",
   );
 
-  const restart = (await call(execute, { command: "", computer: "restart", purpose: "p" })) as {
+  const restart = (await call(execute, { command: "", action: "restart", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.equal(restarted.length, 1);
@@ -451,81 +451,65 @@ test("execute's computer param manages the box out-of-band instead of running a 
       throw new Error("this computer's substrate (local) does not support restarting the computer");
     },
   };
-  const err = (await call(execute, { command: "", computer: "restart", purpose: "p" })) as {
+  const err = (await call(execute, { command: "", action: "restart", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.match(err.content[0]!.text!, /does not support restarting/);
 });
 
-test("computer migrate moves the scope and reports the new home", async () => {
-  const migratedTo: string[] = [];
-  const tc = {
-    ...fakeToolContext(),
-    migrateComputer: async (to: string) => {
-      migratedTo.push(to);
-      return { from: "e2b", to };
-    },
-  };
-  const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
-  const [execute] = createAgentTools(ref, { migrateTargets: ["e2b", "modal"] });
-  const r = (await call(execute, { command: "", computer: "migrate", to: "modal", purpose: "p" })) as {
-    content: Array<{ text?: string }>;
-  };
-  assert.deepEqual(migratedTo, ["modal"]);
-  assert.match(r.content[0]!.text!, /moved from e2b to modal, files included/);
-});
-
-test("migrate targets are advertised only when a deployment has somewhere to go", async () => {
+test("sandbox advertises available management actions and retires migrate", async () => {
   const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "personal:U1" };
-  const withTargets = createAgentTools(ref, { migrateTargets: ["e2b", "modal"] })[0]!;
-  const without = createAgentTools(ref)[0]!;
-  const enumOf = (tool: typeof withTargets) =>
-    (tool.parameters as { properties: { computer: { enum: string[] } } }).properties.computer.enum;
-  assert.deepEqual(enumOf(withTargets), ["status", "restart", "list", "create", "default", "retire", "migrate"]);
-  const toEnum = (withTargets.parameters as { properties: { to: { enum: string[] } } }).properties.to.enum;
-  assert.deepEqual(toEnum, ["e2b", "modal"]);
-  assert.equal("to" in (without.parameters as { properties: object }).properties, false);
-  assert.deepEqual(enumOf(without), ["status", "restart", "list", "create", "default", "retire"]);
+  const enabled = createAgentTools(ref, { sandboxResources: true });
+  const sandbox = enabled.find((t) => t.name === "sandbox")!;
+  const properties = (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties;
+  assert.deepEqual(properties.action!.enum, ["status", "restart", "list", "create", "set_default", "retire"]);
+  const execute = enabled.find((t) => t.name === "execute")!;
+  assert.equal("computer" in (execute.parameters as { properties: object }).properties, false);
+  assert.equal("to" in (execute.parameters as { properties: object }).properties, false);
+  const disabled = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  assert.deepEqual((disabled.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum, [
+    "status",
+    "restart",
+  ]);
+  assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /unsupported sandbox action/);
+  await assert.rejects(() => call(execute, { command: "", computer: "migrate" }), /migrate has been retired/);
 });
 
-test("computer migrate pauses the turn for human approval", async () => {
-  const { NeedsApproval } = await import("../src/tools/primitives.ts");
-  const tc = {
-    ...fakeToolContext(),
-    migrateComputer: async (): Promise<{ from: string; to: string }> => {
-      throw new NeedsApproval(
-        'computer:"migrate" to:"modal"',
-        "moving this computer to modal",
-        "approval",
-        undefined,
-        "computer-migrate:modal",
-      );
+test("sandbox creation and default routing remain independent", async () => {
+  const calls: unknown[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async sandboxResources(action, input) {
+        calls.push({ action, input });
+        return { ok: true };
+      },
     },
   };
-  const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1", pendingApprovals: [] };
-  const [execute] = createAgentTools(ref, { migrateTargets: ["modal"] });
-  const r = (await call(execute, { command: "", computer: "migrate", to: "modal", purpose: "p" })) as {
-    content: Array<{ text?: string }>;
+  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  await call(sandbox, { action: "create", backend: "modal", name: "analysis", purpose: "p" });
+  assert.deepEqual(calls, [{ action: "create", input: { backend: "modal", name: "analysis", sandboxId: undefined } }]);
+  await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
+  assert.deepEqual(calls[1], { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } });
+});
+
+test("sandbox management preserves approval handling", async () => {
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async restartComputer() {
+        throw new NeedsApproval("restart", "restart requested", "approval");
+      },
+    },
+    pendingApprovals: [],
   };
-  assert.match(r.content[0]!.text!, /\[blocked: needs human approval\]/);
+  const sandbox = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  assert.match(
+    textOut(await call(sandbox, { action: "restart", purpose: "Recover the shell" })),
+    /needs human approval/,
+  );
   assert.equal(ref.pausedOnApproval, true);
-  assert.equal(ref.pendingApprovals!.length, 1);
-  assert.equal(ref.pendingApprovals![0]!.approvalKey, "computer-migrate:modal");
-});
-
-test("computer migrate surfaces refusals as tool text", async () => {
-  const refusing = {
-    ...fakeToolContext(),
-    migrateComputer: async (): Promise<{ from: string; to: string }> => {
-      throw new Error("scope has live background work; wait for it to finish or stop it before migrating");
-    },
-  };
-  const refusingRef: ToolContextRef = { current: refusing, emit: () => {}, scopeLabel: "personal:U1" };
-  const [refusingExecute] = createAgentTools(refusingRef, { migrateTargets: ["e2b"] });
-  const refused = (await call(refusingExecute, { command: "", computer: "migrate", to: "e2b", purpose: "p" })) as {
-    content: Array<{ text?: string }>;
-  };
-  assert.match(refused.content[0]!.text!, /\[error\] scope has live background work/);
+  assert.equal(ref.pendingApprovals![0]!.purpose, "Recover the shell");
 });
 
 test("computer status surfaces list-view disagreement and guest pressure", async () => {
@@ -540,8 +524,8 @@ test("computer status surfaces list-view disagreement and guest pressure", async
     restartComputer: async () => {},
   };
   const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
-  const [execute] = createAgentTools(ref);
-  const status = (await call(execute, { command: "", computer: "status", purpose: "p" })) as {
+  const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  const status = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.match(status.content[0]!.text!, /machine: healthy \(listed: cold\)/);
@@ -571,8 +555,8 @@ test("computer status exposes paused lifecycle and recovery deadlines without cl
     emit: () => {},
     scopeLabel: "personal:U1",
   };
-  const [execute] = createAgentTools(ref);
-  const out = (await call(execute, { command: "", computer: "status", purpose: "p" })) as {
+  const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  const out = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   const output = out.content[0]!.text!;
@@ -618,8 +602,8 @@ test("computer status verdicts: answering guest is ok, dead guest without a mach
       emit: () => {},
       scopeLabel: "personal:U1",
     };
-    const [execute] = createAgentTools(ref);
-    const out = (await call(execute, { command: "", computer: "status", purpose: "p" })) as {
+    const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+    const out = (await call(execute, { command: "", action: "status", purpose: "p" })) as {
       content: Array<{ text?: string }>;
     };
     assert.equal(
@@ -2658,9 +2642,14 @@ test("sandbox management and explicit execution preserve independent target argu
       return { ok: true };
     },
   };
-  const [execute] = createAgentTools({ current: tc, emit: () => {}, scopeLabel: "personal:U1" });
-  await call(execute, { command: "", computer: "create", backend: "modal", name: "build", purpose: "p" });
-  await call(execute, { command: "", computer: "default", sandbox_id: null, purpose: "p" });
+  const tools = createAgentTools(
+    { current: tc, emit: () => {}, scopeLabel: "personal:U1" },
+    { sandboxResources: true },
+  );
+  const execute = tools.find((t) => t.name === "execute")!;
+  const sandbox = tools.find((t) => t.name === "sandbox")!;
+  await call(sandbox, { action: "create", backend: "modal", name: "build", purpose: "p" });
+  await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
   await call(execute, { command: "pwd", sandbox_id: "box-a", purpose: "p" });
   assert.deepEqual(operations, [
     { action: "create", input: { backend: "modal", name: "build", sandboxId: undefined } },

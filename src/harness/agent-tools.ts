@@ -1,6 +1,6 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CONFIG_DEFAULTS, enabledSandboxBackends, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
@@ -310,7 +310,7 @@ export interface AgentToolsOptions {
   backgroundJobTtlMaxMs?: number;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
-  migrateTargets?: readonly string[];
+  sandboxResources?: boolean;
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
@@ -319,9 +319,8 @@ export interface AgentToolsOptions {
 export type CoreToolOptions = Omit<AgentToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
-  const sandboxBackends = enabledSandboxBackends(config);
   return {
-    ...(sandboxBackends.length > 1 ? { migrateTargets: sandboxBackends } : {}),
+    sandboxResources: config.sandboxResourcesEnabled,
     scratchExec: config.scratchExecEnabled,
     ownerAuthExec: config.sharedOwnerAuthIsolation,
     reachExec: config.reachExecEnabled,
@@ -501,55 +500,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     `legitimately exceeds the ${execCeilingSec}s ceiling (long builds, installs, test suites, servers), use ` +
     "the `background` tool to run it detached and poll for the result across turns. " +
     "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
-    'wedged — use `computer:"status"` to check it out-of-band and `computer:"restart"` to reboot it.';
+    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it.";
 
   const executeBaseParams = {
-    command: Type.String({
-      description: 'The shell command to run. With `computer`, pass "" — no command runs.',
-    }),
-    computer: Type.Optional(
-      Type.String({
-        enum: [
-          "status",
-          "restart",
-          "list",
-          "create",
-          "default",
-          "retire",
-          ...(opts?.migrateTargets?.length ? ["migrate"] : []),
-        ],
-        description:
-          "Manage computers instead of running a command. list returns inventory; create provisions a blank computer using backend/name without changing the default; default changes only the default target using sandbox_id (null unsets it). retire permanently deletes the named computer and its local files; first unset its default and stop its jobs. Commands and status/restart can target an exact sandbox_id. " +
-          '"status" and "restart" act out-of-band, so they work even when the computer is unresponsive: "status" reports the machine\'s health and whether its shell answers; "restart" reboots it (files survive; running processes don\'t, and an interrupted command may or may not have taken effect). ' +
-          "Reach for these when commands hang or fail with transport errors that nothing you ran explains: check status first, restart only if the machine is up but its shell is not answering." +
-          (opts?.migrateTargets?.length
-            ? ' "migrate" moves this computer to the sandbox provider named in `to`, files included — only when the person explicitly asks, and it requires their approval. ' +
-              "It needs a responsive machine, refuses while background jobs are running, can take several minutes, and must be the last action of the turn: changes written here after the move starts do not come along."
-            : ""),
-      }),
-    ),
-    ...(opts?.migrateTargets?.length
-      ? {
-          to: Type.Optional(
-            Type.String({
-              enum: [...opts.migrateTargets],
-              description: 'The destination provider for computer:"migrate".',
-            }),
-          ),
-        }
-      : {}),
+    command: Type.String({ description: "The shell command to run." }),
     sandbox_id: Type.Optional(
-      Type.Union([Type.String(), Type.Null()], {
-        description:
-          "Run on this exact sandbox ID. With computer:default choose this ID, or null to leave the scope without a default.",
-      }),
-    ),
-    backend: Type.Optional(
       Type.String({
-        description: "Provider for computer:create. Creates a blank independent sandbox without changing the default.",
+        minLength: 1,
+        description:
+          "Exact sandbox ID. Omit only when this scope has a stored default; otherwise select a target with sandbox list/create.",
       }),
     ),
-    name: Type.Optional(Type.String({ description: "Human-readable sandbox name for computer:create." })),
     purpose: Type.String({
       description:
         "One short sentence on what this command accomplishes and why you're running it now — " +
@@ -578,7 +539,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       : {}),
   };
 
-  const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string) => {
+  const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string, tool = "execute") => {
     ref.pendingApprovals?.push({
       command: e.command,
       reason: e.approvalReason,
@@ -590,7 +551,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ref.pausedOnApproval = true;
     return recordResult(
       callId,
-      { tool: "execute", blocked: "needs_approval", reason: e.approvalReason },
+      { tool, blocked: "needs_approval", reason: e.approvalReason },
       { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
       true,
     );
@@ -613,96 +574,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
-    if (params.computer) {
-      await recordCall(callId, { tool: "execute", computer: params.computer });
-      if (route?.scratch || route?.ownerAuth || route?.reachTarget !== undefined) {
-        return recordResult(
-          callId,
-          { tool: "execute", computer: params.computer, invalid: "scoped_only" },
-          text("[error] `computer` manages this conversation's scoped computer only — drop `scope`"),
-          true,
-        );
-      }
-      try {
-        if (["list", "create", "default", "retire"].includes(params.computer)) {
-          if (!tc.sandboxResources) throw new Error("sandbox inventory unavailable");
-          const result = await tc.sandboxResources(params.computer as "list" | "create" | "default" | "retire", {
-            backend: params.backend,
-            name: params.name,
-            sandboxId: params.sandbox_id,
-          });
-          return recordResult(callId, { tool: "execute", computer: params.computer }, text(JSON.stringify(result)));
-        }
-        if (params.sandbox_id === null) throw new Error("null only clears a default");
-        if (params.computer === "restart") {
-          await tc.restartComputer(params.sandbox_id);
-          return recordResult(
-            callId,
-            { tool: "execute", computer: "restart", restarted: true },
-            text("Computer restarting. Give it a moment to boot before running the next command."),
-          );
-        }
-        if (params.computer === "migrate") {
-          if (!params.to) {
-            return recordResult(
-              callId,
-              { tool: "execute", computer: "migrate", invalid: "missing_to" },
-              text('[error] computer:"migrate" needs `to`: the destination provider'),
-              true,
-            );
-          }
-          const moved = await tc.migrateComputer(params.to);
-          return recordResult(
-            callId,
-            { tool: "execute", computer: "migrate", from: moved.from, to: moved.to },
-            text(
-              `Computer moved from ${moved.from} to ${moved.to}, files included. The next command runs on the new computer.`,
-            ),
-          );
-        }
-        const s = await tc.computerStatus(params.sandbox_id);
-        const verdict = computerVerdict(s);
-        const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
-        const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
-        let shellLine = s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`;
-        if (s.lifecycleState === "paused") shellLine = "paused (not probed)";
-        const recoveryLines: string[] = [];
-        if (s.lifecycleState) recoveryLines.push(`lifecycle: ${s.lifecycleState}`);
-        if (s.expiresAtMs !== undefined)
-          recoveryLines.push(`machine expires: ${new Date(s.expiresAtMs).toISOString()}`);
-        if (s.recovery) {
-          recoveryLines.push(`recovery strategy: ${s.recovery.strategy}`);
-          if (s.recovery.state) recoveryLines.push(`recovery state: ${s.recovery.state}`);
-          if (s.recovery.checkpointId) recoveryLines.push(`checkpoint: ${s.recovery.checkpointId}`);
-          if (s.recovery.checkpointAtMs !== undefined)
-            recoveryLines.push(`checkpoint captured: ${new Date(s.recovery.checkpointAtMs).toISOString()}`);
-          if (s.recovery.checkpointExpiresAtMs === null)
-            recoveryLines.push("checkpoint expires: no provider expiry reported");
-          else if (s.recovery.checkpointExpiresAtMs !== undefined)
-            recoveryLines.push(`checkpoint expires: ${new Date(s.recovery.checkpointExpiresAtMs).toISOString()}`);
-          if (s.recovery.error) recoveryLines.push(`recovery error: ${s.recovery.error}`);
-        }
-        const verdictLine =
-          verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
-            : "";
-        return recordResult(
-          callId,
-          { tool: "execute", computer: "status", verdict, ...s },
-          text(
-            [`machine: ${machineLine}; shell: ${shellLine}${pressureLine}${verdictLine}`, ...recoveryLines].join("\n"),
-          ),
-        );
-      } catch (e) {
-        if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
-        return recordResult(
-          callId,
-          { tool: "execute", computer: params.computer, failed: true },
-          text(`[error] ${errMessage(e)}`),
-          true,
-        );
-      }
-    }
+    if (params.computer) throw new Error("Computer actions moved to the sandbox tool; migrate has been retired.");
     let scopeNote: { scope?: string } = {};
     if (route?.reachTarget !== undefined) {
       scopeNote = { scope: route.reachTarget };
@@ -730,7 +602,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const localExec = !route?.scratch && !route?.ownerAuth && route?.reachTarget === undefined && !r.reached;
       const pressureNote =
         localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
-          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work${scratchExec ? ', move self-contained runs to scope:"scratch"' : ""}, or check computer:"status"`
+          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work${scratchExec ? ', move self-contained runs to scope:"scratch"' : ""}, or check sandbox action=status`
           : "";
       return recordResult(
         callId,
@@ -924,6 +796,99 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       execute: (callId, params) => runExecute(callId, params as Parameters<typeof runExecute>[1]),
     });
   }
+
+  const sandboxActions = [
+    "status",
+    "restart",
+    ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
+  ];
+  const sandbox = defineTool({
+    name: "sandbox",
+    label: "sandbox",
+    description:
+      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
+    parameters: Type.Object({
+      action: Type.String({ enum: sandboxActions }),
+      sandbox_id: Type.Optional(
+        Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
+          description: "Exact sandbox ID; null is allowed only for set_default.",
+        }),
+      ),
+      backend: Type.Optional(Type.String({ description: "create only: provider from list." })),
+      name: Type.Optional(Type.String({ description: "create only: human-readable name." })),
+      purpose: Type.String({ description: "Briefly explain why this action is needed." }),
+    }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc) return text("[error] no active tool context");
+      await recordCall(callId, { tool: "sandbox", action: params.action });
+      try {
+        if (!sandboxActions.includes(params.action)) throw new Error("unsupported sandbox action");
+        if (["list", "create", "set_default", "retire"].includes(params.action)) {
+          if (!tc.sandboxResources) throw new Error("sandbox inventory unavailable");
+          const result = await tc.sandboxResources(
+            (params.action === "set_default" ? "default" : params.action) as "list" | "create" | "default" | "retire",
+            {
+              backend: params.backend,
+              name: params.name,
+              sandboxId: params.sandbox_id,
+            },
+          );
+          return recordResult(callId, { tool: "sandbox", action: params.action }, text(JSON.stringify(result)));
+        }
+        if (params.sandbox_id === null) throw new Error("null only clears a default");
+        if (params.action === "restart") {
+          await tc.restartComputer(params.sandbox_id);
+          return recordResult(
+            callId,
+            { tool: "sandbox", action: "restart", restarted: true },
+            text("Computer restarting. Give it a moment to boot before running the next command."),
+          );
+        }
+        const s = await tc.computerStatus(params.sandbox_id);
+        const verdict = computerVerdict(s);
+        const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
+        const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
+        let shellLine = s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`;
+        if (s.lifecycleState === "paused") shellLine = "paused (not probed)";
+        const recoveryLines: string[] = [];
+        if (s.lifecycleState) recoveryLines.push(`lifecycle: ${s.lifecycleState}`);
+        if (s.expiresAtMs !== undefined)
+          recoveryLines.push(`machine expires: ${new Date(s.expiresAtMs).toISOString()}`);
+        if (s.recovery) {
+          recoveryLines.push(`recovery strategy: ${s.recovery.strategy}`);
+          if (s.recovery.state) recoveryLines.push(`recovery state: ${s.recovery.state}`);
+          if (s.recovery.checkpointId) recoveryLines.push(`checkpoint: ${s.recovery.checkpointId}`);
+          if (s.recovery.checkpointAtMs !== undefined)
+            recoveryLines.push(`checkpoint captured: ${new Date(s.recovery.checkpointAtMs).toISOString()}`);
+          if (s.recovery.checkpointExpiresAtMs === null)
+            recoveryLines.push("checkpoint expires: no provider expiry reported");
+          else if (s.recovery.checkpointExpiresAtMs !== undefined)
+            recoveryLines.push(`checkpoint expires: ${new Date(s.recovery.checkpointExpiresAtMs).toISOString()}`);
+          if (s.recovery.error) recoveryLines.push(`recovery error: ${s.recovery.error}`);
+        }
+        const verdictLine =
+          verdict === "wedged"
+            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
+            : "";
+        return recordResult(
+          callId,
+          { tool: "sandbox", action: "status", verdict, ...s },
+          text(
+            [`machine: ${machineLine}; shell: ${shellLine}${pressureLine}${verdictLine}`, ...recoveryLines].join("\n"),
+          ),
+        );
+      } catch (e) {
+        if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose, "sandbox");
+        return recordResult(
+          callId,
+          { tool: "sandbox", action: params.action, failed: true },
+          text(`[error] ${errMessage(e)}`),
+          true,
+        );
+      }
+    },
+  });
 
   const read = defineTool({
     name: "read",
@@ -3393,6 +3358,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     memory,
     history,
     background,
+    sandbox,
     registerLogin,
     ...(controlTools ? [cron, webhook, share] : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
