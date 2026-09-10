@@ -1,0 +1,51 @@
+.approval-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-inline-end: auto;
+  color: var(--ink-3);
+}
+.approval-pager-count {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.approval-pager-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.approval-pager-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+}
+.approval-pager-btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.approval-pager-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+@media (max-width: 560px) {
+  .approval-pager {
+    justify-content: center;
+  }
+  .approval-pager-btn {
+    width: 44px;
+    height: 44px;
+  }
+}

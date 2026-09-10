@@ -2355,33 +2355,31 @@ summary.work-head:hover {
   gap: 8px;
 }
 .approval-reason-badge {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--destructive, #c0392b) 13%, var(--background));
-  color: var(--destructive, #c0392b);
-  border: 1px solid color-mix(in srgb, var(--destructive, #c0392b) 30%, transparent);
-}
-.approval-why {
-  font-size: 13px;
-  color: var(--foreground);
+  font-size: 11.5px;
+  font-weight: 500;
   line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--red-tint);
+  color: var(--red-ink);
+}
+.approval-why,
+.approval-summary-line {
+  color: var(--ink-2);
+}
+.approval-why-label,
+.approval-match-label,
+.approval-full > summary {
+  font-size: 11.5px;
+  color: var(--ink-3);
 }
 .approval-why-label {
-  font-size: 11px;
-  color: var(--muted-foreground);
   margin-right: 8px;
 }
-.approval-summary-line {
-  font-size: 13px;
-  color: var(--foreground);
-  line-height: 1.4;
-}
 .approval-summary {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 13px;
-  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2394,29 +2392,28 @@ summary.work-head:hover {
   min-width: 0;
 }
 .approval-match-label {
-  font-size: 11px;
-  color: var(--muted-foreground);
   flex: none;
 }
 .approval-match-snippet {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--destructive, #c0392b) 12%, var(--background));
-  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 1px 6px;
+  border-radius: var(--radius-chip);
+  background: var(--red-tint);
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
 .approval-full > summary {
-  font-size: 12px;
-  color: var(--muted-foreground);
   cursor: pointer;
   user-select: none;
   list-style: none;
   width: fit-content;
+}
+.approval-full > summary:hover {
+  color: var(--ink);
 }
 .approval-full > summary::-webkit-details-marker {
   display: none;
@@ -2435,35 +2432,50 @@ summary.work-head:hover {
 }
 .approval-actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 .approval-btn {
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12.5px;
   font-weight: 500;
-  padding: 7px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--background);
-  color: var(--foreground);
+  line-height: 1;
+  border: 0;
+  border-radius: 999px;
+  background: var(--hover-2);
+  color: var(--ink);
   cursor: pointer;
-  transition: opacity 0.12s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
 }
 .approval-btn:hover:not(:disabled) {
-  opacity: 0.85;
+  background: var(--line-strong);
+}
+.approval-btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 .approval-btn.primary {
-  background: var(--cta);
-  color: var(--cta-foreground);
-  border-color: var(--cta);
+  background: var(--blue);
+  color: #fff;
 }
-.approval-btn.deny {
-  color: var(--destructive, #c0392b);
-  border-color: color-mix(in srgb, var(--destructive, #c0392b) 40%, var(--border));
+.approval-btn.primary:hover:not(:disabled) {
+  background: var(--blue-ink);
+}
+.approval-btn.deny:hover:not(:disabled) {
+  color: var(--red-ink);
 }
 .approval-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+  opacity: 0.5;
+  cursor: progress;
 }
 .tool-expandable {
   display: block;
@@ -2999,7 +3011,6 @@ summary.work-head:hover {
   display: grid;
   gap: 10px;
   margin: 0 0 10px;
-
   max-height: calc(100dvh - 130px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -3007,20 +3018,12 @@ summary.work-head:hover {
 .composer-approval {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  min-height: 48px;
-  padding: 4px 4px 8px;
 }
 .composer-approval-copy {
   display: grid;
   width: 100%;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
-}
-.composer-approval .approval-title {
-  font-size: 12px;
-  color: var(--muted-foreground);
 }
 .composer-approval .approval-cmd {
   max-width: 100%;
@@ -4733,9 +4736,6 @@ summary.work-head:hover {
   }
   .message-bubble {
     max-width: 88%;
-  }
-  .composer-approval .approval-actions {
-    justify-content: flex-start;
   }
   .composer-toolbar {
     align-items: flex-end;
@@ -9932,16 +9932,6 @@ h3.ambient-field-label {
   .chat-topbar {
     -webkit-user-select: none;
     user-select: none;
-  }
-}
-
-@media (max-width: 560px) {
-  .composer-approval .approval-actions {
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-  .composer-approval .approval-btn {
-    min-height: 48px;
   }
 }
 

@@ -287,6 +287,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return composerState.fastMode ?? orgFastModeDefault;
   }
   let fastModeChargeTimer: ReturnType<typeof setTimeout> | null = null;
+  let approvalPage = 0;
 
   function resetComposer(): void {
     composerState.draft = "";
@@ -298,6 +299,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     composerState.openMenu = null;
     slashActiveIndex = 0;
     composerState.slashDismissed = false;
+    approvalPage = 0;
   }
 
   function scopeKey(): string | null {
@@ -816,59 +818,89 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     `;
   }
 
-  function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult {
+  function composerApprovalPanel(approvals: PendingApproval[]): TemplateResult | typeof nothing {
+    if (!approvals.length) return nothing;
     const decide = (decision: ApprovalDecision): void => {
       if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) ctx.chat.resolveCommandApproval(decision);
     };
+    const page = Math.min(approvalPage, approvals.length - 1);
+    const a = approvals[page];
+    const busy = ctx.chat.state.resolvingApprovals.has(a.requestId);
+    const turnPage = (delta: number): void => {
+      approvalPage = page + delta;
+      ctx.chat.drawActiveChat();
+    };
     return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
-      ${approvals.map(
-        (a) =>
-          html`<div class="composer-approval">
-            <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
-            <div class="approval-actions">
-              <button
-                class="approval-btn deny"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: false })}
-              >
-                Deny
-              </button>
-              <button
-                class="approval-btn"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
-              >
-                Allow once
-              </button>
-              ${
-                a.grantModes?.session === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn primary"
-                      type="button"
-                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
-                    >
-                      Allow for session
-                    </button>`
-              }
-              ${
-                a.grantModes?.always === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn"
-                      type="button"
-                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
-                    >
-                      Allow always
-                    </button>`
-              }
-            </div>
-          </div>`,
-      )}
+      <div class="composer-approval approval-card">
+        <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
+        <div class="approval-actions">
+          ${
+            approvals.length > 1
+              ? html`<span class="approval-pager">
+                  <button
+                    class="approval-pager-btn"
+                    type="button"
+                    aria-label="Previous approval"
+                    ?disabled=${page === 0}
+                    @click=${() => turnPage(-1)}
+                  >
+                    ‹
+                  </button>
+                  <span class="approval-pager-count" aria-live="polite">${page + 1}/${approvals.length}</span>
+                  <button
+                    class="approval-pager-btn"
+                    type="button"
+                    aria-label="Next approval"
+                    ?disabled=${page === approvals.length - 1}
+                    @click=${() => turnPage(1)}
+                  >
+                    ›
+                  </button>
+                </span>`
+              : nothing
+          }
+          <button
+            class="approval-btn deny"
+            type="button"
+            ?disabled=${busy}
+            @click=${() => decide({ requestId: a.requestId, approved: false })}
+          >
+            Deny
+          </button>
+          <button
+            class="approval-btn"
+            type="button"
+            ?disabled=${busy}
+            @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
+          >
+            Allow once
+          </button>
+          ${
+            a.grantModes?.session === false
+              ? nothing
+              : html`<button
+                  class="approval-btn primary"
+                  type="button"
+                  ?disabled=${busy}
+                  @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
+                >
+                  Allow for session
+                </button>`
+          }
+          ${
+            a.grantModes?.always === false
+              ? nothing
+              : html`<button
+                  class="approval-btn"
+                  type="button"
+                  ?disabled=${busy}
+                  @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
+                >
+                  Allow always
+                </button>`
+          }
+        </div>
+      </div>
     </div>`;
   }
 
