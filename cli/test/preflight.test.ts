@@ -226,7 +226,10 @@ test("email preflight resolves delivered secret aliases and settings supplied di
   const aliased = {
     ...CONFIG,
     env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
-    secretEnv: { auth: { AUTH_EMAIL_FROM: "AUTH_SENDER", RESEND_API_KEY: "MAIL_KEY" } },
+    secretEnv: {
+      auth: { AUTH_EMAIL_FROM: "AUTH_SENDER", RESEND_API_KEY: "MAIL_KEY" },
+      portal: { AUTH_EMAIL_FROM: "AUTH_SENDER", RESEND_API_KEY: "MAIL_KEY" },
+    },
   };
   const secrets = new Map([
     ["AUTH_SENDER", "noreply@example.com"],

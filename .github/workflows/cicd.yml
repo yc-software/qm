@@ -259,6 +259,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: plugins/portal/package-lock.json
+      - name: Install embedded auth dependencies
+        run: npm ci --prefix plugins/auth
       - name: Install, typecheck, test
         working-directory: plugins/portal
         run: |

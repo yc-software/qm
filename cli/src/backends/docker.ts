@@ -25,6 +25,8 @@ import {
   brandEnvOf,
   orgEnv,
   runnableServices,
+  hostedServiceEnv,
+  serviceHost,
   serviceDef,
   teardownOrdered,
   virtualServiceEnv,
@@ -359,7 +361,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
   }
   if (service === "portal") {
     if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
-    if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://admin:8080";
+    if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://web-ui:8080/admin";
   }
   if (config.services.includes("auth")) {
     Object.assign(
@@ -406,7 +408,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   const env = {
     ...out,
     ...virtualEnv,
-    ...config.env[service],
+    ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? securityScreenEnv(config) : {}),
     ...secretValues(ctx, service),
   };
@@ -780,8 +782,8 @@ export async function dockerLogs(config: QmConfig, service: string | undefined, 
   const tail = String(opts.tail ?? 200);
 
   if (service) {
-    const resolved = service === "slack" ? "core" : service;
-    if (service === "slack") note("slack is a virtual service; showing core logs");
+    const resolved = serviceHost(service);
+    if (resolved !== service) note(`${service} runs in ${resolved}; showing ${resolved} logs`);
     const name = `${prefix}-${resolved}`;
     if (!containerExists(name)) die(`no container ${name} (is the stack up? services: ${config.services.join(", ")})`);
     const args = ["logs", "--tail", tail];

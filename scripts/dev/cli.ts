@@ -311,8 +311,8 @@ function printSuccess(result: BootResult, branch: string): void {
   );
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
-  out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.admin})`);
-  out(`   logs   : ${lock}/{core,web,admin,portal,supervisor}.log`);
+  out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
+  out(`   logs   : ${lock}/{core,web,portal,supervisor}.log`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
 }

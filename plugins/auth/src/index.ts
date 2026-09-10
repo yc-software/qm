@@ -23,7 +23,7 @@ export function bootChecks(): void {
   throw new Error(`auth broker refusing to start: ${problems.length} misconfiguration(s)`);
 }
 
-export async function startServer(): Promise<void> {
+export async function startServer(options: { port?: number; host?: string } = {}): Promise<import("node:http").Server> {
   bootChecks();
   const signingKey = await loadSigningKey(CFG.signingJwk!);
   const mailer = mailerFor(CFG);
@@ -56,15 +56,21 @@ export async function startServer(): Promise<void> {
       else res.end();
     });
   });
-  server.listen(PORT, () => {
-    console.log(
-      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${mailer ? `${CFG.transport} email` : "email not configured"})`,
-    );
-    if (!CFG.coreSigningSecret)
-      console.warn(
-        "[auth] CORE_SIGNING_SECRET unset, so core will reject the single-use claims that make links and codes one-shot",
-      );
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port ?? PORT, options.host, () => {
+      server.off("error", reject);
+      resolve();
+    });
   });
+  console.log(
+    `[auth] sign-in broker on http://${options.host ?? "localhost"}:${options.port ?? PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${mailer ? `${CFG.transport} email` : "email not configured"})`,
+  );
+  if (!CFG.coreSigningSecret)
+    console.warn(
+      "[auth] CORE_SIGNING_SECRET unset, so core will reject the single-use claims that make links and codes one-shot",
+    );
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -33,6 +33,7 @@ import {
   taskDefinitionDiff,
 } from "../src/backends/aws.ts";
 import type { QmConfig } from "../src/config.ts";
+import { runnableServices } from "../src/services.ts";
 import { computedSecrets } from "../src/secrets.ts";
 import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
@@ -520,6 +521,8 @@ const config: QmConfig = {
 
 test("AWS environment derives identity, public URLs, private wiring, and MicroVM coordinates", () => {
   assert.deepEqual(serviceEnvironment(config, "web-ui"), {
+    ADMIN_BASE_PATH: "/admin",
+    ADMIN_ENABLED: "1",
     CORE_API_URL: "http://core.acme.internal:8080",
     CORE_ORG_ID: "acme",
     PORT: "8080",
@@ -2746,8 +2749,8 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
       } else {
         await result;
         const candidate = JSON.parse(readFileSync(candidatePath, "utf8"));
-        assert.deepEqual(Object.keys(candidate.images).sort(), Object.keys(config.aws!.services).sort());
-        assert.deepEqual(Object.keys(candidate.imageProvenance).sort(), Object.keys(config.aws!.services).sort());
+        assert.deepEqual(Object.keys(candidate.images).sort(), runnableServices(config.services).sort());
+        assert.deepEqual(Object.keys(candidate.imageProvenance).sort(), runnableServices(config.services).sort());
         assert.ok(Object.values(candidate.images).every((image) => /@sha256:[a-f0-9]{64}$/.test(String(image))));
       }
       const lines = readFileSync(events, "utf8").trim().split("\n");
@@ -4639,6 +4642,11 @@ test("AWS private canary reaches core without a core ingress target and refuses 
   process.env.PATH = `${dir}:${priorPath}`;
   try {
     await awsUp(config, dir, { yes: true });
+    const rolloutCalls = readFileSync(fake.log, "utf8");
+    const webUpdate = rolloutCalls.indexOf("ecs update-service --cluster acme-qm --service acme-web-ui");
+    const portalUpdate = rolloutCalls.indexOf("ecs update-service --cluster acme-qm --service acme-portal");
+    const webPoll = rolloutCalls.indexOf("ecs describe-services", webUpdate);
+    assert.ok(webUpdate >= 0 && webUpdate < webPoll && webPoll < portalUpdate);
     await awsCheckLive(config, { report: false });
     assert.match(
       readFileSync(fake.log, "utf8"),
@@ -4823,6 +4831,45 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS secrets push defers activation against pre-consolidation images", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-combined-"));
+  const operator = computedSecrets(config).filter((secret) => secret.managedBy === "operator" && secret.required);
+  writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
+  const fake = statefulAws(dir, config);
+  const state = JSON.parse(readFileSync(fake.state, "utf8"));
+  const tasks = Object.fromEntries(
+    runnableServices(config.services).map((name) => [name, state.services[`acme-${name}`].taskDefinition]),
+  );
+  state.definitions[tasks["web-ui"]] = {
+    containerDefinitions: [{ name: "web-ui", image: "old-web-image", environment: [] }],
+  };
+  state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks }], "current");
+  writeFileSync(fake.state, JSON.stringify(state));
+  try {
+    await awsSecretsPush(config, dir);
+    const calls = readFileSync(fake.log, "utf8");
+    assert.match(calls, /secretsmanager put-secret-value/);
+    assert.doesNotMatch(calls, /ecs (?:register-task-definition|update-service)/);
+    state.definitions[tasks["web-ui"]].containerDefinitions[0].environment = [{ name: "ADMIN_ENABLED", value: "1" }];
+    state.definitions[tasks.portal] = {
+      containerDefinitions: [
+        {
+          name: "portal",
+          image: "old-portal-image",
+          environment: [{ name: "ADMIN_UPSTREAM", value: "http://admin.acme.internal:8080" }],
+        },
+      ],
+    };
+    writeFileSync(fake.state, JSON.stringify(state));
+    writeFileSync(fake.log, "");
+    await awsSecretsPush(config, dir);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
+  } finally {
+    fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });

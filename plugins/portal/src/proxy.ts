@@ -132,7 +132,7 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     protocol: upstream.protocol,
     hostname: upstream.hostname,
     port: requestPort(upstream),
-    path: `${t.forwardPath}${t.search}`,
+    path: `${upstream.pathname.replace(/\/$/, "")}${t.forwardPath}${t.search}`,
     headers,
     honorFramePolicy: true,
   });

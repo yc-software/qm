@@ -319,15 +319,19 @@ const READS = [
   "custom-providers",
 ];
 
-const server = createServer((req, res) => {
+export async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
-  void portalTokenStore
+  await portalTokenStore
     .run(token, () => handle(req, res))
     .catch((err: unknown) => {
       console.error("[admin] unhandled request error:", String(err));
       json(res, 500, { error: "internal_error", message: "internal server error" });
     });
+}
+
+const server = createServer((req, res) => {
+  void handler(req, res);
 });
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

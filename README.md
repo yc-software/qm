@@ -78,8 +78,9 @@ Every turn runs through a central core, which can use a variety of models and ha
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is
 `execute`, which runs commands in the scope's own isolated sandbox — its durable computer,
-where installed tools stay installed. The web UI, the admin panel, and the public portal
-are optional plugins over the core's HTTP API;
+where installed tools stay installed. The web UI and admin panel share one service; the portal and optional built-in
+auth broker share another. These modules communicate with core over its HTTP API.
+See [combined services](docs/combined-services.md) for configuration and migration;
 Slack is an optional in-process plugin that core starts
 and supervises through a direct service client.
 

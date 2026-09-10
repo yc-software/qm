@@ -1,4 +1,4 @@
-import { isVirtualService, type DeclaredServiceName } from "./services.ts";
+import { serviceHost, type DeclaredServiceName } from "./services.ts";
 import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue } from "./util.ts";
@@ -600,7 +600,7 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
       });
     }
   }
-  return [...byName.values()]
+  const secrets = [...byName.values()]
     .map((secret) => ({
       ...secret,
       services: [...secret.services].sort(),
@@ -613,6 +613,20 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
         : {}),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  const delivered = new Map<string, string>();
+  for (const secret of secrets) {
+    for (const [workload, names] of secretDestinations(secret)) {
+      for (const name of names) {
+        const key = `${workload}:${name}`;
+        const prior = delivered.get(key);
+        if (prior !== undefined && prior !== secret.name) {
+          throw new Error(`${workload} would receive env ${name} from both ${prior} and ${secret.name}`);
+        }
+        delivered.set(key, secret.name);
+      }
+    }
+  }
+  return secrets;
 }
 
 export function secretDestinations(
@@ -625,11 +639,10 @@ export function secretDestinations(
   };
   for (const service of secret.services) {
     if (service === "sandbox") add("core", `FLY_RESIDENT_ENV_${secret.name}`);
-    else if (isVirtualService(service)) add("core", secret.name);
-    else add(service, secret.name);
+    else add(serviceHost(service), secret.name);
   }
   for (const alias of secret.aliases ?? []) {
-    add(isVirtualService(alias.service) ? "core" : alias.service, alias.name);
+    add(serviceHost(alias.service), alias.name);
   }
   if (secret.name === "CORE_SIGNING_SECRET") {
     for (const plugin of pluginNames) add(plugin, secret.name);
@@ -642,7 +655,7 @@ export function runtimeSecretNames(
   secret: ComputedSecret,
   pluginNames: readonly string[] = [],
 ): string[] {
-  return [...(secretDestinations(secret, pluginNames).get(workload) ?? [])];
+  return [...(secretDestinations(secret, pluginNames).get(serviceHost(workload)) ?? [])];
 }
 
 export function secretsForService(
@@ -650,7 +663,7 @@ export function secretsForService(
   service: string,
   pluginNames: readonly string[] = [],
 ): ComputedSecret[] {
-  return computedSecrets(config).filter((secret) => secretDestinations(secret, pluginNames).has(service));
+  return computedSecrets(config).filter((secret) => secretDestinations(secret, pluginNames).has(serviceHost(service)));
 }
 
 export function serviceSecretValue(

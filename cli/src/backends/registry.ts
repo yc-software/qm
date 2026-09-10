@@ -7,7 +7,7 @@ import { renderTerraformVars } from "../terraform.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "../commands/infra.ts";
 import { awsScaffold, dockerScaffold, flyScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
-import { runnableServices } from "../services.ts";
+import { runnableServices, serviceHost } from "../services.ts";
 import {
   awsCheckLive,
   awsDoctor,
@@ -253,7 +253,7 @@ const aws: HostingProvider = {
   ],
   upOptions: (ctx, flags, dryRun) => {
     const only = workloadOptions(flags);
-    const unknown = only?.filter((name) => !ctx.config.aws?.services[name]) ?? [];
+    const unknown = only?.filter((name) => !ctx.config.aws?.services[serviceHost(name)]) ?? [];
     if (unknown.length) throw new CliError(`--only has unknown AWS workload(s): ${unknown.join(", ")}`);
     const imageLabel = stringFlag(flags, "image-label");
     const candidate = stringFlag(flags, "candidate");

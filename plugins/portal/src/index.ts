@@ -1484,32 +1484,51 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export function startServer(): void {
+export async function startServer(): Promise<void> {
   bootChecks();
-  server.listen(PORT, () => {
-    console.log(`[portal] public front door on http://localhost:${PORT} → web-ui/admin over 6PN (org ${ORG})`);
-    if (!SESSION_SECRET)
-      console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
-    if (!SECURE_COOKIES)
-      console.warn("[portal] PORTAL_PUBLIC_URL is not https, cookies are NOT Secure (dev/test only)");
-    if (LOCAL_AUTH_BYPASS)
-      console.warn(
-        `[portal] PORTAL_LOCAL_AUTH_BYPASS=1 -- using ${LOCAL_AUTH_PRINCIPAL} as the local session principal (dev/test only)`,
+  if (process.env.AUTH_EMBEDDED === "1") {
+    if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
+      throw new Error("Embedded auth requires the loopback broker upstream");
+    }
+    const auth = await import("../../auth/src/index.ts");
+    const broker = await auth.startServer({ port: 8099, host: "127.0.0.1" });
+    server.once("close", () => broker.close());
+    server.once("error", () => broker.close());
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(PORT, () => {
+      server.off("error", reject);
+      resolve();
+      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui/admin over 6PN (org ${ORG})`);
+      if (!SESSION_SECRET)
+        console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
+      if (!SECURE_COOKIES)
+        console.warn("[portal] PORTAL_PUBLIC_URL is not https, cookies are NOT Secure (dev/test only)");
+      if (LOCAL_AUTH_BYPASS)
+        console.warn(
+          `[portal] PORTAL_LOCAL_AUTH_BYPASS=1 -- using ${LOCAL_AUTH_PRINCIPAL} as the local session principal (dev/test only)`,
+        );
+      if (PLAYGROUND)
+        console.warn(
+          `[portal] PORTAL_PLAYGROUND=1 -- unauthenticated visitors get anonymous browser-pinned sessions (${PLAYGROUND_MINTS_PER_IP} mints per IP per ${PLAYGROUND_MINT_WINDOW_S}s); admin sign-in stays on /auth/login`,
+        );
+      if (PLAYGROUND && !ON_FLY && XFF_TRUSTED_HOPS === 0)
+        console.warn(
+          "[portal] playground mint limits key on the socket address — set PORTAL_XFF_TRUSTED_HOPS when behind a reverse proxy, or every visitor shares one bucket",
+        );
+      console.log(
+        "[portal] /admin access is derived (portal → admin surface /api/whoami over 6PN → core canAdminister); the core's ADMIN_GRANTS is the one source of admin identity",
       );
-    if (PLAYGROUND)
-      console.warn(
-        `[portal] PORTAL_PLAYGROUND=1 -- unauthenticated visitors get anonymous browser-pinned sessions (${PLAYGROUND_MINTS_PER_IP} mints per IP per ${PLAYGROUND_MINT_WINDOW_S}s); admin sign-in stays on /auth/login`,
-      );
-    if (PLAYGROUND && !ON_FLY && XFF_TRUSTED_HOPS === 0)
-      console.warn(
-        "[portal] playground mint limits key on the socket address — set PORTAL_XFF_TRUSTED_HOPS when behind a reverse proxy, or every visitor shares one bucket",
-      );
-    console.log(
-      "[portal] /admin access is derived (portal → admin surface /api/whoami over 6PN → core canAdminister); the core's ADMIN_GRANTS is the one source of admin identity",
-    );
+    });
   });
 }
 
 export { handle, server };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) startServer();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer().catch((error: unknown) => {
+    console.error("[portal] failed to start:", errMessage(error));
+    process.exitCode = 1;
+  });
+}

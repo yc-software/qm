@@ -11,7 +11,35 @@ export const isVirtualService = (s: string): s is VirtualServiceName =>
   (VIRTUAL_SERVICE_NAMES as readonly string[]).includes(s);
 export const isDeclaredService = (s: string): s is DeclaredServiceName => isServiceName(s) || isVirtualService(s);
 
-export const runnableServices = (names: readonly DeclaredServiceName[]): ServiceName[] => names.filter(isServiceName);
+export function serviceHost(name: string): string {
+  if (name === "admin") return "web-ui";
+  if (name === "auth") return "portal";
+  if (name === "slack") return "core";
+  return name;
+}
+
+export const runnableServices = (names: readonly DeclaredServiceName[]): ServiceName[] =>
+  [...new Set(names.map(serviceHost))].filter(isServiceName);
+
+export function hostedServiceEnv(
+  services: readonly DeclaredServiceName[],
+  env: Partial<Record<DeclaredServiceName, Record<string, string>>>,
+  host: string,
+): Record<string, string> {
+  if (host === "core" || serviceHost(host) !== host) return { ...env[host as DeclaredServiceName] };
+  const out: Record<string, string> =
+    host === "web-ui" ? { ADMIN_ENABLED: services.includes("admin") ? "1" : "0" } : {};
+  for (const service of services.filter((name) => serviceHost(name) === host)) {
+    for (const [name, value] of Object.entries(env[service] ?? {})) {
+      if (name === "PORT") continue;
+      if (out[name] !== undefined && out[name] !== value) {
+        throw new Error(`Conflicting ${name} settings in services hosted by ${host}`);
+      }
+      out[name] = value;
+    }
+  }
+  return out;
+}
 
 export function virtualServiceEnv(
   services: readonly DeclaredServiceName[],
@@ -108,8 +136,9 @@ export function orgEnv(
       ...(brand?.orgName ? { ORG_BRAND_ORG_NAME: brand.orgName } : {}),
     };
   }
-  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl };
-  if (service === "portal") return { ...identity, PORTAL_PUBLIC_URL: base };
+  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl, ADMIN_BASE_PATH: "/admin" };
+  if (service === "portal")
+    return { ...identity, PORTAL_PUBLIC_URL: base, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
   if (service === "admin" && hasPortal) return { ...identity, ADMIN_BASE_PATH: "/admin" };
   if (service === "auth") return { ...identity, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
   return identity;
@@ -137,18 +166,21 @@ export function brokerWiring(
   o: { publicUrl: string; authBaseUrl: string; allowedEmailDomain?: string },
 ): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
-  const internal = o.authBaseUrl.replace(/\/$/, "");
   const issuer = `${base}${AUTH_PATH_PREFIX}`;
   if (service === "portal") {
     return {
-      AUTH_BROKER_UPSTREAM: internal,
+      AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
+      AUTH_EMBEDDED: "1",
+      AUTH_ISSUER: issuer,
+      AUTH_CLIENT_ID,
+      AUTH_REDIRECT_URI: `${base}/auth/callback`,
       AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
       OIDC_CLIENT_ID: AUTH_CLIENT_ID,
       OIDC_ISSUER: issuer,
       OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
-      OIDC_TOKEN_ENDPOINT: `${internal}/token`,
-      OIDC_USERINFO_ENDPOINT: `${internal}/userinfo`,
-      OIDC_JWKS_URI: `${internal}/.well-known/jwks.json`,
+      OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+      OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+      OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
       OIDC_SCOPES: "openid email",
       OIDC_PRINCIPAL_CLAIM: "email",
       ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
@@ -245,7 +277,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
       managed: (s) => ({
         ...pluginWiring("portal", s),
         WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
-        ADMIN_UPSTREAM: `http://${s.appPrefix}-admin.internal:8080`,
+        ADMIN_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast/admin`,
       }),
       stackKeys: [
         "PORTAL_PUBLIC_URL",
