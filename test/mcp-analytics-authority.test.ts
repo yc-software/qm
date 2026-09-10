@@ -189,10 +189,34 @@ test("founder-DM signer binds canonical body and rejects every other user, team,
   );
 });
 
+test("founder-DM signer allows only exact configured additional read tools", () => {
+  const signer = createMcpAuthoritySigner(
+    { ...signerConfig, additionalReadTools: ["portfolio_read"] },
+    () => 1_788_119_999_000,
+  );
+  const payload = decodeAuthority(signer.sign("portfolio_read", { window: "7d" }, context).token);
+  assert.equal(payload.tool, "portfolio_read");
+  assert.throws(() => signer.sealAnalyticsCard({} as never, payload, "D123"));
+  assert.throws(() => signer.sign("portfolio_write", {}, context), /authority denied/);
+  assert.throws(() => signer.sign("portfolio_read", {}, { ...context, slackUserId: "U999" }));
+  assert.throws(() =>
+    signer.sign("portfolio_read", {}, { ...context, conversationType: "group" } as unknown as McpHumanCallContext),
+  );
+});
+
 test("authority environment loading is default-off and rejects partial configuration", () => {
   assert.equal(mcpAuthoritySignerConfigFromEnv({}), undefined);
   assert.throws(() => mcpAuthoritySignerConfigFromEnv({ QM_MCP_AUTHORITY_ISSUER: "qm:test" }));
+  assert.throws(() => mcpAuthoritySignerConfigFromEnv({ QM_MCP_AUTHORITY_ADDITIONAL_READ_TOOLS: "portfolio_read" }));
   assert.throws(() => createMcpAuthoritySigner({ ...signerConfig, ttlSeconds: 1 }));
+  for (const additionalReadTools of [
+    ["analytics_query"],
+    ["portfolio_read", "portfolio_read"],
+    ["bad tool"],
+    Array.from({ length: 33 }, (_, index) => `read_${index}`),
+  ]) {
+    assert.throws(() => createMcpAuthoritySigner({ ...signerConfig, additionalReadTools }));
+  }
 });
 
 test("the closed Command Center analytics schema is accepted without pattern support", () => {
@@ -233,11 +257,13 @@ test("signer configuration requires the same canonical email identity carried in
     QM_MCP_AUTHORITY_SLACK_USER_ID: signerConfig.slackUserId,
     QM_MCP_AUTHORITY_SLACK_DM_CHANNEL_ID: signerConfig.slackDmChannelId,
     QM_MCP_AUTHORITY_ED25519_PRIVATE_KEY: signerConfig.privateKey,
+    QM_MCP_AUTHORITY_ADDITIONAL_READ_TOOLS: "portfolio_read,activity.read",
     QM_MCP_AUTHORITY_TTL_SECONDS: String(signerConfig.ttlSeconds),
   });
   assert.equal(canonical?.principalId, "founder@example.com");
   assert.equal(canonical?.slackUserId, "U123");
   assert.notEqual(canonical?.principalId, canonical?.slackUserId);
+  assert.deepEqual(canonical?.additionalReadTools, ["portfolio_read", "activity.read"]);
 });
 
 test("native analytics parser rejects remote blocks and QM renders bounded escaped Slack blocks", () => {

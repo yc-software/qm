@@ -25,7 +25,7 @@ export interface McpAuthorityPayload {
   slackConversationType: "im";
   slackMessageTs: string;
   slackThreadTs: string;
-  tool: "analytics_query";
+  tool: string;
   bodySha256: string;
   jti: string;
   iat: number;
@@ -52,10 +52,13 @@ export interface McpAuthoritySignerConfig {
   slackDmChannelId: string;
   privateKey: string;
   previousPublicKeys?: string[];
+  additionalReadTools?: string[];
   ttlSeconds: number;
 }
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
+const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+const ANALYTICS_TOOL = "analytics_query";
 const CANONICAL_EMAIL =
   /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const SLACK_TS = /^\d{10,12}\.\d{6}$/;
@@ -125,6 +128,7 @@ const CARD_TOKEN_PREFIX = "qm.analytics.card.delivery.v1";
 const MAX_CARD_TOKEN_CHARS = 48_000;
 
 function exactConfig(config: McpAuthoritySignerConfig): McpAuthoritySignerConfig {
+  const additionalReadTools = config.additionalReadTools ?? [];
   if (
     !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{2,127}$/.test(config.issuer) ||
     !IDENTIFIER.test(config.organizationId) ||
@@ -135,6 +139,13 @@ function exactConfig(config: McpAuthoritySignerConfig): McpAuthoritySignerConfig
     !Number.isSafeInteger(config.ttlSeconds) ||
     config.ttlSeconds < 10 ||
     config.ttlSeconds > 60 ||
+    !Array.isArray(additionalReadTools) ||
+    additionalReadTools.length > 32 ||
+    additionalReadTools.some(
+      (value) =>
+        typeof value !== "string" || !TOOL_NAME.test(value) || value === ANALYTICS_TOOL || value !== value.trim(),
+    ) ||
+    new Set(additionalReadTools).size !== additionalReadTools.length ||
     (config.previousPublicKeys !== undefined &&
       (!Array.isArray(config.previousPublicKeys) ||
         config.previousPublicKeys.length > 3 ||
@@ -142,7 +153,7 @@ function exactConfig(config: McpAuthoritySignerConfig): McpAuthoritySignerConfig
   ) {
     throw new Error("QM MCP authority signer configuration is invalid");
   }
-  return config;
+  return { ...config, additionalReadTools: [...additionalReadTools] };
 }
 
 export function createMcpAuthoritySigner(
@@ -150,6 +161,7 @@ export function createMcpAuthoritySigner(
   now = () => Date.now(),
 ): McpAuthoritySigner {
   const config = exactConfig(configInput);
+  const allowedTools = new Set([ANALYTICS_TOOL, ...(config.additionalReadTools ?? [])]);
   let key: ReturnType<typeof createPrivateKey>;
   try {
     key = createPrivateKey({ key: Buffer.from(config.privateKey, "base64"), format: "der", type: "pkcs8" });
@@ -171,7 +183,7 @@ export function createMcpAuthoritySigner(
   return {
     sign(tool, body, context) {
       if (
-        tool !== "analytics_query" ||
+        !allowedTools.has(tool) ||
         !context ||
         context.surface !== "slack" ||
         context.conversationType !== "dm" ||
@@ -199,7 +211,7 @@ export function createMcpAuthoritySigner(
         slackConversationType: "im",
         slackMessageTs: context.slackMessageTs,
         slackThreadTs: context.slackThreadTs,
-        tool: "analytics_query",
+        tool,
         bodySha256: createHash("sha256").update(canonicalJson(body)).digest("hex"),
         jti: randomBytes(32).toString("base64url"),
         iat,
@@ -212,8 +224,11 @@ export function createMcpAuthoritySigner(
       };
     },
     sealAnalyticsCard(card, authority, target) {
-      if (target !== authority.slackChannelId && target !== `${authority.slackChannelId}:${authority.slackThreadTs}`) {
-        throw new Error("QM analytics card delivery target is invalid");
+      if (
+        authority.tool !== ANALYTICS_TOOL ||
+        (target !== authority.slackChannelId && target !== `${authority.slackChannelId}:${authority.slackThreadTs}`)
+      ) {
+        throw new Error("QM analytics card delivery authority is invalid");
       }
       const accepted = parseAnalyticsNativeDelivery(
         { version: 1, delivery: { ...card, authority: cardAuthority(authority) } },
@@ -253,7 +268,7 @@ export function createMcpAuthoritySigner(
         const authority = payload.authority as McpAuthorityPayload;
         if (
           authority.version !== 1 ||
-          authority.tool !== "analytics_query" ||
+          authority.tool !== ANALYTICS_TOOL ||
           !fixedAuthorityMatchesConfig(authority, config) ||
           (payload.target !== authority.slackChannelId &&
             payload.target !== `${authority.slackChannelId}:${authority.slackThreadTs}`)
@@ -283,7 +298,7 @@ export function mcpAuthoritySignerConfigFromEnv(env: NodeJS.ProcessEnv): McpAuth
     "QM_MCP_AUTHORITY_ED25519_PRIVATE_KEY",
     "QM_MCP_AUTHORITY_TTL_SECONDS",
   ] as const;
-  if (names.every((name) => !env[name])) return undefined;
+  if (names.every((name) => !env[name]) && !env.QM_MCP_AUTHORITY_ADDITIONAL_READ_TOOLS) return undefined;
   if (names.some((name) => !env[name])) throw new Error("QM MCP authority signer configuration is incomplete");
   return exactConfig({
     issuer: env.QM_MCP_AUTHORITY_ISSUER!,
@@ -295,6 +310,9 @@ export function mcpAuthoritySignerConfigFromEnv(env: NodeJS.ProcessEnv): McpAuth
     privateKey: env.QM_MCP_AUTHORITY_ED25519_PRIVATE_KEY!,
     ...(env.QM_MCP_AUTHORITY_ED25519_PREVIOUS_PUBLIC_KEYS
       ? { previousPublicKeys: env.QM_MCP_AUTHORITY_ED25519_PREVIOUS_PUBLIC_KEYS.split(",") }
+      : {}),
+    ...(env.QM_MCP_AUTHORITY_ADDITIONAL_READ_TOOLS
+      ? { additionalReadTools: env.QM_MCP_AUTHORITY_ADDITIONAL_READ_TOOLS.split(",") }
       : {}),
     ttlSeconds: Number(env.QM_MCP_AUTHORITY_TTL_SECONDS),
   });

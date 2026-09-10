@@ -18,6 +18,7 @@ QM_MCP_AUTHORITY_SLACK_USER_ID=<exact U... founder id>
 QM_MCP_AUTHORITY_SLACK_DM_CHANNEL_ID=<exact D... personal-DM channel id>
 QM_MCP_AUTHORITY_ED25519_PRIVATE_KEY=<base64 DER/PKCS8 Ed25519 private key>
 QM_MCP_AUTHORITY_ED25519_PREVIOUS_PUBLIC_KEYS=<comma-separated base64 DER/SPKI public keys during rotation>
+QM_MCP_AUTHORITY_ADDITIONAL_READ_TOOLS=<comma-separated exact additional read-only tool names>
 QM_MCP_AUTHORITY_TTL_SECONDS=30
 ```
 
@@ -35,7 +36,13 @@ canonical email principal, workspace, Slack user, and DM channel still match
 the current fixed configuration. New authority and delivery signatures always
 use the current private key.
 
-The QM MCP server record must pin the only allowed remote tool with these
+The optional additional-tool setting permits at most 32 exact MCP tool names.
+It only extends which founder-DM requests the signer can bind. Every configured
+tool must still be independently pinned as read-only in its MCP server record,
+and tools not named in the setting remain denied. `analytics_query` is always
+enabled and must not be repeated in the setting.
+
+The analytics QM MCP server record must pin its remote tool with these
 closed contract fields in addition to its exact reviewed input schema:
 
 ```json
