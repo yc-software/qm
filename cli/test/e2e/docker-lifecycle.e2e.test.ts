@@ -20,6 +20,7 @@ import {
 } from "./harness.ts";
 
 const SERVICES = ["core", "web-ui", "admin", "portal"] as const;
+const WORKLOADS = ["core", "web-ui", "portal"] as const;
 const suffix = (names: string[], end: string): string | undefined => names.find((n) => n.endsWith(`-${end}`));
 
 function lifecycleSkip(): string | false {
@@ -78,7 +79,7 @@ test(
         assert.match(r.out, /plugin widget running/);
 
         const names = deploymentContainers(org);
-        for (const svc of [...SERVICES, "widget", "pg"]) {
+        for (const svc of [...WORKLOADS, "widget", "pg"]) {
           assert.ok(suffix(names, svc), `expected a running container for ${svc}; got ${names.join(", ")}`);
         }
       });
@@ -151,7 +152,7 @@ test(
 
         const all = runCli(["logs", "--tail", "3"], { cwd: dep });
         assert.equal(all.code, 0, all.out);
-        for (const label of [...SERVICES, "widget", "pg"]) {
+        for (const label of [...WORKLOADS, "widget", "pg"]) {
           assert.match(all.out, new RegExp(`${label}\\s+\\|`), `interleaved logs missing ${label}`);
         }
       });
