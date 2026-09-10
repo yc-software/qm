@@ -712,3 +712,30 @@ test("Docker custom headers use CSV syntax and replace rather than merge config 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Docker API versions accept an optional v prefix and gate platform below 1.41", async () => {
+  await withDockerSecrets({}, {}, async (fixture) => {
+    const priorVersion = process.env.DOCKER_API_VERSION;
+    const priorPlatform = process.env.DOCKER_DEFAULT_PLATFORM;
+    try {
+      process.env.DOCKER_DEFAULT_PLATFORM = "linux/arm64";
+      for (const version of ["1.40", "v1.40", "1.41", "v1.41"]) {
+        process.env.DOCKER_API_VERSION = version;
+        writeFileSync(fixture.requestsLog, "");
+        await fixture.up();
+        const requests = readFileSync(fixture.requestsLog, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as CreateRequest);
+        const normalized = version.replace(/^v/, "");
+        for (const request of requests) assert.ok(request.path.startsWith(`/v${normalized}/containers/`));
+        assert.equal(requests[0]!.path.includes("platform="), normalized === "1.41");
+      }
+    } finally {
+      if (priorVersion === undefined) delete process.env.DOCKER_API_VERSION;
+      else process.env.DOCKER_API_VERSION = priorVersion;
+      if (priorPlatform === undefined) delete process.env.DOCKER_DEFAULT_PLATFORM;
+      else process.env.DOCKER_DEFAULT_PLATFORM = priorPlatform;
+    }
+  });
+});

@@ -21,6 +21,8 @@ export interface DockerContainer {
   port?: { host: number; container: number };
 }
 
+const dockerApiVersion = (): string | undefined => process.env.DOCKER_API_VERSION?.replace(/^v/, "");
+
 function customHeadersFromEnv(value: string): Record<string, string> {
   if (/[\r\n]/.test(value)) throw new Error();
   const headers: Record<string, string> = {};
@@ -52,7 +54,7 @@ export function dockerClientDefaults(): { env: Record<string, string>; headers: 
       validateHeaderName(key);
       validateHeaderValue(key, value);
     }
-    if (process.env.DOCKER_API_VERSION && !/^\d+\.\d+$/.test(process.env.DOCKER_API_VERSION)) throw new Error();
+    if (dockerApiVersion() && !/^\d+\.\d+$/.test(dockerApiVersion()!)) throw new Error();
     const proxies = config.proxies ?? {};
     let proxy = proxies.default ?? {};
     if (Object.keys(proxies).some((key) => key !== "default")) {
@@ -109,9 +111,7 @@ function dockerRequest(
     result = JSON.parse(
       execFileSync(process.execPath, [import.meta.filename], {
         input: JSON.stringify({
-          path: process.env.DOCKER_API_VERSION
-            ? `/v${encodeURIComponent(process.env.DOCKER_API_VERSION)}${path}`
-            : path,
+          path: dockerApiVersion() ? `/v${encodeURIComponent(dockerApiVersion()!)}${path}` : path,
           body,
           expectedStatus,
           headers,
@@ -212,7 +212,7 @@ if (process.argv[1] === import.meta.filename) {
 export function startDockerContainer(container: DockerContainer): void {
   validateDockerEnv(container.env);
   const port = container.port ? `${container.port.container}/tcp` : undefined;
-  const [apiMajor = 1, apiMinor = 41] = (process.env.DOCKER_API_VERSION ?? "1.41").split(".").map(Number);
+  const [apiMajor = 1, apiMinor = 41] = (dockerApiVersion() ?? "1.41").split(".").map(Number);
   const platform = apiMajor > 1 || apiMinor >= 41 ? process.env.DOCKER_DEFAULT_PLATFORM : undefined;
   const id = dockerRequest(
     `/containers/create?name=${encodeURIComponent(container.name)}${platform ? `&platform=${encodeURIComponent(platform)}` : ""}`,
