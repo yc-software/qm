@@ -1038,7 +1038,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         systemPrompt += `\n\n${computerBlock}`;
         if (deps.scratchExec) {
           systemPrompt +=
-            '\nThis describes your durable, scoped computer — `execute` runs here by default. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
+            '\nThis is an environment profile, not proof that a sandbox exists. Select an explicit sandbox or use the scope\'s stored default; without a default, choose a target before running a command. The opt-in scratch box (scope:"scratch") is separate: same OS and tooling, org-global files only, no logins or tokens, wiped after the turn — prefer it for heavy self-contained runs that need no logins, workspace files, or follow-up; it keeps this computer responsive.';
         }
       }
       if (deps.deploymentLayer?.hints.length) {
