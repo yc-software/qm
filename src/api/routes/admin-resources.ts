@@ -1,4 +1,3 @@
-import { validateRuntimeChoice } from "../runtime-config.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
@@ -632,9 +631,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harnessId} harness`,
         };
-      const choice = { harnessId, modelId, effortLevel, fastMode };
-      const error = validateRuntimeChoice(choice);
-      if (error) return { error };
+      const choice = {
+        harnessId,
+        modelId,
+        effortLevel,
+        fastMode: fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId),
+      };
       await ctx.deps.config!.setRuntimeSelectionLatest(scope, choice);
       return { ok: true };
     },

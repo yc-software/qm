@@ -1,4 +1,4 @@
-import { runtimeFallback, runtimeConfigBody, validateRuntimeChoice, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeFallback, runtimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, ScopeId } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
@@ -10,6 +10,7 @@ import {
   modelSupportedByHarness,
   modelOfferedInWebui,
   THINKING_LEVELS,
+  fastModeModelIds,
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -1167,9 +1168,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
-    const choice = { harnessId, modelId, effortLevel, fastMode };
-    const error = validateRuntimeChoice(choice);
-    if (error) return sendJson(ctx.res, 400, { error });
+    const choice = { harnessId, modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
     await config.setRuntimeSelectionLatest(target.scope, choice);
   }
   audit(ctx.deps, {

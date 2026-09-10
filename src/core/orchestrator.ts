@@ -1,4 +1,4 @@
-import { recoveredRuntime } from "../harness/runtime-control.ts";
+import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import { shq } from "../util/shell.ts";

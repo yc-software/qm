@@ -8,7 +8,7 @@ import {
   type RuntimeDeps,
 } from "../api/runtime-config.ts";
 import { livePersonCapability } from "../api/artifact-share.ts";
-import { parseScopeId, type SessionEntry } from "../types.ts";
+import { parseScopeId } from "../types.ts";
 import {
   ALL_PROVIDERS_AVAILABLE,
   isHarnessId,
@@ -16,7 +16,6 @@ import {
   safeModelMetadata,
   modelSupportedByHarness,
 } from "../model/pi-models.ts";
-import { isObj } from "../util/objects.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
   return async (claims, active, request, authorizeChoice, individualAuth, signal) => {
@@ -118,33 +117,4 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     if (lifetime === "scope") await deps.config.setRuntimeSelectionLatest(claims.scopeId, choice);
     return { ok: true, handoff: { choice, lifetime } };
   };
-}
-
-export function recoveredRuntime(
-  entries: readonly SessionEntry[],
-  runId: string,
-  actorId: string,
-): RuntimeChoice | undefined {
-  for (const entry of [...entries].reverse()) {
-    const p = entry.payload;
-    if (
-      entry.type !== "tool_result" ||
-      !isObj(p) ||
-      p.tool !== "runtime" ||
-      p.runId !== runId ||
-      p.actorId !== actorId ||
-      !isObj(p.runtimeHandoff)
-    )
-      continue;
-    const choice = p.runtimeHandoff.choice;
-    if (
-      isObj(choice) &&
-      isHarnessId(choice.harnessId) &&
-      typeof choice.modelId === "string" &&
-      (choice.effortLevel === undefined || typeof choice.effortLevel === "string") &&
-      (choice.fastMode === undefined || typeof choice.fastMode === "boolean")
-    )
-      return choice as unknown as RuntimeChoice;
-  }
-  return undefined;
 }

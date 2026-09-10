@@ -20,6 +20,60 @@ const AUTH_PROBE_BUDGET_MS = 500;
 
 export const scenarios: Scenario[] = [
   {
+    name: "runtime-model-handoff",
+    lane: "parallel",
+    tags: ["core", "release"],
+    timeoutMs: 5 * 60_000,
+    async run(ctx) {
+      const ch = await ctx.freshChannel();
+      const marker = ctx.marker();
+      const root = await ch.mention(
+        `Use the runtime tool to inspect your active runtime and available models, then switch to a different available Anthropic model for this task only. Keep the pi harness, set effort to auto and fastMode to false. After the handoff, inspect runtime again and calculate 17 × 23. Only after completing these steps, reply with the exact token ${marker}, your active model and the answer.`,
+      );
+      const reply = await ch.waitForBotReply(root, { match: new RegExp(marker), timeoutMs: 4 * 60_000 });
+      assert.match(reply.text ?? "", /\b391\b/);
+      const session = await ctx.core.findSessionByThread(ch.id, root);
+      assert.ok(session, "no core session found for runtime handoff");
+      const handoffEntry = session.entries.find(
+        (entry: any) => entry.type === "tool_result" && entry.payload?.runtimeHandoff,
+      ) as
+        | { payload: { runtimeHandoff: { lifetime: string; choice: { harnessId: string; modelId: string } } } }
+        | undefined;
+      assert.ok(handoffEntry, "no durable runtime handoff recorded");
+      const { lifetime, choice } = handoffEntry.payload.runtimeHandoff;
+      assert.equal(lifetime, "task");
+      assert.equal(choice.harnessId, "pi");
+      const handoffIndex = session.entries.indexOf(handoffEntry);
+      const verification = session.entries
+        .slice(handoffIndex + 1)
+        .find(
+          (entry: any) =>
+            entry.type === "tool_result" &&
+            entry.payload?.tool === "runtime" &&
+            entry.payload?.action === "get" &&
+            entry.payload?.ok === true,
+        ) as { payload: { result: string } } | undefined;
+      assert.ok(verification, "no successful runtime inspection after handoff");
+      const inspected = JSON.parse(verification.payload.result) as { active: { modelId: string } };
+      assert.equal(inspected.active.modelId, choice.modelId);
+      type ModelCall = { step: number; model: string; createdAt: number; usage: { output: number } | null };
+      let modelCalls: ModelCall[];
+      const deadline = Date.now() + 30_000;
+      do {
+        const { requests } = (await ctx.core.getSessionLlm(session.id)) as { requests: ModelCall[] };
+        modelCalls = requests.filter((request) => request.step >= 0).toSorted((a, b) => a.createdAt - b.createdAt);
+        if (modelCalls.some((request) => request.model === choice.modelId && (request.usage?.output ?? 0) > 0)) break;
+        await sleep(500);
+      } while (Date.now() < deadline);
+      assert.ok(modelCalls.length >= 2, "runtime handoff did not produce multiple model calls");
+      assert.notEqual(modelCalls[0]!.model, choice.modelId, "runtime tool selected the already active model");
+      assert.ok(
+        modelCalls.slice(1).some((request) => request.model === choice.modelId && (request.usage?.output ?? 0) > 0),
+        `no real model call used the selected runtime ${choice.modelId}`,
+      );
+    },
+  },
+  {
     name: "mention-reply",
     lane: "parallel",
     tags: ["smoke", "core", "release"],

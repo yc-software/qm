@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRuntimeService, recoveredRuntime } from "../src/harness/runtime-control.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
+import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
