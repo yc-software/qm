@@ -6,7 +6,7 @@ import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { MemoryService } from "../memory/memory-service.ts";
+import type { MemoryService, MemoryRecallContext } from "../memory/memory-service.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import type { Resolution, ScopeId, Principal } from "../types.ts";
@@ -34,10 +34,10 @@ interface MemoryReaderInput {
 
 export function contextMemory({ memory, scopes, actorId, onRead }: MemoryReaderInput) {
   return {
-    async recall(): Promise<string> {
+    async recall(context?: MemoryRecallContext): Promise<string> {
       const sections: string[] = [];
       for (const scope of scopes) {
-        const body = (await memory.read(scope)).trim();
+        const body = (await memory.recall(scope, context)).trim();
         onRead?.(scope);
         if (body) sections.push(`### ${scope}\n${body}`);
       }

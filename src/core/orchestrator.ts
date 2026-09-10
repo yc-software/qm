@@ -1,4 +1,5 @@
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
+import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import { shq } from "../util/shell.ts";
@@ -951,9 +952,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
-      const recallStart = Date.now();
-      const recalled = await context.recall();
-      const recallMs = Date.now() - recallStart;
+      let recallMs = 0;
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
@@ -1120,9 +1119,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (conversation.kind === "dm") memoryContext = "a direct message";
       else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
       else if (conversation.kind === "group") memoryContext = "a group conversation";
-      const memoryBlock = recalled
-        ? `\n\n## What you remember\nYou're in ${memoryContext}. Scope headings and \`(said in …)\` tags identify provenance. You may use facts from these included, authorized memories to answer this request; do not ask for them to be shared again merely because they came from another scope. Context-specific instructions and preferences still apply only to their source context unless the user says otherwise.\n\n${recalled}`
-        : "";
 
       let onboardingBlock = "";
       if (useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
@@ -1913,6 +1909,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
           systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
         }
+        const recallEntries = memoryAccess?.read.length
+          ? filterHistory(
+              forModelContext(await deps.sessions.getEntries(session.id, { limit: 20 }), {
+                includeSecurityTainted: false,
+              }),
+            )
+          : [];
+        const recallStart = Date.now();
+        const recalled = await context.recall({
+          query: input.text,
+          recentContext: memoryRecallQuery("", recallEntries),
+          sessionId: session.id,
+          actorId: actor.id,
+          conversationScopeId: scopeId,
+          maxChars: 6_000,
+          ...(automatedTurn ? { autonomous: true } : {}),
+        });
+        recallMs += Date.now() - recallStart;
+        const memoryBlock = recalled
+          ? `\n\n## What you remember\nYou're in ${memoryContext}. Scope headings and \`(said in …)\` tags identify provenance. You may use facts from these included, authorized memories to answer this request; do not ask for them to be shared again merely because they came from another scope. Context-specific instructions and preferences still apply only to their source context unless the user says otherwise.\n\n${recalled}`
+          : "";
         const stableSystemBytes = systemPrompt.length;
         if (timeBlock) systemPrompt += `\n\n${timeBlock}`;
         systemPrompt += memoryBlock;

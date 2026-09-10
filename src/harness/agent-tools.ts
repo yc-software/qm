@@ -1132,8 +1132,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "ever touch its OWN memory, no one else's, by design. " +
       'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
       "across every notebook this conversation may read — check what you already know before asking. " +
-      "Every line is loaded into your context on every future turn, so memory is your most " +
-      "expensive storage: it is an index, not a datastore. Save pointers to data, never the data " +
+      "Only a bounded selection of memories is loaded into context; search the full notebooks " +
+      "for facts missing from that selection. Keep memory concise. Save pointers to data, never the data " +
       "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
       "belongs in a file on your computer, with at most one memory line naming that file and what " +
       "it holds. If a fact is a list that grows, it's a file. Two caveats: files are this " +

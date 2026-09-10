@@ -125,8 +125,8 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
 
   const memory: MemoryService = {
     ...base,
-    async recall(scopeId) {
-      const longTerm = stripMarker(await base.recall(scopeId));
+    async recall(scopeId, context) {
+      const longTerm = stripMarker(await base.recall(scopeId, context));
       const parts = longTerm ? [longTerm] : [];
       for (const { date, body } of await readLogWindow(scopeId, Date.now(), 2)) {
         parts.push(`### Scratch log ${date}\n${capTail(body, LOG_RECALL_MAX_CHARS)}`);

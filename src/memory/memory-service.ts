@@ -27,6 +27,7 @@ interface MemoryHead {
 
 export interface MemoryRecallContext {
   query?: string;
+  recentContext?: string;
   actorId?: string;
   sessionId?: string;
   conversationScopeId?: ScopeId;

@@ -9,7 +9,7 @@ Everything here goes through the typed `memory` tool. Memory is NOT a file: writ
 `memory/MEMORY.md` with `write` or shell commands lands on your computer's disk and is
 silently lost — the tool is the one real path.
 
-Every turn already auto-recalls your notebooks into "## What you remember" and
+Every turn already auto-recalls a bounded selection from your notebooks into "## What you remember" and
 auto-extracts facts after you reply. This skill is for what the automatic path misses:
 
 - **Search** (`action: "search"`) — what you remember is bigger than what auto-recall
@@ -17,7 +17,7 @@ auto-extracts facts after you reply. This skill is for what the automatic path m
   org); when more than one is in reach, each hit is tagged with the notebook it came
   from. Matching is substring-based (all terms must match), so prefer distinctive terms
   (a name, a project) over sentences.
-  An empty result is a real answer: you have nothing recorded, so don't assert a memory.
+  An empty result means those terms found no match, not that nothing is recorded. Try fewer terms or alternate wording before concluding a fact is absent.
 - **Write now** (`action: "remember"`) — when the user corrects you or tells you
   something they'll expect you to know later, persist it immediately instead of hoping
   post-turn extraction catches it. Write self-contained facts (who/what, with enough

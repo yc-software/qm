@@ -2,6 +2,65 @@
 
 QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture.
 
+## Built-in semantic recall (prototype)
+
+Configure an OpenAI-compatible embeddings endpoint to rank the built-in notebook's
+facts by cosine similarity instead of injecting its last 6,000 characters:
+
+```bash
+MEMORY_EMBEDDING_URL=https://your-provider.example/v1/embeddings
+MEMORY_EMBEDDING_MODEL=your-embedding-model
+MEMORY_EMBEDDING_API_KEY=your-provider-key
+```
+
+All three settings are required together. They configure the core, not the agent
+computer. The configured provider receives memory text and the retrieval query;
+choose an endpoint approved to handle that data. No provider is selected implicitly.
+Without these settings, existing recall behavior is unchanged. External memory
+providers retain their existing behavior.
+
+- Text remains authoritative. The index stores normalized vectors keyed by fact
+  content hash and notebook scope in the existing `memory_vectors` durable map
+  (Postgres JSONB when `DATABASE_URL` is configured; in-process otherwise).
+  This prototype uses an exact scan of **one authorized notebook**, not a separate
+  vector database or approximate-nearest-neighbor index.
+- Indexing is lazy: the next recall embeds missing/changed facts in batches of 64,
+  reuses unchanged vectors, and prunes removed ones. Completed batches are saved
+  so a timeout doesn't restart a large backfill from zero. Changing the configured
+  endpoint or model rebuilds the index. Do not silently change a model behind a
+  fixed ID.
+- Each turn embeds the current message and up to 2,000 characters of recent,
+  audience-visible, non-quarantined user/assistant dialogue. Tool outputs are not
+  included. Existing external-provider `query` values remain unchanged.
+- Recall packs complete bullets in descending similarity order, up to the existing
+  6,000-character **per-notebook** budget. The prototype cutoff is cosine 0.2;
+  it is a starting heuristic, not a calibrated probability of relevance. It needs
+  evaluation for the chosen model. No always-loaded summary is introduced.
+- Text search (`memory` action `search`, or `POST /v1/memory/search` with
+  `{"query":"distinctive terms","limit":20}`) is independent of embeddings. It
+  searches the full authorized notebooks with case-insensitive, all-term substring
+  matching. It is grep-like literal search, not regex or semantic search.
+- Embedding requests share an eight-second recall deadline. Provider failures fall
+  back to bounded recent **whole** bullets, with a generic warning; chat, writes,
+  and grep remain available. A text recheck prevents deleted facts from being
+  returned after a concurrent edit during embedding.
+
+Verification:
+
+```bash
+node --test test/semantic-memory.test.ts test/semantic-memory-http.test.ts
+DATABASE_URL=postgres://... node --test test/semantic-memory-pg.test.ts
+# Optional live embedding smoke test; uses synthetic facts and a mock reply model
+# to inspect the actual context built by the running QM HTTP server:
+MEMORY_RECALL_LIVE=1 OPENROUTER_API_KEY=... node --test test/semantic-memory-http.test.ts
+```
+
+The initial implementation targets ordinary-sized personal/team notebooks. Large
+notebook backfills, index size, concurrent fleet traffic, and retrieval quality on
+representative real conversations still need broader evaluation before rollout.
+
+## External routing
+
 ```json
 {
   "providers": [
