@@ -527,6 +527,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           if (session) await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
         });
       }
+      if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
       const scope = scopeByName.get(handle.id) ?? "default";
       return provisionQueue(scope, () => teardownScope(handle, scope, tdOpts));
     },

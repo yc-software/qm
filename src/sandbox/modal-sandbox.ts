@@ -730,6 +730,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           if (session) await session.terminate().catch(swallowAs("modal-sandbox: scratch terminate", undefined));
         });
       }
+      if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
       const scope = scopeByName.get(handle.id) ?? "default";
       return provisionQueue(scope, async () => {
         const session = sessionByName.get(handle.id);

@@ -534,3 +534,16 @@ test("destroyScope clears a live E2B session cache after deleting its stored mac
   assert.notEqual((await store.get(scope))!.sandboxId, firstId);
   assert.equal(fake.createdCount(first.id), 2);
 });
+
+test("repeated destroy teardown never targets an unrelated default scope", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const backend = make({ store });
+  await backend.provision([]);
+  const defaultRecord = await store.get("default");
+  assert.ok(defaultRecord);
+  const handle = await backend.provision(layers);
+  await backend.teardown(handle, { destroy: true });
+  await backend.teardown(handle, { destroy: true });
+  assert.deepEqual(await store.get("default"), defaultRecord);
+  assert.equal(await store.get(scope), null);
+});
