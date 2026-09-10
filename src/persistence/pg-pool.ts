@@ -489,6 +489,7 @@ export function createPgPool(
     );
     registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
+    await ready();
     await withMigrationPool((instance) => applyPgMigrations(instance, [migration]));
   }
   function registerMigration(definition: PgMigrationDefinition): void {
