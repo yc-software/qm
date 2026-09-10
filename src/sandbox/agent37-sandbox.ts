@@ -175,12 +175,12 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
 
   async function deleteInstance(name: string): Promise<void> {
     const found = idByName.get(name) ?? (await findInstance(name))?.id;
-    idByName.delete(name);
     if (!found) return;
     const res = await api("DELETE", `/v1/instances/${encodeURIComponent(found)}`, undefined, 120_000);
     if (!res.ok && res.status !== 404) {
       throw new Error(`agent37 delete ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
     }
+    idByName.delete(name);
   }
 
   async function postExec(name: string, script: string, timeoutSec: number): Promise<InstanceExecResponse> {
@@ -543,6 +543,14 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     },
 
     exportFiles: execBackup.exportFiles,
+
+    async destroyScope(scopeId: string): Promise<void> {
+      return provisionQueue(scopeId, async () => {
+        await advisoryLock.withLock(`agent37-provision:${scopeId}`, () =>
+          deleteInstance(sandboxScopeName(prefix, scopeId)),
+        );
+      });
+    },
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       if (handle.scratch) {

@@ -12,7 +12,7 @@ import {
 } from "./exec-file-ops.ts";
 import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createExecSandboxBase } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type { AgentComputerProfile, ExecResult, Sandbox } from "./sandbox.ts";
@@ -154,12 +154,12 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function deleteMachine(name: string): Promise<void> {
     const found = idByName.get(name) ?? (await findMachine(name))?.id;
-    idByName.delete(name);
     if (!found) return;
     const res = await api("DELETE", `/v1/machines/${encodeURIComponent(found)}`);
     if (!res.ok && res.status !== 404) {
       throw new Error(`smolmachines delete ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
     }
+    idByName.delete(name);
   }
 
   async function postExec(
@@ -402,6 +402,12 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     readFileBytes: base.readFileBytes,
     readFile: base.readFile,
     exportFiles: execExport.exportFiles,
+
+    async destroyScope(scopeId: string): Promise<void> {
+      return base.provisionQueue(scopeId, async () => {
+        await deleteMachine(sandboxScopeName(prefix, scopeId));
+      });
+    },
     teardown: base.teardown,
   };
 }
