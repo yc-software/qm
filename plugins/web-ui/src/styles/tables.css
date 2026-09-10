@@ -1,0 +1,68 @@
+.markdown-content div:has(> table) {
+  margin: 8px 0;
+  max-height: 438px;
+  overflow: auto;
+  scrollbar-color: var(--line-strong) transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.markdown-content table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  counter-reset: row;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.markdown-content th,
+.markdown-content td,
+.markdown-content tr::before {
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  transition: background-color 0.12s ease-out;
+}
+.markdown-content tbody tr:last-child > *,
+.markdown-content tbody tr:last-child::before {
+  border-bottom: 0;
+}
+.markdown-content thead th,
+.markdown-content thead tr::before {
+  position: sticky;
+  top: 0;
+  background: var(--inset);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.markdown-content tr::before {
+  content: "";
+  display: table-cell;
+  width: 0;
+  padding-right: 0;
+  color: var(--ink-3);
+  font: 500 11px/1.4 var(--font-mono);
+  text-align: right;
+}
+.markdown-content tbody tr::before {
+  counter-increment: row;
+  content: counter(row);
+}
+.markdown-content tbody td:first-child {
+  font-weight: 500;
+}
+.markdown-content tbody tr:hover > td,
+.markdown-content tbody tr:hover::before {
+  background: var(--hover);
+}
+.markdown-content :is(th, td)[align="center"] {
+  text-align: center;
+}
+.markdown-content :is(th, td)[align="right"] {
+  text-align: right;
+}

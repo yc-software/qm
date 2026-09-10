@@ -55,12 +55,20 @@ test("preserves KaTeX math output (visible render + MathML annotation)", () => {
 
 test("shared Markdown preserves formatting without media or private file links", () => {
   const source =
-    '**Packing list**\n\n- Water\n- Snacks\n\n```js\nconst safe = true;\n```\n![remote](https://example.test/track)\n[private](sandbox:/home/sprite/workspace/secret.txt)\n<img src="/api/files/secret/content"><svg><a xlink:href="/api/sessions/private">hidden link</a></svg>';
+    '**Packing list**\n\n- Water\n- Snacks\n\n| Item | Qty |\n|---|---:|\n| Cones | 12 |\n\n```js\nconst safe = true;\n```\n![remote](https://example.test/track)\n[private](sandbox:/home/sprite/workspace/secret.txt)\n<img src="/api/files/secret/content"><svg><a xlink:href="/api/sessions/private">hidden link</a></svg>';
   const result = DOMPurify.sanitize(marked.parse(source, { async: false }), SHARED_MARKDOWN_SANITIZE_CONFIG) as string;
   assert.ok(result.includes("<strong>Packing list</strong>"));
   assert.ok(result.includes("<li>Water</li>"));
+  assert.ok(result.includes('<td align="right">12</td>'));
   assert.ok(result.includes("const safe = true;"));
   assert.equal(/<img|(?:src|href)=|secret\.txt|api\/files/.test(result), false);
+});
+
+test("shared Markdown drops table-cell attributes that fetch or paint", () => {
+  const cell = '<table><tr><td background="https://x" bgcolor="red" align="right">12</td></tr></table>';
+  const result = DOMPurify.sanitize(cell, SHARED_MARKDOWN_SANITIZE_CONFIG) as string;
+  assert.ok(result.includes('<td align="right">12</td>'));
+  assert.equal(/background|bgcolor/.test(result), false);
 });
 
 test("turns sandbox workspace links into real file-library downloads", () => {

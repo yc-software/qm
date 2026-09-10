@@ -597,6 +597,7 @@ function drawSkills(loading = false): void {
                 html`<button
                   type="button"
                   aria-pressed=${statusFilter === value}
+                  data-status=${value}
                   class=${statusFilter === value ? "active" : ""}
                   @click=${() => {
                     statusFilter = value;

@@ -240,12 +240,9 @@ function drawCronsPage(): void {
   const ownsAny = all.some(({ mine }) => mine);
   const counts: Record<CronTab, number> = { yours: yours.length, shared: shared.length, archived: archived.length };
 
+  const notice = cronActionNotice ? html`<div class="action-notice">${cronActionNotice}</div>` : nothing;
+  cronActionNotice = "";
   const rows: TemplateResult[] = [];
-  if (cronActionNotice) {
-    rows.push(html`<div class="action-notice">${cronActionNotice}</div>`);
-    cronActionNotice = "";
-  }
-  if (all.length) rows.push(cronTabs(counts));
   if (cronTab === "yours") {
     rows.push(...yoursEnabled.map(({ c }) => cronPageRow(c, true)));
     if (all.length && !yoursEnabled.length)
@@ -279,6 +276,7 @@ function drawCronsPage(): void {
           drawCronsPage();
         },
       },
+      filters: html`${notice}${all.length ? cronTabs(counts) : nothing}`,
       rows,
       empty,
     })}`,
@@ -297,24 +295,24 @@ function toggleDisabledCrons(): void {
 }
 
 function cronEmptyRow(text: string): TemplateResult {
-  return html`<div class="empty compact cron-filter-empty">${text}</div>`;
+  return html`<div class="empty compact">${text}</div>`;
 }
 
 function cronTabs(counts: Record<CronTab, number>): TemplateResult {
   const tabs = CRON_TABS.filter((t) => t.value === "yours" || counts[t.value] > 0 || cronTab === t.value);
   return html`
-    <div class="cron-list-controls" role="tablist" aria-label="Cron view">
+    <div class="resource-tabs" role="tablist" aria-label="Cron view">
       ${tabs.map(
         (t) => html`
           <button
             type="button"
             role="tab"
             aria-selected=${cronTab === t.value}
-            class="cron-filter-chip ${cronTab === t.value ? "active" : ""}"
+            data-status=${t.value}
+            class=${cronTab === t.value ? "active" : ""}
             @click=${() => setCronTab(t.value)}
           >
-            <span>${t.label}</span>
-            <span class="cron-filter-count">${counts[t.value]}</span>
+            ${t.label}<span>${counts[t.value]}</span>
           </button>
         `,
       )}

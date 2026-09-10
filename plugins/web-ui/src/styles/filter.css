@@ -1,0 +1,28 @@
+.list-page-head .pane-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.list-page-head .pane-subtitle {
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+.list-rows > :first-child {
+  border-start-start-radius: inherit;
+  border-start-end-radius: inherit;
+}
+.list-rows > :last-child {
+  border-end-start-radius: inherit;
+  border-end-end-radius: inherit;
+}
+.resource-tabs button[data-status="active"]::before,
+.resource-tabs button[data-status="archived"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ink-3);
+}
+.resource-tabs button[data-status="active"]::before {
+  background: var(--green);
+}

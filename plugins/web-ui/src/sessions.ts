@@ -595,6 +595,7 @@ export function drawChatsPage(): void {
               html`<button
                 role="tab"
                 type="button"
+                data-status=${value}
                 aria-selected=${chatsPageStatus === value}
                 class=${chatsPageStatus === value ? "active" : ""}
                 @click=${() => {
@@ -859,7 +860,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const working = sessionWorking(s);
   let titleContent: string | TemplateResult = groupDmTitle(s);
   if (refreshingTitle) {
-    titleContent = html`<span class="sheen-label title-sheen thinking-sheen" data-sheen=${title}>${title}</span>`;
+    titleContent = html`<span class="sheen-label title-sheen thinking-sheen">${title}</span>`;
   } else if (untitledProjectChild) {
     titleContent = title;
   }

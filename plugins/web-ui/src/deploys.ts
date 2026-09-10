@@ -110,20 +110,21 @@ function deployTabs(): TemplateResult {
   ) as Record<DeploymentTab, number>;
   const tabs = DEPLOY_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || deployTab === tab.value);
   return html`
-    <div class="cron-list-controls" role="tablist" aria-label="App view">
+    <div class="resource-tabs" role="tablist" aria-label="App view">
       ${tabs.map(
         (tab) => html`
           <button
             type="button"
             role="tab"
             aria-selected=${deployTab === tab.value}
-            class="cron-filter-chip ${deployTab === tab.value ? "active" : ""}"
+            data-status=${tab.value}
+            class=${deployTab === tab.value ? "active" : ""}
             @click=${() => {
               deployTab = tab.value;
               drawDeploysPage();
             }}
           >
-            <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
+            ${tab.label}<span>${counts[tab.value]}</span>
           </button>
         `,
       )}
@@ -191,17 +192,13 @@ function drawDeploysPage(): void {
   else if (deployLoading && deployList.length === 0) empty = "Loading apps…";
   else if (deployQuery && allForTab.length) empty = "No apps match your search.";
   else if (deployScope) empty = "No apps in this context.";
-  const content = deployList.length
-    ? [
-        deployTabs(),
-        ...(deployNotices.list
-          ? [html`<div class="status deploy-list-notice" role="status" aria-live="polite">${deployNotices.list}</div>`]
-          : []),
-        ...(rows.length
-          ? rows.map(deploymentRow)
-          : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
-      ]
-    : [];
+  const filters = deployList.length
+    ? html`${deployTabs()}${
+        deployNotices.list
+          ? html`<div class="status deploy-list-notice" role="status" aria-live="polite">${deployNotices.list}</div>`
+          : nothing
+      }`
+    : undefined;
   const scoped = Boolean(scopedSession.active);
   deployPageHost.classList.toggle("scoped-view", scoped);
   render(
@@ -217,7 +214,8 @@ function drawDeploysPage(): void {
             drawDeploysPage();
           },
         },
-        rows: content,
+        filters,
+        rows: rows.map(deploymentRow),
         empty,
       })}
       ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
