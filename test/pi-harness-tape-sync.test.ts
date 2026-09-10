@@ -186,3 +186,69 @@ test("a lease lost mid-turn fails the turn instead of degrading silently", async
     globalThis.fetch = realFetch;
   }
 });
+
+test("completed Pi attach results retain openable files in viewer history", async () => {
+  const { createTranscriptSource } = await import("../src/harness/tape-projection.ts");
+  const store = createMemorySessionStore();
+  const scopeLabel = "personal:tester" as ScopeId;
+  const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
+  await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  const files = [
+    { name: "desktop.png", mimetype: "image/png", sizeBytes: 123, artifactId: "desktop" },
+    { name: "phone.png", mimetype: "image/png", sizeBytes: 456, artifactId: "phone" },
+    { name: "preview.html", mimetype: "text/html", sizeBytes: 789, artifactId: "preview" },
+  ];
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (calls++ > 0) return sse(textReplyEvents("Here are the previews."));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "attach-preview", name: "attach", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify({ files: files.map((f) => f.name) }) },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof globalThis.fetch;
+  try {
+    const result = await harness.turns.runTurn(
+      turnInput(
+        session.id,
+        { entries: [], tape: [] },
+        {
+          session,
+          tools: {
+            attach: async () => ({ ok: true, files, staged: files.length }),
+          } as unknown as HarnessTurnInput["tools"],
+          emit: (entry) => store.append(lease, entry),
+          tape: async (rec) => {
+            await store.appendTape(lease, rec);
+          },
+        },
+      ),
+    );
+    assert.equal(result.reply, "Here are the previews.");
+    assert.equal(calls, 2);
+    const original = (await store.getEntries(session.id)).find((e) => e.type === "tool_result");
+    assert.deepEqual((original?.payload as { files?: unknown[] }).files, files);
+    const source = createTranscriptSource(store);
+    for (const read of [await source.forRender(session.id), await source.forViewer(session.id, "tester")]) {
+      assert.deepEqual(
+        read.entries.find((e) => e.type === "tool_result"),
+        original,
+      );
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    await store.releaseLease(lease);
+  }
+});
