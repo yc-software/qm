@@ -418,6 +418,8 @@ test("Open loads included memories in both directions with provenance and captur
     }),
   );
   assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
+  assert.match(dmPrompt.reply ?? "", /included, authorized memories/);
+  assert.doesNotMatch(dmPrompt.reply ?? "", /apply it only if that tag matches here/);
 
   member = false;
   const revoked = await orchestrator.handleTurn(

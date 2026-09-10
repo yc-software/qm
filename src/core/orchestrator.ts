@@ -1121,7 +1121,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       else if (conversation.channelName) memoryContext = `#${conversation.channelName}`;
       else if (conversation.kind === "group") memoryContext = "a group conversation";
       const memoryBlock = recalled
-        ? `\n\n## What you remember\nYou're in ${memoryContext}. A memory tagged \`(said in …)\` was stated in another context — apply it only if that tag matches here; untagged memories are general.\n\n${recalled}`
+        ? `\n\n## What you remember\nYou're in ${memoryContext}. Scope headings and \`(said in …)\` tags identify provenance. You may use facts from these included, authorized memories to answer this request; do not ask for them to be shared again merely because they came from another scope. Context-specific instructions and preferences still apply only to their source context unless the user says otherwise.\n\n${recalled}`
         : "";
 
       let onboardingBlock = "";
