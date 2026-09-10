@@ -211,7 +211,9 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
                     "KILL",
                   );
                 } catch (cleanupError) {
-                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed");
+                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
+                    cause: cleanupError,
+                  });
                 }
                 throw error;
               }
