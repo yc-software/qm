@@ -714,3 +714,22 @@ test("a pending retirement without an error remains retryable after a crash", as
   assert.equal(destroyed, true);
   assert.equal((await records.get(record.id))?.cleanupPending, false);
 });
+
+test("retirement preserves core live-work and owning-scope guards before direct deletion", async () => {
+  const { resources, records, options, backend } = fixture();
+  const record = await resources.create("alice", "personal:alice", "local");
+  let destroyed = false;
+  backend.destroyScope = async () => {
+    destroyed = true;
+  };
+  const guarded = createSandboxResources({
+    ...options,
+    beforeRetire: async () => {
+      throw new Error("live background work");
+    },
+  });
+  await assert.rejects(guarded.retire("mallory", record.id), /permission/);
+  await assert.rejects(guarded.retire("alice", record.id), /live background work/);
+  assert.equal(destroyed, false);
+  assert.equal((await records.get(record.id))?.state, "ready");
+});
