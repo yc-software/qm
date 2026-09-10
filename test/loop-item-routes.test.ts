@@ -40,6 +40,7 @@ interface World {
   followUps: Array<{ itemId: string; message: string; actorId: string }>;
   actions: Array<{ kind: string; args: Record<string, unknown> }>;
   tokens: boolean;
+  openedFiles: Array<[string, string]>;
 }
 
 let cronSeq = 0;
@@ -60,6 +61,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
     followUps: [],
     actions: [],
     tokens: over.tokens !== false,
+    openedFiles: [],
   };
   if (over.fire !== false) {
     w.loops.fire = {
@@ -113,6 +115,10 @@ async function call(
     membershipControlsScope: async () => false,
     managesScope: async () => false,
     samePerson: async (a: string, b: string) => a === b,
+    openFileForViewer: async (id: string, principalId: string) => {
+      w.openedFiles.push([id, principalId]);
+      return null;
+    },
     getCron: async (id: string) => w.crons.get(id) ?? null,
     createCron: async (input: Record<string, unknown>) => {
       const cron = { id: `cron-${++cronSeq}`, enabled: true, ...input } as unknown as Cron;
@@ -777,6 +783,27 @@ test("a compose email is sent by the person alone; an agent capability is refuse
     capability: null,
   });
   assert.equal(asPerson.status, 404, "the person passes the gate and reaches the connector stage");
+});
+
+test("attachments on a compose email are opened as the loop owner, never by bare artifact id", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await holdEmailDraft({ loops: w.loops.store, items: w.loops.items }, "josh", {
+    to: ["dana@northwind.io"],
+    subject: "Q3",
+    body: "Hi Dana",
+    attachments: [{ artifactId: "someone-elses-file", name: "invoice.pdf", mimetype: "application/pdf", sizeBytes: 9 }],
+  });
+  const item = (await w.loops.items.byLoop(loop.id))[0]!;
+  const out = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/action?principalId=josh`,
+    body: { kind: "send" },
+    capability: null,
+  });
+  assert.equal(out.status, 400);
+  assert.match((out.body as { message: string }).message, /"invoice\.pdf" is no longer available/);
+  assert.deepEqual(w.openedFiles, [["someone-elses-file", "josh"]]);
 });
 
 test("a person's own typed mention stays live, while a capability caller's is disarmed", async () => {

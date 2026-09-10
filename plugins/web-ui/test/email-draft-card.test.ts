@@ -134,9 +134,12 @@ test("the email draft card previews, edits, and sends through the ledger with re
 
     await until(() => host.querySelector(".email-draft-subject") !== null, "the preview");
     assert.equal(host.querySelector(".email-draft-subject")?.textContent, "Q3 pricing");
-    const block = host.querySelector<HTMLElement & { content?: string }>(".email-draft-body markdown-block");
-    assert.ok(block, "the body previews as rendered markdown");
-    assert.equal(block.content, "Hi Dana,\n\nShort answer: **no**.");
+    assert.equal(
+      host.querySelector(".email-draft-body b")?.textContent,
+      "no",
+      "the preview renders the same HTML the recipient gets",
+    );
+    assert.equal(host.querySelectorAll(".email-draft-body > div > div").length, 2, "one block per paragraph");
     const chip = host.querySelector<HTMLAnchorElement>(".email-draft-attachment .file-chip")!;
     assert.match(chip.textContent ?? "", /q3-pricing\.csv/);
     assert.match(chip.getAttribute("href") ?? "", /\/api\/files\/art-1\/content\/q3-pricing\.csv$/);

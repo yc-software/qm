@@ -2122,12 +2122,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.emailDrafts && isWeb && gmailConnected && !strictReadOnly
             ? {
                 holdEmailDraft: (draft: EmailDraftInput) => deps.emailDrafts!.hold(actor.id, draft, session.id),
-                attachEmailFiles: createAttachStaging({
-                  sandbox: deps.sandbox,
-                  provision,
-                  blobTransfer,
-                  fileRegistration,
-                }).attach,
+                attachEmailFiles: (paths: readonly string[]) =>
+                  createAttachStaging({
+                    sandbox: deps.sandbox,
+                    provision,
+                    blobTransfer,
+                    fileRegistration: { ...fileRegistration, seed: `${fileRegistration.seed}:email:${randomUUID()}` },
+                  }).attach(paths),
               }
             : {}),
           ...(() => {

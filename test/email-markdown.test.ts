@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { emailHtml, emailPlainText } from "../src/util/email-markdown.ts";
+import { emailHtml, emailPlainText } from "../plugins/chassis/src/email-markdown.ts";
 
 const BODY = [
   "Hi Dana,",
@@ -45,6 +45,26 @@ test("the plain text part drops the markers but keeps the words and the links", 
       "Run qm status if unsure.",
     ].join("\n"),
   );
+});
+
+test("held fragments cannot be forged from the body and code is literal in both parts", () => {
+  assert.equal(emailHtml("see \uE0000\uE001 and `x`"), '<div dir="auto"><div>see 0 and <code>x</code></div></div>');
+  assert.equal(
+    emailHtml("`[a](https://x.io)` and `**b**`"),
+    '<div dir="auto"><div><code>[a](https://x.io)</code> and <code>**b**</code></div></div>',
+  );
+  assert.equal(emailPlainText("`[a](https://x.io)` and `**b**`"), "[a](https://x.io) and **b**");
+  assert.equal(
+    emailHtml("**https://x.io**"),
+    '<div dir="auto"><div><b><a href="https://x.io">https://x.io</a></b></div></div>',
+  );
+});
+
+test("list and heading rewrites apply to whole blocks in both parts, never to a stray line", () => {
+  assert.equal(emailPlainText("Thanks,\n* Sina\n+ Co"), "Thanks,\n* Sina\n+ Co");
+  assert.equal(emailPlainText("## Sub\nmore"), "## Sub\nmore");
+  assert.equal(emailHtml("## Sub\nmore"), '<div dir="auto"><div>## Sub<br>more</div></div>');
+  assert.equal(emailPlainText("# Title"), "Title");
 });
 
 test("prose that merely contains asterisks, underscores, or angle brackets is left alone", () => {

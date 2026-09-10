@@ -10777,9 +10777,19 @@ h3.ambient-field-label {
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
   color: var(--foreground);
 }
-.email-draft-body markdown-block {
-  font-size: 14px;
-  line-height: 1.65;
+.email-draft-body ul,
+.email-draft-body ol {
+  margin: 0;
+  padding-left: 22px;
+}
+.email-draft-body code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+}
+.email-draft-body a {
+  color: var(--cta);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .menu-search {

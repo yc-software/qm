@@ -3,7 +3,8 @@ import { CheckCheck, Eye, Paperclip, PenLine, Send, Undo2, X } from "lucide";
 import { api, ApiError, fileContentUrl } from "./core-bridge";
 import type { EmailDraftRef } from "./email-draft";
 import { toInboxItem, type InboxAttachment, type InboxDraft, type InboxItem, type LedgerItem } from "./inbox";
-import { markdown } from "./message-markdown";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { emailHtml } from "../../chassis/src/email-markdown";
 import { formatBytes, icon, initials, relTime } from "./ui";
 
 interface DraftState {
@@ -326,7 +327,7 @@ function previewTpl(state: DraftState, item: InboxItem, current: InboxDraft): Te
     </div>
     <h3 class="email-draft-subject">${current.subject?.trim() || "(no subject)"}</h3>
     <div class="email-draft-rule"></div>
-    <div class="email-draft-body">${markdown(current.body)}</div>
+    <div class="email-draft-body">${unsafeHTML(emailHtml(current.body))}</div>
     ${attachmentsTpl(state, current, false)}
   `;
 }

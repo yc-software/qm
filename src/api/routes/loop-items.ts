@@ -325,7 +325,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         owner: loop.owner,
         actor: proposalAuthor,
         tokens,
-        files: ctx.deps.files,
+        files: { open: (artifactId: string) => ctx.app.openFileForViewer(artifactId, loop.owner) },
         ...(slackClient ? { slackClient } : {}),
       },
       item,

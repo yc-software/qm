@@ -1,7 +1,7 @@
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
 import { randomUUID } from "node:crypto";
 import { errMessage } from "../../util/errors.ts";
-import { emailHtml, emailPlainText } from "../../util/email-markdown.ts";
+import { emailHtml, emailPlainText } from "../../../plugins/chassis/src/email-markdown.ts";
 import {
   addressList,
   clip,
@@ -89,7 +89,8 @@ export interface MimeAttachment {
   bytes: Uint8Array;
 }
 
-export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_EMAIL_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_FILENAME_CHARS = 150;
 
 function textPart(type: string, text: string): string[] {
   return [
@@ -110,11 +111,17 @@ function alternativePart(body: string, boundary: string): string[] {
   ];
 }
 
+function filenameParams(name: string): string {
+  const trimmed = name.slice(0, MAX_FILENAME_CHARS);
+  const ascii = trimmed.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  if (ascii === trimmed) return `filename="${ascii}"`;
+  return `filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(trimmed)}`;
+}
+
 function attachmentPart(file: MimeAttachment): string[] {
-  const name = headerValue(file.name.replace(/["\r\n]/g, "_"));
   return [
-    `Content-Type: ${file.mimetype}; name="${name}"`,
-    `Content-Disposition: attachment; filename="${name}"`,
+    `Content-Type: ${file.mimetype}`,
+    `Content-Disposition: attachment; ${filenameParams(file.name)}`,
     "Content-Transfer-Encoding: base64",
     "",
     wrap76(b64(file.bytes)),
@@ -158,20 +165,24 @@ async function loadAttachments(
   const wanted = draft.attachments ?? [];
   if (!wanted.length) return { ok: true, files: [] };
   if (!deps.files) return { ok: false, message: "attachments are not available on this deployment" };
+  const tooLarge = `attachments exceed ${Math.floor(MAX_EMAIL_ATTACHMENT_BYTES / 1024 / 1024)} MB in total`;
   const files: MimeAttachment[] = [];
   let total = 0;
   for (const a of wanted) {
     const opened = await deps.files.open(a.artifactId);
     if (!opened)
       return { ok: false, message: `attachment "${a.name}" is no longer available; remove it and send again` };
+    total += opened.sizeBytes;
+    if (total > MAX_EMAIL_ATTACHMENT_BYTES) {
+      opened.stream.destroy();
+      return { ok: false, message: tooLarge };
+    }
     const chunks: Buffer[] = [];
     for await (const chunk of opened.stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     const bytes = Buffer.concat(chunks);
-    total += bytes.length;
-    if (total > MAX_ATTACHMENT_BYTES) {
-      return { ok: false, message: `attachments exceed ${Math.floor(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB in total` };
-    }
-    files.push({ name: a.name, mimetype: a.mimetype, bytes });
+    total += Math.max(0, bytes.length - opened.sizeBytes);
+    if (total > MAX_EMAIL_ATTACHMENT_BYTES) return { ok: false, message: tooLarge };
+    files.push({ name: opened.name, mimetype: opened.mimetype, bytes });
   }
   return { ok: true, files };
 }

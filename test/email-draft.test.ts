@@ -7,7 +7,12 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { ledgerState } from "../src/loops/ledger-view.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import type { ConnectorTokenSource } from "../src/loops/sources/adapter.ts";
-import { buildGmailReplyMime, gmailAdapter, MAX_ATTACHMENT_BYTES, replySubject } from "../src/loops/sources/gmail.ts";
+import {
+  buildGmailReplyMime,
+  gmailAdapter,
+  MAX_EMAIL_ATTACHMENT_BYTES,
+  replySubject,
+} from "../src/loops/sources/gmail.ts";
 import { Readable } from "node:stream";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType } from "../src/types.ts";
@@ -74,17 +79,24 @@ test("a compose item sends as a fresh message: no Re:, no thread, human edits wi
 test("attachments ride along as a multipart/mixed message built from stored artifacts", async () => {
   const loops = createLoopStore();
   const items = createLoopItemLedger();
-  const attachment = { artifactId: "art-1", name: 'q3 "pricing".csv', mimetype: "text/csv", sizeBytes: 12 };
+  const attachment = { artifactId: "art-1", name: "forged.exe", mimetype: "text/plain\r\nX-Evil: 1", sizeBytes: 12 };
   const held = await holdEmailDraft({ loops, items }, "sina@acme.co", { ...DRAFT, attachments: [attachment] });
   const item = (await items.get(held.itemId))!;
-  assert.deepEqual((item.proposal!.data as { attachments: unknown }).attachments, [attachment]);
+  assert.deepEqual((item.proposal!.data as { attachments: unknown }).attachments, [
+    { ...attachment, mimetype: "application/octet-stream" },
+  ]);
 
   const opened: string[] = [];
   const files = {
     open: async (id: string) => {
       opened.push(id);
       if (id !== "art-1") return null;
-      return { artifact: {} as never, sizeBytes: 12, stream: Readable.from([Buffer.from("seat,price\n1,2")]) };
+      return {
+        name: 'q3 "préis".csv',
+        mimetype: "text/csv",
+        sizeBytes: 12,
+        stream: Readable.from([Buffer.from("seat,price\n1,2")]),
+      };
     },
   };
   let raw = "";
@@ -102,7 +114,8 @@ test("attachments ride along as a multipart/mixed message built from stored arti
   assert.match(parts[1]!, /Content-Type: multipart\/alternative/);
   assert.match(
     parts[2]!,
-    /Content-Type: text\/csv; name="q3 _pricing_\.csv"\r\nContent-Disposition: attachment; filename="q3 _pricing_\.csv"/,
+    /Content-Type: text\/csv\r\nContent-Disposition: attachment; filename="q3 _pr_is_\.csv"; filename\*=UTF-8''q3%20%22pr%C3%A9is%22\.csv\r\n/,
+    "the stored artifact's own name and type go out, not the draft's claims",
   );
   const payload = parts[2]!.split("\r\n\r\n")[1]!.replaceAll("\r\n", "").replace(/--$/, "");
   assert.equal(Buffer.from(payload, "base64").toString("utf8"), "seat,price\n1,2");
@@ -116,19 +129,27 @@ test("attachments ride along as a multipart/mixed message built from stored arti
   assert.deepEqual(gone, {
     ok: false,
     reason: "bad_item",
-    message: 'attachment "q3 "pricing".csv" is no longer available; remove it and send again',
+    message: 'attachment "forged.exe" is no longer available; remove it and send again',
   });
 
+  let destroyed = false;
+  const hugeStream = Readable.from([Buffer.alloc(16)]);
+  hugeStream.destroy = () => {
+    destroyed = true;
+    return hugeStream;
+  };
   const huge = {
     open: async () => ({
-      artifact: {} as never,
-      sizeBytes: MAX_ATTACHMENT_BYTES + 1,
-      stream: Readable.from([Buffer.alloc(MAX_ATTACHMENT_BYTES + 1)]),
+      name: "big.bin",
+      mimetype: "application/octet-stream",
+      sizeBytes: MAX_EMAIL_ATTACHMENT_BYTES + 1,
+      stream: hugeStream,
     }),
   };
   const tooBig = await gmailAdapter.act({ owner: "sina@acme.co", tokens, fetchImpl, files: huge }, item, "send", {});
   assert.equal(tooBig.ok, false);
   assert.match((tooBig as { message: string }).message, /exceed 5 MB/);
+  assert.equal(destroyed, true, "an oversize file is refused on its declared size, before it is read");
   assert.equal(buildGmailReplyMime(item, { body: "x", to: ["a@b.co"] })?.includes("multipart/mixed"), false);
 });
 
@@ -208,6 +229,13 @@ test("send_email stages workspace files for the email and refuses when staging f
   });
   const refused = await noStaging.run({ to: ["a@b.co"], subject: "x", body: "y", attachments: ["a.txt"] });
   assert.match(refused.content[0]?.text ?? "", /attachments are not available/);
+  const tooMany = await run({
+    to: ["a@b.co"],
+    subject: "x",
+    body: "y",
+    attachments: Array.from({ length: 11 }, (_, i) => `f${i}`),
+  });
+  assert.match(tooMany.content[0]?.text ?? "", /at most 10 attachments/);
 });
 
 test("send_email rejects malformed input before it reaches the ledger", async () => {

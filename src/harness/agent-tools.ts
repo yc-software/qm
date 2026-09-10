@@ -12,6 +12,7 @@ import { classifyScopeLabel } from "../classify/scope-classifier.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
+import { MAX_EMAIL_ATTACHMENTS } from "../loops/sources/adapter.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
@@ -3131,6 +3132,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (!subject) return fail("send_email needs a subject");
       if (!body) return fail("send_email needs a body");
       let attachments: EmailAttachment[] = [];
+      if (paths.length > MAX_EMAIL_ATTACHMENTS)
+        return fail(`an email carries at most ${MAX_EMAIL_ATTACHMENTS} attachments`);
       if (paths.length) {
         if (!tc.attachEmailFiles) return fail("attachments are not available in this conversation");
         const staged = await tc.attachEmailFiles(paths);

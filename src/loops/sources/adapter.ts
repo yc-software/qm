@@ -1,5 +1,5 @@
+import type { Readable } from "node:stream";
 import type { EmailAttachment, LoopItem, LoopSourcePayload } from "../../types.ts";
-import type { FileArtifactStore } from "../../files/file-artifact-store.ts";
 
 export interface ConnectorTokenSource {
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
@@ -18,7 +18,18 @@ export interface SourceActionDeps {
   tokens: ConnectorTokenSource;
   fetchImpl?: typeof fetch;
   slackClient?: (token: string) => SlackUserClient;
-  files?: Pick<FileArtifactStore, "open">;
+  files?: OwnedFileSource;
+}
+
+interface OpenedOwnedFile {
+  name: string;
+  mimetype: string;
+  sizeBytes: number;
+  stream: Readable;
+}
+
+interface OwnedFileSource {
+  open(artifactId: string): Promise<OpenedOwnedFile | null>;
 }
 
 export type SourceActionResult =
@@ -128,16 +139,18 @@ export interface ReplyDraft {
   attachments?: EmailAttachment[];
 }
 
-const MAX_ATTACHMENTS = 10;
+export const MAX_EMAIL_ATTACHMENTS = 10;
+const MIME_TYPE_RE = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 
 function attachmentList(v: unknown): EmailAttachment[] | undefined {
   if (!Array.isArray(v)) return undefined;
   const out: EmailAttachment[] = [];
-  for (const raw of v.slice(0, MAX_ATTACHMENTS)) {
+  for (const raw of v.slice(0, MAX_EMAIL_ATTACHMENTS)) {
     if (!isObj(raw)) continue;
     const artifactId = clip(raw.artifactId, 200);
-    const name = clip(raw.name, 300);
-    const mimetype = clip(raw.mimetype, 200) ?? "application/octet-stream";
+    const name = clip(raw.name, 150);
+    const declared = clip(raw.mimetype, 200);
+    const mimetype = declared && MIME_TYPE_RE.test(declared) ? declared : "application/octet-stream";
     const sizeBytes = typeof raw.sizeBytes === "number" && Number.isFinite(raw.sizeBytes) ? raw.sizeBytes : 0;
     if (artifactId && name) out.push({ artifactId, name, mimetype, sizeBytes });
   }

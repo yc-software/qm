@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { EmailDraftInput, HeldEmailDraft } from "../types.ts";
+import type { EmailDraftInput, HeldEmailDraft, LoopSourcePayload } from "../types.ts";
+import { parseReplyDraft } from "./sources/adapter.ts";
 import { ensureInboxLoop, INBOX_LEDGER_MAX_ITEMS, INBOX_LEDGER_RETENTION_MS } from "./inbox-loop.ts";
 import { loopItemId, type LoopItemLedger } from "./item-ledger.ts";
 import type { LoopStore } from "./loop-store.ts";
@@ -30,13 +31,7 @@ export async function holdEmailDraft(
       sourceAt: now,
       sourcePayload: { source: "gmail", compose: true, title: draft.subject, from: owner, snippet, receivedAt: now },
       proposal: {
-        data: {
-          to: draft.to,
-          ...(draft.cc?.length ? { cc: draft.cc } : {}),
-          subject: draft.subject,
-          body: draft.body,
-          ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
-        },
+        data: parseReplyDraft(draft) as unknown as LoopSourcePayload,
         by: "agent",
         ...(sessionId ? { sessionId } : {}),
       },
