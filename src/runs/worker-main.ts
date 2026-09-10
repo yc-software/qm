@@ -5,6 +5,7 @@ import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await built.sandboxResources.initialize();
 await built.config.hydrate?.();
 await built.identity.hydrate();
 const { runtime } = built;

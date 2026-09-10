@@ -685,5 +685,10 @@ test("direct Files initiation defaults off and requires explicit activation", ()
 
 test("sandbox resource rollout requires explicit activation", () => {
   assert.equal(loadConfig({ ...productionEnv }).sandboxResourcesEnabled, false);
-  assert.equal(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: "true" }).sandboxResourcesEnabled, true);
+  for (const value of ["true", "on", "1"])
+    assert.equal(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: value }).sandboxResourcesEnabled, true);
+  assert.throws(
+    () => loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: "enable" }),
+    /not a recognized boolean/,
+  );
 });

@@ -36,6 +36,7 @@ export interface LegacySandboxBinding {
 }
 
 export interface SandboxResources {
+  initialize(): Promise<void>;
   list(
     actorId: string,
     scopeId: ScopeId,
@@ -167,6 +168,7 @@ export function createSandboxResources(opts: {
       return action();
     });
   return {
+    initialize,
     get,
     async recordLegacy(scopeId, backend, handle) {
       const id = legacyId(scopeId, backend);

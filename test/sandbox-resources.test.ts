@@ -545,3 +545,15 @@ test("activation retries partial durable writes without losing defaults or creat
   assert.ok(await rollout.get("explicit-defaults"));
   assert.deepEqual(provisioned, []);
 });
+
+test("boot activation freezes legacy scope adoption before a new session arrives", async () => {
+  const known = ["personal:old"];
+  const { options, defaults, provisioned } = fixture(undefined, known);
+  const resources = createSandboxResources(options);
+  await resources.initialize();
+  known.push("personal:new-session");
+  assert.equal(await resources.resolve("personal:new-session"), null);
+  assert.equal(await defaults.get("personal:new-session"), null);
+  assert.ok((await resources.resolve("personal:old"))?.id);
+  assert.deepEqual(provisioned, []);
+});
