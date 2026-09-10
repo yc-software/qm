@@ -166,7 +166,7 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   };
 
   const ordered = [
-    "This machine",
+    "Sandbox environment profile",
     "Skills",
     "Where you are",
     "Where scheduled tasks post",
@@ -186,8 +186,8 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   );
   assert.match(prompt, /chartreuse/);
 
-  assert.match(prompt, /## Your computer/);
-  assert.match(prompt, /a sandboxed Linux machine whose disk persists/);
+  assert.match(prompt, /## Sandboxes/);
+  assert.match(prompt, /Core is home; sandboxes are optional resources/);
   assert.match(prompt, /\$AGENT_API_URL/);
 });
 
@@ -213,7 +213,7 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
   assert.equal(second.status, "ok");
 
   for (const title of [
-    "This machine",
+    "Sandbox environment profile",
     "Skills",
     "Where you are",
     "Where scheduled tasks post",
@@ -291,7 +291,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
   assert.doesNotMatch(prompt, /channel-only digest/);
 });
 
-test("'This machine' renders the substrate profile's spec; no resize menu renders", async () => {
+test("'Sandbox environment profile' renders the substrate profile's spec; no resize menu renders", async () => {
   const sized: Sandbox = {
     ...fakeSandbox(),
     profile: {
