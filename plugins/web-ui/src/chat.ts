@@ -88,6 +88,8 @@ import {
 import {
   buildTimeline,
   segmentStatus,
+  toolCategory,
+  toolExecutionOutput,
   toolRowKind,
   type SegmentStatus,
   type TimelineItem,
@@ -2569,7 +2571,7 @@ export function createChatSurface(
   }
 
   function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
-    switch (tool) {
+    switch (toolCategory({ ...result, ...call, tool })) {
       case "execute":
         return call.command ? firstLine(call.command) : "";
       case "read":
@@ -2671,8 +2673,9 @@ export function createChatSurface(
     activity: ToolActivity | null,
   ): TemplateResult {
     const input = toolPayloadText(call);
-    const hasExecOutput = tool === "execute" && Boolean(result.stdout || result.stderr);
-    const output = toolPayloadText(result, hasExecOutput ? ["stdout", "stderr", "code", "timedOut"] : []);
+    const hasExecOutput =
+      toolCategory({ ...result, ...call, tool }) === "execute" && toolExecutionOutput(result) !== null;
+    const output = toolPayloadText(result, hasExecOutput ? ["stdout", "stderr", "code", "timedOut", "result"] : []);
     return html`<div class="tool-disclosure">
       ${toolPayloadCard("Input", input)} ${hasExecOutput ? execOutputCard(result, work, activity) : nothing}
       ${toolPayloadCard("Result", output)}
@@ -2699,7 +2702,7 @@ export function createChatSurface(
     const call = (row.call?.payload ?? {}) as ToolPayload;
     const result = (row.result?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? result.tool ?? "unknown";
-    const knownMeta = TOOL_META[tool];
+    const knownMeta = TOOL_META[toolCategory({ ...result, ...call, tool })];
     const meta = knownMeta ?? UNKNOWN_TOOL;
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
@@ -2725,7 +2728,7 @@ export function createChatSurface(
   }
 
   function execOutputCard(result: ToolPayload, work: WorkBlock, activity: ToolActivity | null): TemplateResult {
-    const out = [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
+    const out = toolExecutionOutput(result) ?? "";
     const exitCode = result.code ?? 0;
     return html`<div class="code-card">
       <div class="code-card-head">${icon(Terminal, 13)}<span class="code-card-lang">bash</span></div>

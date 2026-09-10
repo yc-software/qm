@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolActivity, WorkBlock } from "../src/core-bridge.ts";
-import { buildTimeline, segmentStatus, toolRowKind, type ToolRowModel } from "../src/timeline.ts";
+import {
+  buildTimeline,
+  segmentStatus,
+  toolRowKind,
+  type ToolRowModel,
+  toolCategory,
+  toolExecutionOutput,
+} from "../src/timeline.ts";
 
 function act(seq: number, type: ToolActivity["type"], payload: unknown): ToolActivity {
   return { seq, parentSeq: null, type, payload, createdAt: seq };
@@ -325,4 +332,19 @@ test("a fold's capsule glyph follows its tools: a ring while live, red once any 
     "a real failure still outranks an unanswered call",
   );
   assert.equal(fold("working", unanswered), "running", "mid-turn the same call is simply still running");
+});
+
+test("the unified sandbox tool is categorised by action for labels and failure detection", () => {
+  assert.equal(toolCategory({ tool: "sandbox", action: "exec" }), "execute");
+  assert.equal(toolCategory({ tool: "sandbox", action: "start_process" }), "background");
+  assert.equal(toolCategory({ tool: "sandbox", action: "snapshot" }), "sandbox");
+  assert.equal(toolCategory({ tool: "read" }), "read");
+  const row = {
+    call: { type: "tool_call", payload: { tool: "sandbox", action: "exec", command: "false" } },
+    result: { type: "tool_result", payload: { tool: "sandbox", code: 1 } },
+  } as unknown as ToolRowModel;
+  assert.equal(toolRowKind(row, "complete"), "failed");
+  assert.equal(toolExecutionOutput({ unscreened: true, result: "raw" }), "raw");
+  assert.equal(toolExecutionOutput({ stdout: "ok", stderr: "warn" }), "ok\n[stderr]\nwarn");
+  assert.equal(toolExecutionOutput({}), null);
 });
