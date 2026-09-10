@@ -294,7 +294,28 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   const blobStaging = createBackendBlobStaging("e2b", (id, script, t) => execRaw(id, script, t), opts);
 
+  async function destroyStoredScope(scope: string): Promise<void> {
+    const name = sandboxScopeName(prefix, scope);
+    const stored = await store.get(scope);
+    const cached = sessionByName.get(name);
+    const ids = new Set([stored?.sandboxId, cached?.sandboxId].filter((id): id is string => !!id));
+    for (const id of ids) {
+      try {
+        await client.kill(id);
+      } catch (error) {
+        if (!(error instanceof E2bSandboxGoneError)) throw error;
+      }
+    }
+    await store.delete(scope);
+    sessionByName.delete(name);
+    scopeByName.delete(name);
+  }
+
   const sandbox: Sandbox = {
+    destroyScope(scopeId: string): Promise<void> {
+      return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
+    },
+
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,
@@ -513,18 +534,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
   async function teardownScope(handle: SandboxHandle, scope: string, tdOpts?: TeardownOptions): Promise<void> {
     const session = sessionByName.get(handle.id);
-    if (tdOpts?.destroy) {
-      sessionByName.delete(handle.id);
-      const stored = await store.get(scope);
-      try {
-        if (session) await session.kill();
-        else if (stored) await client.kill(stored.sandboxId);
-        await store.delete(scope);
-      } catch (e) {
-        reportError("sandbox_teardown", "sandbox_kill_failed", errMessage(e), scope);
-      }
-      return;
-    }
+    if (tdOpts?.destroy) return destroyStoredScope(scope);
     if (!session) return;
 
     const stored = await store.get(scope);

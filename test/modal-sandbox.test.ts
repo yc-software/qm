@@ -14,7 +14,7 @@ import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeModal, type FakeModal } from "./support/fake-modal.ts";
-import type { ModalClient } from "../src/sandbox/modal-client.ts";
+import { ModalSandboxGoneError, type ModalClient } from "../src/sandbox/modal-client.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 let fake: FakeModal;
@@ -787,3 +787,57 @@ for (const path of ["stored", "name-conflict"] as const) {
     assert.equal(fake.createdCount(scopeName()), 1);
   });
 }
+
+test("destroyScope deletes expired native state without provisioning and retains metadata on failure", async () => {
+  const store = createMemoryMap<StoredModalSandbox>();
+  const record: StoredModalSandbox = {
+    sandboxId: "expired-machine",
+    createdAtMs: 0,
+    nativeSnapshotId: "expired-checkpoint",
+    nativeSnapshotExpiresAtMs: 1,
+    hydrationPending: true,
+  };
+  await store.put(scope, record);
+  const deleted: string[] = [];
+  let fail = true;
+  const backend = make({
+    store,
+    client: {
+      ...fake.client,
+      async create() {
+        throw new Error("must not provision");
+      },
+      async fromId() {
+        throw new Error("must not reconnect");
+      },
+      async fromName() {
+        throw new Error("must not discover");
+      },
+      async terminate(id: string) {
+        deleted.push(id);
+        if (fail) throw new Error("provider temporarily unavailable");
+        throw new ModalSandboxGoneError(id, "already gone");
+      },
+    },
+  });
+  await assert.rejects(backend.destroyScope!(scope), /temporarily unavailable/);
+  assert.deepEqual(await store.get(scope), record);
+  fail = false;
+  await backend.destroyScope!(scope);
+  await backend.destroyScope!(scope);
+  assert.equal(await store.get(scope), null);
+  assert.deepEqual(deleted, ["expired-machine", "expired-machine"]);
+});
+
+test("destroyScope clears a live Modal session cache after deleting its stored machine", async () => {
+  const store = createMemoryMap<StoredModalSandbox>();
+  const backend = make({ store });
+  const first = await backend.provision(layers);
+  const firstId = (await store.get(scope))!.sandboxId;
+  await backend.destroyScope!(scope);
+  assert.equal(await store.get(scope), null);
+  const second = await backend.provision(layers);
+  assert.equal(second.coldStart, true);
+  assert.notEqual((await store.get(scope))!.sandboxId, firstId);
+  assert.equal(fake.createdCount(first.id), 2);
+});

@@ -473,7 +473,30 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   const blobStaging = createBackendBlobStaging("modal", (id, script, t) => execRaw(id, script, t), opts);
 
+  async function destroyStoredScope(scope: string): Promise<void> {
+    const name = sandboxScopeName(prefix, scope);
+    const stored = await store.get(scope);
+    const cached = sessionByName.get(name);
+    const ids = new Set([stored?.sandboxId, cached?.sandboxId].filter((id): id is string => !!id));
+    for (const id of ids) {
+      try {
+        await client.terminate(id);
+      } catch (error) {
+        if (!(error instanceof ModalSandboxGoneError)) throw error;
+      }
+    }
+    await store.delete(scope);
+    sessionByName.delete(name);
+    scopeByName.delete(name);
+    rotationHoldUntil.delete(scope);
+    lastTouchMs.delete(scope);
+  }
+
   const sandbox: Sandbox = {
+    destroyScope(scopeId: string): Promise<void> {
+      return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
+    },
+
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,
@@ -710,18 +733,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const scope = scopeByName.get(handle.id) ?? "default";
       return provisionQueue(scope, async () => {
         const session = sessionByName.get(handle.id);
-        if (tdOpts?.destroy) {
-          sessionByName.delete(handle.id);
-          const stored = await store.get(scope);
-          try {
-            if (session) await session.terminate();
-            else if (stored) await client.terminate(stored.sandboxId);
-            await store.delete(scope);
-          } catch (e) {
-            reportError("sandbox_teardown", "sandbox_terminate_failed", errMessage(e), scope);
-          }
-          return;
-        }
+        if (tdOpts?.destroy) return destroyStoredScope(scope);
         if (!session) return;
         const stored = await store.get(scope);
         if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });

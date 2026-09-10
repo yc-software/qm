@@ -16,6 +16,7 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -479,4 +480,57 @@ test("legacy pause preserves dirty home while portable checkpoints are throttled
   await first.teardown(resumed);
   assert.equal(portable.puts(), 1);
   assert.equal((await store.get(scope))?.homeDirty, true);
+});
+
+test("destroyScope deletes paused native state without resuming and retains metadata on failure", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const record: StoredE2bSandbox = {
+    sandboxId: "paused-machine",
+    createdAtMs: 0,
+    nativePause: true,
+    preservationState: "paused",
+  };
+  await store.put(scope, record);
+  const deleted: string[] = [];
+  let fail = true;
+  const backend = make({
+    store,
+    client: {
+      ...fake.client,
+      async create() {
+        throw new Error("must not provision");
+      },
+      async connect() {
+        throw new Error("must not resume");
+      },
+      async list() {
+        throw new Error("must not discover");
+      },
+      async kill(id: string) {
+        deleted.push(id);
+        if (fail) throw new Error("provider temporarily unavailable");
+        throw new E2bSandboxGoneError(id, "already gone");
+      },
+    },
+  });
+  await assert.rejects(backend.destroyScope!(scope), /temporarily unavailable/);
+  assert.deepEqual(await store.get(scope), record);
+  fail = false;
+  await backend.destroyScope!(scope);
+  await backend.destroyScope!(scope);
+  assert.equal(await store.get(scope), null);
+  assert.deepEqual(deleted, ["paused-machine", "paused-machine"]);
+});
+
+test("destroyScope clears a live E2B session cache after deleting its stored machine", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const backend = make({ store });
+  const first = await backend.provision(layers);
+  const firstId = (await store.get(scope))!.sandboxId;
+  await backend.destroyScope!(scope);
+  assert.equal(await store.get(scope), null);
+  const second = await backend.provision(layers);
+  assert.equal(second.coldStart, true);
+  assert.notEqual((await store.get(scope))!.sandboxId, firstId);
+  assert.equal(fake.createdCount(first.id), 2);
 });
