@@ -1,5 +1,6 @@
 import { parseScopeId } from "../../types.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
+import { supportsAmbientControls, UNSUPPORTED_AMBIENT_CONTROLS } from "../../surface-cache/policy-scope.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -34,6 +35,7 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   const p = await deps.channelPolicy.get(container);
   return sendJson(res, 200, {
     policy: {
+      supportsAmbient: supportsAmbientControls(scope),
       orders: p?.orders ?? "",
       bots: p?.bots ?? {},
       ambientEnabled: p?.ambientEnabled ?? null,
@@ -58,12 +60,15 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   if (!deps.channelPolicy)
     return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
   if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
+  const supportsAmbient = supportsAmbientControls(scope);
+  if (!supportsAmbient && (Object.hasOwn(b, "bots") || Object.hasOwn(b, "ambientEnabled")))
+    return sendJson(res, 400, { error: "bad_request", message: UNSUPPORTED_AMBIENT_CONTROLS });
   if (typeof b.orders !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });
   if (b.orders.length > MAX_ORDERS_CHARS)
     return sendJson(res, 400, {
       error: "bad_request",
-      message: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
+      message: `standing order is capped at ${MAX_ORDERS_CHARS} characters`,
     });
   const parsed = parseBotLedger(b.bots ?? {});
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
@@ -81,12 +86,17 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   }
   const p = await deps.channelPolicy.set(container, b.orders, {
     setBy: principalId,
-    bots: parsed.bots,
-    ambientEnabled: b.ambientEnabled as boolean | null | undefined,
+    ...(supportsAmbient ? { bots: parsed.bots, ambientEnabled: b.ambientEnabled as boolean | null | undefined } : {}),
   });
   audit(deps, { principalId, action: "surface.policy.set", resource: container, scopeLabel: scope });
   return sendJson(res, 200, {
-    policy: { orders: p.orders, bots: p.bots, ambientEnabled: p.ambientEnabled ?? null, updatedAt: p.updatedAt },
+    policy: {
+      supportsAmbient,
+      orders: p.orders,
+      bots: p.bots,
+      ambientEnabled: p.ambientEnabled ?? null,
+      updatedAt: p.updatedAt,
+    },
   });
 }
 

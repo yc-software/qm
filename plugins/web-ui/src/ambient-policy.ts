@@ -13,6 +13,7 @@ export interface BotPolicyView {
 }
 interface PolicyWire {
   policy: {
+    supportsAmbient: boolean;
     orders: string;
     bots: Record<string, { mode: BotMode; rollupHours?: number }>;
     ambientEnabled?: boolean | null;
@@ -23,6 +24,7 @@ interface PolicyWire {
 export const ambientPolicyState = {
   scope: null as string | null,
   loading: false,
+  supportsAmbient: null as boolean | null,
   orders: "",
   ambientEnabled: null as boolean | null,
   bots: [] as BotPolicyView[],
@@ -45,6 +47,7 @@ export function resetAmbientPolicy(): void {
   loadSeq += 1;
   ambientPolicyState.scope = null;
   ambientPolicyState.loading = false;
+  ambientPolicyState.supportsAmbient = null;
   ambientPolicyState.orders = "";
   ambientPolicyState.ambientEnabled = null;
   ambientPolicyState.bots = [];
@@ -66,6 +69,9 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
   try {
     const r = await api<PolicyWire>(`/api/contexts/${encodeURIComponent(scopeId)}/ambient-policy`);
     if (seq !== loadSeq) return;
+    ambientPolicyState.supportsAmbient =
+      typeof r.policy.supportsAmbient === "boolean" ? r.policy.supportsAmbient : null;
+    if (ambientPolicyState.supportsAmbient === null) throw new Error("Reload to update standing-order settings.");
     ambientPolicyState.orders = r.policy.orders;
     ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
     ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
@@ -76,6 +82,7 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
     ambientPolicyState.baseUpdatedAt = r.policy.updatedAt;
   } catch (e) {
     if (seq !== loadSeq) return;
+    ambientPolicyState.supportsAmbient = null;
     ambientPolicyState.notice = errMessage(e, "Couldn't load this scope's standing orders.");
     ambientPolicyState.noticeKind = "error";
   } finally {
@@ -88,14 +95,17 @@ export async function loadAmbientPolicy(scopeId: string, onChange: () => void): 
 
 function markDirty(): void {
   ambientPolicyState.dirty = true;
-  ambientPolicyState.notice = "";
-  ambientPolicyState.noticeKind = "";
+  if (ambientPolicyState.supportsAmbient !== null) {
+    ambientPolicyState.notice = "";
+    ambientPolicyState.noticeKind = "";
+  }
   redraw();
 }
 
 async function save(): Promise<void> {
   const scope = ambientPolicyState.scope;
-  if (!scope || ambientPolicyState.saving) return;
+  if (!scope || ambientPolicyState.saving || ambientPolicyState.supportsAmbient === null) return;
+  const seq = loadSeq;
   const bots: Record<string, { mode: BotMode; rollupHours?: number }> = {};
   for (const b of ambientPolicyState.bots) {
     const name = b.name.trim();
@@ -109,11 +119,14 @@ async function save(): Promise<void> {
       method: "PUT",
       body: JSON.stringify({
         orders: ambientPolicyState.orders,
-        bots,
-        ambientEnabled: ambientPolicyState.ambientEnabled,
+        ...(ambientPolicyState.supportsAmbient ? { bots, ambientEnabled: ambientPolicyState.ambientEnabled } : {}),
         baseUpdatedAt: ambientPolicyState.baseUpdatedAt,
       }),
     });
+    if (seq !== loadSeq) return;
+    ambientPolicyState.supportsAmbient =
+      typeof r.policy.supportsAmbient === "boolean" ? r.policy.supportsAmbient : null;
+    if (ambientPolicyState.supportsAmbient === null) throw new Error("Reload to update standing-order settings.");
     ambientPolicyState.orders = r.policy.orders;
     ambientPolicyState.ambientEnabled = r.policy.ambientEnabled ?? null;
     ambientPolicyState.bots = Object.entries(r.policy.bots).map(([name, p]) => ({
@@ -126,11 +139,14 @@ async function save(): Promise<void> {
     ambientPolicyState.notice = "Saved.";
     ambientPolicyState.noticeKind = "saved";
   } catch (e) {
+    if (seq !== loadSeq) return;
     ambientPolicyState.notice = errMessage(e, "Couldn't save. Try again.");
     ambientPolicyState.noticeKind = "error";
   } finally {
-    ambientPolicyState.saving = false;
-    redraw();
+    if (seq === loadSeq) {
+      ambientPolicyState.saving = false;
+      redraw();
+    }
   }
 }
 
@@ -226,38 +242,51 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
       <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
       <div class="context-panel-loading">Loading…</div>
     </section>`;
+  let copy = "Load standing-order settings before editing.";
+  if (ambientPolicyState.supportsAmbient !== null)
+    copy = ambientPolicyState.supportsAmbient
+      ? "Choose what QM should notice and act on."
+      : "Used when QM responds in this project. Ambient replies and automated-poster handling aren’t supported here.";
   return html`
     <section class="context-panel ambient-policy" aria-labelledby="ambient-policy-title">
       <div class="context-panel-heading">
         <div>
-          <h2 class="context-panel-title" id="ambient-policy-title">Agent behavior</h2>
-          <p class="context-panel-copy">Choose what this project should notice and act on.</p>
+          <h2 class="context-panel-title" id="ambient-policy-title">
+            ${ambientPolicyState.supportsAmbient ? "Agent behavior" : "Standing orders"}
+          </h2>
+          <p class="context-panel-copy">${copy}</p>
         </div>
       </div>
-      <div class="ambient-group">
-        <label class="ambient-field-label" for="ambient-enabled">Ambient behavior</label>
-        ${fieldSelect({
-          id: "ambient-enabled",
-          className: "ambient-enabled-select",
-          focusKey: "ambient-enabled",
-          describedBy: "ambient-enabled-hint",
-          disabled: ambientPolicyState.saving,
-          value: ambientValue(ambientPolicyState.ambientEnabled),
-          onChange: (v) => {
-            ambientPolicyState.ambientEnabled = v === "default" ? null : v === "on";
-            markDirty();
-          },
-          options: [
-            html`<option value="default">Default (on when standing orders are set)</option>`,
-            html`<option value="on">On</option>`,
-            html`<option value="off">Off</option>`,
-          ],
-        })}
-        <p class="ambient-policy-hint" id="ambient-enabled-hint">
-          When off, the agent never acts on overheard messages here; it only responds to direct @mentions. Default: on
-          only when standing orders (or an action-mode bot) are set below, otherwise mention-only.
-        </p>
-      </div>
+      ${
+        ambientPolicyState.supportsAmbient
+          ? html`
+              <div class="ambient-group">
+                <label class="ambient-field-label" for="ambient-enabled">Ambient behavior</label>
+                ${fieldSelect({
+                  id: "ambient-enabled",
+                  className: "ambient-enabled-select",
+                  focusKey: "ambient-enabled",
+                  describedBy: "ambient-enabled-hint",
+                  disabled: ambientPolicyState.saving,
+                  value: ambientValue(ambientPolicyState.ambientEnabled),
+                  onChange: (v) => {
+                    ambientPolicyState.ambientEnabled = v === "default" ? null : v === "on";
+                    markDirty();
+                  },
+                  options: [
+                    html`<option value="default">Default (on when standing orders are set)</option>`,
+                    html`<option value="on">On</option>`,
+                    html`<option value="off">Off</option>`,
+                  ],
+                })}
+                <p class="ambient-policy-hint" id="ambient-enabled-hint">
+                  When off, the agent never acts on overheard messages here; it only responds to direct @mentions.
+                  Default: on only when standing orders (or an action-mode bot) are set below, otherwise mention-only.
+                </p>
+              </div>
+            `
+          : nothing
+      }
       <div class="ambient-group">
         <label class="ambient-field-label" for="ambient-orders">Standing orders</label>
         <textarea
@@ -275,42 +304,48 @@ export function ambientPolicySection(scopeId: string): TemplateResult | typeof n
           }}
         ></textarea>
         <p class="ambient-policy-hint" id="ambient-orders-hint">
-          Plain-language guidance for proactive work. Leave empty to respond only when addressed.
+          ${ambientPolicyState.supportsAmbient ? "Plain-language guidance for proactive work. Leave empty to respond only when addressed." : "Standing instructions for addressed replies."}
         </p>
       </div>
-      <div class="ambient-group">
-        <h3 class="ambient-field-label">Automated posters</h3>
-        <p class="ambient-policy-hint">Control how messages from bots and integrations wake the agent.</p>
-        ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">No bots added. All bot posts are treated as activity.</div>`}
-        <form
-          class="ambient-bot-add"
-          @submit=${(e: SubmitEvent) => {
-            e.preventDefault();
-            addBot();
-          }}
-        >
-          <input
-            data-focus-key="ambient-bot-name"
-            type="text"
-            maxlength="120"
-            aria-label="Bot name"
-            required
-            placeholder="Bot name"
-            .value=${ambientPolicyState.newBotName}
-            ?disabled=${ambientPolicyState.saving}
-            @input=${(e: InputEvent) => {
-              ambientPolicyState.newBotName = (e.currentTarget as HTMLInputElement).value;
-              redraw();
-            }}
-          />
-          <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>Add bot</button>
-        </form>
-      </div>
+      ${
+        ambientPolicyState.supportsAmbient
+          ? html`
+              <div class="ambient-group">
+                <h3 class="ambient-field-label">Automated posters</h3>
+                <p class="ambient-policy-hint">Control how messages from bots and integrations wake the agent.</p>
+                ${ambientPolicyState.bots.length ? html`<div class="ambient-bot-list">${ambientPolicyState.bots.map((b, i) => botRow(b, i))}</div>` : html`<div class="empty compact">No bots added. All bot posts are treated as activity.</div>`}
+                <form
+                  class="ambient-bot-add"
+                  @submit=${(e: SubmitEvent) => {
+                    e.preventDefault();
+                    addBot();
+                  }}
+                >
+                  <input
+                    data-focus-key="ambient-bot-name"
+                    type="text"
+                    maxlength="120"
+                    aria-label="Bot name"
+                    required
+                    placeholder="Bot name"
+                    .value=${ambientPolicyState.newBotName}
+                    ?disabled=${ambientPolicyState.saving}
+                    @input=${(e: InputEvent) => {
+                      ambientPolicyState.newBotName = (e.currentTarget as HTMLInputElement).value;
+                      redraw();
+                    }}
+                  />
+                  <button class="btn" type="submit" ?disabled=${ambientPolicyState.saving}>Add bot</button>
+                </form>
+              </div>
+            `
+          : nothing
+      }
       <div class="ambient-policy-actions">
         <button
           class="btn primary"
           type="button"
-          ?disabled=${!ambientPolicyState.dirty || ambientPolicyState.saving}
+          ?disabled=${!ambientPolicyState.dirty || ambientPolicyState.saving || ambientPolicyState.supportsAmbient === null}
           @click=${() => void save()}
         >
           ${ambientPolicyState.saving ? "Saving…" : "Save"}

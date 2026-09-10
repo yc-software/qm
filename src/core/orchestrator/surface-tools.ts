@@ -28,6 +28,7 @@ import type {
 } from "../../tools/primitives.ts";
 import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import { collectNamedOutbound, type ArtifactRegistration } from "../attachments.ts";
+import { supportsAmbientControls, UNSUPPORTED_AMBIENT_CONTROLS } from "../../surface-cache/policy-scope.ts";
 import { parseBotLedger, type BotPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -445,6 +446,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const p = await deps.channelPolicy.get(conversation.channelRef);
       return {
         ok: true,
+        supportsAmbient: supportsAmbientControls(scopeId),
         orders: p?.orders ?? "",
         ...(p?.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
         ...(p?.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
@@ -454,6 +456,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
         return { ok: false, message: "standing orders are per-channel — you can only set one from inside a channel." };
+      const supportsAmbient = supportsAmbientControls(scopeId);
+      if (!supportsAmbient && (bots !== undefined || ambientEnabled !== undefined))
+        return { ok: false, message: UNSUPPORTED_AMBIENT_CONTROLS };
       let parsedBots: Record<string, BotPolicy> | undefined;
       if (bots !== undefined) {
         const parsed = parseBotLedger(bots);
@@ -476,6 +481,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return {
         ok: true,
         orders,
+        supportsAmbient,
         ...(p.bots && Object.keys(p.bots).length ? { bots: p.bots } : {}),
         ...(p.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
       };

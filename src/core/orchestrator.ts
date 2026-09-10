@@ -24,6 +24,7 @@ import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveReachableChannel } from "../resolution/scope-reach.ts";
+import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
@@ -971,7 +972,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       else if (modeName === "mode-conversation") frameMd = MODE_CONVERSATION_MD;
       let frameVars: PromptVars = {};
       if (modeName === "mode-autonomous") {
-        frameVars = { botName, surfaceTool, slack: isSlack };
+        const webProject = isWeb && conversation.kind === "group" && isProjectGroupRef(conversation.channelRef ?? "");
+        frameVars = { botName, surfaceTool, slack: isSlack, webProject, autonomous: !webProject };
       } else if (modeName === "mode-conversation") {
         frameVars = {
           botName,

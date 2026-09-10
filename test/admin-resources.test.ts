@@ -668,7 +668,13 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
     const empty = (await (await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN })).json()) as {
       ambientPolicy: { orders: string; bots: object; updatedAt: number };
     };
-    assert.deepEqual(empty.ambientPolicy, { orders: "", bots: {}, ambientEnabled: null, updatedAt: 0 });
+    assert.deepEqual(empty.ambientPolicy, {
+      orders: "",
+      bots: {},
+      ambientEnabled: null,
+      updatedAt: 0,
+      supportsAmbient: true,
+    });
 
     const badScope = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/ambient-policy`, {
       method: "PUT",
@@ -893,3 +899,114 @@ test("historical cutover policies remain visible and clearable without layer too
     await srv.close();
   }
 });
+
+test("admin project policy preserves orders and legacy options, rejects unsupported fields before all mutation", async () => {
+  const srv = start();
+  const ref = "web-project-317";
+  const scope = `group:${ref}`;
+  const url = `${srv.base}/v1/admin/scopes/${scope}`;
+  const put = (body: unknown, headers = ADMIN) =>
+    fetch(`${url}/ambient-policy`, { method: "PUT", headers, body: JSON.stringify(body) });
+  try {
+    const bots = { CI: { mode: "action" as const } };
+    await srv.built.channelPolicy.set(ref, "before", { bots, ambientEnabled: true });
+    const before = await srv.built.channelPolicy.get(ref);
+    const history = await srv.built.channelPolicy.history(ref);
+    const read = await fetch(url, { headers: ADMIN });
+    assert.equal(read.status, 200);
+    const policy = ((await read.json()) as any).ambientPolicy;
+    assert.equal(policy.supportsAmbient, false);
+    assert.equal(policy.orders, "before");
+    const audits: unknown[] = [];
+    const record = srv.built.auditLog.record.bind(srv.built.auditLog);
+    srv.built.auditLog.record = (e) => {
+      audits.push(e);
+      record(e);
+    };
+    const outsider = { ...ADMIN, "x-admin-actor": "nobody@default-org" };
+    assert.equal((await fetch(url, { headers: outsider })).status, 403);
+    assert.equal((await put({ orders: "not authorized" }, outsider)).status, 403);
+    for (const field of [
+      { ambientEnabled: true },
+      { ambientEnabled: false },
+      { ambientEnabled: null },
+      { ambientEnabled: {} },
+      { bots: {} },
+      { bots: null },
+      { bots },
+    ]) {
+      for (const orders of ["partial write forbidden", undefined]) {
+        const r = await put({ orders, supportsAmbient: true, ...field });
+        assert.equal(r.status, 400);
+        assert.match(((await r.json()) as any).message, /standing orders.*not.*ambient/i);
+      }
+    }
+    assert.equal((await put({})).status, 400);
+    assert.equal((await put({ orders: "x".repeat(20_001) })).status, 400);
+    assert.equal((await put({ orders: "stale", baseUpdatedAt: -1 })).status, 409);
+    assert.deepEqual(await srv.built.channelPolicy.get(ref), before);
+    assert.deepEqual(await srv.built.channelPolicy.history(ref), history);
+    assert.deepEqual(audits, []);
+    assert.equal((await put({ orders: "after", baseUpdatedAt: before!.updatedAt })).status, 200);
+    const after = await srv.built.channelPolicy.get(ref);
+    assert.equal(after!.orders, "after");
+    assert.equal(after!.ambientEnabled, true);
+    assert.deepEqual(after!.bots, bots);
+    assert.deepEqual((await srv.built.channelPolicy.history(ref)).slice(1), history);
+    assert.deepEqual(
+      audits.map((e: any) => e.action),
+      ["surface.policy.set", "ambient-policy.update"],
+    );
+    for (const slack of ["channel:C317", "group:G317"]) {
+      for (const ambientEnabled of [true, false, null]) {
+        const r = await fetch(`${srv.base}/v1/admin/scopes/${slack}/ambient-policy`, {
+          method: "PUT",
+          headers: ADMIN,
+          body: JSON.stringify({ orders: "watch", bots, ambientEnabled }),
+        });
+        assert.equal(r.status, 200);
+        const got = await fetch(`${srv.base}/v1/admin/scopes/${slack}`, { headers: ADMIN });
+        const p = ((await got.json()) as any).ambientPolicy;
+        assert.equal(p.supportsAmbient, true);
+        assert.equal(p.ambientEnabled, ambientEnabled);
+        assert.deepEqual(p.bots, bots);
+      }
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
+for (const scope of ["group:web-project-limit", "channel:C-limit", "group:G-limit"])
+  test(`admin policy size limit is applicability-neutral: ${scope}`, async () => {
+    const srv = start();
+    const ref = scope.slice(scope.indexOf(":") + 1);
+    const put = (orders: string) =>
+      fetch(`${srv.base}/v1/admin/scopes/${scope}/ambient-policy`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ orders, ...(scope.startsWith("group:web-project-") ? {} : { bots: {} }) }),
+      });
+    try {
+      assert.equal((await put("x".repeat(20_000))).status, 200);
+      const before = await srv.built.channelPolicy.get(ref);
+      const history = await srv.built.channelPolicy.history(ref);
+      const audits: unknown[] = [];
+      const record = srv.built.auditLog.record.bind(srv.built.auditLog);
+      srv.built.auditLog.record = (e) => {
+        audits.push(e);
+        record(e);
+      };
+      const oversized = await put("x".repeat(20_001));
+      assert.equal(oversized.status, 400);
+      assert.equal(
+        ((await oversized.json()) as { message: string }).message,
+        "standing order is capped at 20000 characters",
+      );
+      assert.deepEqual(await srv.built.channelPolicy.get(ref), before);
+      assert.deepEqual(await srv.built.channelPolicy.history(ref), history);
+      assert.deepEqual(audits, []);
+    } finally {
+      await srv.close();
+    }
+  });

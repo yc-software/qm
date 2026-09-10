@@ -85,3 +85,15 @@ test("PUT relays orders, bots, and the conflict snapshot under the signed-in pri
   assert.deepEqual(call.body.bots, { "General Agent": { mode: "rollup", rollupHours: 4 } });
   assert.equal(call.body.baseUpdatedAt, 42);
 });
+
+test("project orders-only PUT preserves field omission and rejects caller identity/scope overrides", async () => {
+  const before = calls.length;
+  const scope = "group:web-project-317";
+  const r = await fetch(`${base}/api/contexts/${encodeURIComponent(scope)}/ambient-policy`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ principalId: "mallory", scope: "channel:C1", orders: "project order", baseUpdatedAt: 42 }),
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(calls[before]!.body, { principalId: "alice", scope, orders: "project order", baseUpdatedAt: 42 });
+});

@@ -2245,11 +2245,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "guidance",
     description:
       "Read or rewrite your durable guidance — the standing instructions you carry into " +
-      "future turns. Two scopes: `channel` = how you behave in THIS channel (when to chime " +
-      "in unprompted, where replies land, ongoing 'whenever X, do Y' orders — evaluated " +
-      "against every new message automatically, so never build a poll or timer for these); " +
+      "future turns. Two scopes: `channel` = how you behave in THIS Slack channel or group DM " +
+      "(when to chime in unprompted, where replies land, ongoing 'whenever X, do Y' orders — " +
+      "evaluated against every new message automatically, so never build a poll or timer for these); " +
+      "in web projects, `channel` orders affect addressed replies only and never trigger unprompted turns. " +
+      "Omit `ambientEnabled` and `bots` for web projects. " +
       "`conversation` = your standing instructions for this conversation (tone, defaults, " +
-      "recurring preferences). Default scope: `channel` when you're in a channel, else " +
+      "recurring preferences). Default scope: `channel` in a channel, group DM or web project, else " +
       "`conversation`. Conversation guidance lives on the surrounding scope — in a personal " +
       "context it is shared by ALL of that person's sessions, not tied to the session that " +
       "wrote it. Never store session pins or 'for this session' notes here: ALL pinning goes " +
@@ -2265,7 +2267,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
-            "Channel scope only. true judges every message for an unprompted reply, false responds only when addressed, and null uses the platform default.",
+            "Slack channel/group-DM scope only; unsupported in web projects. true judges every message for an unprompted reply, false responds only when addressed, and null uses the platform default.",
         }),
       ),
       bots: Type.Optional(
@@ -2277,7 +2279,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }),
           {
             description:
-              "Per-bot handling for automated posters in this channel, keyed by bot author name: " +
+              "Per-bot handling for automated posters in Slack channels and group DMs (unsupported in web projects), keyed by bot author name: " +
               "ignore (never wakes you), rollup (batch; judge at most every rollupHours), action " +
               "(their posts are triggers to act on), user (treat like a person).",
           },
@@ -2313,7 +2315,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const soul = tc.soulRead();
           const convoExists = !isUnavailable(soul) && !!soul.soul && soul.soul.trim().length > 0;
           const ledger =
-            channel!.bots && Object.keys(channel!.bots).length
+            channel!.supportsAmbient !== false && channel!.bots && Object.keys(channel!.bots).length
               ? "\n\nBot ledger:\n" +
                 Object.entries(channel!.bots)
                   .map(([n, b]) => `- ${n}: ${b.mode}${b.rollupHours ? ` (every ${b.rollupHours}h)` : ""}`)
@@ -2324,7 +2326,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             : "";
           let ambientState = "default";
           if (channel!.ambientEnabled !== undefined) ambientState = channel!.ambientEnabled ? "on" : "off";
-          const ambient = `\n\nAmbient replies: ${ambientState}`;
+          const ambient =
+            channel!.supportsAmbient === false
+              ? "\n\nStanding orders in this project affect addressed replies only. Ambient replies and bot handling are not supported here."
+              : `\n\nAmbient replies: ${ambientState}`;
           const body =
             (channel!.orders.trim() ? channel!.orders : "[no channel guidance set]") + ambient + ledger + note;
           return recordResult(callId, { tool: "guidance", scope, ok: true }, text(body));
@@ -2343,7 +2348,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const r = await tc.setStandingOrder(orders, params.bots, params.ambientEnabled);
         if (!r.ok)
           return recordResult(callId, { tool: "guidance", scope, ok: false }, text(`[error] ${r.message}`), true);
-        return recordResult(callId, { tool: "guidance", scope, ok: true }, text("[channel guidance updated]"));
+        const message =
+          r.supportsAmbient === false
+            ? "[project standing orders updated — these affect addressed replies only]"
+            : "[channel guidance updated]";
+        return recordResult(callId, { tool: "guidance", scope, ok: true }, text(message));
       }
 
       if (params.ambientEnabled !== undefined) {
