@@ -129,7 +129,10 @@ test("the card is org-only and follows the current governance layout", () => {
     vm.runInContext(`{${loadSource}}`, context);
     assert.ok(elements["card-auto-flagger"].classes.has("hidden"));
   }
-  assert.match(html, /\$\("card-security-posture"\),\s*\$\("card-auto-flagger"\),\s*governanceAmbient/);
+  assert.match(
+    html,
+    /\$\("card-security-posture"\),\s*\$\("card-auto-flagger"\),\s*\$\("card-sharing-posture"\),\s*governanceAmbient/,
+  );
 });
 
 test("test sends an unsaved draft and comparison window without saving it", async () => {
