@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionEntry } from "../types.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import type { MemoryService } from "./memory-service.ts";
+import type { MemoryService, MemoryRecallContext, MemoryCandidate } from "./memory-service.ts";
 import { bullets, RECALL_MAX_CHARS } from "./notebook.ts";
 import { unitVector, type MemoryEmbedder } from "./embeddings.ts";
 
@@ -87,44 +87,54 @@ export function createSemanticMemoryService(
       return { facts: facts.filter((f) => vectors[hash(f)]), vectors };
     });
   }
+  const queries = new WeakMap<MemoryRecallContext, Promise<number[]>>();
+  async function candidates(scope: string, context?: MemoryRecallContext): Promise<MemoryCandidate[]> {
+    const query = context?.query?.trim();
+    const recent = async () =>
+      bullets(await base.read(scope))
+        .reverse()
+        .map((f) => ({ text: `- ${f}`, score: 0.2 }));
+    if (!query || !context) return recent();
+    try {
+      const signal = AbortSignal.timeout(8000);
+      const { facts, vectors } = await indexed(scope, signal);
+      if (!facts.length) return [];
+      let request = queries.get(context);
+      if (!request) {
+        const input = context.recentContext
+          ? `${context.recentContext.slice(-2000)}\nCurrent message: ${query.slice(0, 2000)}`
+          : query.slice(0, 4000);
+        request = embedder.embed([input], signal).then((result) => unitVector(result[0]));
+        queries.set(context, request);
+      }
+      const queryVector = await request;
+      const ranked = facts
+        .map((fact) => {
+          const vector = vectors[hash(fact)]!;
+          if (vector.length !== queryVector.length)
+            throw new Error("Memory embedding dimensions changed; configure the new model ID");
+          const score = vector.reduce((sum, value, i) => sum + value * queryVector[i]!, 0);
+          return { fact, score };
+        })
+        .filter((row) => row.score >= (opts.minSimilarity ?? 0.2))
+        .sort((a, b) => b.score - a.score);
+      const current = new Set(bullets(await base.read(scope)));
+      return ranked.filter((row) => current.has(row.fact)).map((row) => ({ text: `- ${row.fact}`, score: row.score }));
+    } catch {
+      opts.onError?.();
+      return recent();
+    }
+  }
   return {
     ...base,
+    recallCandidates: candidates,
     async recall(scope, context) {
       const budget = Math.max(0, Math.min(RECALL_MAX_CHARS, Math.floor(context?.maxChars ?? RECALL_MAX_CHARS)));
       if (!budget) return "";
-      const query = context?.query?.trim();
-      if (!query) return pack(bullets(await base.read(scope)).reverse(), budget);
-      try {
-        const signal = AbortSignal.timeout(8000);
-        const { facts, vectors } = await indexed(scope, signal);
-        if (!facts.length) return "";
-        // Query requests do not hold the scope's indexing lock (notably for org memory).
-        const input = context?.recentContext
-          ? `${context.recentContext.slice(-2000)}\nCurrent message: ${query.slice(0, 2000)}`
-          : query.slice(0, 4000);
-        const result = await embedder.embed([input], signal);
-        const queryVector = unitVector(result[0]);
-        const ranked = facts
-          .map((fact) => {
-            const vector = vectors[hash(fact)]!;
-            if (vector.length !== queryVector.length)
-              throw new Error("Memory embedding dimensions changed; configure the new model ID");
-            const score = vector.reduce((sum, value, i) => sum + value * queryVector[i]!, 0);
-            return { fact, score };
-          })
-          .filter((row) => row.score >= (opts.minSimilarity ?? 0.2))
-          .sort((a, b) => b.score - a.score);
-        // A rewrite/deletion during query embedding must not reintroduce removed facts.
-        const current = new Set(bullets(await base.read(scope)));
-        return pack(
-          ranked.filter((row) => current.has(row.fact)).map((row) => row.fact),
-          budget,
-        );
-      } catch {
-        opts.onError?.();
-        // Embedding outages must not block chat or exact-text search.
-        return pack(bullets(await base.read(scope)).reverse(), budget);
-      }
+      return pack(
+        (await candidates(scope, context)).map((row) => row.text.slice(2)),
+        budget,
+      );
     },
   };
 }

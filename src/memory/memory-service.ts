@@ -46,7 +46,13 @@ export interface MemoryCaptureContext {
   idempotencyKey?: string;
 }
 
+export interface MemoryCandidate {
+  text: string;
+  score: number;
+}
+
 export interface MemoryService {
+  recallCandidates?(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<string>;
   capture(
     scopeId: ScopeId,

@@ -505,7 +505,11 @@ const FAMILIES: AgentApiFamily[] = [
     when: (v) => !!v.claims.memory,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
     routes: [
-      { method: "POST", path: "/v1/memory/search", summary: "search every notebook this conversation may read" },
+      {
+        method: "POST",
+        path: "/v1/memory/search",
+        summary: "search authorized notebooks; optional scope selects one notebook",
+      },
       { method: "POST", path: "/v1/memory/facts", summary: "append durable facts to this conversation's notebook now" },
       {
         method: "GET|PUT",

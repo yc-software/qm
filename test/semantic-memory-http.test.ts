@@ -50,6 +50,8 @@ test("HTTP turn injects semantic matches; grep remains independent and authorize
       },
     }),
   );
+  const orgFact = "Browser regression tests should also cover Firefox.";
+  await built.memory.replace("org:default-org", `- ${orgFact}`);
   const otherFact = "Another user's confidential browser preference";
   await built.memory.replace("personal:U1", `- ${fact}\n${filler}`);
   await built.memory.replace("personal:U2", `- ${otherFact}`);
@@ -92,6 +94,7 @@ test("HTTP turn injects semantic matches; grep remains independent and authorize
   assert.equal(result.status, "ok");
   assert.match(result.reply, /What you remember/);
   assert.ok(result.reply.includes(fact));
+  assert.ok(result.reply.includes(orgFact));
   assert.ok(!result.reply.includes(otherFact));
   const memoryBlock = result.reply.split("## What you remember")[1] ?? "";
   assert.ok(memoryBlock.indexOf(fact) < memoryBlock.indexOf("warehouse") || !memoryBlock.includes("warehouse"));
@@ -140,4 +143,98 @@ test("HTTP turn injects semantic matches; grep remains independent and authorize
         batch.some((text) => text.includes("portal verification") && text.includes("yes, do that")),
       ),
     );
+});
+
+test("HTTP Open DM combines room and current memory, then blocks reads after membership revocation", async (t) => {
+  const inputs: string[][] = [];
+  const provider = httpServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const { input } = JSON.parse(body) as { input: string[] };
+    inputs.push(input);
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        data: input.map((text, index) => {
+          const first = Number(text.split(" ")[0]);
+          const score = Number.isFinite(first) ? first : 1;
+          return { index, embedding: [score, Math.sqrt(1 - score * score)] };
+        }),
+      }),
+    );
+  });
+  const providerUrl = await listen(provider);
+  t.after(() => close(provider));
+  const built = buildApp(
+    testConfig({
+      sharingPosture: "open",
+      memoryConsolidateAfter: 0,
+      memoryStrategy: "agent-only",
+      memoryEmbedding: { url: providerUrl, model: "test", apiKey: "test" },
+    }),
+  );
+  const personal = "personal:U1",
+    room = "channel:C1",
+    denied = "channel:C2";
+  await built.directory.replaceChannels(
+    [
+      { channelId: "C1", name: "room", isPrivate: true },
+      { channelId: "C2", name: "closed", isPrivate: true },
+    ],
+    [
+      { channelId: "C1", principalId: "U1" },
+      { channelId: "C2", principalId: "U1" },
+    ],
+  );
+  for (const scope of [room, denied]) {
+    const session = await built.sessions.getOrCreateByThread(`${scope}:seed`, "channel", scope);
+    await built.sessions.addParticipant(session.id, "U1");
+  }
+  await built.config.setSharingPosture(denied, "isolated");
+  await built.memory.replace(
+    personal,
+    "- 0.7 LOCAL_NEAR\n" + Array.from({ length: 120 }, (_, i) => `- 0.6 local ${i} ${"x".repeat(70)}`).join("\n"),
+  );
+  await built.memory.replace(room, "- 0.99 REMOTE_BEST\n- 0.72 REMOTE_NEAR");
+  await built.memory.replace(denied, "- 1 DENIED_NOTEBOOK");
+  const server = createInsecureTestServer(built.app);
+  const base = await listen(server);
+  t.after(() => close(server));
+  const turn = async (text: string, thread: string) => {
+    const response = await fetch(base + "/v1/turns", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        surface: "test",
+        origin: { kind: "human" },
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: thread },
+        text,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const result = (await response.json()) as { status: string; reply: string };
+    assert.equal(result.status, "ok");
+    return result.reply;
+  };
+  const prompt = await turn("!sysprompt\nverify the change", "cross-scope-http");
+  const memory = prompt.split("## What you remember")[1]!.split("</environment>")[0]!;
+  const packed = memory.slice(memory.indexOf("### ")).trim();
+  assert.ok(packed.length <= 6000);
+  assert.ok(memory.indexOf("REMOTE_BEST") >= 0);
+  assert.ok(memory.indexOf("REMOTE_BEST") < memory.indexOf("LOCAL_NEAR"));
+  assert.ok(memory.indexOf("LOCAL_NEAR") < memory.indexOf("REMOTE_NEAR"));
+  assert.doesNotMatch(prompt, /DENIED_NOTEBOOK/);
+  assert.ok(inputs.flat().every((text) => !text.includes("DENIED_NOTEBOOK")));
+  assert.equal(inputs.filter((batch) => batch.length === 1 && batch[0]!.includes("verify the change")).length, 1);
+  assert.match(await turn("!memoryread channel:C1", "read-shared"), /REMOTE_BEST/);
+  assert.doesNotMatch(await turn("!memoryread channel:C2", "read-denied"), /DENIED_NOTEBOOK/);
+  await built.directory.replaceChannels([{ channelId: "C1", name: "room", isPrivate: true }], []);
+  assert.doesNotMatch(await turn("!memoryread channel:C1", "read-revoked"), /REMOTE_BEST/);
+  assert.doesNotMatch(await turn("!sysprompt\nverify the change", "recall-revoked"), /REMOTE_BEST/);
+  assert.ok(
+    (await built.auditLog.events()).some(
+      (event) => event.action === "sharing.cross_context_read" && event.resource === "memory",
+    ),
+  );
 });

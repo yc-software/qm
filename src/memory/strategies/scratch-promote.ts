@@ -1,3 +1,4 @@
+import { recallCandidates } from "../cross-scope.ts";
 import { relative } from "node:path";
 import type { ScopeId } from "../../types.ts";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
@@ -125,6 +126,16 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
 
   const memory: MemoryService = {
     ...base,
+    async recallCandidates(scopeId, context) {
+      const rows = (await recallCandidates(base, scopeId, context)).map((row) => ({
+        ...row,
+        text: stripMarker(row.text),
+      }));
+      for (const { date, body } of await readLogWindow(scopeId, Date.now(), 2)) {
+        rows.push({ text: `### Scratch log ${date}\n${capTail(body, LOG_RECALL_MAX_CHARS)}`, score: 0.2 });
+      }
+      return rows;
+    },
     async recall(scopeId, context) {
       const longTerm = stripMarker(await base.recall(scopeId, context));
       const parts = longTerm ? [longTerm] : [];

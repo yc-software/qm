@@ -215,8 +215,8 @@ export interface ToolContext extends SurfaceToolDeps {
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
-  memorySearch(q: string, limit?: number): Promise<string[] | null>;
-  memoryRead(): Promise<string | null>;
+  memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null>;
+  memoryRead(scope?: ScopeId): Promise<string | null>;
   memoryRemember(facts: string[]): Promise<number | null>;
   memoryRewrite(content: string): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
@@ -1058,19 +1058,25 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
-    async memorySearch(q: string, limit?: number): Promise<string[] | null> {
-      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit));
+    async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
+      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit, scope));
       const read = deps.memoryAccess?.read ?? [];
       if (!deps.memory || read.length === 0) return null;
       return timed("recall", () =>
-        contextMemory({ memory: deps.memory!, scopes: read, actorId: deps.createdBy }).search(q, limit),
+        contextMemory({ memory: deps.memory!, scopes: read, actorId: deps.createdBy }).search(q, limit, scope),
       );
     },
 
-    async memoryRead(): Promise<string | null> {
-      const write = deps.memoryAccess?.write;
-      if (!deps.memory || !write) return null;
-      return timed("recall", () => deps.memory!.read(write));
+    async memoryRead(scope?: ScopeId): Promise<string | null> {
+      const target = scope ?? deps.memoryAccess?.write ?? deps.memoryScopeId;
+      if (!deps.memory || !target || !(deps.memoryAccess?.read.includes(target) || target === deps.memoryAccess?.write))
+        return null;
+      const body = await timed("recall", () => {
+        if (deps.context && deps.memoryAccess?.read.includes(target)) return deps.context.readMemory(target);
+        return deps.memory!.read(target);
+      });
+      if (body === null) return null;
+      return scope !== undefined ? `### ${target}\n${body}` : body;
     },
 
     async memoryRemember(facts: string[]): Promise<number | null> {
