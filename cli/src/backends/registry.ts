@@ -329,7 +329,7 @@ const aws: HostingProvider = {
       }
     }
     for (const name of Object.keys(config.aws.services)) {
-      if (!workloads.has(name)) {
+      if (!workloads.has(name) && !workloads.has(serviceHost(name))) {
         errors.push({
           clause: "config.v1",
           message: `contract aws.services.${name}: coordinates do not match an enabled service or discovered plugin`,
