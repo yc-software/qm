@@ -196,5 +196,5 @@ test("keychain page renders loading placeholders instead of empty states while l
     /api<\{ providers\?: Record<string, ConnectorProvider> \}>\("\/api\/connectors"\)\.then\(/,
   );
   assert.doesNotMatch(connectorsSource, /drawConnectors\((true|false)\)/);
-  assert.match(shellCssSource, /\.kc-loading \.spinner/);
+  assert.match(connectorsSource, /class="kc-loading">\$\{pixelLoader\(\)\}/);
 });

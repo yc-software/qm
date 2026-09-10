@@ -36,6 +36,16 @@ export function waveLoader(
   </svg>`;
 }
 
+export function pixelLoader(label?: string): TemplateResult {
+  return html`<span
+    class="pixel-loader"
+    role=${label ? "status" : nothing}
+    aria-label=${label ?? nothing}
+    aria-hidden=${label ? nothing : "true"}
+    ><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i
+  ></span>`;
+}
+
 export function workingWave(): TemplateResult {
   return waveLoader({
     width: 13.6,
