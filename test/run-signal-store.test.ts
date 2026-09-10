@@ -412,9 +412,9 @@ test("pg store: pendingRunIds lists unconsumed runs; prune deletes only old cons
 
 test("memory store: a signal carrying a dedupe key is stored once, and the second send reports the duplicate", async () => {
   const store = createMemoryRunSignalStore();
-  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), true);
-  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), false);
-  assert.equal(await store.send("r1", { kind: "steer", text: "again" }), true, "keyless signals never dedupe");
+  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), "sent");
+  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), "duplicate");
+  assert.equal(await store.send("r1", { kind: "steer", text: "again" }), "sent", "keyless signals never dedupe");
   assert.equal((await store.takePending("r1")).length, 2);
 });
 
@@ -422,8 +422,8 @@ test("pg store: a dedupe key collapses a redelivered steer to one row", { skip }
   const store = createPostgresRunSignalStore(URL!);
   const key = `slack:B:C1:${Date.now()}:steer`;
   try {
-    assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), true);
-    assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), false);
+    assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), "sent");
+    assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), "duplicate");
     assert.equal((await store.takePending("r-dedupe")).length, 1);
   } finally {
     await store.close?.();
@@ -469,7 +469,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await writer.closeReader(runId, "second");
         assert.equal(await observer.readerClosed(runId), true);
         await writer.prune(-1);
-        assert.equal(await observer.readerClosed(runId), false);
+        assert.equal(await observer.readerClosed(runId), true);
       } finally {
         await writer.close?.();
         if (observer !== writer) await observer.close?.();
@@ -491,4 +491,155 @@ test("startSignalPoll: stopping before reader registration completes still close
   opened.resolve();
   await stopping;
   assert.equal(await store.readerClosed("delayed"), true);
+});
+
+for (const backend of ["memory", "postgres"] as const) {
+  test(
+    `${backend}: closure serializes with admission and hands every accepted pending steer off once`,
+    { skip: backend === "postgres" ? skip : false },
+    async () => {
+      const replayed: string[] = [];
+      const opts = {
+        onReaderClosed: async (id: string) => {
+          replayed.push(...(await observer.takePending(id)).flatMap((s) => (s.text ? [s.text] : [])));
+        },
+      };
+      const store = backend === "memory" ? createMemoryRunSignalStore(opts) : createPostgresRunSignalStore(URL!, opts);
+      const observer = backend === "memory" ? store : createPostgresRunSignalStore(URL!);
+      try {
+        for (let i = 0; i < 20; i++) {
+          const runId = crypto.randomUUID();
+          await store.openReader(runId, "owner");
+          const admitted = observer.send(runId, { kind: "steer", text: runId, dedupeKey: runId });
+          const closed = store.closeReader(runId, "owner");
+          const [outcome] = await Promise.all([admitted, closed]);
+          assert.ok(outcome === "sent" || outcome === "closed");
+          assert.equal(replayed.filter((text) => text === runId).length, outcome === "sent" ? 1 : 0);
+          assert.deepEqual(await observer.takePending(runId), []);
+          assert.equal(
+            await observer.send(runId, { kind: "steer", text: "late", dedupeKey: "late:" + runId }),
+            "closed",
+          );
+          assert.equal(await observer.hasDedupeKey("late:" + runId), false);
+          assert.equal(await observer.send(runId, { kind: "abort" }), "sent");
+          await store.closeReader(runId, "owner");
+          assert.deepEqual(await observer.takePending(runId), [{ kind: "abort" }]);
+        }
+      } finally {
+        await store.close?.();
+        if (observer !== store) await observer.close?.();
+      }
+    },
+  );
+}
+
+test("reader closure waits for an in-flight handler and hands only undrained messages to replay", async () => {
+  const handoff: string[] = [];
+  const store = createMemoryRunSignalStore({
+    onReaderClosed: async (id) => {
+      handoff.push(...(await store.takePending(id)).map((s) => s.text!));
+    },
+  });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const seen: string[] = [];
+  const stop = startSignalPoll(store, "handoff", {
+    onSteer: async (text) => {
+      seen.push(text);
+      entered.resolve();
+      await release.promise;
+    },
+    onAbort: async () => {},
+  });
+  await store.send("handoff", { kind: "steer", text: "first" });
+  await entered.promise;
+  await store.send("handoff", { kind: "steer", text: "second" });
+  const closing = stop();
+  assert.deepEqual(handoff, []);
+  release.resolve();
+  await closing;
+  assert.deepEqual(seen, ["first"]);
+  assert.deepEqual(handoff, ["second"]);
+  assert.equal(await store.send("handoff", { kind: "steer", text: "third" }), "closed");
+});
+
+for (const backend of ["memory", "postgres"] as const) {
+  test(
+    `${backend}: a delayed close callback cannot take a replacement reader's signals`,
+    { skip: backend === "postgres" ? skip : false },
+    async () => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const taken: string[] = [];
+      let finished = false;
+      const opts = {
+        readerFinished: async () => finished,
+        onReaderClosed: async (id: string) => {
+          entered.resolve();
+          await release.promise;
+          taken.push(...(await observer.takeClosed(id)).map((s) => s.text!));
+        },
+      };
+      const store = backend === "memory" ? createMemoryRunSignalStore(opts) : createPostgresRunSignalStore(URL!, opts);
+      const observer = backend === "memory" ? store : createPostgresRunSignalStore(URL!);
+      const id = crypto.randomUUID();
+      try {
+        await store.openReader(id, "old");
+        const closing = store.closeReader(id, "old");
+        await entered.promise;
+        await observer.openReader(id, "new");
+        assert.equal(await observer.send(id, { kind: "steer", text: "new message", dedupeKey: id }), "sent");
+        release.resolve();
+        await closing;
+        assert.deepEqual(taken, []);
+        assert.deepEqual(
+          (await observer.takeLive(id)).map((s) => s.text),
+          ["new message"],
+        );
+        await store.closeReader(id, "new");
+        assert.equal(await observer.send(id, { kind: "steer", text: "new message", dedupeKey: id }), "duplicate");
+        await store.prune(-1);
+        assert.equal(await observer.readerClosed(id), true);
+        finished = true;
+        await store.prune(-1);
+        assert.equal(await observer.readerClosed(id), false);
+      } finally {
+        release.resolve();
+        await store.close?.();
+        if (observer !== store) await observer.close?.();
+      }
+    },
+  );
+}
+
+test("reader registration recovers after a transient failure and still delivers aborts", async () => {
+  const store = createMemoryRunSignalStore();
+  const register = store.openReader.bind(store);
+  let attempts = 0;
+  store.openReader = async (...args) => {
+    if (++attempts === 1) throw new Error("temporary database outage");
+    await register(...args);
+  };
+  const failed = Promise.withResolvers<void>();
+  let aborted = false;
+  const stop = startSignalPoll(
+    store,
+    "registration-retry",
+    {
+      onSteer: async () => {},
+      onAbort: async () => {
+        aborted = true;
+      },
+    },
+    { intervalMs: 20, onError: () => failed.resolve() },
+  );
+  try {
+    await failed.promise;
+    await store.send("registration-retry", { kind: "abort" });
+    await until(() => aborted);
+    assert.equal(attempts, 2);
+  } finally {
+    await stop();
+  }
+  assert.equal(await store.readerClosed("registration-retry"), true);
 });

@@ -1,6 +1,12 @@
 import { createPgPool, type PoolClient, type Rows } from "../persistence/pg-pool.ts";
 import { swallowAs } from "../util/errors.ts";
-import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import type {
+  RunSignal,
+  RunSignalKind,
+  RunSignalStore,
+  RunSignalStoreOptions,
+  SignalAdmission,
+} from "./run-signal-store.ts";
 
 const CHANNEL = "run_signals";
 const RECONNECT_DELAY_MS = 1_000;
@@ -18,7 +24,10 @@ function toSignals(rows: Rows): RunSignal[] {
     );
 }
 
-export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
+export function createPostgresRunSignalStore(
+  connectionString: string,
+  opts: RunSignalStoreOptions = {},
+): RunSignalStore {
   const pg = createPgPool(connectionString, [
     {
       id: "runs/signals/0001",
@@ -53,6 +62,22 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     },
   ]);
   const q = pg.query;
+
+  async function withReader<T>(runId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await (await pg.pool()).connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", ["run-signal-reader:" + runId]);
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 
   const listeners = new Map<string, Set<() => void>>();
   let listenClient: PoolClient | null = null;
@@ -99,28 +124,50 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
 
   return {
     async send(runId, signal) {
-      const { rows } = await q(
-        `WITH ins AS (
+      return withReader<SignalAdmission>(runId, async (client) => {
+        if (signal.dedupeKey) {
+          const duplicate = await client.query(`SELECT 1 FROM run_signals WHERE dedupe_key=$1`, [signal.dedupeKey]);
+          if (duplicate.rows.length) return "duplicate";
+        }
+        if (signal.kind === "steer") {
+          const reader = await client.query(
+            `SELECT 1 FROM run_signal_readers WHERE run_id=$1 AND closed_at IS NOT NULL`,
+            [runId],
+          );
+          if (reader.rows.length) return "closed";
+        }
+        const { rows } = await client.query(
+          `WITH ins AS (
            INSERT INTO run_signals(run_id, kind, text, payload, created_at, dedupe_key) VALUES ($1,$2,$3,$4,$5,$6)
            ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
            RETURNING id
          )
          SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
-        [runId, signal.kind, signal.text ?? null, JSON.stringify(signal), Date.now(), signal.dedupeKey ?? null],
-      );
-      return rows.length > 0;
+          [runId, signal.kind, signal.text ?? null, JSON.stringify(signal), Date.now(), signal.dedupeKey ?? null],
+        );
+        return rows.length > 0 ? "sent" : "duplicate";
+      });
     },
 
     async openReader(runId, token) {
-      await q(
-        `INSERT INTO run_signal_readers(run_id, token) VALUES ($1,$2)
+      await withReader(runId, (client) =>
+        client.query(
+          `INSERT INTO run_signal_readers(run_id, token) VALUES ($1,$2)
         ON CONFLICT (run_id) DO UPDATE SET token=EXCLUDED.token, closed_at=NULL`,
-        [runId, token],
+          [runId, token],
+        ),
       );
     },
 
     async closeReader(runId, token) {
-      await q(`UPDATE run_signal_readers SET closed_at=$3 WHERE run_id=$1 AND token=$2`, [runId, token, Date.now()]);
+      const { rowCount } = await withReader(runId, (client) =>
+        client.query(`UPDATE run_signal_readers SET closed_at=$3 WHERE run_id=$1 AND token=$2 AND closed_at IS NULL`, [
+          runId,
+          token,
+          Date.now(),
+        ]),
+      );
+      if (rowCount) await opts.onReaderClosed?.(runId);
     },
 
     async readerClosed(runId) {
@@ -170,6 +217,19 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return toSignals(rows);
     },
 
+    async takeClosed(runId) {
+      return withReader(runId, async (client) => {
+        const { rows } = await client.query(
+          `UPDATE run_signals SET consumed_at=$2
+          WHERE run_id=$1 AND consumed_at IS NULL AND kind <> 'abort'
+          AND EXISTS (SELECT 1 FROM run_signal_readers WHERE run_id=$1 AND closed_at IS NOT NULL)
+          RETURNING id, kind, text, payload`,
+          [runId, Date.now()],
+        );
+        return toSignals(rows);
+      });
+    },
+
     async pendingRunIds() {
       const { rows } = await q(`SELECT DISTINCT run_id FROM run_signals WHERE consumed_at IS NULL`);
       return rows.map((r) => r.run_id as string);
@@ -177,7 +237,12 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
 
     async prune(olderThanMs) {
       await q(`DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [Date.now() - olderThanMs]);
-      await q(`DELETE FROM run_signal_readers WHERE closed_at < $1`, [Date.now() - olderThanMs]);
+      const cutoff = Date.now() - olderThanMs;
+      const { rows } = await q(`SELECT run_id FROM run_signal_readers WHERE closed_at < $1`, [cutoff]);
+      for (const row of rows) {
+        if (await opts.readerFinished?.(row.run_id as string))
+          await q(`DELETE FROM run_signal_readers WHERE run_id=$1 AND closed_at < $2`, [row.run_id, cutoff]);
+      }
     },
 
     onSignal(runId, cb) {

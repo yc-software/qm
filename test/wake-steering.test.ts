@@ -696,6 +696,10 @@ test("orphan replay: a stale abort is drained; a request-less steer replays on t
   const liveRunId = first.runId!;
   await built.signals.send(liveRunId, { kind: "abort" });
   await built.signals.send(liveRunId, { kind: "steer", text: "manual web steer" });
+  const claimed = await built.runs.claimById(liveRunId, "stale-abort", 30_000);
+  assert.ok(claimed?.leaseToken);
+  await built.runs.complete(liveRunId, claimed.leaseToken, { status: "silent" });
+  await until(async () => (await built.runs.list()).find((r) => r.sessionId === threadRef && r.id !== liveRunId));
 
   await built.app.replayOrphanedRunSignals(liveRunId);
   assert.equal((await built.signals.takePending(liveRunId)).length, 0, "drained");
@@ -784,4 +788,22 @@ test("steer path: a message whose run goes terminal mid-send is replayed and the
     0,
     "the raced signal was consumed by the inline drain",
   );
+});
+
+test("addressed wake to a closed reader queues a new run without recording a signal dedupe key", async () => {
+  const built = freshApp();
+  const first = await built.app.turn(mention("@bot go", "C-closed", "closed.1"));
+  const runId = first.runId!;
+  await built.signals.openReader(runId, "owner");
+  await built.signals.closeReader(runId, "owner");
+  const second = await built.app.turn({
+    ...mention("@bot and another thing", "C-closed", "closed.1"),
+    triggerTs: "closed.2",
+  });
+  assert.equal(second.status, "queued");
+  assert.notEqual(second.runId, runId);
+  assert.notEqual(second.steered, true);
+  assert.deepEqual(await built.signals.takePending(runId), []);
+  const text = (await built.runs.get(second.runId!))?.request.text;
+  assert.ok(text?.includes("and another thing"));
 });

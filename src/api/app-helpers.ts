@@ -1,3 +1,4 @@
+import { isTerminal } from "../runs/run-store.ts";
 import type {
   PendingApproval,
   PendingApprovalRecord,
@@ -576,7 +577,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
     if (!deps.signals) return [];
     const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
-    for (const signal of await deps.signals.takePending(runId)) {
+    const run = await deps.runs.get(runId);
+    const pending =
+      run && !isTerminal(run.status) ? await deps.signals.takeClosed(runId) : await deps.signals.takePending(runId);
+    for (const signal of pending) {
       if (signal.kind === "abort") continue;
       let replayRunId: string | undefined;
       let replayOutcomeKnown = true;

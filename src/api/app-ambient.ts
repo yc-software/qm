@@ -319,7 +319,8 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       .catch(() => "block" as const);
     if (decision === "block") return false;
     const steerText = decision === "unscreened" ? `${unscreenedNotice("mid-turn message")}\n${req.text}` : req.text;
-    await deps.signals.send(live.id, { kind: "steer", text: steerText, ts: latestTs, request: req });
+    if ((await deps.signals.send(live.id, { kind: "steer", text: steerText, ts: latestTs, request: req })) === "closed")
+      return false;
     const after = await deps.runs.get(live.id);
     if (!after || isTerminal(after.status)) await app.replayOrphanedRunSignals(live.id);
     return true;

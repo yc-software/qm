@@ -683,3 +683,103 @@ test("web steer after the reader closes is refused without storing it, and resen
     [nextId],
   );
 });
+
+test("web HTTP: shutdown during send refuses the steer atomically", async () => {
+  const threadRef = "web:U1:atomic-close";
+  const first = await fetch(
+    `${webBase}/api/turn`,
+    asUser("U1", {
+      method: "POST",
+      body: JSON.stringify({ threadRef, text: "first" }),
+    }),
+  );
+  const { runId } = (await first.json()) as { runId: string };
+  await built.runs.claimById(runId, "atomic-test", 60_000);
+  const stop = startSignalPoll(built.signals, runId, { onSteer: async () => {}, onAbort: async () => {} });
+  const send = built.signals.send.bind(built.signals);
+  built.signals.send = async (id, signal) => {
+    if (id === runId) await stop();
+    return send(id, signal);
+  };
+  try {
+    const response = await fetch(
+      `${webBase}/api/runs/${runId}/signal`,
+      asUser("U1", {
+        method: "POST",
+        body: JSON.stringify({ kind: "steer", text: "too late" }),
+      }),
+    );
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { accepted: false, reason: "terminal" });
+    assert.deepEqual(await built.signals.takePending(runId), []);
+    assert.equal((await built.runs.get(runId))?.status, "running");
+  } finally {
+    built.signals.send = send;
+    await stop();
+  }
+});
+
+test("web HTTP: an admitted steer pending at shutdown is queued once before the run finishes", async () => {
+  const threadRef = "web:U1:atomic-handoff";
+  const first = await fetch(
+    `${webBase}/api/turn`,
+    asUser("U1", {
+      method: "POST",
+      body: JSON.stringify({ threadRef, text: "first" }),
+    }),
+  );
+  const { runId } = (await first.json()) as { runId: string };
+  const claimed = await built.runs.claimById(runId, "handoff-test", 60_000);
+  assert.ok(claimed?.leaseToken);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const stop = startSignalPoll(built.signals, runId, {
+    onSteer: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+    onAbort: async () => {},
+  });
+  await built.signals.send(runId, { kind: "steer", text: "already being handled" });
+  await entered.promise;
+  const response = await fetch(
+    `${webBase}/api/runs/${runId}/signal`,
+    asUser("U1", {
+      method: "POST",
+      body: JSON.stringify({ kind: "steer", text: "second" }),
+    }),
+  );
+  assert.equal(response.status, 200);
+  const closing = stop();
+  release.resolve();
+  await closing;
+  assert.equal((await built.runs.get(runId))?.status, "running");
+  const queued = (await built.runs.inFlightForThread(threadRef)).filter((r) => r.id !== runId);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0]?.request.text, "second");
+  await built.runs.complete(runId, claimed.leaseToken, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(runId);
+  assert.deepEqual(
+    (await built.runs.inFlightForThread(threadRef)).map((r) => r.id),
+    queued.map((r) => r.id),
+  );
+});
+
+test("reader handoff preserves an abort until the run is terminal", async () => {
+  const { run } = await built.runs.enqueue({
+    sessionId: "t-abort-handoff",
+    request: request("first", "t-abort-handoff"),
+  });
+  const claimed = await built.runs.claimById(run.id, "abort-test", 60_000);
+  assert.ok(claimed?.leaseToken);
+  await built.signals.openReader(run.id, "old-reader");
+  await built.signals.send(run.id, { kind: "abort" });
+  await built.signals.send(run.id, { kind: "steer", text: "next" });
+  await built.signals.closeReader(run.id, "old-reader");
+  assert.deepEqual(await built.signals.takeLive(run.id), [{ kind: "abort" }]);
+  await built.signals.openReader(run.id, "reclaimer");
+  assert.deepEqual(await built.signals.takeLive(run.id), [{ kind: "abort" }]);
+  await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "done" });
+  await built.app.replayOrphanedRunSignals(run.id);
+  assert.deepEqual(await built.signals.takePending(run.id), []);
+});

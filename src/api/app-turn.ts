@@ -397,33 +397,35 @@ export function createTurnMethods(
           const route = routeWake(wake, true, resolveTurnOrigin(live.request).kind === "ambient");
           if (route.kind === "steer" || route.kind === "drop") {
             const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
-            let redelivered = false;
-            const routedRunId = await withCurrentProjectRoster(async () => {
+            const admission = await withCurrentProjectRoster(async () => {
               if (route.kind === "steer")
-                redelivered = !(await deps.signals!.send(live.id, {
+                return deps.signals!.send(live.id, {
                   kind: route.signal,
                   ...(route.text ? { text: route.text } : {}),
                   ...(steerTs ? { ts: steerTs } : {}),
                   ...(route.signal === "steer" ? { request: req } : {}),
                   ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
-                }));
-              return live.id;
+                });
+              return "sent" as const;
             });
-            if (!routedRunId)
+            const routedRunId = live.id;
+            if (!admission)
               return { status: "refused", reason: "project membership changed; retry from the current project" };
-            if (redelivered)
+            if (admission === "duplicate")
               return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
-            if (route.kind === "steer") {
-              const after = await deps.runs.get(live.id);
-              if (!after || isTerminal(after.status)) {
-                const own = (await replayOrphanedRunSignals(live.id)).find(
-                  (d) => d.signal.text === route.text && d.signal.ts === steerTs,
-                );
-                if (own?.replayRunId)
-                  return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+            if (admission !== "closed") {
+              if (route.kind === "steer") {
+                const after = await deps.runs.get(live.id);
+                if (!after || isTerminal(after.status)) {
+                  const own = (await replayOrphanedRunSignals(live.id)).find(
+                    (d) => d.signal.text === route.text && d.signal.ts === steerTs,
+                  );
+                  if (own?.replayRunId)
+                    return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+                }
               }
+              return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
             }
-            return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
           }
         }
       }
@@ -447,33 +449,31 @@ export function createTurnMethods(
         if (ambientSession) {
           const liveAmbient = await deps.runs.activeForThread(ambientRef);
           if (liveAmbient && !isTerminal(liveAmbient.status)) {
-            const routedRunId = await withCurrentProjectRoster(async () => {
+            const admission = await withCurrentProjectRoster(async () => {
               if (deps.signals)
-                await deps.signals.send(liveAmbient.id, {
+                return deps.signals.send(liveAmbient.id, {
                   kind: "steer",
                   text: req.text,
                   ts: origin.messageTs,
                   request: req,
                   ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
                 });
-              return liveAmbient.id;
+              return "closed" as const;
             });
-            if (!routedRunId)
+            const routedRunId = liveAmbient.id;
+            if (!admission)
               return { status: "refused", reason: "project membership changed; retry from the current project" };
-            const after = await deps.runs.get(liveAmbient.id);
-            if (!after || isTerminal(after.status)) {
-              const own = (await replayOrphanedRunSignals(liveAmbient.id)).find(
-                (d) => d.signal.text === req.text && d.signal.ts === origin.messageTs,
-              );
-              if (own?.replayRunId)
-                return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+            if (admission !== "closed") {
+              const after = await deps.runs.get(liveAmbient.id);
+              if (!after || isTerminal(after.status)) {
+                const own = (await replayOrphanedRunSignals(liveAmbient.id)).find(
+                  (d) => d.signal.text === req.text && d.signal.ts === origin.messageTs,
+                );
+                if (own?.replayRunId)
+                  return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+              }
+              return req.async ? { status: "queued", runId: routedRunId } : drive(routedRunId);
             }
-            // Deliberately NOT flagged `steered`. Unlike the mid-turn branch above, this run's owner
-            // is the UNPROMPTED ambient handler, which stays silent on a refusal or failure
-            // (bystander restraint) and whose recovery copy is suppressed for the same reason. The
-            // addressed caller is the only one that would ever report that, so standing it down
-            // would trade a duplicate reply for silence on a message someone actually addressed.
-            return req.async ? { status: "queued", runId: routedRunId } : drive(routedRunId);
           }
         }
       }
@@ -625,9 +625,6 @@ export function createTurnMethods(
       if (signal.request && signal.request.conversation.threadRef !== run.request.conversation.threadRef) {
         return { accepted: false, reason: "conversation_mismatch" };
       }
-      if (signal.kind === "steer" && (await deps.signals.readerClosed(runId))) {
-        return { accepted: false, reason: "terminal" };
-      }
       let outbound = signal;
       if (signal.kind === "steer") {
         const requestActor = signal.request?.actor;
@@ -642,7 +639,7 @@ export function createTurnMethods(
           ...(steerer ? { text: attributedSteerText(steerer, run.request.actor.id, signal.text!) } : {}),
         };
       }
-      await deps.signals.send(runId, outbound);
+      if ((await deps.signals.send(runId, outbound)) === "closed") return { accepted: false, reason: "terminal" };
       const after = await deps.runs.get(runId);
       if (!after || isTerminal(after.status)) {
         const drained = await replayOrphanedRunSignals(runId);

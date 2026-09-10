@@ -1076,10 +1076,17 @@ export function buildApp(
       : createMemorySessionStore();
   memorySessions.store = sessions;
   const runStoreKind = config.runStore;
+  const signalOptions = {
+    onReaderClosed: (runId: string) => app.replayOrphanedRunSignals(runId),
+    readerFinished: async (runId: string) => {
+      const run = await runs.get(runId);
+      return !run || isTerminal(run.status);
+    },
+  };
   const runSignals: RunSignalStore =
     runStoreKind === "postgres"
-      ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
-      : createMemoryRunSignalStore();
+      ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"), signalOptions)
+      : createMemoryRunSignalStore(signalOptions);
   const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
@@ -1797,7 +1804,8 @@ export function buildApp(
     async () => {
       for (const runId of await runSignals.pendingRunIds()) {
         const run = await runs.get(runId);
-        if (!run || isTerminal(run.status)) await app.replayOrphanedRunSignals(runId);
+        if (!run || isTerminal(run.status) || (await runSignals.readerClosed(runId)))
+          await app.replayOrphanedRunSignals(runId);
       }
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
