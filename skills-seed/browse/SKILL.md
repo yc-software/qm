@@ -15,6 +15,21 @@ click through a flow — or when a plain fetch is genuinely blocked by heavy JS 
 (To verify a localhost site you built, don't use this at all — a remote browser can't reach
 your loopback; use the local headless `chromium` binary.)
 
+## Prefer a connected Aside Browser
+
+Before paying for a provider browser, check whether this person's own DM already has Aside
+Remote Control connected:
+
+```bash
+command -v aside >/dev/null 2>&1 && aside host list --json
+```
+
+If the command succeeds and at least one host is both online and remote-control enabled, read
+`skills/aside-browser/SKILL.md` and use that path instead. It drives the person's real signed-in
+Aside Browser without copying their browser profile into this computer. If the person explicitly
+asks to connect or use Aside, read that skill even when the check fails. Otherwise continue below;
+do not turn a normal browse request into an Aside setup flow.
+
 ## Pick the provider
 
 Which provider you use is decided by which API key is available in your env (or obtainable

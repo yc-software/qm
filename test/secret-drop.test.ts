@@ -366,6 +366,49 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     );
   });
 
+  it("a personal drop can explicitly grant its automatic resume one-time access", async () => {
+    const minted = await post(
+      "/v1/keychain/drops",
+      {
+        service: "aside.com",
+        purpose: "sign in the Aside CLI once",
+        grantMode: "once",
+        fields: [
+          { key: "ASIDE_EMAIL", label: "Aside email", secret: false },
+          { key: "ASIDE_PASSWORD", label: "Aside password" },
+        ],
+      },
+      await capFor("U_ASIDE"),
+    );
+    assert.equal(minted.status, 200);
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const redeemRes = await redeem(
+      dropId,
+      { values: { ASIDE_EMAIL: "user@example.com", ASIDE_PASSWORD: "temporary-password" } },
+      "U_ASIDE",
+      linkToken(formPath),
+    );
+    assert.equal(redeemRes.status, 200);
+    const { credential } = (await redeemRes.json()) as { credential: { id: string } };
+
+    const grants = await built.keychain!.grantsForScope(scopeId("personal", "U_ASIDE"));
+    const granted = grants.find((entry) => entry.credential.id === credential.id);
+    assert.equal(granted?.grant.mode, "once");
+    const materialized = await built.keychain!.materialize(
+      granted!.grant.id,
+      scopeId("personal", "U_ASIDE"),
+      "U_ASIDE",
+    );
+    assert.deepEqual(materialized.kind === "env" ? materialized.env : [], [
+      { key: "ASIDE_EMAIL", value: "user@example.com" },
+      { key: "ASIDE_PASSWORD", value: "temporary-password" },
+    ]);
+    await assert.rejects(
+      built.keychain!.materialize(granted!.grant.id, scopeId("personal", "U_ASIDE"), "U_ASIDE"),
+      /already used/,
+    );
+  });
+
   it("a Project roster change invalidates an unredeemed drop", async () => {
     await built.app.upsertDirectory([
       { principalId: "U_PROJECT_OWNER", displayName: "Owner", type: "internal" },

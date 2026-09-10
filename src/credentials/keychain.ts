@@ -1703,7 +1703,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     '   `curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" ' +
       CAPABILITY_CURL_AUTH +
       ' -H \'content-type: application/json\' -d \'{"service":"stripe","purpose":"<what the key is for>","envKey":"<ENV_VAR, for a token-style key>"}\'`',
-    "They open it in a browser and paste the secret there; it lands encrypted in their own keychain, and (from a channel or group) is granted to this conversation, which resumes when they submit. Single-use and short-lived.",
+    'They open it in a browser and paste the secret there; it lands encrypted in their own keychain. A channel or group drop is granted to that conversation automatically. In a personal conversation, set `grantMode:"once"` only when the automatic resume must consume the credential immediately. The conversation resumes when they submit. The link is single-use and short-lived.',
   );
 
   const waiting = inDm

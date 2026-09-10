@@ -162,7 +162,8 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     ownerId = speaker.principalId;
   }
   const scope = parseScopeId(capability.scopeId);
-  const wantsGrant = scope.kind === "channel" || scope.kind === "group";
+  const wantsPersonalGrant = scope.kind === "personal" && samePerson(scope.ref, ownerId) && b.grantMode !== undefined;
+  const wantsGrant = scope.kind === "channel" || scope.kind === "group" || wantsPersonalGrant;
   const dest = resolveCapabilityDestination(capability, undefined);
   const { dropId } = await deps.secretDrops.mint({
     ownerId,

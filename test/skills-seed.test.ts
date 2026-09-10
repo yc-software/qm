@@ -38,6 +38,7 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   const skills = createSkillStore({ signingSecret: "seed-test-secret" });
   const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
   assert.deepEqual(result.skipped, []);
+  assert.ok(result.installed.includes("aside-browser"));
   assert.ok(result.installed.includes("cloud-cli"));
   assert.ok(result.installed.includes("google-workspace"));
   assert.ok(result.installed.includes("google-drive-sheets"));

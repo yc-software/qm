@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl wget jq unzip \
       nftables \
       python3 python3-venv python3-pip \
-      ca-certificates gnupg \
+      ca-certificates gnupg libatomic1 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node-runtime /usr/local/ /usr/local/
@@ -31,6 +31,19 @@ RUN case "$TARGETARCH" in \
   && rm -rf /tmp/gh* \
   && gh --version \
   && rm -rf /root/.local/state/gh
+
+ARG ASIDE_CLI_VERSION=1.26.906.1630
+RUN case "$TARGETARCH" in \
+      amd64) ASIDE_ARCH=x64; ASIDE_SHA=092751c803a3a1c393af5a15b275f07b8663c53eb15851645d80521b170dacf8 ;; \
+      arm64) ASIDE_ARCH=arm64; ASIDE_SHA=0c70914864b8811154d021087419b718a39bee52a7cf948fc73e6f5087f0adf5 ;; \
+      *) exit 1 ;; \
+    esac \
+  && curl -fsSL "https://releases.aside.com/cli/AsideCLI-linux-${ASIDE_ARCH}-${ASIDE_CLI_VERSION}.tar.gz" -o /tmp/aside.tgz \
+  && echo "$ASIDE_SHA  /tmp/aside.tgz" | sha256sum -c - \
+  && tar xzf /tmp/aside.tgz -C /tmp \
+  && install /tmp/aside /usr/local/bin/aside \
+  && rm -f /tmp/aside /tmp/aside.tgz \
+  && aside --version
 
 RUN claude --version \
   && codex --version
