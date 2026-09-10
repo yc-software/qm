@@ -26,7 +26,7 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && p === "/v1/files/upload-client") ||
       (p === "/v1/files/uploads" && m === "POST") ||
       (/^\/v1\/files\/uploads\/[^/]+$/.test(p) && (m === "GET" || m === "DELETE")) ||
-      (/^\/v1\/files\/uploads\/[^/]+\/(complete|parts\/[0-9]+)$/.test(p) && m === "POST"),
+      (/^\/v1\/files\/uploads\/[^/]+\/(complete|parts\/[^/]+)$/.test(p) && m === "POST"),
     guidance:
       'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files.',
     routes: [

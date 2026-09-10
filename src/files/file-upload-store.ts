@@ -1,7 +1,7 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 
-export type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
+type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
 
 export interface FileUpload {
   id: string;
@@ -26,7 +26,7 @@ export interface FileUploadStore {
 }
 
 export const MAX_ACTIVE_UPLOADS = 4;
-export const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
+const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
 
 export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
   const db = createPgPool(connectionString, [

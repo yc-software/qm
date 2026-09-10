@@ -130,6 +130,7 @@ test("signed parts bind the exact size, checksum, upload and number; unpublished
   assert.equal(f.calls.at(-1)!.input.UploadId, "s3-upload");
   assert.equal(f.calls.at(-1)!.input.PartNumber, 1);
   assert.equal(await f.files.get(row.id), null);
+  await assert.rejects(f.service.sign(row.id, Number.NaN));
   await assert.rejects(f.service.sign(row.id, 0));
   await assert.rejects(f.service.sign(row.id, 2));
 });

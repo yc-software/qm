@@ -1,3 +1,4 @@
+import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -97,17 +98,10 @@ test("process sessions capability works end to end", async () => {
   if (!supportsProcessSessions(sandbox)) return;
   const h = await sandbox.provision(layers);
   const { processId } = await sandbox.startProcess(h, "echo one; echo two");
-  let cursor = 0,
-    chunks = "",
-    state = "running";
-  for (let i = 0; i < 10 && state === "running"; i++) {
-    const r = await sandbox.readProcess(h, processId, { sinceCursor: cursor });
-    chunks += r.chunks;
-    cursor = r.cursor;
-    state = r.status.state;
-  }
-  assert.match(chunks, /one/);
-  assert.match(chunks, /two/);
+  const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
+  assert.equal(status.state, "exited");
+  assert.match(output, /one/);
+  assert.match(output, /two/);
 });
 
 test("force-through proxy env is set when a proxy url and token are present", async () => {

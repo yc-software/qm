@@ -45,7 +45,7 @@ export interface PutFileInput {
   reuseExistingPath?: boolean;
 }
 
-export type PublishFileInput = Omit<PutFileInput, "data" | "maxBytes"> & {
+type PublishFileInput = Omit<PutFileInput, "data" | "maxBytes"> & {
   blobKey: string;
   sizeBytes: number;
   sha256: string | null;

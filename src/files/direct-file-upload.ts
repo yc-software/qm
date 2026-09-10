@@ -23,7 +23,7 @@ import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
-export const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
+const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const URL_TTL_SECONDS = 15 * 60;
 const SHA256_BASE64 = /^[A-Za-z0-9+/]{43}=$/;
