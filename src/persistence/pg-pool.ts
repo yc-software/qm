@@ -7,6 +7,63 @@ export type { Pool, PoolClient };
 
 export type Rows = Record<string, unknown>[];
 
+const sharedPools = new Map<string, { pool: Pool; users: number }>();
+
+async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
+  const pg = (await import("pg")).default;
+  const key = `${kind}:${connectionString}`;
+  const existing = sharedPools.get(key);
+  if (existing) {
+    existing.users++;
+    return existing.pool;
+  }
+  const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
+  const max = kind === "migration" ? 1 : Number(process.env[setting] ?? (kind === "query" ? 10 : 32));
+  if (!Number.isInteger(max) || max < 1 || max > 100)
+    throw new Error(`${setting} must be an integer between 1 and 100`);
+  let url = connectionString;
+  let ssl = pgCaOptions();
+  if (kind === "query" && connectionString === process.env.DATABASE_POOL_URL && process.env.DATABASE_POOL_CA_CERT) {
+    const parsed = new URL(connectionString);
+    for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) parsed.searchParams.delete(key);
+    url = parsed.toString();
+    ssl = { ssl: { ca: process.env.DATABASE_POOL_CA_CERT } };
+  }
+  const pool = new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 });
+  pool.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
+  sharedPools.set(key, { pool, users: 1 });
+  return pool;
+}
+
+async function releasePool(
+  connectionString: string,
+  pool: Pool,
+  kind: "query" | "session" | "migration",
+): Promise<void> {
+  const key = `${kind}:${connectionString}`;
+  const entry = sharedPools.get(key);
+  if (!entry || entry.pool !== pool) return;
+  if (--entry.users === 0) {
+    sharedPools.delete(key);
+    await pool.end();
+  }
+}
+
+function pooledDatabaseUrl(connectionString: string): string {
+  const pooled = process.env.DATABASE_POOL_URL;
+  if (!pooled || connectionString !== process.env.DATABASE_URL) return connectionString;
+  const directUrl = new URL(connectionString);
+  const pooledUrl = new URL(pooled);
+  if (
+    directUrl.username !== pooledUrl.username ||
+    directUrl.password !== pooledUrl.password ||
+    directUrl.pathname !== pooledUrl.pathname
+  ) {
+    throw new Error("DATABASE_POOL_URL must preserve the DATABASE_URL database and credentials");
+  }
+  return pooled;
+}
+
 export const PG_MIGRATIONS_TABLE = "qm_schema_migrations";
 
 export interface PgMigrationDefinition {
@@ -31,6 +88,7 @@ export interface PgQueryOptions {
 
 export interface PgPool {
   pool(): Promise<Pool>;
+  sessionPool(): Promise<Pool>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
@@ -44,11 +102,16 @@ async function withStatementTimeout<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   if (timeoutMs === undefined) return run();
-  await client.query(`SET statement_timeout = ${Math.max(1, Math.round(timeoutMs))}`);
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
+  await client.query("BEGIN");
   try {
-    return await run();
-  } finally {
-    await client.query("RESET statement_timeout").catch(swallowAs("pg-pool: reset statement_timeout", undefined));
+    await client.query(`SET LOCAL statement_timeout = ${Math.round(timeoutMs)}`);
+    const result = await run();
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(swallowAs("pg-pool: rollback query timeout", undefined));
+    throw error;
   }
 }
 
@@ -302,28 +365,40 @@ export function createPgPool(
   const postMigrationMaintenance = maintenanceSource
     .filter((definition) => !definition.beforeMigrations)
     .map((definition) => definePgMigration(definition.id, definition.statements));
-  let poolP: Promise<Pool> | null = null;
-  function pool(): Promise<Pool> {
-    if (!poolP) {
-      poolP = (async () => {
-        const pg = (await import("pg")).default;
-        const instance = new pg.Pool({ connectionString, ...pgCaOptions() });
-        instance.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
-        try {
-          await applyPgMaintenance(instance, preMigrationMaintenance);
-          await applyPgMigrations(instance, migrations);
-          await applyPgMaintenance(instance, postMigrationMaintenance);
-        } catch (error) {
-          await instance.end().catch(swallowAs("pg-pool: close after schema failure", undefined));
-          throw error;
-        }
-        return instance;
-      })().catch((error) => {
-        poolP = null;
-        throw error;
-      });
+  let readyP: Promise<void> | null = null;
+  let sessionPoolP: Promise<Pool> | null = null;
+  let queryPoolP: Promise<Pool> | null = null;
+  let closed = false;
+  const queryUrl = pooledDatabaseUrl(connectionString);
+  async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
+    const instance = await retainPool(connectionString, "migration");
+    try {
+      return await fn(instance);
+    } finally {
+      await releasePool(connectionString, instance, "migration");
     }
-    return poolP;
+  }
+  async function ready(): Promise<void> {
+    if (closed) throw new Error("Postgres store is closed");
+    await (readyP ??= withMigrationPool(async (instance) => {
+      await applyPgMaintenance(instance, preMigrationMaintenance);
+      await applyPgMigrations(instance, migrations);
+      await applyPgMaintenance(instance, postMigrationMaintenance);
+    }).catch((error) => {
+      readyP = null;
+      throw error;
+    }));
+    if (closed) throw new Error("Postgres store is closed");
+  }
+  async function pool(): Promise<Pool> {
+    await ready();
+    if (closed) throw new Error("Postgres store is closed");
+    return (queryPoolP ??= retainPool(queryUrl, "query"));
+  }
+  async function sessionPool(): Promise<Pool> {
+    await ready();
+    if (closed) throw new Error("Postgres store is closed");
+    return (sessionPoolP ??= retainPool(connectionString, "session"));
   }
   async function query(
     text: string,
@@ -397,7 +472,13 @@ export function createPgPool(
     return (await query(text, params, options)).rows;
   }
   async function close(): Promise<void> {
-    if (poolP) await (await poolP).end();
+    if (closed) return;
+    closed = true;
+    await readyP?.catch(() => {});
+    await Promise.all([
+      queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
+      sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
+    ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
     const migration = definePgMigration(
@@ -407,7 +488,8 @@ export function createPgPool(
       definition.legacyId,
     );
     registerPgMigration(connectionString, migration);
-    await applyPgMigrations(await pool(), [migration]);
+    if (closed) throw new Error("Postgres store is closed");
+    await withMigrationPool((instance) => applyPgMigrations(instance, [migration]));
   }
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(
@@ -415,5 +497,5 @@ export function createPgPool(
       definePgMigration(definition.id, definition.statements, definition.expectedChecksum, definition.legacyId),
     );
   }
-  return { pool, q, query, registerMigration, migrate, close };
+  return { pool, sessionPool, q, query, registerMigration, migrate, close };
 }
