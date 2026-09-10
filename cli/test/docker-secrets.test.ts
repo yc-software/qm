@@ -22,11 +22,27 @@ const SECRETS = {
   EXAMPLE_SCREEN_TOKEN: "security-screen-supersecret",
 };
 
-function fakeDocker(dir: string): { argvLog: string; envCopy: string } {
+interface CreateRequest {
+  path: string;
+  headers: string;
+  body: {
+    Env: string[];
+    Image: string;
+    Labels: Record<string, string>;
+    HostConfig: { Binds: string[]; GroupAdd: string[]; PortBindings?: Record<string, { HostPort: string }[]> };
+    NetworkingConfig: { EndpointsConfig: Record<string, { Aliases: string[] }> };
+  };
+}
+
+function fakeDocker(dir: string): { argvLog: string; envCopy: string; requestsLog: string; clientEnv: string } {
   const argvLog = join(dir, "docker-argv.log");
   const envCopy = join(dir, "env-copy.log");
   writeFileSync(argvLog, "");
   writeFileSync(envCopy, "");
+  const requestsLog = join(dir, "requests.log");
+  const clientEnv = join(dir, "client-env.log");
+  writeFileSync(requestsLog, "");
+  writeFileSync(clientEnv, "");
   const bin = join(dir, "docker");
   writeFileSync(
     bin,
@@ -35,15 +51,28 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
 if (args[0] === "version") { console.log("25.0"); process.exit(0); }
-if (args[0] === "run") {
-  for (let i = 0; i < args.length - 1; i++) {
-    if (args[i] !== "-e" || args[i + 1].includes("=")) continue;
-    const name = args[i + 1];
-    fs.appendFileSync(${JSON.stringify(envCopy)}, name + "=" + (process.env[name] ?? "") + "\\n");
+if (args[0] === "system" && args[1] === "dial-stdio") {
+  const raw = fs.readFileSync(0, "utf8");
+  const path = raw.split(" ")[1];
+  const body = JSON.parse(raw.slice(raw.indexOf("\\r\\n\\r\\n") + 4));
+  fs.appendFileSync(${JSON.stringify(requestsLog)}, JSON.stringify({path, body, headers: raw.slice(0, raw.indexOf("\\r\\n\\r\\n"))}) + "\\n");
+  fs.appendFileSync(${JSON.stringify(clientEnv)}, JSON.stringify(Object.fromEntries(["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_API_VERSION", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "LD_PRELOAD", "PATH", "HOME", "CORE_SIGNING_SECRET", "PLUG_TOKEN"].map(k => [k, process.env[k]]))) + "\\n");
+  if (body.Env) fs.appendFileSync(${JSON.stringify(envCopy)}, body.Env.join("\\n") + "\\n---\\n");
+  const modePath = ${JSON.stringify(join(dir, "api-mode"))};
+  const mode = fs.existsSync(modePath) ? fs.readFileSync(modePath, "utf8") : "";
+  const created = JSON.stringify({Id: "a".repeat(64)});
+  if (mode === "process-error") { console.error(JSON.stringify(body)); process.exit(1); }
+  if (mode === "truncated") { process.stdout.write("HTTP/1.1 201 Created\\r\\nContent-Length: 1000\\r\\n\\r\\n{"); process.exit(0); }
+  if (mode === "invalid-id") { process.stdout.write('HTTP/1.1 201 Created\\r\\nContent-Length: 12\\r\\n\\r\\n{"Id":"bad"}'); process.exit(0); }
+  if (mode === "chunked" && path.includes("/create?")) { process.stdout.write("HTTP/1.1 201 Created\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n" + Buffer.byteLength(created).toString(16) + "\\r\\n" + created + "\\r\\n0\\r\\n\\r\\n"); process.exit(0); }
+  if (mode === "informational") process.stdout.write("HTTP/1.1 100 Continue\\r\\n\\r\\n");
+  if (fs.existsSync(${JSON.stringify(join(dir, "reject-api"))})) {
+    process.stdout.write("HTTP/1.1 500 Server Error\\r\\nConnection: close\\r\\n\\r\\n" + JSON.stringify(body));
+    process.exit(0);
   }
-  fs.appendFileSync(${JSON.stringify(envCopy)}, "---\\n");
-  console.log("cid");
-  process.exit(0);
+  process.stdout.write(path.includes("/create?") ? 'HTTP/1.1 201 Created\\r\\nContent-Length: 73\\r\\n\\r\\n{"Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' : "HTTP/1.1 204 No Content\\r\\n\\r\\n");
+  if (mode === "linger") setInterval(() => {}, 1000);
+  else process.exit(0);
 }
 if (args[0] === "logs") { console.log("listening on :8080"); process.exit(0); }
 if (args[0] === "volume") { console.error("No such volume"); process.exit(1); }
@@ -56,7 +85,7 @@ process.exit(0);
 `,
   );
   chmodSync(bin, 0o755);
-  return { argvLog, envCopy };
+  return { argvLog, envCopy, requestsLog, clientEnv };
 }
 
 test("docker up keeps secret values off the docker argv", { timeout: 60_000 }, async () => {
@@ -147,26 +176,44 @@ test("docker up keeps secret values off the docker argv", { timeout: 60_000 }, a
     );
     assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
     assert.ok(!argv.includes("--env-file"), "docker runs do not need a temporary env file");
-    assert.ok(argv.includes('"CORE_SIGNING_SECRET"'), "secret names travel as name-only -e flags");
-    assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
-    assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
-    const signerArgs = argv
+    const requests = readFileSync(fake.requestsLog, "utf8")
+      .trim()
       .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as string[])
-      .find((args) => args.includes("qm-sekrit-signer"));
-    assert.ok(signerArgs, "coreless plugin starts");
-    assert.ok(!signerArgs.includes("CORE_API_URL=http://core:8080"), "coreless plugin gets no core endpoint");
-    assert.ok(!signerArgs.includes("CORE_SIGNING_SECRET"), "coreless plugin gets no source-auth secret");
-    assert.ok(argv.includes("SECURITY_SCREEN_BACKEND=proxy"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ROLLOUT=enforce"));
-
+      .map((line) => JSON.parse(line) as CreateRequest);
+    const creates = requests.filter((request) => request.path.startsWith("/containers/create?"));
+    const signer = creates.find((request) => request.path.endsWith("name=qm-sekrit-signer"));
+    assert.ok(signer, "the actual coreless container-create request is inspected");
     assert.ok(
-      argv.includes("WEB_UI_PUBLIC_URL=http://folded.example.com/web-ui"),
-      "virtual-service env folds into the core env",
+      !signer.body.Env.some((entry) => entry.startsWith("CORE_API_URL=")),
+      "coreless plugin gets no core endpoint",
     );
+    assert.ok(
+      !signer.body.Env.some((entry) => entry.startsWith("CORE_SIGNING_SECRET=")),
+      "coreless plugin gets no source-auth secret",
+    );
+    const core = creates.find((request) => request.path.endsWith("name=qm-sekrit-core"))!;
+    assert.deepEqual(core.body.HostConfig.PortBindings, { "8080/tcp": [{ HostIp: "", HostPort: "8080" }] });
+    assert.ok(core.body.HostConfig.Binds.includes("qm-sekrit-coredata:/data"));
+    assert.deepEqual(core.body.NetworkingConfig.EndpointsConfig["qm-sekrit"]!.Aliases, [
+      "core",
+      "qm-sekrit-core.internal",
+    ]);
+    assert.equal(core.body.Labels["qm.org"], "sekrit");
+    const sentEnv = creates.flatMap((request) => request.body.Env);
+    for (const entry of [
+      "FLY_RESIDENT_ENV_TZ=UTC",
+      "LINEAR_REGION=us",
+      "SECURITY_SCREEN_BACKEND=proxy",
+      "SECURITY_SCREEN_PROXY_PROVIDER=example-screen",
+      "SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify",
+      "SECURITY_SCREEN_PROXY_ROLLOUT=enforce",
+      "WEB_UI_PUBLIC_URL=http://folded.example.com/web-ui",
+    ])
+      assert.ok(sentEnv.includes(entry), entry);
+    const clientEnv = readFileSync(fake.clientEnv, "utf8");
+    assert.ok(!clientEnv.includes(SECRETS.CORE_SIGNING_SECRET));
+    assert.ok(!clientEnv.includes(SECRETS.PLUG_TOKEN));
+
     assert.ok(
       lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("HARNESS")),
       "unforwarded .env keys are warned about",
@@ -215,7 +262,7 @@ test("docker up keeps secret values off the docker argv", { timeout: 60_000 }, a
       "a secretEnv alias delivers the stored value under its declared env name",
     );
     assert.match(envFiles, new RegExp(`^SECURITY_SCREEN_PROXY_TOKEN=${SECRETS.EXAMPLE_SCREEN_TOKEN}$`, "m"));
-    assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is absent from secret delivery");
+
     assert.equal(process.env.CORE_SIGNING_SECRET, undefined, "secret delivery does not mutate the parent environment");
   } finally {
     console.log = log;
@@ -273,17 +320,21 @@ test(
 
       const argv = readFileSync(fake.argvLog, "utf8");
       assert.ok(!argv.includes(password), "the pg password must not reach the docker argv");
-      assert.ok(argv.includes('"POSTGRES_PASSWORD"'), "POSTGRES_PASSWORD travels as a name-only -e flag");
+      const requests = readFileSync(fake.requestsLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as CreateRequest);
+      const pg = requests.find((request) => request.path.endsWith("name=qm-sekritpg-pg"))!;
+      assert.equal(pg.body.Image, "postgres:16");
+      assert.deepEqual(pg.body.HostConfig.Binds, ["qm-sekritpg-pgdata:/var/lib/postgresql/data"]);
+      assert.ok(pg.body.Env.includes("POSTGRES_DB=qm"));
       assert.ok(!argv.includes("postgres://"), "the derived DATABASE_URL must not reach the docker argv");
 
       const envFiles = readFileSync(fake.envCopy, "utf8");
-      assert.ok(
-        envFiles.includes(`POSTGRES_PASSWORD=${password}`),
-        "pg gets its password through the docker process env",
-      );
+      assert.ok(envFiles.includes(`POSTGRES_PASSWORD=${password}`), "pg gets its password through the Docker API body");
       assert.ok(
         envFiles.includes(`DATABASE_URL=postgres://postgres:${password}@pg:5432/qm`),
-        "the core gets DATABASE_URL through the docker process env",
+        "the core gets DATABASE_URL through the Docker API body",
       );
     } finally {
       console.log = log;
@@ -348,7 +399,7 @@ test(
   },
 );
 
-test("a multi-line secret value is delivered through the docker process environment", { timeout: 60_000 }, async () => {
+test("a multi-line secret value is delivered through the Docker API body", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-nl-"));
   const priorPath = process.env.PATH;
   const priorDb = process.env.DATABASE_URL;
@@ -380,7 +431,7 @@ test("a multi-line secret value is delivered through the docker process environm
     await dockerUp(config, dir, {});
     assert.ok(
       readFileSync(fake.envCopy, "utf8").includes("CORE_SIGNING_SECRET=-----BEGIN KEY-----\nabc\n-----END KEY-----"),
-      "name-only delivery preserves multi-line secret values",
+      "API delivery preserves multi-line secret values",
     );
   } finally {
     console.log = log;
@@ -392,4 +443,222 @@ test("a multi-line secret value is delivered through the docker process environm
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+async function withDockerSecrets(
+  extraConfig: Record<string, unknown>,
+  secrets: Record<string, string>,
+  check: (fixture: ReturnType<typeof fakeDocker> & { dir: string; up: () => Promise<void> }) => Promise<void>,
+): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "qm-docker-api-secrets-"));
+  const priorPath = process.env.PATH;
+  const priorDb = process.env.DATABASE_URL;
+  const log = console.log,
+    warn = console.warn;
+  try {
+    writeFileSync(
+      join(dir, CONFIG_FILENAME),
+      JSON.stringify({
+        contract: 1,
+        orgId: "apisecrets",
+        publicUrl: "http://localhost:8080",
+        target: "docker",
+        services: ["core"],
+        ...extraConfig,
+      }),
+    );
+    writeFileSync(
+      join(dir, ".env"),
+      Object.entries({ ...SECRETS, DATABASE_URL: "postgres://sentinel:db@db/qm", ...secrets })
+        .map(([key, value]) => `${key}=${value}`)
+        .join("\n"),
+    );
+    const fake = fakeDocker(dir);
+    process.env.PATH = `${dir}:${priorPath}`;
+    delete process.env.DATABASE_URL;
+    console.log = (): void => {};
+    console.warn = console.log;
+    const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
+    await check({ ...fake, dir, up: () => dockerUp(config, dir, {}) });
+  } finally {
+    console.log = log;
+    console.warn = warn;
+    process.env.PATH = priorPath;
+    if (priorDb === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = priorDb;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+for (const plugin of [false, true]) {
+  test(`container control variables never alter the Docker client (${plugin ? "plugin" : "core"})`, async () => {
+    const names = [
+      "DOCKER_HOST",
+      "DOCKER_CONTEXT",
+      "DOCKER_CONFIG",
+      "DOCKER_API_VERSION",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "LD_PRELOAD",
+      "PATH",
+      "HOME",
+    ];
+    const values = Object.fromEntries(names.map((name) => [name, `sentinel-container-${name}`]));
+    const aliases = Object.fromEntries(names.map((name) => [name, `STORED_${name}`]));
+    const extraConfig = plugin
+      ? {
+          plugins: [
+            {
+              name: "signer",
+              image: "example.invalid/signer:1",
+              coreAccess: false,
+              secrets: names.map((name) => ({ name })),
+            },
+          ],
+        }
+      : { secretEnv: { core: aliases } };
+    const secrets = plugin ? values : Object.fromEntries(names.map((name) => [aliases[name], values[name]]));
+    await withDockerSecrets(extraConfig, secrets, async (fixture) => {
+      const expected = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+      await fixture.up();
+      const clients = readFileSync(fixture.clientEnv, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, string>);
+      assert.ok(clients.length > 0);
+      for (const client of clients) for (const name of names) assert.equal(client[name], expected[name], name);
+      const creates = readFileSync(fixture.requestsLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as CreateRequest);
+      const request = creates.find((entry) => entry.path.endsWith(`name=qm-apisecrets-${plugin ? "signer" : "core"}`))!;
+      for (const name of names) assert.ok(request.body.Env.includes(`${name}=${values[name]}`));
+      if (plugin) assert.ok(!request.body.Env.some((entry) => entry.startsWith("CORE_SIGNING_SECRET=")));
+      for (const name of names) assert.equal(process.env[name], expected[name]);
+    });
+  });
+}
+
+for (const source of ["core", "plugin", "database", "literal"]) {
+  test(`NUL in ${source} environment is rejected without values before deployment changes`, async () => {
+    const sentinel = "sentinel-private-prefix\0private-suffix";
+    const configs: Record<string, Record<string, unknown>> = {
+      plugin: {
+        plugins: [
+          { name: "signer", image: "example.invalid/signer:1", coreAccess: false, secrets: [{ name: "PLUG_TOKEN" }] },
+        ],
+      },
+      literal: { env: { core: { CUSTOM_VALUE: sentinel } } },
+    };
+    const keys: Record<string, string> = { plugin: "PLUG_TOKEN", database: "DATABASE_URL" };
+    const key = keys[source] ?? "CAPABILITY_SECRET";
+    const extraConfig = configs[source] ?? {};
+    const secrets = source === "literal" ? {} : { [key]: sentinel };
+    await withDockerSecrets(extraConfig, secrets, async (fixture) => {
+      await assert.rejects(fixture.up(), (error: Error) => {
+        assert.match(error.message, /NUL byte/);
+        assert.ok(!error.message.includes("sentinel-private-prefix"));
+        assert.ok(!error.message.includes("private-suffix"));
+        return true;
+      });
+      const commands = readFileSync(fixture.argvLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      assert.deepEqual(
+        commands.map((args) => args[0]),
+        ["version"],
+      );
+      assert.equal(readFileSync(fixture.requestsLog, "utf8"), "");
+    });
+  });
+}
+
+test("Docker API error bodies containing secrets are withheld", async () => {
+  await withDockerSecrets({}, {}, async (fixture) => {
+    writeFileSync(join(fixture.dir, "reject-api"), "");
+    await assert.rejects(fixture.up(), (error: Error) => {
+      assert.match(error.message, /HTTP 500/);
+      for (const secret of Object.values(SECRETS)) assert.ok(!error.message.includes(secret));
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+  });
+});
+
+for (const mode of ["process-error", "truncated", "invalid-id"]) {
+  test(`Docker API ${mode} fails closed without starting a container or disclosing values`, async () => {
+    await withDockerSecrets({}, {}, async (fixture) => {
+      writeFileSync(join(fixture.dir, "api-mode"), mode);
+      await assert.rejects(fixture.up(), (error: Error) => {
+        assert.match(error.message, /Docker API/);
+        for (const value of Object.values(SECRETS)) assert.ok(!error.message.includes(value));
+        return true;
+      });
+      assert.ok(!readFileSync(fixture.requestsLog, "utf8").includes("/start"));
+    });
+  });
+}
+
+for (const mode of ["chunked", "informational", "linger"]) {
+  test(`Docker API handles ${mode} and starts the returned ID rather than the mutable name`, async () => {
+    await withDockerSecrets({}, {}, async (fixture) => {
+      writeFileSync(join(fixture.dir, "api-mode"), mode);
+      const before = Date.now();
+      await fixture.up();
+      assert.ok(Date.now() - before < 10_000, "a complete response must not wait for the proxy to exit");
+      const requests = readFileSync(fixture.requestsLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as CreateRequest);
+      assert.equal(requests[1]!.path, `/containers/${"a".repeat(64)}/start`);
+    });
+  });
+}
+
+test("Docker proxy defaults, explicit overrides, custom headers and default platform survive API delivery", async () => {
+  await withDockerSecrets({ env: { core: { HTTPS_PROXY: "explicit-proxy" } } }, {}, async (fixture) => {
+    const priorConfig = process.env.DOCKER_CONFIG;
+    const priorPlatform = process.env.DOCKER_DEFAULT_PLATFORM;
+    const priorVersion = process.env.DOCKER_API_VERSION;
+    const priorHeaders = process.env.DOCKER_CUSTOM_HEADERS;
+    try {
+      process.env.DOCKER_CONFIG = fixture.dir;
+      process.env.DOCKER_DEFAULT_PLATFORM = "linux/arm64";
+      process.env.DOCKER_API_VERSION = "1.47";
+      process.env.DOCKER_CUSTOM_HEADERS = "X-Launcher-Test=launcher-header-sentinel";
+      writeFileSync(
+        join(fixture.dir, "config.json"),
+        JSON.stringify({
+          proxies: { default: { httpProxy: "http://default-proxy", httpsProxy: "https://default-proxy" } },
+          HttpHeaders: { "X-Docker-Test": "header-sentinel" },
+        }),
+      );
+      await fixture.up();
+      const requests = readFileSync(fixture.requestsLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as CreateRequest);
+      assert.ok(requests[0]!.path.startsWith("/v1.47/containers/create?"));
+      assert.ok(requests[0]!.path.endsWith("&platform=linux%2Farm64"));
+      for (const request of requests) assert.match(request.headers, /X-Launcher-Test: launcher-header-sentinel/i);
+      for (const request of requests) assert.match(request.headers, /X-Docker-Test: header-sentinel/i);
+      const env = requests[0]!.body.Env;
+      assert.ok(env.includes("HTTP_PROXY=http://default-proxy"));
+      assert.ok(env.includes("http_proxy=http://default-proxy"));
+      assert.ok(env.includes("HTTPS_PROXY=explicit-proxy"));
+      assert.ok(env.includes("https_proxy=https://default-proxy"));
+    } finally {
+      if (priorConfig === undefined) delete process.env.DOCKER_CONFIG;
+      else process.env.DOCKER_CONFIG = priorConfig;
+      if (priorPlatform === undefined) delete process.env.DOCKER_DEFAULT_PLATFORM;
+      else process.env.DOCKER_DEFAULT_PLATFORM = priorPlatform;
+      if (priorVersion === undefined) delete process.env.DOCKER_API_VERSION;
+      else process.env.DOCKER_API_VERSION = priorVersion;
+      if (priorHeaders === undefined) delete process.env.DOCKER_CUSTOM_HEADERS;
+      else process.env.DOCKER_CUSTOM_HEADERS = priorHeaders;
+    }
+  });
 });
