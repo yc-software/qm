@@ -28,7 +28,7 @@ export const scenarios: Scenario[] = [
       const ch = await ctx.freshChannel();
       const marker = ctx.marker();
       const root = await ch.mention(
-        `Use the runtime tool to inspect your active runtime and available models, then switch to a different available Anthropic model for this task only. Keep the pi harness, set effort to auto and fastMode to false. After the handoff, inspect runtime again and calculate 17 × 23. Only after completing these steps, reply with the exact token ${marker}, your active model and the answer.`,
+        `Can you switch your model to a different available Anthropic model for this request and then calculate 17 × 23? Keep using pi with automatic reasoning effort and fast mode off. Once you have switched, verify which model you are actually running on. Include ${marker}, that model and the answer in your final reply.`,
       );
       const reply = await ch.waitForBotReply(root, { match: new RegExp(marker), timeoutMs: 4 * 60_000 });
       assert.match(reply.text ?? "", /\b391\b/);
