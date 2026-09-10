@@ -1,6 +1,6 @@
 import { sendJson } from "../http.ts";
 import { externalMemberActive } from "../../identity/external-members.ts";
-import { isObj } from "./shared.ts";
+import { isObj, authorizeAdmin, orgScope, audit } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 const NAMESPACE = "authbroker:";
@@ -60,7 +60,48 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { allowed, ...(allowed ? { expiresAt: member.expiresAt } : {}) });
 }
 
+async function brokerSession(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body } = ctx;
+  if (!deps.brokerSessions) return sendJson(res, 503, { error: "not_configured" });
+  const b = isObj(body) ? body : {};
+  if (ctx.pathname.endsWith("/use")) {
+    if (typeof b.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(b.token))
+      return sendJson(res, 400, { error: "invalid_token" });
+    return sendJson(res, 200, { session: await deps.brokerSessions.use(b.token) });
+  }
+  if (typeof b.email !== "string" || b.email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.email))
+    return sendJson(res, 400, { error: "invalid_email" });
+  const email = b.email.trim().toLowerCase();
+  if (ctx.pathname.endsWith("/revoke")) {
+    if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, orgScope()))) return;
+    await deps.brokerSessions.revoke(email);
+    audit(deps, {
+      principalId: ctx.actor?.p ?? "admin",
+      action: "auth.broker.revoke",
+      resource: email,
+      scopeLabel: orgScope(),
+    });
+    return sendJson(res, 200, { ok: true });
+  }
+  const idleS = b.idleS;
+  const absoluteS = b.absoluteS;
+  if (
+    typeof idleS !== "number" ||
+    typeof absoluteS !== "number" ||
+    !Number.isInteger(idleS) ||
+    !Number.isInteger(absoluteS) ||
+    idleS < 1 ||
+    absoluteS < idleS ||
+    absoluteS > 90 * 86400
+  )
+    return sendJson(res, 400, { error: "invalid_lifetime" });
+  return sendJson(res, 200, await deps.brokerSessions.create(email, idleS, absoluteS));
+}
+
 export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "POST", path: "/v1/auth/broker/sessions", auth: "source", handle: brokerSession },
+  { method: "POST", path: "/v1/auth/broker/sessions/use", auth: "source", handle: brokerSession },
+  { method: "POST", path: "/v1/auth/broker/sessions/revoke", auth: "source", handle: brokerSession },
   { method: "POST", path: "/v1/auth/broker/claim", auth: "source", handle: claimBrokerNonce },
   { method: "GET", path: "/v1/auth/broker/email-allowed", auth: "source", handle: emailAllowed },
 ];

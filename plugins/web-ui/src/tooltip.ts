@@ -19,31 +19,21 @@ function hoverless(): boolean {
 }
 
 function showTooltip(target: Element, text: string): void {
+  hideTooltip();
   if (!text || hoverless()) return;
   anchor = target;
+  target.setAttribute("data-qm-tooltip-anchor", "");
   const el = ensureEl();
   el.textContent = text;
+  el.classList.toggle("beside", !!target.closest('[data-tip-placement="right"]'));
   el.classList.add("visible");
-  // Measure after content is set.
-  const r = target.getBoundingClientRect();
-  const tr = el.getBoundingClientRect();
-  const clamp = (value: number, extent: number) => Math.max(6, Math.min(value, extent - 6));
-  const beside = target.closest('[data-tip-placement="right"]') && r.right + 7 + tr.width <= window.innerWidth - 6;
-  if (beside) {
-    el.style.left = `${Math.round(r.right + 7)}px`;
-    el.style.top = `${Math.round(clamp(r.top + r.height / 2 - tr.height / 2, window.innerHeight - tr.height))}px`;
-    return;
-  }
-  let top = r.top - tr.height - 7;
-  if (top < 6) top = r.bottom + 7; // no room above — flip below
-  el.style.left = `${Math.round(clamp(r.left + r.width / 2 - tr.width / 2, window.innerWidth - tr.width))}px`;
-  el.style.top = `${Math.round(top)}px`;
 }
 
 export function hideTooltip(target?: Element): void {
   if (target && anchor && target !== anchor) return;
-  anchor = null;
   tipEl?.classList.remove("visible");
+  anchor?.removeAttribute("data-qm-tooltip-anchor");
+  anchor = null;
 }
 
 const attached = new WeakMap<Element, TooltipBinding>();

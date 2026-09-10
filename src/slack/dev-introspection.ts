@@ -139,10 +139,12 @@ function attachRawFrameTap(
         return;
       }
       state.lastEventAtRaw = now();
-      const text = frame?.type === "events_api" ? frame.payload?.event?.text : undefined;
+      const event = frame?.type === "events_api" ? frame.payload?.event : undefined;
+      const text = event?.subtype === "message_deleted" ? event.previous_message?.text : event?.text;
       const isCanary = typeof text === "string" && text.includes(CANARY_PREFIX);
-      if (!isCanary) state.lastActivityAt = now();
-      if (frame?.type !== "events_api" || !isCanary) return;
+      const isActivity = ["events_api", "interactive", "slash_commands"].includes(frame?.type);
+      if (isActivity && !isCanary) state.lastActivityAt = now();
+      if (frame?.type !== "events_api" || !isCanary || event?.subtype === "message_deleted") return;
       const nonce = text.slice(text.indexOf(CANARY_PREFIX) + CANARY_PREFIX.length).trim();
       const waiter = canaryWaiters.get(nonce);
       if (!waiter) return;

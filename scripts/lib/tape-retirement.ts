@@ -334,10 +334,14 @@ export async function limitedSessionParity(
     latestEntrySeq: (id) => store.latestEntrySeq(id),
     participantWindowsOf: (id) => store.participantWindowsOf(id),
   };
-  const served = (await createTranscriptSource(recording).forRender(sessionId, { limit })).entries;
+  const servedRead = (await createTranscriptSource(recording).forRender(sessionId, { limit })).entries;
   if (fellBack) return { status: "fallback" };
+  const covered = projectTapeEntries(sessionId, rows)?.coveredSeq ?? -1;
+  const snapshotLatest = entries.length ? entries[entries.length - 1]!.seq : -1;
+  if (covered < snapshotLatest) return { status: "fallback" };
+  const served = servedRead.filter((e) => e.seq <= snapshotLatest);
   const floor = served[0]?.seq ?? Number.MAX_SAFE_INTEGER;
-  const expected = entries.filter((e) => e.seq >= floor);
+  const expected = entries.filter((e) => e.seq >= floor && e.seq <= covered);
   return {
     status: "projected",
     report: classifyDivergences(expected, served, { coarse: coarseTape(rows) }),

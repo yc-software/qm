@@ -61,8 +61,10 @@ test("an inbox drag paints drop zones on every existing pane", () => {
 test("email items edit like an email; slack items like slack", () => {
   assert.match(inbox, /<span>To<\/span>/);
   assert.match(inbox, /<span>Subject<\/span>/);
-  assert.match(inbox, /Send reply/);
-  assert.match(inbox, /Send to Slack/);
+  assert.match(inbox, /Send it/, "send lives in the composer as a suggested action");
+  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render inside the ask composer");
+  assert.match(inbox, /Send the drafted reply in Gmail/);
+  assert.match(inbox, /Send the drafted reply to Slack/);
   assert.match(inbox, /rows=\$\{gmail \? 7 : 3\}/, "email drafts get a taller editor than slack replies");
 });
 
@@ -197,4 +199,23 @@ test("an edit remembers the draft version it started from, and both edit and sen
   );
   assert.match(inbox, /const basedOnAt = edited\?\.basedOnAt \?\? item\.draftAt;/);
   assert.match(inbox, /if \(isDraftConflict\(e\)\) return explainDraftConflict\(item, true\);/);
+});
+
+test("draft header links stay together after the label", () => {
+  assert.match(css, /\.inbox-draft-label \{[^}]*margin-right: auto;/);
+  assert.doesNotMatch(css, /\.inbox-session-link \{[^}]*margin-left: auto;/);
+  assert.doesNotMatch(css, /\.inbox-draft-head \.inbox-external-link \{[^}]*margin-left: auto;/);
+});
+
+test("suggested draft actions yield to typed instructions without reflow", () => {
+  assert.match(inbox, /inbox-chat-composer \$\{pending\.trim\(\) \? "has-text" : ""\}/);
+  assert.match(inbox, /if \(had !== Boolean\(box\.value\.trim\(\)\)\) drawAll\(\);/);
+  assert.match(css, /\.inbox-chat-composer\.has-text \.inbox-chat-suggest \{\s*visibility: hidden;/);
+  assert.doesNotMatch(inbox, /inbox-draft-actions|function sendLabel/);
+});
+
+test("conversation messages use the containing view's scroll instead of clipping the latest message", () => {
+  const context = css.match(/\.inbox-context \{[^}]*\}/)?.[0] ?? "";
+  assert.match(context, /flex: none;/);
+  assert.doesNotMatch(context, /max-height:|overflow-y:/);
 });

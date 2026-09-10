@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
+import { canonicalJson, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
 
 test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "short"), true);
@@ -184,4 +184,9 @@ test("promptHidden treats Ctrl-D as enter on a non-empty buffer and as cancel on
     emit(Buffer.from([0x04]));
     await assert.rejects(() => pending, /secret entry cancelled/);
   });
+});
+
+test("async inherited processes reject spawn errors and signal termination", async () => {
+  await assert.rejects(runInheritAsync("/definitely-missing-qm-command", []), /ENOENT/);
+  await assert.rejects(runInheritAsync(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")']), /SIGTERM/);
 });

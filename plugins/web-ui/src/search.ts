@@ -56,6 +56,7 @@ export function openChatSearch(): void {
   searchState.query = "";
   searchState.hits = [];
   searchState.loading = false;
+  searchState.failed = false;
   searchState.sel = 0;
   draw();
   requestAnimationFrame(() => host?.querySelector<HTMLInputElement>(".chat-search-input")?.focus());
@@ -64,6 +65,7 @@ export function openChatSearch(): void {
 function closeChatSearch(): void {
   if (!searchState.open) return;
   searchState.open = false;
+  fetchSeq++;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   inflight?.abort();
@@ -100,12 +102,14 @@ function onQueryInput(e: InputEvent): void {
   searchState.query = (e.currentTarget as HTMLInputElement).value;
   searchState.sel = 0;
   if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = null;
+  fetchSeq++;
+  inflight?.abort();
+  inflight = null;
+  searchState.hits = [];
+  searchState.failed = false;
   const q = searchState.query.trim();
   if (q.length < MIN_QUERY_LEN) {
-    inflight?.abort();
-    inflight = null;
-    searchState.hits = [];
-    searchState.failed = false;
     searchState.loading = false;
     draw();
     return;
@@ -169,6 +173,7 @@ function onPaletteKeydown(e: KeyboardEvent): void {
   if (e.key === "Enter") {
     e.preventDefault();
     if (e.metaKey || e.ctrlKey) return void askQm();
+    if (searchState.loading) return;
     const hit = searchState.hits[searchState.sel];
     if (hit) return void openHit(hit);
     if (askRowShown() && searchState.sel === searchState.hits.length) return void askQm();
@@ -298,9 +303,7 @@ function paletteTpl(): TemplateResult {
   } else if (searchState.loading && !searchState.hits.length) {
     body = html`<div class="chat-search-empty sheen-label thinking-sheen">Searching…</div>`;
   } else if (searchState.failed) {
-    body = html`<div class="chat-search-empty chat-search-failed">
-      Search failed. Check the connection and try again.
-    </div>`;
+    body = html`<div class="chat-search-empty chat-search-failed">Search failed. Try again.</div>`;
   } else if (!searchState.hits.length) {
     body = html`<div class="chat-search-empty">No results for “${q}”</div>`;
   } else {

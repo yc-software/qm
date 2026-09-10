@@ -22,6 +22,40 @@ const onPath = (m: string, p: string) => (method: string, pathname: string) => m
 
 const FAMILIES: AgentApiFamily[] = [
   {
+    match: (m, p) =>
+      (m === "GET" && p === "/v1/files/upload-client") ||
+      (p === "/v1/files/uploads" && m === "POST") ||
+      (/^\/v1\/files\/uploads\/[^/]+$/.test(p) && (m === "GET" || m === "DELETE")) ||
+      (/^\/v1\/files\/uploads\/[^/]+\/(complete|parts\/[^/]+)$/.test(p) && m === "POST"),
+    guidance:
+      'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files.',
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/files/upload-client",
+        summary: "download the resumable Python Files publisher; execute it in the sandbox with a file path",
+      },
+      {
+        method: "POST",
+        path: "/v1/files/uploads",
+        summary:
+          "begin a direct upload with {name,mimetype?,scopeId?,sizeBytes,checksums,requestId?}; checksums are ordered base64 SHA-256 hashes of 64 MiB parts",
+      },
+      { method: "GET", path: "/v1/files/uploads/:id", summary: "inspect an owned upload session" },
+      {
+        method: "POST",
+        path: "/v1/files/uploads/:id/parts/:part",
+        summary: "get a short-lived signed PUT URL and required headers for one part",
+      },
+      {
+        method: "POST",
+        path: "/v1/files/uploads/:id/complete",
+        summary: "verify uploaded parts and publish Files metadata; safe to retry after interruption",
+      },
+      { method: "DELETE", path: "/v1/files/uploads/:id", summary: "abort an unfinished owned upload" },
+    ],
+  },
+  {
     match: onPath("POST", "/v1/search"),
     guidance:
       "Search uses this conversation's complete principal set as its visibility floor. Shared conversations without a complete roster fail closed.",

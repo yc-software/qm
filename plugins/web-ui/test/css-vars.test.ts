@@ -58,3 +58,30 @@ test("only the elevated chat surfaces paint a shadow", () => {
   assert.deepEqual(inlineShadows, [], "inline styles must not introduce additional shadows");
   assert.doesNotMatch(shellCss + tsSource, /drop-shadow\(/);
 });
+
+test("every modal scrim dims through --scrim, which each theme points away from its own text", () => {
+  const scrims = [...shellCss.matchAll(/\n\s*\.[^{]*(?:scrim|overlay|backdrop)[^{]*\{[^}]*\}/g)].map((m) => m[0]);
+  assert.ok(scrims.length >= 5, "the scrim rules should still be findable by name");
+  for (const rule of scrims) {
+    const background = rule.match(/\n\s*background:\s*([^;]+);/)?.[1] ?? "";
+    if (!background.includes("transparent")) continue;
+    const name = rule.split("{")[0].trim();
+    assert.doesNotMatch(
+      background,
+      /var\(--foreground\)/,
+      `a scrim mixed from --foreground inverts in dark mode, painting white over the page: ${name}`,
+    );
+    if (background.includes("var(--background)")) continue;
+    assert.match(background, /var\(--scrim\)/, `scrim should dim through --scrim: ${name}`);
+  }
+  const light = shellCss.match(/:root \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const dark = shellCss.match(/\n\.dark \{[\s\S]*?\n\}/)?.[0] ?? "";
+  for (const [name, block] of [
+    ["light", light],
+    ["dark", dark],
+  ] as const) {
+    const value = block.match(/--scrim:\s*oklch\(([\d.]+)/)?.[1];
+    assert.ok(value, `${name} must define --scrim`);
+    assert.ok(Number(value) < 0.2, `${name} --scrim must be dark enough to dim, got L=${value}`);
+  }
+});

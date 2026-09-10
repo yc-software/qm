@@ -18,6 +18,7 @@ export interface LinkClaims extends AuthRequest {
 }
 
 export interface CodeClaims {
+  authTime?: number;
   clientId: string;
   redirectUri: string;
   nonce: string;
@@ -134,7 +135,14 @@ export class TokenSigner {
   async sealCode(claims: CodeClaims, ttlS: number, nowMs?: number): Promise<SealedToken> {
     return this.seal(
       "code",
-      { cid: claims.clientId, ru: claims.redirectUri, no: claims.nonce, cc: claims.codeChallenge, em: claims.email },
+      {
+        cid: claims.clientId,
+        ru: claims.redirectUri,
+        no: claims.nonce,
+        cc: claims.codeChallenge,
+        em: claims.email,
+        at: claims.authTime,
+      },
       ttlS,
       nowMs,
     );
@@ -155,6 +163,7 @@ export class TokenSigner {
         nonce: no as string,
         codeChallenge: cc as string,
         email: em as string,
+        ...(typeof payload.at === "number" ? { authTime: payload.at } : {}),
       },
       jti: String(payload.jti),
       expiresAtMs: Number(payload.exp) * 1000,
@@ -198,10 +207,25 @@ function readRequest(payload: JWTPayload): AuthRequest | null {
 
 export async function mintIdToken(
   key: SigningKey,
-  args: { issuer: string; clientId: string; sub: string; email: string; nonce: string; ttlS: number; nowMs?: number },
+  args: {
+    issuer: string;
+    clientId: string;
+    sub: string;
+    email: string;
+    nonce: string;
+    ttlS: number;
+    nowMs?: number;
+    authTime?: number;
+  },
 ): Promise<string> {
   const issuedAt = Math.floor((args.nowMs ?? Date.now()) / 1000);
-  return new SignJWT({ nonce: args.nonce, azp: args.clientId, email: args.email, email_verified: true })
+  return new SignJWT({
+    nonce: args.nonce,
+    azp: args.clientId,
+    email: args.email,
+    email_verified: true,
+    ...(args.authTime !== undefined ? { auth_time: args.authTime } : {}),
+  })
     .setProtectedHeader({ alg: ID_TOKEN_ALG, kid: key.kid, typ: "JWT" })
     .setIssuer(args.issuer)
     .setSubject(args.sub)

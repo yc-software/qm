@@ -91,6 +91,7 @@ export function createSessionMethods(
   const {
     sessionsForViewer,
     sessionForViewer,
+    managedProjectMembership,
     filesForViewer,
     canUseContext,
     currentResourceScopesForViewer,
@@ -425,11 +426,17 @@ export function createSessionMethods(
       const capped = Math.max(1, Math.min(limit, 100));
       const hits = await deps.sessions.searchEntries(principalId, query, capped);
       if (!hits.length) return [];
-      const visible = new Map((await sessionsForViewer(principalId)).map((s) => [s.id, s]));
+      const allowed = new Map(
+        await Promise.all(
+          [...new Set(hits.map((hit) => hit.scopeId))].map(
+            async (scope) => [scope, (await managedProjectMembership(scope, principalId)) !== false] as const,
+          ),
+        ),
+      );
       const terms = searchTerms(query);
       return hits.flatMap((hit) => {
-        const session = visible.get(hit.sessionId);
-        if (!session) return [];
+        if (!allowed.get(hit.scopeId)) return [];
+        const session = hit;
         return [
           {
             sessionId: hit.sessionId,
@@ -662,7 +669,14 @@ export function createSessionMethods(
         deps.deploy.listDeployments(),
         deps.skills.list(),
       ]);
-      const files = [...page.owned, ...page.shared].sort((a, b) => b.createdAt - a.createdAt);
+      const files = [...page.owned, ...page.shared];
+      let cursor = page.nextCursor;
+      while (cursor) {
+        const next = await filesForViewer(principalId, { limit: 200, cursor }, scope);
+        files.push(...next.owned, ...next.shared);
+        cursor = next.nextCursor;
+      }
+      files.sort((a, b) => b.createdAt - a.createdAt);
       const deployments = (
         await Promise.all(
           allDeployments

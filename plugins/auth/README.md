@@ -107,3 +107,32 @@ the per-address budget is what bounds a single source. Both are durable claims,
 so they survive restarts, and both are keyed by an HMAC under
 `AUTH_TOKEN_SECRET` so another plugin holding the shared core signing secret
 cannot compute — and pre-claim — a chosen mailbox's slots.
+
+## Remembered browsers
+
+Verifying an email link creates a durable broker session in core's Postgres store.
+The browser receives an HttpOnly, Secure, SameSite=Lax cookie scoped to the issuer
+path (`/idp` behind the portal). Core stores only a hash of the random token; the
+cookie also carries a broker-only MAC, so another plugin's core signing credential
+cannot manufacture an email sign-in. Rotating `AUTH_TOKEN_SECRET` invalidates all
+remembered cookies.
+
+`AUTH_SESSION_IDLE_S` defaults to 30 days and `AUTH_SESSION_ABSOLUTE_S` defaults
+to 90 days. Both are whole seconds; the idle limit must not exceed the absolute
+limit, and the absolute limit cannot exceed 90 days. Reauthorization slides the
+idle expiry without moving the original authentication time or absolute expiry.
+The broker rechecks email eligibility before issuing and exchanging a code.
+
+`prompt=login` and `max_age=0` always require a fresh email. A positive `max_age`
+compares against the original email authentication time, also returned as
+`auth_time` in the ID token. `prompt=none` returns `login_required` when silent
+reauthentication is unavailable. Invalid prompt and max-age values fail closed.
+
+The portal forwards only the broker cookie to `/idp` and preserves all broker
+Set-Cookie headers. Ordinary `POST /auth/logout` clears both local cookies.
+`POST /auth/logout?everywhere=1` additionally revokes all remembered browsers for
+the authenticated email principal. The signed core endpoint
+`POST /v1/auth/broker/sessions/revoke` accepts `{ "email": "user@example.com" }`
+from that user's portal identity or an authorized administrator. These operations
+prevent future silent reauthentication; already-issued stateless portal sessions
+remain valid until their normal expiry.

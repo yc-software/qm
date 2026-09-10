@@ -26,7 +26,12 @@ test("the cache key covers every mutable render input of a settled row", () => {
     "hit.stopReason === msg.stopReason",
     "hit.errorMessage === msg.errorMessage",
     "hit.approvalDecision === msg.approvalDecision",
+    "hit.sendFailure === msg.sendFailure",
     "hit.forkable === forkable",
+    "hit.speakerLabel === speakerLabel",
+    "hit.edited === edited",
+    "hit.deleted === deleted",
+    "hit.expanded === expanded",
   ]) {
     assert.ok(chat.includes(field), `cache key must compare: ${field}`);
   }

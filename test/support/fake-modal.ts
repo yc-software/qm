@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -32,7 +32,7 @@ export interface FakeModal {
   cleanup(): void;
 }
 
-export function installFakeModal(): FakeModal {
+export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
   const root = mkdtempSync(join(tmpdir(), "fake-modal-"));
   const records = new Map<string, FakeRecord>();
   const execScripts: string[] = [];
@@ -68,6 +68,20 @@ export function installFakeModal(): FakeModal {
 
   const session = (r: FakeRecord): ModalSession => ({
     sandboxId: r.sandboxId,
+    ...(opts.native
+      ? {
+          async snapshotHome(): Promise<{ imageId: string; expiresAtMs: number }> {
+            alive(r);
+            const imageId = `im-${nextId++}`;
+            cpSync(r.home, join(root, imageId), { recursive: true });
+            return { imageId, expiresAtMs: Date.now() + 30 * 24 * 3600_000 };
+          },
+          async restoreHome(imageId: string): Promise<void> {
+            alive(r);
+            cpSync(join(root, imageId), r.home, { recursive: true });
+          },
+        }
+      : {}),
     async runCommand(command): Promise<ModalCommandResult> {
       alive(r);
       execScripts.push(command);
@@ -105,6 +119,7 @@ export function installFakeModal(): FakeModal {
   });
 
   const client: ModalClient = {
+    nativeSnapshots: opts.native ?? false,
     async create(opts): Promise<ModalSession> {
       if (opts.name) {
         const existing = byName(opts.name);

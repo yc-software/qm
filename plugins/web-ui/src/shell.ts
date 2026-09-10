@@ -89,6 +89,7 @@ import {
   openInboxItemById,
   refreshInbox,
   renderInbox,
+  resetActiveInboxItem,
   resetInboxState,
   routeInboxHistory,
 } from "./inbox";
@@ -681,6 +682,7 @@ export function switchView(v: View): void {
   }
   renderSidebarTop();
   syncUrlFromState();
+  resetActiveDetail(v);
   switch (v) {
     case "chats":
       if (splitState.active) drawCanvas();
@@ -691,15 +693,12 @@ export function switchView(v: View): void {
       void renderInbox();
       break;
     case "webhooks":
-      resetActiveWebhook();
       void renderWebhooksPage();
       break;
     case "crons":
-      resetActiveCron();
       void renderCronsPage();
       break;
     case "loops":
-      resetActiveLoop();
       void renderLoopsPage();
       break;
     case "contexts":
@@ -718,7 +717,6 @@ export function switchView(v: View): void {
       void renderMemory();
       break;
     case "skills":
-      resetActiveSkill();
       void renderSkills();
       break;
     case "settings":
@@ -727,7 +725,29 @@ export function switchView(v: View): void {
   }
 }
 
+function resetActiveDetail(v: View): void {
+  switch (v) {
+    case "inbox":
+      resetActiveInboxItem();
+      break;
+    case "webhooks":
+      resetActiveWebhook();
+      break;
+    case "crons":
+      resetActiveCron();
+      break;
+    case "loops":
+      resetActiveLoop();
+      break;
+    case "skills":
+      resetActiveSkill();
+      break;
+  }
+}
+
 function refreshActiveView(v: View): void {
+  resetActiveDetail(v);
+  syncUrlFromState();
   switch (v) {
     case "chats":
       if (splitState.active) void refreshSessions({ silent: true, refreshContexts: true });

@@ -126,6 +126,30 @@ test("a bottom-pinned stream follows growth instantly and coalesces frames", () 
   }
 });
 
+test("resizing a settled transcript updates the prompt expansion control", () => {
+  const f = fixture();
+  try {
+    f.prompt.innerHTML = '<div class="user-bubble" data-expanded="false"><markdown-block></markdown-block></div>';
+    const bubble = f.prompt.querySelector<HTMLElement>(".user-bubble")!;
+    const body = bubble.querySelector("markdown-block")!;
+    let availableHeight = 240;
+    Object.defineProperties(body, {
+      scrollHeight: { value: 240 },
+      clientHeight: { get: () => availableHeight },
+    });
+    f.resize(30, 50);
+    assert.equal(bubble.dataset.clamped, "false");
+    availableHeight = 160;
+    f.resize(30, 50);
+    assert.equal(bubble.dataset.clamped, "true");
+    availableHeight = 240;
+    f.resize(30, 50);
+    assert.equal(bubble.dataset.clamped, "false");
+  } finally {
+    f.close();
+  }
+});
+
 test("even a small upward scroll stops following; returning to the bottom resumes it", () => {
   const f = fixture();
   try {

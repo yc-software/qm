@@ -27,7 +27,7 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { beginPaneKindDrag, endPaneDrag, exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, icon, initials, relTime, slackMark } from "./ui";
+import { brandName, icon, initials, relTime, slackMark, workingWave } from "./ui";
 
 export type InboxSource = "gmail" | "slack";
 
@@ -130,6 +130,10 @@ export const inboxState = {
   syncBusy: false,
 };
 
+const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove the salutations"];
+const ASIDE_MIN_HEIGHT = 320;
+const ASIDE_MAX_HEIGHT = 1100;
+const CHAT_INPUT_MAX_HEIGHT = 200;
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const sending = new Set<string>();
 const acting = new Set<string>();
@@ -387,6 +391,17 @@ function notify(msg: string | null): void {
   }
 }
 
+function draftSubject(item: InboxItem, draft: InboxDraft): string {
+  if (draft.subject !== undefined) return draft.subject;
+  return item.gmail?.subject ? `Re: ${item.gmail.subject.replace(/^re:\s*/i, "")}` : "";
+}
+
+function headerPeek(item: InboxItem, draft: InboxDraft): string {
+  const to = (draft.to ?? []).join(", ");
+  const subject = draftSubject(item, draft);
+  return [to, subject].filter(Boolean).join(" · ") || "Recipients and subject";
+}
+
 function effectiveDraft(item: InboxItem): InboxDraft {
   const edited = draftEdits.get(item.id);
   if (edited) {
@@ -578,7 +593,7 @@ export async function askAgent(item: InboxItem, message: string): Promise<void> 
     replaceItem(mapped);
   } catch (e) {
     notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
-    chatDrafts.set(item.id, text);
+    if (!chatDrafts.has(item.id)) chatDrafts.set(item.id, text);
   } finally {
     chatting.delete(item.id);
     drawAll();
@@ -705,7 +720,7 @@ export function slackTextTpl(item: InboxItem, text: string, opts: { links?: bool
   return html`${splitSlackWire(text).map((seg) => {
     if (seg.kind === "mention") return mentionChip(seg.handle);
     if (seg.kind === "link") {
-      if (opts.links === false) return html`<span title=${seg.href}>${withMentions(seg.label)}</span>`;
+      if (opts.links === false) return html`<span ${tip(seg.href)}>${withMentions(seg.label)}</span>`;
       return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
         >${withMentions(seg.label)}</a
       >`;
@@ -728,10 +743,12 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
 }
 
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
-  const rows = item.context ?? [];
-  if (!rows.length) return nothing;
+  const rows = [
+    ...(item.context ?? []).map((message, index) => ({ ...message, imageIndex: index })),
+    { author: item.from, at: item.receivedAt, text: item.snippet, images: item.images, imageIndex: -1 },
+  ];
   return html`<div class="inbox-context">
-    ${rows.map((m, i) => {
+    ${rows.map((m) => {
       const name = participantName(m.author) || m.author;
       return html`
         <div class="inbox-context-msg">
@@ -744,7 +761,7 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
               ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
             </div>
             <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
-            ${itemImagesTpl(item, m.images, i)}
+            ${itemImagesTpl(item, m.images, m.imageIndex)}
           </div>
         </div>
       `;
@@ -752,22 +769,14 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   </div>`;
 }
 
-function sendLabel(item: InboxItem, busy: boolean): string {
-  if (busy) return "Sending…";
-  return item.source === "gmail" ? "Send reply" : "Send to Slack";
-}
-
-function syncAskEnabled(box: HTMLTextAreaElement): void {
-  const send = box.closest(".inbox-chat-composer")?.querySelector<HTMLButtonElement>(".inbox-chat-send");
-  if (send) send.disabled = !box.value.trim();
-}
-
 export function chatTpl(item: InboxItem): TemplateResult {
   const busy = chatting.has(item.id);
   const pending = chatDrafts.get(item.id) ?? "";
   const submit = (el: HTMLTextAreaElement): void => {
+    if (busy) return;
     const text = el.value;
     el.value = "";
+    autosizeChatInput(el);
     void askAgent(item, text);
   };
   const empty = item.thread.length === 0;
@@ -775,7 +784,22 @@ export function chatTpl(item: InboxItem): TemplateResult {
     <div class="inbox-chat">
       ${
         empty
-          ? html`<h2 class="inbox-chat-cta">What should I change?</h2>`
+          ? html`<div class="inbox-chat-empty">
+              <h2 class="inbox-chat-cta">What should I change?</h2>
+              <div class="inbox-chat-suggestions">
+                ${DRAFT_SUGGESTIONS.map(
+                  (prompt) =>
+                    html`<button
+                      class="inbox-chat-suggestion"
+                      type="button"
+                      ?disabled=${busy}
+                      @click=${() => void askAgent(item, prompt)}
+                    >
+                      ${prompt}
+                    </button>`,
+                )}
+              </div>
+            </div>`
           : html`<div class="inbox-chat-log">
               ${item.thread.map(
                 (m) =>
@@ -785,18 +809,19 @@ export function chatTpl(item: InboxItem): TemplateResult {
               )}
             </div>`
       }
-      ${busy ? html`<div class="inbox-chat-working">Thinking…</div>` : nothing}
-      <div class="inbox-chat-composer">
+      ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
+      <div class="inbox-chat-composer ${pending.trim() ? "has-text" : ""}">
         <textarea
           class="inbox-chat-input"
           rows="1"
           placeholder=${`Ask ${brandName()} for something`}
           .value=${pending}
-          ?disabled=${busy}
           @input=${(e: Event) => {
             const box = e.currentTarget as HTMLTextAreaElement;
+            const had = Boolean((chatDrafts.get(item.id) ?? "").trim());
             chatDrafts.set(item.id, box.value);
-            syncAskEnabled(box);
+            autosizeChatInput(box);
+            if (had !== Boolean(box.value.trim())) drawAll();
           }}
           @keydown=${(e: KeyboardEvent) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -806,6 +831,30 @@ export function chatTpl(item: InboxItem): TemplateResult {
           }}
         ></textarea>
         <div class="inbox-chat-actions">
+          <div class="inbox-chat-suggest">
+            ${
+              item.status === "open"
+                ? html`
+                    <button
+                      class="inbox-suggest-chip primary"
+                      type="button"
+                      ?disabled=${sending.has(item.id)}
+                      ${tip(item.source === "gmail" ? "Send the drafted reply in Gmail" : "Send the drafted reply to Slack")}
+                      @click=${() => void sendItem(item)}
+                    >
+                      ${icon(Send, 12)}<span>${sending.has(item.id) ? "Sending…" : "Send it"}</span>
+                    </button>
+                    <button
+                      class="inbox-suggest-chip"
+                      type="button"
+                      @click=${() => void setItemStatus(item, "dismissed")}
+                    >
+                      ${icon(X, 12)}<span>Dismiss</span>
+                    </button>
+                  `
+                : nothing
+            }
+          </div>
           <button
             class="btn inbox-chat-send"
             type="button"
@@ -829,7 +878,6 @@ export function chatTpl(item: InboxItem): TemplateResult {
 
 export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): TemplateResult {
   const draft = effectiveDraft(item);
-  const busy = sending.has(item.id);
   const gmail = item.source === "gmail";
   const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
   return html`
@@ -848,42 +896,54 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
               </a>`
             : nothing
         }
+        ${
+          item.externalUrl
+            ? html`<a class="inbox-external-link" href=${item.externalUrl} target="_blank" rel="noreferrer noopener">
+                ${icon(ArrowUpRight, 12)}<span>Open in ${gmail ? "Gmail" : "Slack"}</span>
+              </a>`
+            : nothing
+        }
       </div>
       ${
         gmail
           ? html`
-              <label class="inbox-field">
-                <span>To</span>
-                <input
-                  type="text"
-                  .value=${(draft.to ?? []).join(", ")}
-                  placeholder="who@example.com"
-                  @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
-                  @blur=${() => void persistDraft(item)}
-                />
-              </label>
-              ${
-                showCc
-                  ? html`<label class="inbox-field">
-                      <span>Cc</span>
-                      <input
-                        type="text"
-                        .value=${(draft.cc ?? []).join(", ")}
-                        @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
-                        @blur=${() => void persistDraft(item)}
-                      />
-                    </label>`
-                  : nothing
-              }
-              <label class="inbox-field">
-                <span>Subject</span>
-                <input
-                  type="text"
-                  .value=${draft.subject ?? (item.gmail?.subject ? `Re: ${item.gmail.subject.replace(/^re:\s*/i, "")}` : "")}
-                  @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
-                  @blur=${() => void persistDraft(item)}
-                />
-              </label>
+              <details class="inbox-draft-headers">
+                <summary><span class="inbox-draft-headers-peek">${headerPeek(item, draft)}</span></summary>
+                <div class="inbox-draft-headers-fields">
+                  <label class="inbox-field">
+                    <span>To</span>
+                    <input
+                      type="text"
+                      .value=${(draft.to ?? []).join(", ")}
+                      placeholder="who@example.com"
+                      @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                      @blur=${() => void persistDraft(item)}
+                    />
+                  </label>
+                  ${
+                    showCc
+                      ? html`<label class="inbox-field">
+                          <span>Cc</span>
+                          <input
+                            type="text"
+                            .value=${(draft.cc ?? []).join(", ")}
+                            @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                            @blur=${() => void persistDraft(item)}
+                          />
+                        </label>`
+                      : nothing
+                  }
+                  <label class="inbox-field">
+                    <span>Subject</span>
+                    <input
+                      type="text"
+                      .value=${draftSubject(item, draft)}
+                      @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
+                      @blur=${() => void persistDraft(item)}
+                    />
+                  </label>
+                </div>
+              </details>
             `
           : nothing
       }
@@ -896,22 +956,6 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
           @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
           @blur=${() => void persistDraft(item)}
         ></textarea>
-      </div>
-      <div class="inbox-draft-actions">
-        <button class="btn primary inbox-send-btn" type="button" ?disabled=${busy} @click=${() => void sendItem(item)}>
-          ${icon(Send, 13)}<span>${sendLabel(item, busy)}</span>
-        </button>
-        <button class="btn" type="button" @click=${() => void setItemStatus(item, "dismissed")}>
-          ${icon(X, 13)}<span>Dismiss</span>
-        </button>
-        <span class="inbox-draft-spacer"></span>
-        ${
-          item.externalUrl
-            ? html`<a class="inbox-external-link" href=${item.externalUrl} target="_blank" rel="noreferrer noopener">
-                ${icon(ArrowUpRight, 13)}<span>Open in ${gmail ? "Gmail" : "Slack"}</span>
-              </a>`
-            : nothing
-        }
       </div>
       ${
         !gmail && item.reactions?.length
@@ -1013,8 +1057,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
-              ${contextTpl(item)} ${itemImagesTpl(item, item.images, -1)}
-              ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}
+              ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}
             </div>`
           : nothing
       }
@@ -1033,25 +1076,25 @@ function syncLineTpl(): TemplateResult {
     return html`<button
       class="btn inbox-sync-setup"
       type="button"
+      ${tip("Create the inbox loop and the personal cron that scans your connected apps and drafts replies")}
       ?disabled=${inboxState.syncBusy}
       @click=${() => void setUpSync()}
-      title="Create the inbox loop and the personal cron that scans your connected apps and drafts replies"
     >
       ${icon(RefreshCw, 13)}<span>${inboxState.syncBusy ? "Setting up…" : "Set up sync"}</span>
     </button>`;
   }
   return html`<span class="inbox-sync-line">
     <button
-      class="icon-btn subtle"
+      class="icon-btn subtle compact"
       type="button"
-      title="Sync now"
+      ${tip("Sync now")}
       aria-label="Sync now"
       ?disabled=${inboxState.syncBusy}
       @click=${() => void syncNow()}
     >
-      ${icon(RefreshCw, 13)}
+      ${icon(RefreshCw, 14)}
     </button>
-    <span title=${cron.enabled ? "The sync cron is on" : "The sync cron is paused. Manage it under Crons"}>
+    <span ${tip(cron.enabled ? "The sync cron is on" : "The sync cron is paused. Manage it under Crons")}>
       ${syncStatusLabel(cron)}
     </span>
   </span>`;
@@ -1178,8 +1221,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
-        ${contextTpl(item)} ${itemImagesTpl(item, item.images, -1)}
-        ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}
+        ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}
       </div>
     </div>
     <aside class="inbox-item-aside">${chatTpl(item)}</aside>
@@ -1198,9 +1240,11 @@ function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
 function drawSurface(surface: InboxSurface): void {
   if (!surface.host.isConnected && surface.pane) return;
   keepingChatLogsPinned(surface.host, () => render(surfaceTpl(surface), surface.host));
+  sizeChatInputs(surface.host);
 }
 
 let fullSurface: InboxSurface | null = null;
+let asideObserver: ResizeObserver | null = null;
 let fullViewId = "all";
 let pendingItemId: string | null = null;
 
@@ -1218,6 +1262,7 @@ function drawFull(): void {
       showHandled: fullSurface?.showHandled ?? false,
     };
     appState.mainEl.replaceChildren(host);
+    observeAsideSize(host);
   }
   fullSurface.viewId = fullViewId;
   if (pendingItemId) {
@@ -1235,10 +1280,7 @@ function drawFull(): void {
         ? itemPageTpl(openItem)
         : html`
             <div class="pane-head">
-              <div>
-                <h1 class="pane-title">Inbox</h1>
-                <div class="pane-subtitle">Everything waiting on a reply from you, drafted and ready to send.</div>
-              </div>
+              <h1 class="pane-title">Inbox</h1>
               <div class="pane-head-actions">${syncLineTpl()}</div>
             </div>
             ${surfaceTpl(surface)}
@@ -1246,6 +1288,46 @@ function drawFull(): void {
       host,
     ),
   );
+  sizeAside(host);
+  sizeChatInputs(host);
+}
+
+/**
+ * The assistant sticks to the top of a page that now scrolls, so its height is
+ * the viewport below wherever it starts rather than a share of a fixed frame.
+ */
+function sizeAside(host: HTMLElement): void {
+  if (!host.querySelector(".inbox-item-aside")) return;
+  const pad = getComputedStyle(host);
+  const padTop = Number.parseFloat(pad.paddingTop) || 0;
+  const padBottom = Number.parseFloat(pad.paddingBottom) || 0;
+  const available = host.clientHeight - padTop - padBottom;
+  const height = Math.min(ASIDE_MAX_HEIGHT, Math.max(ASIDE_MIN_HEIGHT, available));
+  const next = `${height}px`;
+  if (host.style.getPropertyValue("--inbox-aside-height") === next) return;
+  host.style.setProperty("--inbox-aside-height", next);
+}
+
+function observeAsideSize(host: HTMLElement): void {
+  if (typeof ResizeObserver === "undefined") return;
+  asideObserver?.disconnect();
+  asideObserver = new ResizeObserver(() => {
+    sizeAside(host);
+    sizeChatInputs(host);
+  });
+  asideObserver.observe(host);
+}
+
+function autosizeChatInput(box: HTMLTextAreaElement): void {
+  box.style.height = "auto";
+  const cap = Number.parseFloat(getComputedStyle(box).maxHeight) || CHAT_INPUT_MAX_HEIGHT;
+  const content = box.scrollHeight;
+  box.style.height = `${Math.min(cap, content)}px`;
+  box.style.overflowY = content > cap ? "auto" : "hidden";
+}
+
+function sizeChatInputs(host: HTMLElement): void {
+  for (const box of host.querySelectorAll<HTMLTextAreaElement>(".inbox-chat-input")) autosizeChatInput(box);
 }
 
 function syncItemUrl(itemId: string | null, push = false): void {
@@ -1256,13 +1338,16 @@ function syncItemUrl(itemId: string | null, push = false): void {
   else history.replaceState(null, "", next);
 }
 
-function closeInboxItem(): void {
+export function resetActiveInboxItem(): void {
   const open = fullSurface?.selectedId;
-  if (open) {
-    const item = inboxState.items.find((i) => i.id === open);
-    if (item) void persistDraft(item);
-  }
-  if (fullSurface) fullSurface.selectedId = null;
+  if (!open || !fullSurface) return;
+  const item = inboxState.items.find((i) => i.id === open);
+  if (item) void persistDraft(item);
+  fullSurface.selectedId = null;
+}
+
+function closeInboxItem(): void {
+  resetActiveInboxItem();
   syncItemUrl(null);
   drawAll();
 }

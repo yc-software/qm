@@ -37,10 +37,11 @@ test("plain-text code fences stay compact without changing source-code fences", 
 });
 
 test("long plain-text fences collapse by default and remain expandable", () => {
-  assert.match(chat, /requestAnimationFrame\(\(\) => decorateTextCodeBlocks\(/);
+  assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*decorateTextCodeBlocks\(/);
   assert.match(chat, /normalizePlainTextFences/);
   assert.match(
     css,
-    /code-block\.text-code-collapsible\[data-expanded="false"\] \.text-code-body[^}]*max-height: 76px;[^}]*overflow: hidden;[^}]*mask-image: linear-gradient\(to bottom, #000, rgb\(0 0 0 \/ 0\.74\) 38%, rgb\(0 0 0 \/ 0\.32\) 68%, transparent\);/s,
+    /code-block\.text-code-collapsible\[data-expanded="false"\] \.text-code-body[^}]*max-height: 76px;[^}]*overflow: hidden;/s,
   );
+  assert.doesNotMatch(css, /code-block\.text-code-collapsible[^}]*mask-image:/s);
 });

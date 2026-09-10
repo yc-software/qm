@@ -166,3 +166,89 @@ test("slack backend intersects private-channel visibility across all principals"
     ["C-SHARED:1"],
   );
 });
+
+test("file search retains common artifact identities when viewers own different copies", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-copies-")) }));
+  const project = scopeId("group", "search-copy-project");
+  const ids = ["shared-copy-alice", "shared-copy-bob"];
+  for (const [index, author] of principals.entries()) {
+    const id = ids[index]!;
+    const ownerScopeId = scopeId("personal", author.id);
+    await built.files.put({
+      id,
+      ownerScopeId,
+      createdBy: author.id,
+      createdInScope: project,
+      name: "pelican.txt",
+      path: id,
+      mimetype: "text/plain",
+      data: Buffer.from("pelican launch"),
+      direction: "in",
+      createdAt: index + 1,
+    });
+    await built.acl.grant({
+      ownerScopeId,
+      ref: id,
+      granteeScopeId: scopeId("personal", principals[1 - index]!.id),
+      permission: "read",
+      grantedBy: author.id,
+    });
+  }
+  const alice = await built.app.listFilesForViewer(principals[0]!.id);
+  const bob = await built.app.listFilesForViewer(principals[1]!.id);
+  assert.deepEqual(
+    alice.owned.map((f) => f.id),
+    [ids[0]],
+  );
+  assert.deepEqual(
+    bob.owned.map((f) => f.id),
+    [ids[1]],
+  );
+  const result = await built.app.search("pelican", principals);
+  assert.deepEqual(
+    result.hits
+      .filter((hit) => hit.backend === "files")
+      .map((hit) => hit.id)
+      .sort(),
+    ids,
+  );
+});
+
+test("file search still reaches shared artifacts outside the first document page", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-shared-pages-")) }));
+  const ownerScopeId = scopeId("personal", "carol@example.com");
+  for (let n = 0; n < 205; n++) {
+    const id = "shared-search-" + n;
+    await built.files.put({
+      id,
+      path: id,
+      ownerScopeId,
+      createdBy: "carol@example.com",
+      name: "note.txt",
+      mimetype: "text/plain",
+      data: Buffer.from(n === 0 ? "pelican milestone" : "unrelated " + n),
+      direction: "out",
+      createdAt: n,
+    });
+    for (const person of principals)
+      await built.acl.grant({
+        ownerScopeId,
+        ref: id,
+        granteeScopeId: scopeId("personal", person.id),
+        permission: "read",
+        grantedBy: "carol@example.com",
+      });
+  }
+  const page = await built.app.listFilesForViewer(principals[0]!.id, { limit: 200 });
+  assert.equal(page.shared.length, 200);
+  assert.ok(page.nextCursor);
+  assert.equal(
+    page.shared.some((file) => file.id === "shared-search-0"),
+    false,
+  );
+  const result = await built.app.search("pelican", principals);
+  assert.deepEqual(
+    result.hits.filter((hit) => hit.backend === "files").map((hit) => hit.id),
+    ["shared-search-0"],
+  );
+});

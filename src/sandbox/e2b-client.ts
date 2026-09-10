@@ -38,6 +38,9 @@ interface E2bCreateOpts {
 }
 
 export interface E2bClient {
+  readonly nativePause?: boolean;
+  info?(sandboxId: string): Promise<{ state: string; expiresAtMs: number; onTimeout?: string }>;
+
   create(opts: E2bCreateOpts): Promise<E2bSession>;
 
   connect(sandboxId: string): Promise<E2bSession>;
@@ -160,11 +163,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
       }
     },
     async pause(): Promise<void> {
-      try {
-        await sbx.pause();
-      } catch {
-        await sbx.pause();
-      }
+      await sbx.pause({ keepMemory: true });
     },
     async kill(): Promise<void> {
       await sbx.kill().catch((err) => {
@@ -174,13 +173,24 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   });
 
   return {
+    nativePause: true,
+    async info(sandboxId) {
+      const { Sandbox } = await loadSdk();
+      try {
+        const info = await Sandbox.getInfo(sandboxId, common);
+        return { state: info.state, expiresAtMs: info.endAt.getTime(), onTimeout: info.lifecycle?.onTimeout };
+      } catch (err) {
+        if (isGoneError(err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
+        throw err;
+      }
+    },
     async create(createOpts): Promise<E2bSession> {
       const { Sandbox } = await loadSdk();
       const sbx = await Sandbox.create(templateId, {
         ...common,
         timeoutMs: createOpts.timeoutMs ?? sandboxTtlMs,
         metadata: createOpts.metadata,
-        ...(createOpts.autoPause !== undefined ? { autoPause: createOpts.autoPause } : {}),
+        lifecycle: { onTimeout: createOpts.autoPause ? "pause" : "kill", autoResume: false },
       });
       return wrap(sbx);
     },

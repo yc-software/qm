@@ -1,10 +1,14 @@
 import { randomBytes } from "node:crypto";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
-import { parseSecurityScreenVerdict, SECURITY_SCREEN_SYSTEM_PROMPT } from "../security/security-posture.ts";
+import {
+  parseSecurityScreenVerdict,
+  SECURITY_SCREEN_STEP,
+  SECURITY_SCREEN_SYSTEM_PROMPT,
+} from "../security/security-posture.ts";
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import type { HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
+import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
 import { swallow } from "../util/errors.ts";
@@ -159,7 +163,12 @@ export function oneShotRunner(runPrompt: (turn: HarnessTurnInput) => Promise<Har
         return saved;
       },
       recordModelCall: observe?.recordModelCall ?? (() => {}),
-      ...(observe?.recordLlmRequest ? { recordLlmRequest: observe.recordLlmRequest } : {}),
+      ...(observe?.recordLlmRequest
+        ? {
+            recordLlmRequest: (rec: HarnessLlmRequestRecord, requestSignal?: AbortSignal) =>
+              observe.recordLlmRequest!({ ...rec, turnSeq: null }, requestSignal),
+          }
+        : {}),
     });
     return result.reply || undefined;
   };
@@ -176,7 +185,12 @@ export function oneShotModelUtilities(
       parseSecurityScreenVerdict(
         await single(SECURITY_SCREEN_SYSTEM_PROMPT, payload, signal, {
           recordModelCall,
-          ...(recordLlmRequest ? { recordLlmRequest } : {}),
+          ...(recordLlmRequest
+            ? {
+                recordLlmRequest: (rec, requestSignal) =>
+                  recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }, requestSignal),
+              }
+            : {}),
         }),
       ),
     generateTitle: async (transcript) =>

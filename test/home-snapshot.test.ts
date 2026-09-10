@@ -1,7 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, chmodSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  chmodSync,
+  symlinkSync,
+  readlinkSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -217,7 +228,7 @@ test("the whole snapshot is bounded by one deadline", async () => {
   assert.equal(rec.aborted, 1);
 });
 
-test("an empty or missing snapshot hydrates nothing", async () => {
+test("a missing snapshot hydrates nothing", async () => {
   const b = box();
   assert.equal(await ops(b, createMemorySnapshotStore()).hydrateHome("scope", b), false);
 });
@@ -268,3 +279,89 @@ test("snapshotDue skips an unused turn only when the stored home is known clean"
   assert.equal(snapshotDue({ lastSnapshotMs: 100 }, { homeUnchanged: true }, 0, 101), true, "unknown counts as dirty");
   assert.equal(snapshotDue(null, { homeUnchanged: true }, 0), true, "never snapshotted counts as dirty");
 });
+
+test("snapshots preserve symlinks and empty directories without following links or archiving pruned contents", async () => {
+  const a = box();
+  fill(a.home, "project/source", 32);
+  fill(a.home, "project/node_modules/excluded", 32);
+  mkdirSync(join(a.home, "empty"));
+  symlinkSync("project/source", join(a.home, "link"));
+  symlinkSync("missing", join(a.home, "dangling"));
+  const store = createMemorySnapshotStore();
+  await ops(a, store).snapshotHome("scope", a);
+  const b = box();
+  await ops(b, store).hydrateHome("scope", b);
+  assert.equal(readlinkSync(join(b.home, "link")), "project/source");
+  assert.equal(readlinkSync(join(b.home, "dangling")), "missing");
+  assert.ok(statSync(join(b.home, "empty")).isDirectory());
+  assert.equal(existsSync(join(b.home, "project/node_modules")), false);
+});
+
+for (const lengthDelta of [-1, 1]) {
+  test(`hydrate rejects a stream whose size differs by ${lengthDelta} before touching home files`, async () => {
+    const a = box();
+    fill(a.home, "existing", 32);
+    const store = createMemorySnapshotStore();
+    await ops(a, store).snapshotHome("scope", a);
+    const mismatched: HomeSnapshotStore = {
+      ...store,
+      async open(scope) {
+        const snapshot = await store.open(scope);
+        return snapshot && { ...snapshot, size: snapshot.size + lengthDelta };
+      },
+    };
+    const b = box();
+    writeFileSync(join(b.home, "existing"), "keep me");
+    await assert.rejects(ops(b, mismatched).hydrateHome("scope", b), /received .* bytes, expected/);
+    assert.equal(readFileSync(join(b.home, "existing"), "utf8"), "keep me");
+    assert.equal(existsSync(b.tar), false);
+  });
+}
+
+test("hydrate detects truncated guest writes before extraction", async () => {
+  const a = box();
+  fill(a.home, "existing", 32);
+  const store = createMemorySnapshotStore();
+  await ops(a, store).snapshotHome("scope", a);
+  const b = box();
+  writeFileSync(join(b.home, "existing"), "keep me");
+  const truncatedIo = {
+    ...io,
+    async writeFileBytes(target: Box, path: string, bytes: Uint8Array) {
+      await io.writeFileBytes(target, path, bytes.subarray(0, bytes.length - 1));
+    },
+  };
+  await assert.rejects(ops(b, store, { io: truncatedIo }).hydrateHome("scope", b), /wrote .* bytes, expected/);
+  assert.equal(readFileSync(join(b.home, "existing"), "utf8"), "keep me");
+  assert.equal(existsSync(b.tar), false);
+});
+
+test("hydrate validates archive structure before extraction", async () => {
+  const store = createMemorySnapshotStore();
+  await store.put("scope", Buffer.from("not a tar archive"));
+  const b = box();
+  writeFileSync(join(b.home, "existing"), "keep me");
+  await assert.rejects(ops(b, store).hydrateHome("scope", b), /archive invalid/);
+  assert.equal(readFileSync(join(b.home, "existing"), "utf8"), "keep me");
+  assert.equal(existsSync(b.tar), false);
+});
+
+for (const size of [0, -1, NaN, Infinity, 1.5]) {
+  test(`hydrate refuses invalid declared size ${size}`, async () => {
+    const store = createMemorySnapshotStore();
+    const invalid: HomeSnapshotStore = {
+      ...store,
+      async open() {
+        return {
+          size,
+          parts: (async function* () {
+            yield Buffer.alloc(1);
+          })(),
+        };
+      },
+    };
+    const b = box();
+    await assert.rejects(ops(b, invalid).hydrateHome("scope", b), /invalid snapshot size/);
+    assert.equal(existsSync(b.tar), false);
+  });
+}

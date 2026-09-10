@@ -1,5 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, Trash2, Upload, type IconNode } from "lucide";
+import { BookOpen, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./ui";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
@@ -171,25 +171,25 @@ function themeRow(): TemplateResult {
             @change=${(e: Event) => void onThemeFileChosen(e)}
           />
           <button
-            class="settings-row-action"
+            class="settings-theme-link"
             type="button"
             @click=${(e: Event) =>
               (e.currentTarget as HTMLElement).parentElement
                 ?.querySelector<HTMLInputElement>(".theme-file-input")
                 ?.click()}
           >
-            ${icon(Upload, 15)}<span>${custom ? "Replace theme file…" : "Import theme file…"}</span>
+            ${custom ? "Replace theme file" : "Import theme file"}
           </button>
           ${
             custom
               ? html`
                   <button
-                    class="settings-row-action"
+                    class="settings-theme-link"
                     type="button"
                     aria-label="Remove imported theme"
                     @click=${() => removeCustomTheme()}
                   >
-                    ${icon(Trash2, 15)}<span>Remove</span>
+                    Remove
                   </button>
                 `
               : nothing

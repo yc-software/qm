@@ -38,7 +38,7 @@ test("local auth bypass signs in loopback portal requests without OIDC", async (
   const login = await fetch(`${base}/auth/login?returnTo=/admin/`, { redirect: "manual" });
   assert.equal(login.status, 302);
   assert.equal(login.headers.get("location"), "/admin/");
-  assert.match(login.headers.get("set-cookie") ?? "", /portal_session=/);
+  assert.match(login.headers.get("set-cookie") ?? "", /portal_session=[^,]*Max-Age=604800\b/);
 
   const admin = await fetch(`${base}/admin/api/me`);
   assert.equal(admin.status, 200);

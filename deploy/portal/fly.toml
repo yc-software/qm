@@ -17,7 +17,6 @@ primary_region = "sjc"
   OIDC_SCOPES = "openid email profile"
   OIDC_PRINCIPAL_CLAIM = "email"
   OIDC_ALLOWED_EMAIL_DOMAIN = "example.com"
-  PORTAL_SESSION_TTL_S = "28800"
 
 [http_service]
   internal_port = 8080

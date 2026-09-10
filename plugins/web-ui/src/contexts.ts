@@ -2,8 +2,6 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import {
   ArrowLeft,
   Boxes,
-  Check,
-  ChevronDown,
   Folder,
   FolderPlus,
   Hash,
@@ -27,7 +25,7 @@ import {
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
-import { actionSnippet, closeFormMenus, fieldSelect, formatBytes, icon, initials, relTime, toggleFormMenu } from "./ui";
+import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
@@ -274,38 +272,21 @@ export function scopeChip(scopeId: string | null, fallbackName?: string | null):
 }
 
 export function scopeFilterControl(current: string | null, onSelect: (scopeId: string | null) => void): TemplateResult {
-  const label = current ? metaForScope(current).title : "All contexts";
-  const option = (scopeId: string | null, text: string, glyph: IconNode) => {
-    const active = (current ?? null) === scopeId;
-    return html`
-      <button
-        class="menu-option ${active ? "active" : ""}"
-        type="button"
-        role="menuitemradio"
-        aria-checked=${active ? "true" : "false"}
-        @click=${(e: Event) => {
-          e.stopPropagation();
-          closeFormMenus();
-          onSelect(scopeId);
-        }}
-      >
-        <span class="menu-option-label scope-option-label">${icon(glyph, 14)}<span>${text}</span></span>
-        ${active ? icon(Check, 15) : nothing}
-      </button>
-    `;
-  };
-  return html`
-    <div class="menu-control form-menu-control scope-filter">
-      <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" @click=${toggleFormMenu}>
-        <span class="menu-label">Filter by: ${label}</span>${icon(ChevronDown, 14)}
-      </button>
-      <div class="menu-popover" role="menu" hidden>
-        <div class="menu-title">Filter by context</div>
-        ${option(null, "All contexts", Boxes)}
-        ${contextsState.list.map((c) => option(c.scopeId, contextMeta(c).title, contextMeta(c).glyph))}
-      </div>
-    </div>
-  `;
+  return menuSelect({
+    value: current,
+    prefix: "Filter by: ",
+    ariaLabel: "Filter by context",
+    className: "scope-filter",
+    onSelect,
+    options: [
+      { value: null, label: "All contexts", glyph: Boxes },
+      ...contextsState.list.map((c) => ({
+        value: c.scopeId,
+        label: contextMeta(c).title,
+        glyph: contextMeta(c).glyph,
+      })),
+    ],
+  });
 }
 
 function sessionsIn(scopeId: string): CoreSession[] {

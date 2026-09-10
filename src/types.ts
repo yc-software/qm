@@ -252,25 +252,7 @@ export interface Cron extends TriggerBase {
 }
 
 interface WebhookVerification {
-  scheme: "hmac-sha256" | "github" | "slack" | "stripe";
-  secret?: string;
-}
-
-interface WebhookFilter {
-  path: string;
-  in: string[];
-}
-
-export interface Webhook extends TriggerBase {
-  action: string;
-  verification: WebhookVerification;
-  filters?: WebhookFilter[];
-  lastDeliveryId?: string;
-  lastError?: string;
-}
-
-interface WebhookVerification {
-  scheme: "hmac-sha256" | "github" | "slack" | "stripe";
+  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
   secret?: string;
 }
 

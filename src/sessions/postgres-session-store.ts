@@ -463,6 +463,64 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ON session_entry_search USING GIN (session_id, search_tsv)`,
         ],
       },
+      {
+        id: "sessions/store/0014-search-write-through-v1",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `CREATE OR REPLACE FUNCTION sync_session_entry_search() RETURNS trigger
+           LANGUAGE plpgsql AS $sync_session_entry_search$
+           DECLARE body text;
+           BEGIN
+             IF TG_OP = 'DELETE' THEN
+               DELETE FROM session_entry_search WHERE session_id = OLD.session_id AND seq = OLD.seq;
+               RETURN OLD;
+             END IF;
+             IF TG_OP = 'UPDATE' AND (OLD.session_id, OLD.seq) IS DISTINCT FROM (NEW.session_id, NEW.seq) THEN
+               DELETE FROM session_entry_search WHERE session_id = OLD.session_id AND seq = OLD.seq;
+             END IF;
+             IF NEW.type IN ('user', 'assistant', 'text') THEN
+               body := entry_search_text(NEW.payload);
+             END IF;
+             IF body IS NULL OR btrim(body) = '' THEN
+               DELETE FROM session_entry_search WHERE session_id = NEW.session_id AND seq = NEW.seq;
+             ELSE
+               INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)
+               VALUES (NEW.session_id, NEW.seq, NEW.type,
+                       CASE WHEN NEW.type = 'user' THEN
+                         (SELECT CASE WHEN json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
+                            FROM (SELECT safe_json(replace(NEW.payload, '\\u0000', '')) AS j) _) END,
+                       body, NEW.created_at)
+               ON CONFLICT (session_id, seq) DO UPDATE
+                 SET type = EXCLUDED.type, author = EXCLUDED.author, text = EXCLUDED.text,
+                     created_at = EXCLUDED.created_at;
+             END IF;
+             RETURN NEW;
+           END $sync_session_entry_search$`,
+          `CREATE TRIGGER session_entries_search_write_through
+           AFTER INSERT OR UPDATE OF payload, type, created_at, session_id, seq OR DELETE ON session_entries
+           FOR EACH ROW EXECUTE FUNCTION sync_session_entry_search()`,
+        ],
+      },
+      {
+        id: "sessions/store/0015-search-backfill-v1",
+        statements: [
+          `WITH missing AS MATERIALIZED (
+             SELECT e.session_id, e.seq, e.type,
+                    CASE WHEN e.type = 'user' THEN
+                      (SELECT CASE WHEN json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
+                         FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) END AS author,
+                    entry_search_text(e.payload) AS text, e.created_at
+               FROM session_entries e
+              WHERE e.type IN ('user', 'assistant', 'text')
+                AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
+              FOR SHARE OF e
+           )
+           INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)
+           SELECT session_id, seq, type, author, text, created_at FROM missing
+            WHERE COALESCE(btrim(text), '') <> ''
+           ON CONFLICT (session_id, seq) DO NOTHING`,
+        ],
+      },
     ],
     [
       {
@@ -904,29 +962,40 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async listScreenSamples(limit): Promise<ScreenSample[]> {
-      const rows = await q(
-        `SELECT r.id, r.session_id, r.scope_label, r.created_at, r.model, e.body AS prompt_body
-           FROM session_llm_requests r JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash
-          WHERE r.step = $1
-          ORDER BY r.created_at DESC, r.id DESC
-          LIMIT $2`,
-        [SECURITY_SCREEN_STEP, Math.max(0, Math.trunc(limit))],
-      );
-      return rows.flatMap((r) => {
-        const payload = screenPayloadFromEnvelope(JSON.parse(r.prompt_body as string));
-        return payload
-          ? [
-              {
-                id: r.id as string,
-                sessionId: r.session_id as string,
-                scopeLabel: r.scope_label as ScopeId,
-                createdAt: Number(r.created_at),
-                model: r.model as string,
-                payload,
-              },
-            ]
-          : [];
-      });
+      const wanted = Math.max(0, Math.trunc(limit));
+      const pageSize = Math.max(wanted, 100);
+      const samples: ScreenSample[] = [];
+      let beforeAt: number | null = null;
+      let beforeId: string | null = null;
+      while (samples.length < wanted) {
+        const rows = await q(
+          `SELECT r.id, r.session_id, r.scope_label, r.created_at, r.model, e.body AS prompt_body
+             FROM session_llm_requests r JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash
+            WHERE r.step = $1
+              AND ($3::bigint IS NULL OR (r.created_at, r.id) < ($3::bigint, $4::text))
+            ORDER BY r.created_at DESC, r.id DESC
+            LIMIT $2`,
+          [SECURITY_SCREEN_STEP, pageSize, beforeAt, beforeId],
+        );
+        for (const r of rows) {
+          const payload = screenPayloadFromEnvelope(JSON.parse(r.prompt_body as string));
+          if (!payload) continue;
+          samples.push({
+            id: r.id as string,
+            sessionId: r.session_id as string,
+            scopeLabel: r.scope_label as ScopeId,
+            createdAt: Number(r.created_at),
+            model: r.model as string,
+            payload,
+          });
+          if (samples.length === wanted) return samples;
+        }
+        if (rows.length < pageSize) break;
+        const last = rows.at(-1)!;
+        beforeAt = Number(last.created_at);
+        beforeId = last.id as string;
+      }
+      return samples;
     },
 
     async addParticipant(sessionId, principalId, title, opts): Promise<void> {
@@ -1093,32 +1162,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
-        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at
-           FROM participants p
-           CROSS JOIN LATERAL
-                ((SELECT s.session_id, s.seq, s.type, s.author, s.text, s.created_at
-                    FROM session_entry_search s
-                   WHERE s.session_id = p.session_id
-                     AND s.search_tsv @@ to_tsquery('simple', $2)
-                     AND ${withinParticipantWindow("s", "p")}
-                   ORDER BY s.created_at DESC, s.seq DESC
-                   LIMIT $3)
-                  UNION ALL
-                 (SELECT e.session_id, e.seq, e.type,
-                         (SELECT CASE WHEN e.type = 'user' AND json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END
-                            FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) AS author,
-                         entry_search_text(e.payload) AS text,
-                         e.created_at
-                    FROM session_entries e
-                   WHERE e.session_id = p.session_id
-                     AND e.type IN ('user', 'assistant', 'text')
-                     AND e.search_tsv @@ to_tsquery('simple', $2)
-                     AND ${withinParticipantWindow("e", "p")}
-                     AND NOT EXISTS (SELECT 1 FROM session_entry_search x
-                                      WHERE x.session_id = e.session_id AND x.seq = e.seq)
-                   ORDER BY e.created_at DESC, e.seq DESC
-                   LIMIT $3)) h
-          WHERE p.principal_id = $1
+        `WITH viewer AS MATERIALIZED (
+           SELECT session_id, valid_from_seq, valid_from, valid_to_seq, valid_to, title, archived
+             FROM participants WHERE principal_id = $1
+         ), candidates AS MATERIALIZED (
+           SELECT session_id, seq, type, author, text, created_at
+             FROM session_entry_search
+            WHERE session_id = ANY(ARRAY(SELECT session_id FROM viewer))
+              AND search_tsv @@ to_tsquery('simple', $2)
+         )
+         SELECT h.*, s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
+           FROM candidates h
+           JOIN viewer p ON p.session_id = h.session_id
+           JOIN sessions s ON s.id = h.session_id
+          WHERE ${withinParticipantWindow("h", "p")}
           ORDER BY h.created_at DESC, h.session_id, h.seq DESC
           LIMIT $3`,
         [principalId, ts, Math.max(1, Math.min(limit, 200))],
@@ -1130,6 +1187,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         return [
           {
             sessionId: r.session_id as string,
+            scopeId: r.scope_id as ScopeId,
+            ...(r.title != null ? { title: r.title as string } : {}),
+            ...(r.channel_name ? { channelName: r.channel_name as string } : {}),
+            ...(r.surface ? { surface: r.surface as string } : {}),
+            ...(r.archived ? { archived: true } : {}),
             seq: Number(r.seq),
             type: r.type as EntrySearchHit["type"],
             ...(r.author ? { author: r.author as string } : {}),
@@ -1165,6 +1227,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         sessionId,
       ]);
       return Number(rows[0]?.n ?? -1);
+    },
+
+    async missingSearchEntries(sessionId): Promise<number> {
+      const rows = await q(
+        `WITH missing AS MATERIALIZED (
+           SELECT entry_search_text(e.payload) AS text FROM session_entries e
+            WHERE e.session_id = $1 AND e.type IN ('user', 'assistant', 'text')
+              AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
+         )
+         SELECT COUNT(*) AS n FROM missing WHERE COALESCE(btrim(text), '') <> ''`,
+        [sessionId],
+      );
+      return Number(rows[0]?.n ?? 0);
     },
 
     async lastSearchableEntrySeq(sessionId): Promise<number> {

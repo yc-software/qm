@@ -1715,6 +1715,49 @@ test("on a surface without reactions, the same acknowledgement just stays silent
   );
 });
 
+test("an ambient decline that goes silent records exactly one metric row tied to the run", async () => {
+  const { app, metrics } = freshApp();
+  const res = await app.turn(channel("ok sounds good to me", { unprompted: true }));
+  assert.equal(res.status, "silent");
+  const samples = (await metrics.list()).filter((s) => s.status !== "capture");
+  assert.equal(samples.length, 1, "the decline must produce exactly one metric row, not zero");
+  const sample = samples[0]!;
+  assert.equal(sample.status, "silent");
+  assert.equal(sample.sessionId, res.sessionId);
+  assert.ok(typeof sample.detectMs === "number" && sample.detectMs >= 0, "the detection latency must be captured");
+  assert.equal(sample.totalMs, 0, "no harness run happened — totalMs must not claim harness work time");
+  assert.ok(
+    typeof sample.ingressMs === "number" && sample.ingressMs >= sample.detectMs!,
+    "ingressMs covers admission through the decline decision, so it must be at least the detection latency",
+  );
+});
+
+test("an ambient decline that reacts records exactly one metric row tied to the run", async () => {
+  const { app, metrics } = freshApp();
+  const res = await app.turn(channel("thanks, that's perfect", { unprompted: true }));
+  assert.equal(res.status, "react");
+  const samples = (await metrics.list()).filter((s) => s.status !== "capture");
+  assert.equal(samples.length, 1, "the decline must produce exactly one metric row, not zero");
+  const sample = samples[0]!;
+  assert.equal(sample.status, "react");
+  assert.equal(sample.sessionId, res.sessionId);
+  assert.ok(typeof sample.detectMs === "number" && sample.detectMs >= 0, "the detection latency must be captured");
+  assert.equal(sample.totalMs, 0, "no harness run happened — totalMs must not claim harness work time");
+  assert.ok(
+    typeof sample.ingressMs === "number" && sample.ingressMs >= sample.detectMs!,
+    "ingressMs covers admission through the decline decision, so it must be at least the detection latency",
+  );
+});
+
+test("a normal answered turn still records exactly one 'ok' metric row, unchanged by the ambient-decline fix", async () => {
+  const { app, metrics } = freshApp();
+  const res = await app.turn(channel("what does everyone think about the rollout?", { unprompted: true }));
+  assert.equal(res.status, "ok");
+  const samples = (await metrics.list()).filter((s) => s.status !== "capture");
+  assert.equal(samples.length, 1, "a normal answered turn must still record exactly one metric row");
+  assert.equal(samples[0]!.status, "ok");
+});
+
 test("an unprompted thread question gets a reply (turn detection chimes in)", async () => {
   const { app } = freshApp();
   const res = await app.turn(channel("what does everyone think about the rollout?", { unprompted: true }));

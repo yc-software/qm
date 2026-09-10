@@ -13,6 +13,8 @@ export interface ModalSession {
   runCommand(command: string, opts?: ModalRunOpts): Promise<ModalCommandResult>;
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
+  snapshotHome?(): Promise<{ imageId: string; expiresAtMs: number }>;
+  restoreHome?(imageId: string): Promise<void>;
   terminate(): Promise<void>;
 }
 export class ModalSandboxGoneError extends Error {
@@ -33,6 +35,8 @@ interface ModalCreateOpts {
 }
 
 export interface ModalClient {
+  readonly lifetimeMs?: number;
+  readonly nativeSnapshots?: boolean;
   create(opts: ModalCreateOpts): Promise<ModalSession>;
   fromId(sandboxId: string): Promise<ModalSession>;
   fromName(name: string): Promise<ModalSession | null>;
@@ -51,6 +55,7 @@ export interface SdkModalClientOptions {
   regions?: string[];
   sandboxTimeoutMs?: number;
   maxCommandMs?: number;
+  snapshotRetentionMs?: number;
 }
 
 const MAX_LIFETIME_MS = 24 * 3600_000;
@@ -97,6 +102,9 @@ function isDeadlineError(err: unknown): boolean {
 export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   const sandboxTimeoutMs = Math.min(opts.sandboxTimeoutMs ?? MAX_LIFETIME_MS, MAX_LIFETIME_MS);
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
+  const snapshotRetentionMs = opts.snapshotRetentionMs ?? 30 * 24 * 3600_000;
+  if (!Number.isFinite(snapshotRetentionMs) || snapshotRetentionMs <= 0)
+    throw new Error("Modal snapshot retention must be a positive finite duration");
   type ModalSdk = typeof import("modal");
   type SdkClient = InstanceType<ModalSdk["ModalClient"]>;
   type SdkApp = Awaited<ReturnType<SdkClient["apps"]["fromName"]>>;
@@ -158,6 +166,15 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         throw err;
       }
     },
+    async snapshotHome() {
+      const expiresAtMs = Date.now() + snapshotRetentionMs;
+      const image = await sbx.snapshotDirectory("/root", { ttlMs: snapshotRetentionMs });
+      return { imageId: image.imageId, expiresAtMs };
+    },
+    async restoreHome(imageId): Promise<void> {
+      const { client } = await loadCtx();
+      await sbx.mountImage("/root", await client.images.fromId(imageId));
+    },
     async terminate(): Promise<void> {
       await sbx.terminate().catch((err) => {
         if (!isSandboxGoneError(err)) throw err;
@@ -166,6 +183,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   });
 
   return {
+    lifetimeMs: sandboxTimeoutMs,
+    nativeSnapshots: true,
     async create(createOpts): Promise<ModalSession> {
       const { client, app, image } = await loadCtx();
       try {

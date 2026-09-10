@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface } from "node:readline";
 import { errMessage } from "../util/errors.ts";
 
 export class CodexRpcError extends Error {
@@ -151,14 +150,24 @@ export class CodexAppServer {
     this.processClosed = new Promise<void>((resolve) => {
       resolveProcessClosed = resolve;
     });
-    const lines = createInterface({ input: this.process.stdout! });
-    lines.on("line", (line) => {
+    let pendingOutput = "";
+    const receiveLine = (line: string) => {
       this.eventTail = this.eventTail
         .then(() => this.receive(line))
         .catch((error) => {
           this.failAll(error instanceof Error ? error : new Error(String(error)));
           this.process.kill("SIGTERM");
         });
+    };
+    this.process.stdout!.setEncoding("utf8");
+    this.process.stdout!.on("data", (chunk: string) => {
+      const lines = (pendingOutput + chunk).split("\n");
+      pendingOutput = lines.pop()!;
+      for (const line of lines) receiveLine(line);
+    });
+    this.process.stdout!.on("end", () => {
+      if (pendingOutput) receiveLine(pendingOutput);
+      pendingOutput = "";
     });
     this.process.stderr?.on("data", (chunk: Buffer) => {
       this.stderr = `${this.stderr}${chunk.toString()}`.slice(-16_384);

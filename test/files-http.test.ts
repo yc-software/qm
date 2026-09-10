@@ -270,3 +270,88 @@ test("scoped file listing pages within the requested context", async () => {
   );
   assert.equal(page.nextCursor, undefined, "unrelated files do not create a misleading next page");
 });
+
+test("project files collapse across contributors and turns before paging owned and shared documents", async () => {
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const acl = createAclStore();
+  const app = makeUploadApp(files, acl);
+  const ledger: string[] = [];
+  for (const [turn, author, documents] of [
+    [1, "U1", [1, 2]],
+    [2, "U2", [1, 2, 3, 4]],
+    [3, "U2", [1, 2, 3, 4]],
+  ] as const) {
+    for (const document of documents) {
+      const id = fileArtifactId(`turn-${turn}`, "out", document);
+      const ownerScopeId = scopeId("personal", author);
+      const path = `artifacts/${id}/document-${document}.txt`;
+      await files.put({
+        id,
+        ownerScopeId,
+        createdBy: author,
+        path,
+        name: `document-${document}.txt`,
+        mimetype: "text/plain",
+        data: Buffer.from(`document ${document}`),
+        direction: "out",
+        createdInScope: channel,
+        createdAt: turn * 100,
+      });
+      await acl.grant({ ownerScopeId, ref: path, granteeScopeId: channel, permission: "read", grantedBy: author });
+      ledger.push(id);
+    }
+  }
+  for (const viewer of ["U1", "U2"]) {
+    const pages = [];
+    let cursor: string | undefined;
+    do {
+      const page = await app.listFilesForViewer(viewer, { limit: 2, ...(cursor ? { cursor } : {}) }, channel);
+      assert.ok(page.owned.length + page.shared.length <= 2, "the page limit applies to the combined document list");
+      pages.push(page);
+      cursor = page.nextCursor;
+      assert.ok(pages.length <= 2, "four documents require only two pages");
+    } while (cursor);
+    const owned = pages.flatMap((p) => p.owned);
+    const all = pages.flatMap((p) => [...p.owned, ...p.shared]);
+    assert.equal(all.length, 4);
+    assert.equal(new Set(all.map((f) => f.name)).size, 4);
+    assert.equal(owned.length, viewer === "U1" ? 2 : 4, "owned copies remain owned in the grouped listing");
+    for (const file of all) assert.ok(await app.openFileForViewer(file.id, viewer));
+  }
+  for (const id of ledger) assert.ok(await files.get(id), "deduplication does not delete the artifact ledger");
+  const stranger = await app.listFilesForViewer("U3", undefined, channel);
+  assert.deepEqual([...stranger.owned, ...stranger.shared], []);
+});
+
+for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
+  test("scope resources drain file pages for " + authors.join(" and "), async () => {
+    const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+    const acl = createAclStore();
+    const app = makeUploadApp(files, acl);
+    for (let n = 0; n < 55; n++) {
+      for (const [index, author] of authors.entries()) {
+        const ownerScopeId = scopeId("personal", author);
+        const id = fileArtifactId("many-" + author, "out", n);
+        const path = "artifacts/" + id + "/file.txt";
+        await files.put({
+          id,
+          path,
+          ownerScopeId,
+          createdBy: author,
+          name: "file.txt",
+          mimetype: "text/plain",
+          data: Buffer.from(author + ":" + n),
+          direction: "out",
+          createdInScope: channel,
+          createdAt: n * 2 + index,
+        });
+        await acl.grant({ ownerScopeId, ref: path, granteeScopeId: channel, permission: "read", grantedBy: author });
+      }
+    }
+    const resources = await app.listScopeResources("U1", channel);
+    assert.equal(resources?.files.length, 55 * authors.length);
+    assert.equal(new Set(resources?.files.map((file) => file.id)).size, 55 * authors.length);
+    for (const author of authors)
+      assert.equal(resources?.files.filter((file) => file.ownerScopeId === scopeId("personal", author)).length, 55);
+  });
+}

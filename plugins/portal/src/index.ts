@@ -62,8 +62,8 @@ import {
 const PORT = portFromEnv(8097);
 const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
-const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 28800);
-const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(86400, SESSION_TTL_S));
+const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
+const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
 const COOKIE_DOMAIN =
@@ -897,10 +897,35 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/auth/admin-login") return adminLogin(req, res);
   if (pathname === "/auth/logout" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
+    if (AUTH_BROKER_UPSTREAM && url.searchParams.get("everywhere") === "1") {
+      const session = currentSession(req);
+      if (!session || session.anon) return json(res, 401, { error: "sign in" });
+      if (!PORTAL_IDENTITY_SECRET) return json(res, 503, { error: "not_configured" });
+      const path = withSourceAuthNonce("/v1/auth/broker/sessions/revoke", CORE_SIGNING_SECRET);
+      const body = JSON.stringify({ email: session.sub });
+      try {
+        const response = await fetch(`${CORE}${path}`, {
+          method: "POST",
+          headers: {
+            ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
+            [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+              { p: session.sub, exp: Date.now() + 60_000 },
+              PORTAL_IDENTITY_SECRET,
+            ),
+          },
+          body,
+          signal: AbortSignal.timeout(4_000),
+        });
+        if (!response.ok) return json(res, 503, { error: "revocation_failed" });
+      } catch {
+        return json(res, 503, { error: "revocation_failed" });
+      }
+    }
     setSession(res, [
       clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
       ...(COOKIE_DOMAIN ? [clearCookie("portal_session", "/", SECURE_COOKIES)] : []),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
         ? [setCookie(LOCAL_LOGOUT_COOKIE, "1", { path: "/", maxAge: SESSION_TTL_S, secure: SECURE_COOKIES })]
         : []),
@@ -919,9 +944,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return proxyToUpstream(
       req,
       res,
-      { baseUrl: AUTH_BROKER_UPSTREAM, path: brokerPath, search: url.search },
+      { baseUrl: AUTH_BROKER_UPSTREAM, path: brokerPath, search: url.search, forwardCookies: true },
       FORWARD_BROKER_HEADERS,
-      { "x-qm-client-ip": clientIpOf(req) },
+      {
+        "x-qm-client-ip": clientIpOf(req),
+        cookie: (req.headers.cookie ?? "")
+          .split(";")
+          .map((part) => part.trim())
+          .filter((part) => /^qm_idp_session=[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(part))
+          .join("; "),
+      },
     );
   }
 
@@ -1234,6 +1266,7 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
     setSession(res, [
       ...sessionCookieSet(seal(localSession, sessionKey)),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       clearCookie(LOCAL_LOGOUT_COOKIE, "/", SECURE_COOKIES),
     ]);
     res.writeHead(302, { location: returnTo, "cache-control": "no-store" });

@@ -1,4 +1,4 @@
-import { syncSearchIndex } from "../src/harness/tape-projection.ts";
+import { searchRowsFromEntries } from "../src/harness/tape-projection.ts";
 import { openSessionStore, parseBackfillArgs, resolveSessions, runBackfill } from "./lib/backfill-runner.ts";
 
 const { apply, only } = parseBackfillArgs();
@@ -12,16 +12,17 @@ await runBackfill({
   sessions,
   apply,
   preview: async (session) => {
-    const latest = await store.latestEntrySeq(session.id);
-    if (latest < 0) return { action: "skip", reason: "empty", quiet: true };
-    const lastSearchable = await store.lastSearchableEntrySeq(session.id);
-    const watermark = await store.searchIndexCoverage(session.id);
-    if (watermark >= lastSearchable) return { action: "skip", reason: "covered", quiet: true };
-    return { action: "work", detail: `seq ${watermark + 1}..${lastSearchable}` };
+    const missing = await store.missingSearchEntries(session.id);
+    if (!missing) return { action: "skip", reason: "covered", quiet: true };
+    return { action: "work", detail: `${missing} missing messages` };
   },
-  applyStep: async (_session, lease) => {
-    const sync = await syncSearchIndex(store, lease);
-    if (!sync.servable) return { action: "skip", reason: "unservable projection (entries index keeps serving)" };
-    return { action: "work", detail: `${sync.indexed} rows, covered through seq ${sync.coveredSeq}` };
+  applyStep: async (session, lease) => {
+    const rows = searchRowsFromEntries(await store.getEntries(session.id), -1);
+    for (let i = 0; i < rows.length; i += 500) {
+      await store.appendSearchEntries(lease, rows.slice(i, i + 500));
+    }
+    const missing = await store.missingSearchEntries(session.id);
+    if (missing) throw new Error(`${missing} searchable messages remain unindexed`);
+    return { action: "work", detail: "all searchable messages covered" };
   },
 });

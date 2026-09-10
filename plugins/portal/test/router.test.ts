@@ -95,6 +95,8 @@ process.env.CORE_SIGNING_SECRET = "router-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
+const SESSION_TTL_S = 28800;
+process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 
 const { server } = await import("../src/index.ts");
 const { deriveKey, seal, open } = await import("../src/session.ts");
@@ -105,7 +107,7 @@ const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, ageS = 0): string {
   const now = Math.floor(Date.now() / 1000);
   const iat = now - ageS;
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + 28800 }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 test.after(() => {
@@ -561,10 +563,13 @@ test("sliding renewal: a fresh session is NOT re-stamped, an aged one is re-issu
   const setCookie = aged.headers.get("set-cookie") ?? "";
   const m = setCookie.match(/portal_session=([^;]+)/);
   assert.ok(m, "an aged session is re-stamped through the proxy");
-  assert.match(setCookie, /Max-Age=28800/, "the renewed cookie carries a full TTL");
+  assert.match(setCookie, new RegExp(`Max-Age=${SESSION_TTL_S}\\b`), "the renewed cookie carries a full TTL");
   const claims = open(decodeURIComponent(m![1] ?? ""), sessionKey) as { sub: string; exp: number } | null;
   assert.equal(claims?.sub, "U1", "the renewed cookie is valid and preserves the sub");
-  assert.ok((claims?.exp ?? 0) > Math.floor(Date.now() / 1000) + 28000, "exp is pushed out to ~now + full TTL");
+  assert.ok(
+    (claims?.exp ?? 0) > Math.floor(Date.now() / 1000) + SESSION_TTL_S - 800,
+    "exp is pushed out to ~now + full TTL",
+  );
 });
 
 test("admin-status probe is memoized within the TTL (one round-trip per sub)", async () => {

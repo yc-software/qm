@@ -399,6 +399,7 @@ export function themeTokens(palette: Palette): ThemeTokens {
     "--tooltip-muted": dark ? mix(fg, bg, 0.3) : mix(bg, fg, 0.3),
     "--tooltip-border": dark ? border : mix(fg, bg, 0.25),
     "--selection": palette.selection ?? mix(bg, action, 0.35),
+    "--scrim": mix(bg, BLACK, 0.82),
     "--working-dot": readable(ansiOrBright(ANSI.blue) ?? action),
     "--awaiting-dot": warning,
     "--syntax-keyword": syntax("keyword", ansiOrBright(ANSI.magenta), fg),

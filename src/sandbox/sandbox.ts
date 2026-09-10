@@ -15,7 +15,7 @@ export function hasParentPathSegment(path: string): boolean {
   return path.split("/").includes("..");
 }
 
-type WritablePersistence = "snapshot_to_workspace" | "resident_disk";
+type WritablePersistence = "snapshot_to_workspace" | "resident_disk" | "provider_managed";
 export type EgressEnforcement = "none" | "ip_port" | "domain";
 
 export interface AgentComputerSpec {
@@ -137,6 +137,16 @@ export interface ProcessSession {
 }
 
 export interface ComputerStatus {
+  lifecycleState?: "running" | "paused";
+  expiresAtMs?: number;
+  recovery?: {
+    strategy: "provider_snapshot" | "provider_pause" | "workspace_snapshot";
+    checkpointId?: string;
+    checkpointAtMs?: number;
+    checkpointExpiresAtMs?: number | null;
+    state?: string;
+    error?: string;
+  };
   machine: string;
   listed?: string;
   provisioned?: boolean;
@@ -148,7 +158,7 @@ export interface ComputerStatus {
 export type ComputerVerdict = "ok" | "wedged" | "down";
 
 export function computerVerdict(s: ComputerStatus): ComputerVerdict {
-  if (s.guestResponsive) return "ok";
+  if (s.guestResponsive || s.lifecycleState === "paused") return "ok";
   return s.provisioned ? "wedged" : "down";
 }
 
