@@ -99,18 +99,18 @@ export interface SessionTopbarOpts {
 export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
   const crumbTpl = ((): TemplateResult | typeof nothing => {
     if (!o.crumb) return nothing;
-    if (!o.onCrumb) return html`<span class="session-crumb">${o.crumb}</span><span class="session-crumb-sep">/</span>`;
+    if (!o.onCrumb) return html`<span class="session-crumb">${o.crumb}</span>`;
     return html`<button
-        class="session-crumb as-link"
-        type="button"
-        ${tip(`Open the ${o.crumb} project`)}
-        @click=${(e: Event) => {
-          e.stopPropagation();
-          o.onCrumb!();
-        }}
-      >
-        ${o.crumb}</button
-      ><span class="session-crumb-sep">/</span>`;
+      class="session-crumb as-link"
+      type="button"
+      ${tip(`Open the ${o.crumb} project`)}
+      @click=${(e: Event) => {
+        e.stopPropagation();
+        o.onCrumb!();
+      }}
+    >
+      ${o.crumb}
+    </button>`;
   })();
   const heading = html`
     ${crumbTpl} ${o.title ? html`<span class="session-title" dir="auto">${o.title}</span>` : nothing}
@@ -186,7 +186,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           aria-expanded="false"
           @click=${toggleFormMenu}
         >
-          ${icon(Ellipsis, 20)}
+          ${icon(Ellipsis, 16)}
         </button>
         <div class="menu-popover" role="menu" hidden>
           <div class="menu-title">This conversation's workspace</div>

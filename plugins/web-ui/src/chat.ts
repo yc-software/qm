@@ -23,6 +23,7 @@ import {
   GitFork,
   Globe,
   type IconNode,
+  Lock,
   Maximize2,
   Paperclip,
   Pause,
@@ -966,7 +967,7 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), true)}
+            ${chatHeader(groupDmTitle(s))}
             <div class="readonly-banner">
               ${
                 surfaceOf(s) === "slack"
@@ -1403,12 +1404,12 @@ export function createChatSurface(
     });
   }
 
-  function chatHeader(title: string | TemplateResult, detail: string, readOnly: boolean): TemplateResult {
+  function chatHeader(title: string | TemplateResult): TemplateResult {
     return html`
-      <header class="chat-topbar">
-        <div class="chat-heading">
-          <div class="chat-title" dir="auto">${title}</div>
-          <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
+      <header class="chat-topbar session-topbar">
+        <div class="session-heading">
+          <span class="session-title" dir="auto">${title}</span>
+          <span class="shared-view-badge">${icon(Lock, 12)}Read-only</span>
         </div>
       </header>
     `;
@@ -1615,7 +1616,7 @@ export function createChatSurface(
                 aria-label="Copy message"
                 @click=${(e: Event) => void copyMessage(text, e.currentTarget as HTMLButtonElement)}
               >
-                ${icon(Copy, 13)}
+                ${icon(Copy, 15)}
               </button>`
             : nothing
         }
@@ -1628,7 +1629,7 @@ export function createChatSurface(
                 aria-label="Fork conversation from here"
                 @click=${() => void forkFromMessage(index)}
               >
-                ${icon(GitFork, 13)}
+                ${icon(GitFork, 15)}
               </button>`
             : nothing
         }
@@ -1690,11 +1691,11 @@ export function createChatSurface(
       return;
     }
     btn.classList.add("copied");
-    btn.replaceChildren(icon(Check, 13));
+    btn.replaceChildren(icon(Check, 15));
     setTimeout(() => {
       if (!btn.isConnected) return;
       btn.classList.remove("copied");
-      btn.replaceChildren(icon(Copy, 13));
+      btn.replaceChildren(icon(Copy, 15));
     }, 1200);
   }
 
