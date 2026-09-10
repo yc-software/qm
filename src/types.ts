@@ -388,6 +388,18 @@ export interface LoopItem {
   updatedAt: number;
 }
 
+export interface EmailDraftInput {
+  to: string[];
+  cc?: string[];
+  subject: string;
+  body: string;
+}
+
+export interface HeldEmailDraft {
+  loopId: string;
+  itemId: string;
+}
+
 export type LoopOutputState =
   "staged" | "ready" | "shipping" | "unconfirmed" | "shipped" | "returned" | "superseded" | "expired";
 

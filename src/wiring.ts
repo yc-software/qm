@@ -102,6 +102,7 @@ import { createCronStore, type CronStore } from "./cron/cron-store.ts";
 import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
+import { holdEmailDraft } from "./loops/email-draft.ts";
 import {
   createMemoryLedgerEventBus,
   createPostgresLedgerEventBus,
@@ -1532,7 +1533,10 @@ export function buildApp(
     ...(keychain ? { keychain } : {}),
     serviceCreds: credentialStore,
     deliveries,
-    emailDrafts: { loops: loopStore, items: loopItems },
+    emailDrafts: {
+      hold: (owner, draft, sessionId) =>
+        holdEmailDraft({ loops: loopStore, items: loopItems }, owner, draft, sessionId),
+    },
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
     ...(processes ? { processes } : {}),

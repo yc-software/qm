@@ -3105,7 +3105,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const body = params.body.trim();
       const summary = { tool: "send_email", to, ...(cc.length ? { cc } : {}), subject };
       await recordCall(callId, summary);
-      const fail = (message: string) => recordResult(callId, { ...summary, error: message }, text(`[error] ${message}`), true);
+      const fail = (message: string) =>
+        recordResult(callId, { ...summary, error: message }, text(`[error] ${message}`), true);
       if (!tc.holdEmailDraft) {
         return fail(
           "Gmail is not connected for this user here. Ask them to connect Google Workspace under Keychain in the web UI, then try again.",

@@ -229,8 +229,8 @@ function cardTpl(state: DraftState): TemplateResult {
     const { to, subject } = state.ref;
     return html`<div class="email-draft-receipt">
       <span class="meta"
-        >Email draft${subject ? html` <b>${subject}</b>` : nothing}${to?.length ? ` to ${to.join(", ")}` : ""} is no longer
-        on the ledger.</span
+        >Email draft${subject ? html` <b>${subject}</b>` : nothing}${to?.length ? ` to ${to.join(", ")}` : ""} is no
+        longer on the ledger.</span
       >
     </div>`;
   }
@@ -250,11 +250,7 @@ function cardTpl(state: DraftState): TemplateResult {
       </span>
       <span class="email-draft-recipients">${recipientsLine(current)}</span>
       <span class="email-draft-seg" role="tablist" aria-label="Draft view">
-        <button
-          type="button"
-          class=${state.mode === "preview" ? "on" : ""}
-          @click=${() => setMode(state, "preview")}
-        >
+        <button type="button" class=${state.mode === "preview" ? "on" : ""} @click=${() => setMode(state, "preview")}>
           ${icon(Eye, 12)}Preview
         </button>
         <button type="button" class=${state.mode === "edit" ? "on" : ""} @click=${() => setMode(state, "edit")}>
@@ -262,7 +258,9 @@ function cardTpl(state: DraftState): TemplateResult {
         </button>
       </span>
     </div>
-    <div class="email-draft-paper">${state.mode === "edit" ? editTpl(state, item, current) : previewTpl(item, current)}</div>
+    <div class="email-draft-paper">
+      ${state.mode === "edit" ? editTpl(state, item, current) : previewTpl(item, current)}
+    </div>
     <div class="email-draft-foot">
       <button
         type="button"
@@ -272,7 +270,12 @@ function cardTpl(state: DraftState): TemplateResult {
       >
         Discard
       </button>
-      <button type="button" class="approval-btn primary email-draft-send" ?disabled=${state.busy} @click=${() => void send(state)}>
+      <button
+        type="button"
+        class="approval-btn primary email-draft-send"
+        ?disabled=${state.busy}
+        @click=${() => void send(state)}
+      >
         ${icon(Send, 13)}${state.busy ? "Working…" : "Send"}
       </button>
     </div>
@@ -325,7 +328,9 @@ function receiptTpl(state: DraftState, item: InboxItem): TemplateResult {
   return html`<div class="email-draft-receipt">
     <span class="ok">${icon(CheckCheck, 15)}</span>
     <span>Sent <b>${sent.subject?.trim() || "(no subject)"}</b> to ${(sent.to ?? []).join(", ")}</span>
-    <span class="meta">${sent.cc?.length ? `cc ${sent.cc.join(", ")} · ` : ""}${item.sentAt ? relTime(item.sentAt) : ""}</span>
+    <span class="meta"
+      >${sent.cc?.length ? `cc ${sent.cc.join(", ")} · ` : ""}${item.sentAt ? relTime(item.sentAt) : ""}</span
+    >
   </div>`;
 }
 

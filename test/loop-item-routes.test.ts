@@ -754,11 +754,11 @@ test("an edit carrying the draft it was based on is refused when the agent redra
 test("a compose email is sent by the person alone; an agent capability is refused", async () => {
   const w = world();
   const loop = await ensureInboxLoop(w.loops.store, "josh");
-  await holdEmailDraft(
-    { loops: w.loops.store, items: w.loops.items },
-    "josh",
-    { to: ["dana@northwind.io"], subject: "Q3", body: "Hi Dana" },
-  );
+  await holdEmailDraft({ loops: w.loops.store, items: w.loops.items }, "josh", {
+    to: ["dana@northwind.io"],
+    subject: "Q3",
+    body: "Hi Dana",
+  });
   const item = (await w.loops.items.byLoop(loop.id))[0]!;
   const asAgent = await call(w, {
     method: "POST",

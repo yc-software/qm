@@ -1,19 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { EmailDraftInput, HeldEmailDraft } from "../types.ts";
 import { ensureInboxLoop, INBOX_LEDGER_MAX_ITEMS, INBOX_LEDGER_RETENTION_MS } from "./inbox-loop.ts";
 import { loopItemId, type LoopItemLedger } from "./item-ledger.ts";
 import type { LoopStore } from "./loop-store.ts";
-
-export interface EmailDraftInput {
-  to: string[];
-  cc?: string[];
-  subject: string;
-  body: string;
-}
-
-export interface HeldEmailDraft {
-  loopId: string;
-  itemId: string;
-}
 
 export interface EmailDraftDeps {
   loops: LoopStore;

@@ -16,7 +16,12 @@ function entry(over: Record<string, unknown> = {}, proposalAt = 1_000): Record<s
     sourcePayload: { source: "gmail", compose: true, title: "Q3 pricing", from: "owner@acme.co", snippet: "Hi Dana" },
     sourceAt: 1_000,
     proposal: {
-      data: { to: ["dana@northwind.io"], cc: ["priya@acme.co"], subject: "Q3 pricing", body: "Hi Dana,\n\nShort answer: no." },
+      data: {
+        to: ["dana@northwind.io"],
+        cc: ["priya@acme.co"],
+        subject: "Q3 pricing",
+        body: "Hi Dana,\n\nShort answer: no.",
+      },
       by: "agent",
       at: proposalAt,
       sessionId: "s1",
@@ -81,7 +86,10 @@ test("the email draft card previews, edits, and sends through the ledger with re
           sendConflictsOnce = false;
           current = entry({ proposal: { data: { ...args.proposal, body: "Agent redraft." }, by: "agent", at: 3_000 } });
           return Response.json(
-            { error: "conflict", message: "the draft changed since you last saw it; review the new draft before sending" },
+            {
+              error: "conflict",
+              message: "the draft changed since you last saw it; review the new draft before sending",
+            },
             { status: 409 },
           );
         }
@@ -122,7 +130,10 @@ test("the email draft card previews, edits, and sends through the ledger with re
     assert.equal(host.querySelectorAll(".email-draft-body p").length, 2, "paragraphs split on blank lines");
     assert.match(host.querySelector(".email-draft-pill")?.textContent ?? "", /Ready to send/);
     assert.match(host.querySelector(".email-draft-who")?.textContent ?? "", /owner@acme\.co/);
-    assert.match(host.querySelector(".email-draft-recipients")?.textContent ?? "", /to dana@northwind\.io · cc priya@acme\.co/);
+    assert.match(
+      host.querySelector(".email-draft-recipients")?.textContent ?? "",
+      /to dana@northwind\.io · cc priya@acme\.co/,
+    );
 
     click(".email-draft-seg button", /Edit/);
     const textarea = host.querySelector<HTMLTextAreaElement>(".email-draft-textarea")!;
@@ -164,15 +175,24 @@ test("the email draft card previews, edits, and sends through the ledger with re
       ["edit", "edit", "send"],
       "a Send clicked while the blur save is pending waits for it instead of being dropped",
     );
-    assert.equal((actions[1]!.args as { proposal: { body: string } }).proposal.body, "Hi Dana,\n\nShort answer: no. Typed mid-save.");
+    assert.equal(
+      (actions[1]!.args as { proposal: { body: string } }).proposal.body,
+      "Hi Dana,\n\nShort answer: no. Typed mid-save.",
+    );
     assert.equal((actions[2]!.args as { expectedProposalAt: number }).expectedProposalAt, 2_002);
-    assert.match(host.querySelector(".email-draft-notice")?.textContent ?? "", /changed this draft while you were looking/);
+    assert.match(
+      host.querySelector(".email-draft-notice")?.textContent ?? "",
+      /changed this draft while you were looking/,
+    );
     assert.equal(host.querySelector<HTMLTextAreaElement>(".email-draft-textarea")?.value, "Agent redraft.");
 
     click(".email-draft-send");
     await until(() => host.querySelector(".email-draft-receipt") !== null, "the sent receipt");
     assert.equal((actions[3]!.args as { expectedProposalAt: number }).expectedProposalAt, 3_000);
-    assert.match(host.querySelector(".email-draft-receipt")?.textContent ?? "", /Sent.*Q3 pricing, updated.*dana@northwind\.io/);
+    assert.match(
+      host.querySelector(".email-draft-receipt")?.textContent ?? "",
+      /Sent.*Q3 pricing, updated.*dana@northwind\.io/,
+    );
     assert.equal(host.querySelector(".email-draft-send"), null, "a sent email offers no second send");
   } finally {
     await vite.close();

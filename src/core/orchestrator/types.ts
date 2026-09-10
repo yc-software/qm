@@ -10,6 +10,8 @@ import type {
   SurfaceContextResult,
   TurnRequest,
   TurnResult,
+  EmailDraftInput,
+  HeldEmailDraft,
 } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
@@ -65,7 +67,6 @@ import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
-import type { EmailDraftDeps } from "../../loops/email-draft.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -168,7 +169,7 @@ export interface OrchestratorDeps {
   runtime?: RuntimeService;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
-  emailDrafts?: EmailDraftDeps;
+  emailDrafts?: { hold(owner: string, draft: EmailDraftInput, sessionId?: string): Promise<HeldEmailDraft> };
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;

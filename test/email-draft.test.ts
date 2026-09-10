@@ -11,7 +11,12 @@ import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/so
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType } from "../src/types.ts";
 
-const DRAFT = { to: ["dana@northwind.io"], cc: ["priya@acme.co"], subject: "Q3 pricing", body: "Hi Dana,\n\nShort answer: no." };
+const DRAFT = {
+  to: ["dana@northwind.io"],
+  cc: ["priya@acme.co"],
+  subject: "Q3 pricing",
+  body: "Hi Dana,\n\nShort answer: no.",
+};
 
 test("holdEmailDraft files a held gmail compose item in the owner's inbox loop", async () => {
   const loops = createLoopStore();
@@ -42,7 +47,10 @@ test("a compose item sends as a fresh message: no Re:, no thread, human edits wi
   const held = await holdEmailDraft({ loops, items }, "sina@acme.co", DRAFT);
   const item = (await items.get(held.itemId))!;
   assert.equal(replySubject(item, { body: "x" }), "Q3 pricing");
-  assert.match(buildGmailReplyMime(item, { body: "x", to: ["a@b.co"] }) ?? "", /^To: a@b\.co\r\nSubject: Q3 pricing\r\n/);
+  assert.match(
+    buildGmailReplyMime(item, { body: "x", to: ["a@b.co"] }) ?? "",
+    /^To: a@b\.co\r\nSubject: Q3 pricing\r\n/,
+  );
   assert.doesNotMatch(buildGmailReplyMime(item, { body: "x", to: ["a@b.co"] }) ?? "", /In-Reply-To/);
 
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -76,7 +84,10 @@ function toolsWith(tc: Partial<ToolContext>, emailDrafts = true) {
   };
   const tool = createAgentTools(ref, { emailDrafts }).find((t) => t.name === "send_email");
   const run = (params: unknown) =>
-    (tool!.execute as unknown as (id: string, p: unknown) => Promise<{ content: Array<{ text?: string }> }>)("t", params);
+    (tool!.execute as unknown as (id: string, p: unknown) => Promise<{ content: Array<{ text?: string }> }>)(
+      "t",
+      params,
+    );
   return { tool, run, emitted };
 }
 

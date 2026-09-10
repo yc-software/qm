@@ -194,7 +194,7 @@ import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
-import { holdEmailDraft, type EmailDraftInput } from "../loops/email-draft.ts";
+import type { EmailDraftInput } from "../types.ts";
 import { GMAIL_HOST } from "../loops/sources/gmail.ts";
 
 export {
@@ -2121,8 +2121,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           createdBy: actor.id,
           ...(deps.emailDrafts && isWeb && gmailConnected
             ? {
-                holdEmailDraft: (draft: EmailDraftInput) =>
-                  holdEmailDraft(deps.emailDrafts!, actor.id, draft, session.id),
+                holdEmailDraft: (draft: EmailDraftInput) => deps.emailDrafts!.hold(actor.id, draft, session.id),
               }
             : {}),
           ...(() => {
