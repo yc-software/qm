@@ -2,7 +2,7 @@ import { createGrindMeter, grindState } from "./grind.ts";
 import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
-import { Check } from "typebox/value";
+import { Check, Clone } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
@@ -1716,7 +1716,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...Object.fromEntries(
       Object.entries(schemas(background)).map(([key, schema]) => {
         const description = (schema as TSchema & { description?: string }).description;
-        return [key, description ? { ...schema, description: processFieldDescription(description) } : schema];
+        return [
+          key,
+          description ? Object.assign(Clone(schema), { description: processFieldDescription(description) }) : schema,
+        ];
       }),
     ),
     ...schemas(execute),
