@@ -1009,7 +1009,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — native home checkpoints have limited retention; portable recovery snapshots are memory-only. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and use a durable ARTIFACT_STORE for checkpoint references.",
+      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — native home checkpoints have limited retention; portable recovery snapshots are memory-only. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and configure DATABASE_URL for durable checkpoint references.",
     );
   }
   if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {
