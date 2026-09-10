@@ -263,16 +263,12 @@ export function createSandboxResources(opts: {
       const route = await opts.defaults.get(scopeId);
       const sandboxes: SandboxResource[] = [];
       for (const record of await opts.records.all()) {
-        if (await opts.canUseScope(actorId, record.ownerScopeId))
-          sandboxes.push({
-            ...record,
-            availableActions:
-              record.state === "retired"
-                ? (record.cleanupPending || record.error) && opts.backends[record.backend]?.destroyScope
-                  ? ["retire"]
-                  : []
-                : actionsFor(opts.backends[record.backend]).filter((action) => action !== "create"),
-          });
+        if (!(await opts.canUseScope(actorId, record.ownerScopeId))) continue;
+        const backend = opts.backends[record.backend];
+        let availableActions = actionsFor(backend).filter((action) => action !== "create");
+        if (record.state === "retired")
+          availableActions = (record.cleanupPending || record.error) && backend?.destroyScope ? ["retire"] : [];
+        sandboxes.push({ ...record, availableActions });
       }
       const providers = (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
         .filter(([, backend]) => !!backend)
