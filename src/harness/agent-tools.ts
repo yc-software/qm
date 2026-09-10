@@ -4,7 +4,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
+import type { CronFireLogEntry, EmailAttachment, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
@@ -3089,12 +3089,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "send_email",
     label: "send_email",
     description:
-      "Hand a finished email to the user to review and send from their own Gmail. This call sends nothing: the draft appears in the conversation with Send, Edit and Discard controls, and only the user can send it. Use it whenever they ask you to email someone, after writing the complete email yourself (plain text body in their voice, no markdown). Afterwards tell them in one line that the draft is ready to review; do not repeat the email text.",
+      "Hand a finished email to the user to review and send from their own Gmail. This call sends nothing: the draft appears in the conversation with Send, Edit and Discard controls, and only the user can send it. Use it whenever they ask you to email someone, after writing the complete email yourself in their voice. To attach files, write them to the workspace first and name their paths. Afterwards tell them in one line that the draft is ready to review; do not repeat the email text.",
     parameters: Type.Object({
       to: Type.Array(Type.String(), { description: "Recipient email addresses." }),
       cc: Type.Optional(Type.Array(Type.String(), { description: "Cc addresses." })),
       subject: Type.String(),
-      body: Type.String({ description: "Plain text. Paragraphs separated by blank lines." }),
+      body: Type.String({
+        description:
+          "The email body. Paragraphs separated by blank lines. Light markdown is rendered for the recipient: **bold**, *italic*, `code`, [links](https://...), and - or 1. lists. No headings, tables, or HTML.",
+      }),
+      attachments: Type.Optional(
+        Type.Array(Type.String(), { description: 'Workspace-relative paths of files to attach, e.g. ["report.pdf"].' }),
+      ),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -3103,7 +3109,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const cc = (params.cc ?? []).map((a) => a.trim()).filter(Boolean);
       const subject = params.subject.trim();
       const body = params.body.trim();
-      const summary = { tool: "send_email", to, ...(cc.length ? { cc } : {}), subject };
+      const paths = (params.attachments ?? []).map((p) => p.trim()).filter(Boolean);
+      const summary = {
+        tool: "send_email",
+        to,
+        ...(cc.length ? { cc } : {}),
+        subject,
+        ...(paths.length ? { attachments: paths } : {}),
+      };
       await recordCall(callId, summary);
       const fail = (message: string) =>
         recordResult(callId, { ...summary, error: message }, text(`[error] ${message}`), true);
@@ -3117,8 +3130,28 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (bad) return fail(`"${bad}" is not an email address`);
       if (!subject) return fail("send_email needs a subject");
       if (!body) return fail("send_email needs a body");
+      let attachments: EmailAttachment[] = [];
+      if (paths.length) {
+        if (!tc.attachEmailFiles) return fail("attachments are not available in this conversation");
+        const staged = await tc.attachEmailFiles(paths);
+        if (!staged.ok) return fail(staged.message);
+        const unstored = staged.files.find((f) => !f.artifactId);
+        if (unstored) return fail(`"${unstored.name}" could not be stored for the email; write it again and retry`);
+        attachments = staged.files.map((f) => ({
+          artifactId: f.artifactId!,
+          name: f.name,
+          mimetype: f.mimetype,
+          sizeBytes: f.sizeBytes,
+        }));
+      }
       try {
-        const held = await tc.holdEmailDraft({ to, ...(cc.length ? { cc } : {}), subject, body });
+        const held = await tc.holdEmailDraft({
+          to,
+          ...(cc.length ? { cc } : {}),
+          subject,
+          body,
+          ...(attachments.length ? { attachments } : {}),
+        });
         return recordResult(
           callId,
           { ...summary, ok: true, itemId: held.itemId },

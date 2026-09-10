@@ -30,7 +30,13 @@ export async function holdEmailDraft(
       sourceAt: now,
       sourcePayload: { source: "gmail", compose: true, title: draft.subject, from: owner, snippet, receivedAt: now },
       proposal: {
-        data: { to: draft.to, ...(draft.cc?.length ? { cc: draft.cc } : {}), subject: draft.subject, body: draft.body },
+        data: {
+          to: draft.to,
+          ...(draft.cc?.length ? { cc: draft.cc } : {}),
+          subject: draft.subject,
+          body: draft.body,
+          ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
+        },
         by: "agent",
         ...(sessionId ? { sessionId } : {}),
       },

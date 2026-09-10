@@ -321,7 +321,13 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const slackClient = ctx.deps.loopSlackClient;
     const result = await adapter.act(
-      { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
+      {
+        owner: loop.owner,
+        actor: proposalAuthor,
+        tokens,
+        files: ctx.deps.files,
+        ...(slackClient ? { slackClient } : {}),
+      },
       item,
       kind,
       args,

@@ -1,5 +1,7 @@
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import { randomUUID } from "node:crypto";
 import { errMessage } from "../../util/errors.ts";
+import { emailHtml, emailPlainText } from "../../util/email-markdown.ts";
 import {
   addressList,
   clip,
@@ -81,31 +83,106 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): string | null {
+export interface MimeAttachment {
+  name: string;
+  mimetype: string;
+  bytes: Uint8Array;
+}
+
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+function textPart(type: string, text: string): string[] {
+  return [
+    `Content-Type: ${type}; charset="UTF-8"`,
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap76(b64(new TextEncoder().encode(text))),
+  ];
+}
+
+function alternativePart(body: string, boundary: string): string[] {
+  return [
+    `--${boundary}`,
+    ...textPart("text/plain", emailPlainText(body)),
+    `--${boundary}`,
+    ...textPart("text/html", emailHtml(body)),
+    `--${boundary}--`,
+  ];
+}
+
+function attachmentPart(file: MimeAttachment): string[] {
+  const name = headerValue(file.name.replace(/["\r\n]/g, "_"));
+  return [
+    `Content-Type: ${file.mimetype}; name="${name}"`,
+    `Content-Disposition: attachment; filename="${name}"`,
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap76(b64(file.bytes)),
+  ];
+}
+
+export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft, files: MimeAttachment[] = []): string | null {
   const meta = metaOf(item);
   const to = (draft.to?.length ? draft.to : meta?.to) ?? [];
   if (to.length === 0) return null;
   const cc = draft.cc ?? meta?.cc ?? [];
   const rfcId = meta?.rfcMessageId;
-  const lines = [
+  const alt = `alt-${randomUUID()}`;
+  const mixed = `mixed-${randomUUID()}`;
+  const headers = [
     `To: ${to.join(", ")}`,
     ...(cc.length ? [`Cc: ${cc.join(", ")}`] : []),
     `Subject: ${headerValue(replySubject(item, draft))}`,
     ...(rfcId ? [`In-Reply-To: ${rfcId}`, `References: ${rfcId}`] : []),
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    wrap76(b64(new TextEncoder().encode(draft.body))),
   ];
-  return lines.join("\r\n");
+  const body = files.length
+    ? [
+        `Content-Type: multipart/mixed; boundary="${mixed}"`,
+        "",
+        `--${mixed}`,
+        `Content-Type: multipart/alternative; boundary="${alt}"`,
+        "",
+        ...alternativePart(draft.body, alt),
+        ...files.flatMap((file) => [`--${mixed}`, ...attachmentPart(file)]),
+        `--${mixed}--`,
+      ]
+    : [`Content-Type: multipart/alternative; boundary="${alt}"`, "", ...alternativePart(draft.body, alt)];
+  return [...headers, ...body].join("\r\n");
+}
+
+async function loadAttachments(
+  deps: SourceActionDeps,
+  draft: ReplyDraft,
+): Promise<{ ok: true; files: MimeAttachment[] } | { ok: false; message: string }> {
+  const wanted = draft.attachments ?? [];
+  if (!wanted.length) return { ok: true, files: [] };
+  if (!deps.files) return { ok: false, message: "attachments are not available on this deployment" };
+  const files: MimeAttachment[] = [];
+  let total = 0;
+  for (const a of wanted) {
+    const opened = await deps.files.open(a.artifactId);
+    if (!opened)
+      return { ok: false, message: `attachment "${a.name}" is no longer available; remove it and send again` };
+    const chunks: Buffer[] = [];
+    for await (const chunk of opened.stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const bytes = Buffer.concat(chunks);
+    total += bytes.length;
+    if (total > MAX_ATTACHMENT_BYTES) {
+      return { ok: false, message: `attachments exceed ${Math.floor(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB in total` };
+    }
+    files.push({ name: a.name, mimetype: a.mimetype, bytes });
+  }
+  return { ok: true, files };
 }
 
 async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const token = await tokenFor(deps.tokens, GMAIL_HOST, deps.owner);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
-  const mime = buildGmailReplyMime(item, draft);
+  const loaded = await loadAttachments(deps, draft);
+  if (!loaded.ok) return { ok: false, reason: "bad_item", message: loaded.message };
+  const mime = buildGmailReplyMime(item, draft, loaded.files);
   if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const threadId = metaOf(item)?.threadId;
   const res = await fetchImpl(`https://${GMAIL_HOST}/gmail/v1/users/me/messages/send`, {

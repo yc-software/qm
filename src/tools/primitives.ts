@@ -214,6 +214,7 @@ export interface ToolContext extends SurfaceToolDeps {
   publish(input: PublishInput): Promise<PublishResult>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
   holdEmailDraft?(draft: EmailDraftInput): Promise<HeldEmailDraft>;
+  attachEmailFiles?: AttachFiles;
   memorySearch(q: string, limit?: number): Promise<string[] | null>;
   memoryRead(): Promise<string | null>;
   memoryRemember(facts: string[]): Promise<number | null>;
@@ -488,6 +489,7 @@ export interface ToolContextDeps {
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
   holdEmailDraft?: (draft: EmailDraftInput) => Promise<HeldEmailDraft>;
+  attachEmailFiles?: AttachFiles;
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -900,6 +902,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     ...(deps.holdEmailDraft ? { holdEmailDraft: deps.holdEmailDraft } : {}),
+    ...(deps.attachEmailFiles ? { attachEmailFiles: deps.attachEmailFiles } : {}),
 
     async createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact> {
       if (!deps.files || !writableScopeId) throw new Error("playgrounds require a writable artifact store");

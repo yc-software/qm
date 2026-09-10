@@ -31,11 +31,19 @@ import { brandName, icon, initials, relTime, slackMark, workingWave } from "./ui
 
 export type InboxSource = "gmail" | "slack";
 
+export interface InboxAttachment {
+  artifactId: string;
+  name: string;
+  mimetype: string;
+  sizeBytes: number;
+}
+
 export interface InboxDraft {
   to?: string[];
   cc?: string[];
   subject?: string;
   body: string;
+  attachments?: InboxAttachment[];
 }
 
 export interface InboxContextMessage {
@@ -215,11 +223,15 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v 
 function draftOf(item: LedgerItem): InboxDraft | undefined {
   const data = item.proposal?.data;
   if (!data || typeof data.body !== "string") return undefined;
+  const attachments = Array.isArray(data.attachments)
+    ? (data.attachments as InboxAttachment[]).filter((a) => str(a?.artifactId) && str(a?.name))
+    : [];
   return {
     body: data.body,
     ...(Array.isArray(data.to) ? { to: data.to as string[] } : {}),
     ...(Array.isArray(data.cc) ? { cc: data.cc as string[] } : {}),
     ...(str(data.subject) ? { subject: data.subject as string } : {}),
+    ...(attachments.length ? { attachments } : {}),
   };
 }
 

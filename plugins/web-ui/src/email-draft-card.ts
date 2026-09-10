@@ -1,9 +1,10 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { CheckCheck, Eye, PenLine, Send, Undo2 } from "lucide";
-import { api, ApiError } from "./core-bridge";
+import { CheckCheck, Eye, Paperclip, PenLine, Send, Undo2, X } from "lucide";
+import { api, ApiError, fileContentUrl } from "./core-bridge";
 import type { EmailDraftRef } from "./email-draft";
-import { toInboxItem, type InboxDraft, type InboxItem, type LedgerItem } from "./inbox";
-import { icon, initials, relTime } from "./ui";
+import { toInboxItem, type InboxAttachment, type InboxDraft, type InboxItem, type LedgerItem } from "./inbox";
+import { markdown } from "./message-markdown";
+import { formatBytes, icon, initials, relTime } from "./ui";
 
 interface DraftState {
   ref: EmailDraftRef;
@@ -86,13 +87,18 @@ function draft(state: DraftState): InboxDraft {
   return state.item?.draft ?? { body: "" };
 }
 
+function attachmentIds(draft: InboxDraft): string {
+  return (draft.attachments ?? []).map((a) => a.artifactId).join(",");
+}
+
 function sameDraft(a: InboxDraft | undefined, b: InboxDraft): boolean {
   return (
     a !== undefined &&
     a.body === b.body &&
     (a.subject ?? "") === (b.subject ?? "") &&
     (a.to ?? []).join(",") === (b.to ?? []).join(",") &&
-    (a.cc ?? []).join(",") === (b.cc ?? []).join(",")
+    (a.cc ?? []).join(",") === (b.cc ?? []).join(",") &&
+    attachmentIds(a) === attachmentIds(b)
   );
 }
 
@@ -105,7 +111,9 @@ function splitAddresses(raw: string): string[] {
 
 function patchDraft(state: DraftState, patch: Partial<InboxDraft>): void {
   const basedOnAt = state.edit?.basedOnAt ?? state.item?.draftAt;
-  state.edit = { ...draft(state), ...patch, ...(basedOnAt !== undefined ? { basedOnAt } : {}) };
+  const next = { ...draft(state), ...patch, ...(basedOnAt !== undefined ? { basedOnAt } : {}) };
+  if (!next.attachments?.length) delete next.attachments;
+  state.edit = next;
   state.notice = null;
   draw(state);
 }
@@ -216,12 +224,31 @@ function draw(_state: DraftState): void {
   for (const hook of changeHooks) hook();
 }
 
-function paragraphs(body: string): TemplateResult[] {
-  return body
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => html`<p>${p}</p>`);
+function attachmentsTpl(state: DraftState, current: InboxDraft, editable: boolean): TemplateResult | typeof nothing {
+  const files = current.attachments ?? [];
+  if (!files.length) return nothing;
+  const chip = (file: InboxAttachment): TemplateResult =>
+    html`<span class="email-draft-attachment">
+      <a class="file-chip" href=${fileContentUrl(file.artifactId, file.name)} target="_blank" rel="noreferrer">
+        ${icon(Paperclip, 13)}<span>${file.name}</span><small>${formatBytes(file.sizeBytes)}</small>
+      </a>
+      ${
+        editable
+          ? html`<button
+              type="button"
+              class="email-draft-attachment-remove"
+              aria-label=${`Remove ${file.name}`}
+              @click=${() => {
+                patchDraft(state, { attachments: files.filter((f) => f.artifactId !== file.artifactId) });
+                void persist(state);
+              }}
+            >
+              ${icon(X, 12)}
+            </button>`
+          : nothing
+      }
+    </span>`;
+  return html`<div class="email-draft-attachments">${files.map(chip)}</div>`;
 }
 
 function recipientsLine(current: InboxDraft): string {
@@ -266,7 +293,7 @@ function cardTpl(state: DraftState): TemplateResult {
       </span>
     </div>
     <div class="email-draft-paper">
-      ${state.mode === "edit" ? editTpl(state, item, current) : previewTpl(item, current)}
+      ${state.mode === "edit" ? editTpl(state, item, current) : previewTpl(state, item, current)}
     </div>
     <div class="email-draft-foot">
       <button
@@ -290,7 +317,7 @@ function cardTpl(state: DraftState): TemplateResult {
   `;
 }
 
-function previewTpl(item: InboxItem, current: InboxDraft): TemplateResult {
+function previewTpl(state: DraftState, item: InboxItem, current: InboxDraft): TemplateResult {
   const from = item.from;
   return html`
     <div class="email-draft-from">
@@ -299,7 +326,8 @@ function previewTpl(item: InboxItem, current: InboxDraft): TemplateResult {
     </div>
     <h3 class="email-draft-subject">${current.subject?.trim() || "(no subject)"}</h3>
     <div class="email-draft-rule"></div>
-    <div class="email-draft-body">${paragraphs(current.body)}</div>
+    <div class="email-draft-body">${markdown(current.body)}</div>
+    ${attachmentsTpl(state, current, false)}
   `;
 }
 
@@ -327,6 +355,7 @@ function editTpl(state: DraftState, item: InboxItem, current: InboxDraft): Templ
       @input=${(e: Event) => patchDraft(state, { body: (e.currentTarget as HTMLTextAreaElement).value })}
       @blur=${() => void persist(state)}
     ></textarea>
+    ${attachmentsTpl(state, current, true)}
   `;
 }
 

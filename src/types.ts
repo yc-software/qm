@@ -388,11 +388,19 @@ export interface LoopItem {
   updatedAt: number;
 }
 
+export interface EmailAttachment {
+  artifactId: string;
+  name: string;
+  mimetype: string;
+  sizeBytes: number;
+}
+
 export interface EmailDraftInput {
   to: string[];
   cc?: string[];
   subject: string;
   body: string;
+  attachments?: EmailAttachment[];
 }
 
 export interface HeldEmailDraft {

@@ -7,7 +7,8 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { ledgerState } from "../src/loops/ledger-view.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import type { ConnectorTokenSource } from "../src/loops/sources/adapter.ts";
-import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/sources/gmail.ts";
+import { buildGmailReplyMime, gmailAdapter, MAX_ATTACHMENT_BYTES, replySubject } from "../src/loops/sources/gmail.ts";
+import { Readable } from "node:stream";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType } from "../src/types.ts";
 
@@ -70,6 +71,67 @@ test("a compose item sends as a fresh message: no Re:, no thread, human edits wi
   assert.match(mime, /^To: dana@northwind\.io\r\nCc: priya@acme\.co\r\nSubject: Q3 pricing \(updated\)\r\n/);
 });
 
+test("attachments ride along as a multipart/mixed message built from stored artifacts", async () => {
+  const loops = createLoopStore();
+  const items = createLoopItemLedger();
+  const attachment = { artifactId: "art-1", name: 'q3 "pricing".csv', mimetype: "text/csv", sizeBytes: 12 };
+  const held = await holdEmailDraft({ loops, items }, "sina@acme.co", { ...DRAFT, attachments: [attachment] });
+  const item = (await items.get(held.itemId))!;
+  assert.deepEqual((item.proposal!.data as { attachments: unknown }).attachments, [attachment]);
+
+  const opened: string[] = [];
+  const files = {
+    open: async (id: string) => {
+      opened.push(id);
+      if (id !== "art-1") return null;
+      return { artifact: {} as never, sizeBytes: 12, stream: Readable.from([Buffer.from("seat,price\n1,2")]) };
+    },
+  };
+  let raw = "";
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    raw = Buffer.from((JSON.parse(String(init.body)) as { raw: string }).raw, "base64url").toString("utf8");
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  const tokens: ConnectorTokenSource = { connectorAccessToken: async () => "tok" };
+  const result = await gmailAdapter.act({ owner: "sina@acme.co", tokens, fetchImpl, files }, item, "send", {});
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(opened, ["art-1"]);
+  const mixed = raw.match(/Content-Type: multipart\/mixed; boundary="([^"]+)"/)![1]!;
+  const parts = raw.split(`--${mixed}`);
+  assert.equal(parts.length, 4, "preamble, alternative body, one attachment, closing");
+  assert.match(parts[1]!, /Content-Type: multipart\/alternative/);
+  assert.match(
+    parts[2]!,
+    /Content-Type: text\/csv; name="q3 _pricing_\.csv"\r\nContent-Disposition: attachment; filename="q3 _pricing_\.csv"/,
+  );
+  const payload = parts[2]!.split("\r\n\r\n")[1]!.replaceAll("\r\n", "").replace(/--$/, "");
+  assert.equal(Buffer.from(payload, "base64").toString("utf8"), "seat,price\n1,2");
+
+  const gone = await gmailAdapter.act(
+    { owner: "sina@acme.co", tokens, fetchImpl, files: { open: async () => null } },
+    item,
+    "send",
+    {},
+  );
+  assert.deepEqual(gone, {
+    ok: false,
+    reason: "bad_item",
+    message: 'attachment "q3 "pricing".csv" is no longer available; remove it and send again',
+  });
+
+  const huge = {
+    open: async () => ({
+      artifact: {} as never,
+      sizeBytes: MAX_ATTACHMENT_BYTES + 1,
+      stream: Readable.from([Buffer.alloc(MAX_ATTACHMENT_BYTES + 1)]),
+    }),
+  };
+  const tooBig = await gmailAdapter.act({ owner: "sina@acme.co", tokens, fetchImpl, files: huge }, item, "send", {});
+  assert.equal(tooBig.ok, false);
+  assert.match((tooBig as { message: string }).message, /exceed 5 MB/);
+  assert.equal(buildGmailReplyMime(item, { body: "x", to: ["a@b.co"] })?.includes("multipart/mixed"), false);
+});
+
 type Emitted = { type: EntryType; payload: Record<string, unknown>; scopeLabel: string };
 
 function toolsWith(tc: Partial<ToolContext>, emailDrafts = true) {
@@ -109,6 +171,43 @@ test("send_email hands the draft over and paints it for the UI, without sending 
   assert.deepEqual(persisted.display, {
     emailDraft: { loopId: "l1", itemId: "i1", to: ["dana@northwind.io"], subject: "Q3 pricing" },
   });
+});
+
+test("send_email stages workspace files for the email and refuses when staging fails", async () => {
+  const seen: unknown[] = [];
+  const { run, emitted } = toolsWith({
+    async attachEmailFiles(paths) {
+      seen.push(paths);
+      if (paths.includes("missing.pdf")) return { ok: false, message: "couldn't attach: missing.pdf (not found)" };
+      return {
+        ok: true,
+        staged: 1,
+        files: [{ name: "report.pdf", mimetype: "application/pdf", sizeBytes: 2048, artifactId: "art-9" }],
+      };
+    },
+    async holdEmailDraft(draft) {
+      seen.push(draft);
+      return { loopId: "l1", itemId: "i1" };
+    },
+  });
+  const bad = await run({ to: ["a@b.co"], subject: "x", body: "y", attachments: ["missing.pdf"] });
+  assert.match(bad.content[0]?.text ?? "", /missing\.pdf \(not found\)/);
+  const ok = await run({ to: ["a@b.co"], subject: "x", body: "y", attachments: [" report.pdf "] });
+  assert.match(ok.content[0]?.text ?? "", /handed to the user/);
+  assert.deepEqual(seen.at(-2), ["report.pdf"]);
+  assert.deepEqual((seen.at(-1) as { attachments: unknown }).attachments, [
+    { artifactId: "art-9", name: "report.pdf", mimetype: "application/pdf", sizeBytes: 2048 },
+  ]);
+  const persisted = emitted.filter((e) => e.type === "tool_result").at(-1)!.payload;
+  assert.deepEqual(persisted.attachments, ["report.pdf"]);
+
+  const noStaging = toolsWith({
+    async holdEmailDraft() {
+      return { loopId: "l1", itemId: "i1" };
+    },
+  });
+  const refused = await noStaging.run({ to: ["a@b.co"], subject: "x", body: "y", attachments: ["a.txt"] });
+  assert.match(refused.content[0]?.text ?? "", /attachments are not available/);
 });
 
 test("send_email rejects malformed input before it reaches the ledger", async () => {

@@ -2119,9 +2119,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
-          ...(deps.emailDrafts && isWeb && gmailConnected
+          ...(deps.emailDrafts && isWeb && gmailConnected && !strictReadOnly
             ? {
                 holdEmailDraft: (draft: EmailDraftInput) => deps.emailDrafts!.hold(actor.id, draft, session.id),
+                attachEmailFiles: createAttachStaging({
+                  sandbox: deps.sandbox,
+                  provision,
+                  blobTransfer,
+                  fileRegistration,
+                }).attach,
               }
             : {}),
           ...(() => {

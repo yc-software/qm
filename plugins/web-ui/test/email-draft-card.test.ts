@@ -20,7 +20,8 @@ function entry(over: Record<string, unknown> = {}, proposalAt = 1_000): Record<s
         to: ["dana@northwind.io"],
         cc: ["priya@acme.co"],
         subject: "Q3 pricing",
-        body: "Hi Dana,\n\nShort answer: no.",
+        body: "Hi Dana,\n\nShort answer: **no**.",
+        attachments: [{ artifactId: "art-1", name: "q3-pricing.csv", mimetype: "text/csv", sizeBytes: 18432 }],
       },
       by: "agent",
       at: proposalAt,
@@ -133,7 +134,13 @@ test("the email draft card previews, edits, and sends through the ledger with re
 
     await until(() => host.querySelector(".email-draft-subject") !== null, "the preview");
     assert.equal(host.querySelector(".email-draft-subject")?.textContent, "Q3 pricing");
-    assert.equal(host.querySelectorAll(".email-draft-body p").length, 2, "paragraphs split on blank lines");
+    const block = host.querySelector<HTMLElement & { content?: string }>(".email-draft-body markdown-block");
+    assert.ok(block, "the body previews as rendered markdown");
+    assert.equal(block.content, "Hi Dana,\n\nShort answer: **no**.");
+    const chip = host.querySelector<HTMLAnchorElement>(".email-draft-attachment .file-chip")!;
+    assert.match(chip.textContent ?? "", /q3-pricing\.csv/);
+    assert.match(chip.getAttribute("href") ?? "", /\/api\/files\/art-1\/content\/q3-pricing\.csv$/);
+    assert.equal(host.querySelector(".email-draft-attachment-remove"), null, "preview has no remove control");
     assert.match(host.querySelector(".email-draft-pill")?.textContent ?? "", /Ready to send/);
     assert.match(host.querySelector(".email-draft-who")?.textContent ?? "", /owner@acme\.co/);
     assert.match(
@@ -143,7 +150,8 @@ test("the email draft card previews, edits, and sends through the ledger with re
 
     click(".email-draft-seg button", /Edit/);
     const textarea = host.querySelector<HTMLTextAreaElement>(".email-draft-textarea")!;
-    assert.equal(textarea.value, "Hi Dana,\n\nShort answer: no.");
+    assert.equal(textarea.value, "Hi Dana,\n\nShort answer: **no**.");
+    assert.ok(host.querySelector(".email-draft-attachment-remove"), "edit mode can drop an attachment");
     const subject = [...host.querySelectorAll<HTMLInputElement>(".email-draft-field input")][2]!;
     subject.value = "Q3 pricing, updated";
     subject.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
@@ -156,21 +164,26 @@ test("the email draft card previews, edits, and sends through the ledger with re
         to: ["dana@northwind.io"],
         cc: ["priya@acme.co"],
         subject: "Q3 pricing, updated",
-        body: "Hi Dana,\n\nShort answer: no.",
+        body: "Hi Dana,\n\nShort answer: **no**.",
+        attachments: [{ artifactId: "art-1", name: "q3-pricing.csv", mimetype: "text/csv", sizeBytes: 18432 }],
       },
       expectedProposalAt: 1_000,
     });
     assert.ok(host.querySelector(".email-draft-send:not([disabled])"), "a save in flight never disables Send");
-    textarea.value = "Hi Dana,\n\nShort answer: no. Typed mid-save.";
+    textarea.value = "Hi Dana,\n\nShort answer: **no**. Typed mid-save.";
     textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     releaseEdit!();
     await until(() => host.querySelector(".email-draft-pill")?.textContent?.includes("Edited") === true, "the pill");
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(
       host.querySelector<HTMLTextAreaElement>(".email-draft-textarea")?.value,
-      "Hi Dana,\n\nShort answer: no. Typed mid-save.",
+      "Hi Dana,\n\nShort answer: **no**. Typed mid-save.",
       "text typed while a save was in flight survives the save landing",
     );
+    click(".email-draft-attachment-remove");
+    await until(() => actions.length === 2, "the attachment removal to persist");
+    assert.equal((actions[1]!.args as { proposal: { attachments?: unknown } }).proposal.attachments, undefined);
+    assert.equal(host.querySelector(".email-draft-attachment"), null, "the chip is gone once removed");
 
     textarea.dispatchEvent(new dom.window.Event("blur"));
     click(".email-draft-send");
@@ -183,7 +196,7 @@ test("the email draft card previews, edits, and sends through the ledger with re
     );
     assert.equal(
       (actions[1]!.args as { proposal: { body: string } }).proposal.body,
-      "Hi Dana,\n\nShort answer: no. Typed mid-save.",
+      "Hi Dana,\n\nShort answer: **no**. Typed mid-save.",
     );
     assert.equal((actions[2]!.args as { expectedProposalAt: number }).expectedProposalAt, 2_002);
     assert.match(

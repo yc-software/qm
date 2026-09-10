@@ -10746,6 +10746,41 @@ h3.ambient-field-label {
   align-items: center;
   gap: 5px;
 }
+.email-draft-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.email-draft-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.email-draft-attachment .file-chip {
+  text-decoration: none;
+}
+.email-draft-attachment-remove {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.email-draft-attachment-remove:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--foreground);
+}
+.email-draft-body markdown-block {
+  font-size: 14px;
+  line-height: 1.65;
+}
 
 .menu-search {
   position: sticky;
