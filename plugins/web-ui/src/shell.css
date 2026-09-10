@@ -7512,6 +7512,16 @@ h3.ambient-field-label {
   background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--background));
 }
 
+.settings-fast-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.settings-fast-toggle.active .icon {
+  fill: currentColor;
+}
+
 [data-qm-tooltip-anchor] {
   anchor-name: --qm-tooltip-anchor;
 }

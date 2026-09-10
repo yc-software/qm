@@ -958,18 +958,18 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   ${
                     fastAvailable
                       ? html`
-                          <button
-                            class="menu-option ${fastOn ? "active" : ""}"
-                            type="button"
-                            role="menuitemcheckbox"
-                            aria-checked=${fastOn ? "true" : "false"}
-                            @click=${() => toggleFastMode(agent)}
-                          >
-                            <span class="menu-option-copy">
-                              <span class="menu-option-label">${icon(Zap, 13)} Fast mode</span>
-                            </span>
-                            ${fastOn ? icon(Check, 15) : nothing}
-                          </button>
+                          <div class="settings-seg">
+                            <button
+                              class="settings-chip settings-fast-toggle ${fastOn ? "active" : ""}"
+                              type="button"
+                              role="menuitemcheckbox"
+                              aria-checked=${fastOn ? "true" : "false"}
+                              @click=${() => toggleFastMode(agent)}
+                            >
+                              ${icon(Zap, 15)}
+                              <span>Fast mode</span>
+                            </button>
+                          </div>
                         `
                       : nothing
                   }
