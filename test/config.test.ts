@@ -668,3 +668,10 @@ test("Modal native retention and interval configuration are independent of legac
   assert.equal(config.modalSandbox.snapshotRetentionSec, 86400);
   assert.equal(config.modalSandbox.snapshotIntervalSec, 315360000);
 });
+
+test("Modal native activation is default-off and uses strict boolean configuration", () => {
+  assert.equal(loadConfig({}).modalSandbox.nativeSnapshotsEnabled, false);
+  for (const value of ["true", "on", "1"])
+    assert.equal(loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: value }).modalSandbox.nativeSnapshotsEnabled, true);
+  assert.throws(() => loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: "enable" }), /not a recognized boolean/);
+});

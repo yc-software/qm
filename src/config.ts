@@ -390,7 +390,8 @@ interface ModalSandboxEnv {
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
   const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
   return {
-    ...(env.MODAL_NATIVE_SNAPSHOTS_ENABLED === "true" ? { nativeSnapshotsEnabled: true } : {}),
+    nativeSnapshotsEnabled:
+      boolEnvStrict("MODAL_NATIVE_SNAPSHOTS_ENABLED", env.MODAL_NATIVE_SNAPSHOTS_ENABLED) ?? false,
     ...(num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") !== undefined
       ? { nativeSnapshotIntervalSec: num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") }
       : {}),
