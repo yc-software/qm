@@ -2858,7 +2858,7 @@ test("unified sandbox keeps strict approval and quarantined output associated wi
   };
   const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
   await call(tool, { action: "start_process", command: "test" });
-  assert.equal(ref.pendingApprovals?.[0]?.approvalKey, "tool:sandbox");
+  assert.equal(ref.pendingApprovals?.[0]?.approvalKey, "tool:sandbox:start_process");
   assert.deepEqual(
     entries.map((e) => [e.tool, e.action]),
     [
@@ -2894,4 +2894,51 @@ test("unscreened unified output retains the called action in the durable transcr
   assert.equal(entries[1]?.tool, "sandbox");
   assert.equal(entries[1]?.action, "read_process");
   assert.equal(entries[1]?.unscreened, true);
+});
+
+test("sandbox strict approvals remain action-scoped across resource activation", async () => {
+  const grants = new Set(["tool:sandbox", "tool:sandbox:status"]);
+  const checked: string[] = [];
+  let executions = 0;
+  const tc = fakeToolContext();
+  tc.execute = async () => {
+    executions++;
+    return { stdout: "ok", stderr: "", code: 0, timedOut: false };
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    pendingApprovals: [],
+    toolApprovalGate: (identity) => {
+      checked.push(identity);
+      return grants.has(`tool:${identity}`);
+    },
+  };
+  const legacy = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  assert.doesNotMatch(textOut(await call(legacy, { action: "status", purpose: "Check health" })), /blocked/);
+  assert.equal(checked.at(-1), "sandbox:status");
+  const unified = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
+  for (const action of ["exec", "start_process"]) {
+    ref.pausedOnApproval = false;
+    assert.match(
+      textOut(await call(unified, { action, command: "echo ok", purpose: "Verify the build" })),
+      /needs human approval/,
+    );
+    assert.equal(ref.pendingApprovals?.at(-1)?.approvalKey, `tool:sandbox:${action}`);
+    assert.equal(ref.pendingApprovals?.at(-1)?.command, `sandbox ${action}`);
+    assert.equal(ref.pendingApprovals?.at(-1)?.purpose, "Verify the build");
+  }
+  assert.equal(executions, 0);
+  grants.add("tool:sandbox:exec");
+  ref.pausedOnApproval = false;
+  for (let i = 0; i < 2; i++)
+    assert.doesNotMatch(
+      textOut(await call(unified, { action: "exec", command: "echo ok", purpose: "Verify the build" })),
+      /blocked/,
+    );
+  assert.equal(executions, 2);
+  assert.match(
+    textOut(await call(unified, { action: "retire", sandbox_id: "box-a", purpose: "Retire finished work" })),
+    /needs human approval/,
+  );
+  assert.equal(ref.pendingApprovals?.at(-1)?.approvalKey, "tool:sandbox:retire");
 });

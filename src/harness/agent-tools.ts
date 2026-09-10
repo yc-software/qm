@@ -3571,12 +3571,19 @@ function withToolApprovalGate(
     ...tool,
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
-      if (gate && !gate(tool.name)) {
+      const sandboxAction =
+        tool.name === "sandbox" && isObj(params) && typeof params.action === "string" ? params.action : undefined;
+      const approvalIdentity = tool.name === "sandbox" ? `sandbox:${sandboxAction ?? "invalid"}` : tool.name;
+      const commandLabel = tool.name === "sandbox" ? `sandbox ${sandboxAction ?? "invalid"}` : tool.name;
+      if (gate && !gate(approvalIdentity)) {
         ref.pendingApprovals?.push({
-          command: tool.name,
+          command: commandLabel,
           reason: STRICT_TOOL_APPROVAL_REASON,
           kind: "approval",
-          approvalKey: `tool:${tool.name}`,
+          approvalKey: `tool:${approvalIdentity}`,
+          ...(tool.name === "sandbox" && isObj(params) && typeof params.purpose === "string"
+            ? { purpose: params.purpose }
+            : {}),
         });
         ref.pausedOnApproval = true;
         await rec.recordCall(callId, {

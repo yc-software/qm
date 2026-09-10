@@ -28,7 +28,7 @@ The initial agent interface restricts inventory and operations to the current ow
 
 Process actions also accept optional `purpose` for approval context. Unrelated fields are rejected rather than silently ignored. `exec` retains the enabled scoped, scratch, owner-auth and reached-room routing options and command credential handles. Process starts use the default or a named authorized resource; subsequent operations use the process ID's durable saved target, even after the scope default changes. Watches retain their durable monitor registration and wake this conversation with output or exit. Provider loss or expiry can still interrupt a process.
 
-Execution and process handlers retain their existing approval and output-screening paths. Transcript entries identify the actual `sandbox` action. Files publication, application deployment, and file read/write remain separate capabilities; unsupported resize and clone actions are not advertised.
+Execution and process handlers retain their existing approval and output-screening paths. Strict sandbox approvals are scoped to each action (`tool:sandbox:exec`, for example); an older broad `tool:sandbox` grant does not authorize newly exposed command or process actions. Transcript entries identify the actual `sandbox` action. Files publication, application deployment, and file read/write remain separate capabilities; unsupported resize and clone actions are not advertised.
 
 ## Staged activation
 
