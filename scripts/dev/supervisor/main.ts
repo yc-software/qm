@@ -32,11 +32,11 @@ const HEALTH_FAIL_THRESHOLD = 3;
 const CANARY_INTERVAL_MS = Number(process.env.DEV_INSTANCE_CANARY_INTERVAL_MS || 10 * 60_000);
 const IDLE_HOURS = (() => {
   const raw = process.env.DEV_INSTANCE_IDLE_HOURS;
-  if (raw === undefined || raw === "") return 8;
+  if (raw === undefined || raw === "") return 24;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) {
-    console.warn(`[supervisor] DEV_INSTANCE_IDLE_HOURS=${raw} is not a number -- using the 8h default`);
-    return 8;
+    console.warn(`[supervisor] DEV_INSTANCE_IDLE_HOURS=${raw} is not a number -- using the 24h default`);
+    return 24;
   }
   return n;
 })();

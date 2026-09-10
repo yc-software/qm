@@ -185,3 +185,36 @@ test("lastActivityAt tracks real inbound frames but never canary traffic", async
     assert.equal(dev.state.lastActivityAt, before, "canary round trip must not count as activity");
   });
 });
+
+test("canary deletion and connection maintenance do not keep an idle slot alive", async () => {
+  const app = makeApp();
+  let clock = 1000;
+  const dev = installDevIntrospection(app, { enabled: true, now: () => clock });
+  assert.ok(dev);
+  try {
+    emitFrame(app, { type: "events_api", payload: { event: { type: "message", text: "hello" } } });
+    assert.equal(dev.state.lastActivityAt, 1000);
+    clock = 2000;
+    emitFrame(app, {
+      type: "events_api",
+      payload: {
+        event: { type: "message", subtype: "message_deleted", previous_message: { text: "qm-canary:probe" } },
+      },
+    });
+    emitFrame(app, { type: "disconnect", reason: "refresh_requested" });
+    emitFrame(app, { type: "hello", num_connections: 1 });
+    assert.equal(dev.state.lastActivityAt, 1000);
+    assert.equal(dev.state.lastEventAtRaw, 2000);
+    clock = 3000;
+    emitFrame(app, {
+      type: "events_api",
+      payload: { event: { type: "message", subtype: "message_deleted", previous_message: { text: "hello" } } },
+    });
+    assert.equal(dev.state.lastActivityAt, 3000);
+    clock = 4000;
+    emitFrame(app, { type: "slash_commands", payload: { command: "/qm" } });
+    assert.equal(dev.state.lastActivityAt, 4000);
+  } finally {
+    await dev.close();
+  }
+});

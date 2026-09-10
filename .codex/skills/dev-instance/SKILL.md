@@ -109,9 +109,10 @@ canary message is deleted right after it round-trips. `CANARY_CHANNEL=<channel i
 slot env overrides. With no eligible channel at all, `up` prints `delivery unverified` (or
 fails under `--strict`).
 
-A forgotten instance cleans itself up: after 8 hours with no Slack events and no CLI
+A forgotten instance cleans itself up: after 24 hours with no Slack activity and no CLI control
 actions the supervisor tears itself down and frees the slot
-(`DEV_INSTANCE_IDLE_HOURS` overrides; `0` disables).
+on its next idle check (every 10 minutes). Health checks, status reads, and automatic
+canaries do not reset the timer. `DEV_INSTANCE_IDLE_HOURS` overrides the timeout; `0` disables it.
 
 ## Real by Default
 
