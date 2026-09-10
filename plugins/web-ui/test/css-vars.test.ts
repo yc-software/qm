@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
-const shellCss = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
+const stylesDir = new URL("../src/styles/", import.meta.url);
+const shellCss = [
+  readFileSync(new URL("../src/shell.css", import.meta.url), "utf8"),
+  ...readdirSync(stylesDir)
+    .filter((f) => f.endsWith(".css"))
+    .sort()
+    .map((f) => readFileSync(new URL(f, stylesDir), "utf8")),
+].join("\n");
 const themeCss = readFileSync(
   new URL("../node_modules/@earendil-works/pi-web-ui/dist/app.css", import.meta.url),
   "utf8",
