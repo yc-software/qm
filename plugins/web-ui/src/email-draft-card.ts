@@ -1,4 +1,4 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { CheckCheck, Eye, PenLine, Send, Undo2 } from "lucide";
 import { api, ApiError } from "./core-bridge";
 import type { EmailDraftRef } from "./email-draft";
@@ -7,7 +7,6 @@ import { icon, initials, relTime } from "./ui";
 
 interface DraftState {
   ref: EmailDraftRef;
-  host: HTMLElement;
   item: InboxItem | null;
   gone: boolean;
   hidden: boolean;
@@ -20,6 +19,17 @@ interface DraftState {
 }
 
 const states = new Map<string, DraftState>();
+const changeHooks = new Set<() => void>();
+let version = 0;
+
+export function onEmailDraftChange(hook: () => void): () => void {
+  changeHooks.add(hook);
+  return () => changeHooks.delete(hook);
+}
+
+export function emailDraftsVersion(): number {
+  return version;
+}
 
 function itemPath(ref: EmailDraftRef): string {
   return `/api/loops/${encodeURIComponent(ref.loopId)}/items/${encodeURIComponent(ref.itemId)}`;
@@ -30,14 +40,11 @@ export function refreshEmailDraft(itemId: string): void {
   if (state && !state.busy) void load(state);
 }
 
-export function emailDraftCard(ref: EmailDraftRef): HTMLElement {
+export function emailDraftCard(ref: EmailDraftRef): TemplateResult {
   let state = states.get(ref.itemId);
   if (!state) {
-    const host = document.createElement("section");
-    host.className = "email-draft";
     state = {
       ref,
-      host,
       item: null,
       gone: false,
       hidden: false,
@@ -51,8 +58,7 @@ export function emailDraftCard(ref: EmailDraftRef): HTMLElement {
     states.set(ref.itemId, state);
     void load(state);
   }
-  draw(state);
-  return state.host;
+  return html`<section class="email-draft">${cardTpl(state)}</section>`;
 }
 
 async function load(state: DraftState): Promise<void> {
@@ -205,8 +211,9 @@ function send(state: DraftState): Promise<void> {
   );
 }
 
-function draw(state: DraftState): void {
-  render(cardTpl(state), state.host);
+function draw(_state: DraftState): void {
+  version++;
+  for (const hook of changeHooks) hook();
 }
 
 function paragraphs(body: string): TemplateResult[] {

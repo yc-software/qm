@@ -1,6 +1,6 @@
 import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
 import { emailDraftsIn } from "./email-draft";
-import { emailDraftCard } from "./email-draft-card";
+import { emailDraftCard, emailDraftsVersion, onEmailDraftChange } from "./email-draft-card";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -160,6 +160,7 @@ interface SettledRowKey {
   speakerLabel: string | undefined;
   edited: boolean;
   deleted: boolean;
+  emailDrafts: number;
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
@@ -620,8 +621,11 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat();
   }
 
+  const offEmailDraftChange = onEmailDraftChange(() => redrawTranscript());
+
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
+    offEmailDraftChange();
     teardownActiveChat();
   }
 
@@ -1432,9 +1436,11 @@ export function createChatSurface(
     const speakerLabel = speakerLabelFor(message);
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
+    const emailDrafts = emailDraftsIn(work?.activity).length ? emailDraftsVersion() : 0;
     const hit = settledRowCache.get(message as object);
     if (
       hit &&
+      hit.emailDrafts === emailDrafts &&
       hit.index === index &&
       hit.activity === work?.activity &&
       hit.status === work?.status &&
@@ -1466,6 +1472,7 @@ export function createChatSurface(
       speakerLabel,
       edited,
       deleted,
+      emailDrafts,
       tpl,
     });
     return tpl;
@@ -1767,7 +1774,7 @@ export function createChatSurface(
       parts.push(playgroundCard(playground));
     }
     for (const draft of emailDraftsIn((message as AssistantWork).work?.activity)) {
-      parts.push(html`${emailDraftCard(draft)}`);
+      parts.push(emailDraftCard(draft));
     }
     return parts;
   }

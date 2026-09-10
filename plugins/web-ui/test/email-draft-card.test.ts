@@ -101,14 +101,20 @@ test("the email draft card previews, edits, and sends through the ledger with re
   };
 
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  let offChange = (): void => undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     appState.me = { user: "owner@acme.co", org: "acme", permissions: [] };
     await vite.ssrLoadModule("/src/split.ts");
     await vite.ssrLoadModule("/src/sessions.ts");
-    const { emailDraftCard } = await vite.ssrLoadModule("/src/email-draft-card.ts");
-    const host = emailDraftCard({ loopId: LOOP_ID, itemId: ITEM_ID }) as HTMLElement;
-    document.querySelector("#main")!.append(host);
+    const { emailDraftCard, onEmailDraftChange } = await vite.ssrLoadModule("/src/email-draft-card.ts");
+    const { render } = await import("lit");
+    const host = document.querySelector<HTMLElement>("#main")!;
+    const paint = (): void => {
+      render(emailDraftCard({ loopId: LOOP_ID, itemId: ITEM_ID }), host);
+    };
+    offChange = onEmailDraftChange(paint);
+    paint();
 
     const until = async (ready: () => boolean, what: string): Promise<void> => {
       for (let i = 0; i < 100; i++) {
@@ -195,6 +201,7 @@ test("the email draft card previews, edits, and sends through the ledger with re
     );
     assert.equal(host.querySelector(".email-draft-send"), null, "a sent email offers no second send");
   } finally {
+    offChange();
     await vite.close();
     dom.window.close();
   }
