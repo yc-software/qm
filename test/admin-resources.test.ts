@@ -30,7 +30,11 @@ function credentialLayer(): string {
   return dir;
 }
 
-function start(harnessId = "pi", withLayer = true): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(
+  harnessId = "pi",
+  withLayer = true,
+  overrides: (built: BuiltApp) => Partial<NonNullable<Parameters<typeof createInsecureTestServer>[1]>> = () => ({}),
+): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-res-")),
@@ -48,7 +52,9 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
     featureFlags: built.featureFlags,
     credentialServices: () => built.credentialTools.map((tool) => tool.service),
     channelPolicy: built.channelPolicy,
+    loops: built.loops,
     harnessId,
+    ...overrides(built),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -1087,6 +1093,177 @@ test("factory-config clears with { reset: true } only, idempotently, and leaves 
       assert.equal(((await r.json()) as { message: string }).message, "factory-config: unknown key reset");
     }
     assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+  } finally {
+    await srv.close();
+  }
+});
+
+const factoryLoops = async (built: BuiltApp) =>
+  (await built.loops.store.list()).filter((loop) => loop.surface === "factory");
+
+test("applying a factory config mints one factory loop owned by the acting admin at the deployment org scope", async () => {
+  const srv = start();
+  try {
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+
+    const loops = await factoryLoops(srv.built);
+    assert.equal(loops.length, 1);
+    const loop = loops[0]!;
+    assert.equal(loop.owner, "admin-alice");
+    assert.equal(loop.ownerScopeId, "org:default-org");
+    assert.equal((await srv.built.loops.store.list()).length, 1);
+    assert.equal((await fetch(`${srv.base}/v1/loops/${loop.id}?principalId=admin-alice`)).status, 200);
+
+    const fired = await srv.built.loops.fire!.fire(loop.id, "apply-fire-1");
+    assert.equal(fired.status, "failed");
+    assert.match(fired.note ?? "", /factory_credentials_missing: factory-linear, factory-github/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("re-applying a factory config never mints a second loop and never re-owns the first", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const first = (await factoryLoops(srv.built))[0]!;
+
+    const bob = { "content-type": "application/json", "x-admin-actor": "admin-bob@default-org" };
+    const repeats: [string, string, unknown, Record<string, string>][] = [
+      ["same admin, same body", "org:default-org", FACTORY_BODY, ADMIN],
+      ["another admin", "org:default-org", FACTORY_BODY, bob],
+      ["edited config", "org:default-org", { ...FACTORY_BODY, targetBranch: "release" }, ADMIN],
+      ["another org scope in the path", "org:other-org", FACTORY_BODY, ADMIN],
+    ];
+    for (const [label, scope, body, headers] of repeats) {
+      assert.equal((await putFactory(srv.base, scope, body, headers)).status, 200, label);
+      const loops = await factoryLoops(srv.built);
+      assert.equal(loops.length, 1, label);
+      assert.deepEqual(loops[0], first, label);
+    }
+    assert.equal((await srv.built.loops.store.list()).length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("resetting the factory config clears the config only and leaves the loop standing", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", { reset: true })).status, 200);
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const loop = (await factoryLoops(srv.built))[0]!;
+
+    assert.equal((await putFactory(srv.base, "org:default-org", { reset: true })).status, 200);
+    assert.equal((await scopeConfig(srv.base, "org:default-org")).factoryConfig, null);
+    assert.deepEqual(await srv.built.loops.store.list(), [loop]);
+
+    const fired = await srv.built.loops.fire!.fire(loop.id, "reset-fire-1");
+    assert.equal(fired.status, "failed");
+    assert.match(fired.note ?? "", /factory_config_missing/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("deleting the factory loop and applying again brings exactly one back", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const first = (await factoryLoops(srv.built))[0]!;
+
+    const deleted = await fetch(`${srv.base}/v1/loops/${first.id}?principalId=admin-alice`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.equal((await factoryLoops(srv.built)).length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a rejected factory-config apply leaves no loop behind", async () => {
+  const srv = start();
+  try {
+    const rejected: [string, string, unknown, Record<string, string>][] = [
+      ["missing verifyLintCmd", "org:default-org", withoutKey("verifyLintCmd"), ADMIN],
+      ["unknown key", "org:default-org", { ...FACTORY_BODY, linearTeamID: "QM" }, ADMIN],
+      ["unknown forge", "org:default-org", { ...FACTORY_BODY, forge: "svn" }, ADMIN],
+      ["non-org scope", "channel:C1", FACTORY_BODY, ADMIN],
+      ["non-admin actor", "org:default-org", FACTORY_BODY, { ...ADMIN, "x-admin-actor": "nobody@default-org" }],
+    ];
+    for (const [label, scope, body, headers] of rejected) {
+      const r = await putFactory(srv.base, scope, body, headers);
+      assert.equal(r.status, headers["x-admin-actor"] === "nobody@default-org" ? 403 : 400, label);
+      assert.deepEqual(await srv.built.loops.store.list(), [], label);
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a deployment without loops wired still accepts its factory config", async () => {
+  const srv = start("pi", true, () => ({ loops: undefined }));
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a factory loop that fails to be created surfaces as an error and a retry converges to one loop", async () => {
+  let failNext = true;
+  const srv = start("pi", true, (built) => ({
+    loops: {
+      ...built.loops,
+      store: {
+        ...built.loops.store,
+        create: async (input) => {
+          if (failNext) {
+            failNext = false;
+            throw new Error("loop store is down");
+          }
+          return built.loops.store.create(input);
+        },
+      },
+    },
+  }));
+  try {
+    const failed = await putFactory(srv.base, "org:default-org", FACTORY_BODY);
+    assert.equal(failed.status, 500);
+    assert.equal(((await failed.json()) as { error: string }).error, "internal_error");
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.equal((await factoryLoops(srv.built)).length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the public loop create route still refuses to carry a surface", async () => {
+  const srv = start();
+  try {
+    const created = await fetch(`${srv.base}/v1/loops?principalId=admin-alice`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "not the factory",
+        playbook: "do the thing",
+        successCondition: "the thing is done",
+        surface: "factory",
+      }),
+    });
+    assert.equal(created.status, 200);
+    const loop = ((await created.json()) as { loop: { id: string; surface?: string } }).loop;
+    assert.equal(loop.surface, undefined);
+    assert.deepEqual(await factoryLoops(srv.built), []);
   } finally {
     await srv.close();
   }
