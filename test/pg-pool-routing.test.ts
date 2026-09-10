@@ -2,10 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
 
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
+const pooling = {
+  ...(direct ? { databaseUrl: direct } : {}),
+  ...(pooled ? { poolUrl: pooled } : {}),
+  ...(process.env.DATABASE_POOL_CA_CERT ? { caCert: process.env.DATABASE_POOL_CA_CERT } : {}),
+  queryMax: Number(process.env.DATABASE_POOL_MAX ?? 4),
+  sessionMax: Number(process.env.DATABASE_DIRECT_POOL_MAX ?? 1),
+};
+configurePgPooling(pooling);
 const skip = !direct || !pooled ? "requires direct Postgres and transaction PgBouncer URLs" : false;
 
 test("stores share the query pool and closing one does not close another", { skip }, async () => {
@@ -57,11 +65,11 @@ test("pooled credentials cannot silently change company identity", { skip }, () 
   const previous = process.env.DATABASE_POOL_URL;
   const url = new URL(previous!);
   url.pathname = "/another_company";
-  process.env.DATABASE_POOL_URL = url.toString();
+  configurePgPooling({ ...pooling, poolUrl: url.toString() });
   try {
     assert.throws(() => createPgPool(direct!), /preserve.*database and credentials/);
   } finally {
-    process.env.DATABASE_POOL_URL = previous;
+    configurePgPooling(pooling);
   }
 });
 
