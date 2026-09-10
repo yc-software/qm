@@ -7,7 +7,7 @@ export type { Pool, PoolClient };
 
 export type Rows = Record<string, unknown>[];
 
-export interface PgPoolingConfig {
+interface PgPoolingConfig {
   databaseUrl?: string;
   poolUrl?: string;
   caCert?: string;
@@ -41,8 +41,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     return existing.pool;
   }
   const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max =
-    kind === "migration" ? 1 : kind === "query" ? (poolingConfig.queryMax ?? 10) : (poolingConfig.sessionMax ?? 32);
+  const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
   if (!Number.isInteger(max) || max < 1 || max > 100)
     throw new Error(`${setting} must be an integer between 1 and 100`);
   let url = connectionString;
