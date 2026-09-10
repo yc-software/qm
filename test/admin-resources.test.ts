@@ -114,7 +114,14 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     const r = await fetch(`${srv.base}/v1/admin/resources`, { headers: ADMIN });
     assert.equal(r.status, 200);
     const body = (await r.json()) as {
-      resources: { id: string; kind: string; target?: string; secret?: boolean; enumValues?: unknown[] }[];
+      resources: {
+        id: string;
+        kind: string;
+        target?: string;
+        clearable?: boolean;
+        secret?: boolean;
+        enumValues?: unknown[];
+      }[];
     };
     const ids = body.resources.map((x) => x.id).sort();
     assert.deepEqual(ids, ADMIN_RESOURCES.map((x) => x.id).sort());
@@ -127,6 +134,9 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
     assert.equal(byId.has("import"), false);
+    assert.equal(byId.get("runtime")?.target, "any");
+    assert.equal(byId.get("runtime")?.clearable, true);
+    assert.equal(byId.get("runtime")?.kind, "custom");
   } finally {
     await srv.close();
   }

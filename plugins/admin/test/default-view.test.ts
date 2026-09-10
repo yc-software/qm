@@ -254,7 +254,7 @@ test("default runtime controls save reasoning level and fast mode", () => {
   assert.match(html, /base-fast-mode-control"\)\.style\.display = fastCapable \? "" : "none"/);
   assert.match(
     html,
-    /runtime: \(\) => \(\{[\s\S]*effortLevel: \$\("base-effort"\)\.value,[\s\S]*fastMode: \$\("base-fast-mode"\)\.checked/,
+    /runtime: \(\) =>[\s\S]*runtimeInherits\(\)[\s\S]*effortLevel: \$\("base-effort"\)\.value,[\s\S]*fastMode: \$\("base-fast-mode"\)\.checked/,
   );
 });
 

@@ -9,6 +9,7 @@ import {
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   modelServiceable,
+  modelSupportedByHarness,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
   thinkingLevelsForHarness,
@@ -295,7 +296,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       ? await selectableModelCatalog(deps.modelCredentialFetch)
       : builtInModelCatalog();
   const runtime = values.runtime as { harnessId?: unknown; modelId?: unknown } | null | undefined;
-  const approvedHarnesses = (await deps.config.getApprovedHarnessesDurable()) ?? [deps.harnessId ?? "pi"];
+  const approvedHarnesses = await deps.config.getApprovedHarnessesDurable();
   const resolvedCurrent = runtime && typeof runtime.modelId === "string" ? resolveModel(runtime.modelId) : null;
   const currentProvider = resolvedCurrent?.provider;
   const currentModel =
@@ -308,16 +309,22 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     const models = selectableCatalogForHarness(catalog, harnessId);
     if (currentModel && runtime?.harnessId === harnessId && !models.some((model) => model.id === currentModel.id))
       models.push(currentModel);
-    return models.filter(
-      (model) =>
-        modelServiceable(model.id, providersFor(harnessId)) ||
-        (runtime?.harnessId === harnessId && currentModel?.id === model.id),
-    );
+    return models
+      .filter(
+        (model) =>
+          modelServiceable(model.id, providersFor(harnessId)) ||
+          (runtime?.harnessId === harnessId && currentModel?.id === model.id),
+      )
+      .map((model) => ({
+        ...model,
+        available: modelSupportedByHarness(model.id, harnessId) && modelServiceable(model.id, providersFor(harnessId)),
+      }));
   };
   return sendJson(res, 200, {
     scopeId: targetScope,
     ...environmentMetadata,
     ...values,
+    approvedHarnesses,
     soulVersion: deps.config.soulVersion(targetScope),
     soulHistory: deps.config.soulHistory(targetScope),
     directoryMembers: parseScopeId(targetScope).kind === "org" ? ((await deps.directory?.list()) ?? []) : [],
@@ -325,7 +332,8 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
     harnessDefault: deps.harnessId ?? "pi",
     harnessOptions: HARNESS_IDS.filter(
-      (id) => id !== "mock" && (approvedHarnesses.includes(id) || runtime?.harnessId === id),
+      (id) =>
+        id !== "mock" && ((approvedHarnesses ?? [deps.harnessId ?? "pi"]).includes(id) || runtime?.harnessId === id),
     ),
     modelsByHarness: Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)])),
     thinkingLevelsByHarness: Object.fromEntries(
