@@ -26,7 +26,7 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
   const cwd = spec.workdir ?? ".";
   const home = spec.homeDir ?? "~";
   const ws = [
-    `The workspace path is \`${cwd}\` (read-write). Working-state recovery depends on the sandbox provider; publish durable code to git and artifacts to Files. Keep workspace outputs here, including anything you'll \`publish\` (publish ships files in your workspace, not files elsewhere under \`$HOME\`). \`$HOME\` (\`${home}\`) holds native logins and config; its recovery has the same provider limits.`,
+    `The workspace path is \`${cwd}\` (read-write). Recovery depends on the sandbox provider; save durable outputs to git or Files. Keep workspace outputs here, including anything you'll \`publish\` (publish ships files in your workspace, not files elsewhere under \`$HOME\`). \`$HOME\` (\`${home}\`) holds native logins and config; its recovery has the same provider limits.`,
   ];
   if (layout.hasGlobal) ws.push("Shared org files are at `./global` (read-only).");
   if (layout.teamCount > 0) {

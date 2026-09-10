@@ -282,7 +282,7 @@ test("shared-core platform guidance reaches both the DM and the spine prompt", a
     await sysprompt(buildOrchestrator(), slackDm("")),
     await sysprompt(buildOrchestrator(), spineChannelTurn("")),
   ]) {
-    assert.match(prompt, /## Your computer/);
+    assert.match(prompt, /## Sandboxes/);
     assert.match(prompt, /## Files/);
     assert.match(prompt, /## Memory/);
     assert.match(prompt, /## Auth/);

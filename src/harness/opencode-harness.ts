@@ -834,11 +834,15 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       },
       scopeLabel: turn.scopeLabel,
     });
+    const aliases = tools.flatMap((tool) => {
+      const alias = bridgeToolName(tool.name);
+      return alias === tool.name ? [] : [`${alias} is ${tool.name}`];
+    });
     const state: ActiveTurn = {
       turn,
       ref,
       tools: new Map(tools.map((tool) => [bridgeToolName(tool.name), tool])),
-      system: `${turn.systemPrompt}\n\nOpenCode tool aliases: workspace_execute is foreground \`execute\`; workspace_read reads workspace files; workspace_write writes workspace files.`,
+      system: `${turn.systemPrompt}${aliases.length ? `\n\nOpenCode tool aliases: ${aliases.join("; ")}.` : ""}`,
       history: replayMessages(reconstructMessagesFromHistory(turn.history), sessionId, model),
       userSeq: userEntry.seq,
       captures: [],

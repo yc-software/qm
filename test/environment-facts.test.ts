@@ -37,7 +37,7 @@ test("computer block: renders OS/size/runtimes/tools and the not-installed list"
   assert.match(out, /NOT installed.*gh/);
   assert.match(out, /`\/root\/workspace` \(read-write\)/);
   assert.match(out, /publish ships files in your workspace/);
-  assert.match(out, /recovery depends on the sandbox provider/);
+  assert.match(out, /Recovery depends on the sandbox provider/);
   assert.match(out, /\$HOME` \(`\/root`\) holds native logins/);
   assert.match(out, /`\.\/global` \(read-only\)/);
   assert.match(out, /team-\*.*2 mounted/);

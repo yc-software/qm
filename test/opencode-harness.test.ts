@@ -393,3 +393,31 @@ test("custom providers materialize into the opencode config (enabled + provider 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("OpenCode advertises aliases only for tools available on the turn", async (t) => {
+  for (const sandboxResources of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-aliases-"));
+    const captured = join(dir, "context.json");
+    const handlers = `
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        const context = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/context", {
+          headers: { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET },
+        }).then((r) => r.json());
+        require("node:fs").writeFileSync(${JSON.stringify(captured)}, JSON.stringify(context));
+        return json(res, ${okAssistant});
+      }
+      if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+    `;
+    const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "aliases", handlers), sandboxResources });
+    t.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    await harness.turns.runTurn(turnInput([], []));
+    const { systemPrompt } = JSON.parse(readFileSync(captured, "utf8")) as { systemPrompt: string };
+    assert.match(systemPrompt, /workspace_read is read/);
+    if (sandboxResources) assert.doesNotMatch(systemPrompt, /workspace_execute/);
+    else assert.match(systemPrompt, /workspace_execute is execute/);
+  }
+});
