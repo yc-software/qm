@@ -46,6 +46,9 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     },
     async removeDir() {},
     async teardown() {},
+    async destroyScope(id) {
+      disks.delete(id);
+    },
     async computerStatus(scopeId) {
       return { machine: scopeId, guestResponsive: true };
     },
@@ -217,8 +220,8 @@ test("retirement refuses the default, waits for an active command, and prevents 
     return { stdout: "done", stderr: "", code: 0, timedOut: false };
   };
   let destroyed = false;
-  backend.teardown = async (_handle, options) => {
-    destroyed = options?.destroy === true;
+  backend.destroyScope = async () => {
+    destroyed = true;
   };
   const command = router.run(handle, "work");
   await running;
@@ -634,4 +637,80 @@ test("a legacy migration queued behind activation fails before its action runs",
   resume.resolve([]);
   await Promise.all([activation, rejected]);
   assert.equal(changed, false);
+});
+
+test("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {
+  const { resources, backend, provisioned } = fixture();
+  await resources.initialize();
+  const record = await resources.resolve("personal:alice");
+  assert.equal(record?.state, "unverified");
+  await resources.setDefault("alice", "personal:alice", null);
+  const destroyed: string[] = [];
+  backend.provision = async () => {
+    throw new Error("must not restore");
+  };
+  backend.computerStatus = async () => {
+    throw new Error("must not probe");
+  };
+  backend.destroyScope = async (scope) => {
+    destroyed.push(scope);
+  };
+  await resources.retire("alice", record!.id);
+  await resources.retire("alice", record!.id);
+  assert.deepEqual(destroyed, ["personal:alice"]);
+  assert.deepEqual(provisioned, []);
+});
+
+test("unsupported retirement is hidden and refuses before inventory mutation", async () => {
+  const { resources, records } = fixture((backend) => {
+    delete backend.destroyScope;
+  });
+  const record = await resources.create("alice", "personal:alice", "local");
+  const before = await records.get(record.id);
+  const list = await resources.list("alice", "personal:alice");
+  assert.ok(!list.providers[0]!.actions.includes("retire"));
+  assert.ok(!list.sandboxes.find((r) => r.id === record.id)!.availableActions!.includes("retire"));
+  await assert.rejects(resources.retire("alice", record.id), /retirement unavailable/);
+  assert.deepEqual(await records.get(record.id), before);
+});
+
+test("failed retirement stays unroutable and retries cleanup by backing scope after a core restart", async () => {
+  const { resources, backend, records, options } = fixture();
+  const record = await resources.create("alice", "personal:alice", "local");
+  backend.destroyScope = async () => {
+    throw new Error("provider unavailable");
+  };
+  await assert.rejects(resources.retire("alice", record.id), /provider unavailable/);
+  assert.equal((await records.get(record.id))?.cleanupPending, true);
+  assert.equal((await records.get(record.id))?.state, "retired");
+  await assert.rejects(resources.setDefault("alice", "personal:alice", record.id), /retired/);
+  assert.deepEqual(
+    (await resources.list("alice", "personal:alice")).sandboxes.find((r) => r.id === record.id)?.availableActions,
+    ["retire"],
+  );
+  const destroyed: string[] = [];
+  backend.destroyScope = async (scope) => {
+    destroyed.push(scope);
+  };
+  backend.provision = async () => {
+    throw new Error("must not restore");
+  };
+  const restarted = createSandboxResources(options);
+  await restarted.retire("alice", record.id);
+  assert.deepEqual(destroyed, [record.backingScopeId]);
+  assert.equal((await records.get(record.id))?.cleanupPending, false);
+  assert.equal((await records.get(record.id))?.error, undefined);
+});
+
+test("a pending retirement without an error remains retryable after a crash", async () => {
+  const { resources, records, options, backend } = fixture();
+  const record = await resources.create("alice", "personal:alice", "local");
+  await records.put(record.id, { ...record, state: "retired", cleanupPending: true });
+  let destroyed = false;
+  backend.destroyScope = async () => {
+    destroyed = true;
+  };
+  await createSandboxResources(options).retire("alice", record.id);
+  assert.equal(destroyed, true);
+  assert.equal((await records.get(record.id))?.cleanupPending, false);
 });

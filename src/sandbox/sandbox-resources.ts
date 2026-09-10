@@ -17,6 +17,7 @@ export interface SandboxResource {
   state: "unverified" | "provisioning" | "ready" | "failed" | "retired";
   availableActions?: string[];
   machineId?: string;
+  cleanupPending?: boolean;
   spec?: AgentComputerSpec;
   error?: string;
 }
@@ -149,7 +150,7 @@ export function createSandboxResources(opts: {
       "create",
       ...(backend.computerStatus ? ["status"] : []),
       ...(backend.restartComputer ? ["restart"] : []),
-      "retire",
+      ...(backend.destroyScope ? ["retire"] : []),
     ];
   };
   const authorize = async (actorId: string, scopeId: ScopeId): Promise<void> => {
@@ -209,32 +210,21 @@ export function createSandboxResources(opts: {
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
           const current = await get(id);
-          if (current.state === "retired") throw new Error("sandbox has already been retired");
+          if (current.state === "retired" && !current.cleanupPending && !current.error) return;
           const selected = await opts.defaults.get(current.ownerScopeId);
           const legacyBackend = (await opts.routes.get(current.ownerScopeId))?.backend ?? opts.defaultBackend;
           if (selected?.sandboxId === id || (!selected && current.legacy && current.backend === legacyBackend))
             throw new Error("unset or change this scope's default before retiring its computer");
           await opts.beforeRetire?.(current);
           const backend = opts.backends[current.backend];
-          if (!backend) throw new Error(`sandbox backend unavailable: ${current.backend}`);
-          const handle = await backend.provision(
-            [{ scopeId: current.backingScopeId, mountPath: "/", mode: "rw" }],
-            await opts.provisionOptions?.(current.ownerScopeId),
-          );
-          if (
-            backend.listProcesses &&
-            (await backend.listProcesses(handle)).some((process) => process.status.state === "running")
-          )
-            throw new Error("stop this sandbox's processes before retiring it");
-          await opts.records.put(id, { ...current, state: "retired" });
+          if (!backend?.destroyScope) throw new Error(`sandbox retirement unavailable: ${current.backend}`);
+          const retiring = { ...current, state: "retired" as const, cleanupPending: true };
+          await opts.records.put(id, retiring);
           try {
-            await backend.teardown(handle, { destroy: true });
-            if (backend.computerStatus && (await backend.computerStatus(current.backingScopeId)).provisioned === true)
-              throw new Error(
-                "sandbox retired from routing but provider still reports a machine; cleanup requires attention",
-              );
+            await backend.destroyScope(current.backingScopeId);
+            await opts.records.put(id, { ...retiring, cleanupPending: false, error: undefined });
           } catch (error) {
-            await opts.records.put(id, { ...current, state: "retired", error: String(error) });
+            await opts.records.put(id, { ...retiring, error: String(error) });
             throw error;
           }
         }),
@@ -278,7 +268,9 @@ export function createSandboxResources(opts: {
             ...record,
             availableActions:
               record.state === "retired"
-                ? []
+                ? (record.cleanupPending || record.error) && opts.backends[record.backend]?.destroyScope
+                  ? ["retire"]
+                  : []
                 : actionsFor(opts.backends[record.backend]).filter((action) => action !== "create"),
           });
       }
