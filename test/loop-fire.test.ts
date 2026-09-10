@@ -10,9 +10,10 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { FACTORY_LOOP_SURFACE, type FactoryEffectsDeps } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
 import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_WRAPPER } from "../src/loops/factory/process-work.ts";
 import type { FactoryConfig } from "../src/resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
-import type { ReadProcessResult, Sandbox } from "../src/sandbox/sandbox.ts";
+import type { ReadProcessResult, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 
 function fakeIdentity() {
@@ -595,6 +596,8 @@ function factorySandbox(
   const probe = FACTORY_REQUIRED_TOOLS.map((tool) => `${tool}=ok 1.0`).join("\n");
   const unused = (name: string) => () => Promise.reject(new Error(`a factory loop must not call ${name}`));
   let provisioned = 0;
+  let started = 0;
+  const wrapperProcessIds = new Set<string>();
   const defaultRead = async (): Promise<ReadProcessResult> => {
     const sinceStart = ops.slice(ops.lastIndexOf("startProcess"));
     return sinceStart.filter((op) => op === "readProcess").length === 1
@@ -612,9 +615,17 @@ function factorySandbox(
       return record("provision", { id: `sbx-${provisioned}`, rootDir: "/workspace" });
     },
     run: () => record("run", { stdout: `${probe}\n`, stderr: "", code: 0, timedOut: false }),
-    startProcess: () => record("startProcess", { processId: "p1" }),
-    readProcess: () => {
+    startProcess: (_handle: SandboxHandle, command: string) => {
+      started += 1;
+      const processId = `p${started}`;
+      if (command.includes(FACTORY_WRAPPER)) wrapperProcessIds.add(processId);
+      return record("startProcess", { processId });
+    },
+    readProcess: (_handle: SandboxHandle, processId: string) => {
       ops.push("readProcess");
+      if (!wrapperProcessIds.has(processId)) {
+        return Promise.resolve({ chunks: "", cursor: 0, status: { state: "exited" as const, code: 0 } });
+      }
       return (opts.read ?? defaultRead)(ops);
     },
     signalProcess: () => record("signalProcess", undefined),
@@ -859,7 +870,15 @@ test("factory surface: a fire drives the factory effects and takes no agent turn
   assert.equal(intake?.url, LINEAR_URL);
   assert.match(intake?.body ?? "", /"teamId":"TEAM-1"/);
   assert.equal(intake?.headers.get("Authorization"), LINEAR_KEY);
-  assert.deepEqual(fake.sandbox.ops.slice(0, 5), ["provision", "run", "teardown", "provision", "startProcess"]);
+  assert.deepEqual(fake.sandbox.ops.slice(0, 7), [
+    "provision",
+    "run",
+    "startProcess",
+    "readProcess",
+    "teardown",
+    "provision",
+    "startProcess",
+  ]);
   const items = await s.items.byLoop(loop.id);
   assert.equal(items[0]?.sourceKey, FACTORY_TICKET);
   const output = (await s.outputs.awaitingReview(loop.id))[0];

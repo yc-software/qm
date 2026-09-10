@@ -27,6 +27,7 @@ import type { WorkspaceLayer } from "../src/types.ts";
 const HANDLE: SandboxHandle = { id: "sbx-1", rootDir: "/workspace" };
 const SCOPE_ID = "org:acme";
 const REPO_DIR = "/workspace/repo";
+const SOURCE_DIR = "/workspace/qm-yc/layer/factory";
 const TICKET = "QM-12";
 
 type ProcessMethod = "startProcess" | "readProcess" | "writeStdin" | "signalProcess" | "listProcesses";
@@ -71,6 +72,7 @@ const ENV_INPUT: FactoryEnvInput = {
   linearApiKey: "lin_api_secret",
   githubToken: "ghp_secret",
   repoDir: REPO_DIR,
+  factorySourceDir: SOURCE_DIR,
 };
 
 const OPTIONAL_KEYS = ["IO_FEEDBACK", "IO_REPO_SETUP_CMD", "IO_PROOF_START_CMD", "IO_PROOF_BASE_URL_CMD"];
@@ -176,6 +178,7 @@ const baseInput = (fake: Fake, extra: Partial<FactoryProcessInput> = {}): Factor
   sandbox: fake.sandbox,
   scopeId: SCOPE_ID,
   repoDir: REPO_DIR,
+  factorySourceDir: SOURCE_DIR,
   ticketId: TICKET,
   env: { IO_LINEAR_API_KEY: "lin_api_secret" },
   ...extra,
@@ -218,7 +221,7 @@ test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or
     IO_VERIFY_TEST_FILE_CMD: "npm test --",
     IO_VERIFY_LINT_CMD: "npm run lint",
     IO_REPO_DIR: REPO_DIR,
-    IO_FACTORY_SOURCE_DIR: REPO_DIR,
+    IO_FACTORY_SOURCE_DIR: SOURCE_DIR,
     IO_REPO_CLONE_URL: "https://github.com/acme/widgets.git",
     IO_REPO_SETUP_CMD: "npm ci",
     IO_PROOF_START_CMD: "npm run dev",
@@ -227,6 +230,7 @@ test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or
     IO_FOLLOWUPS_ENABLED: "false",
     IO_FOLLOWUP_TEAM_ID: "team_123",
   });
+  assert.notEqual(env.IO_FACTORY_SOURCE_DIR, env.IO_REPO_DIR);
   assert.equal(FULL_CONFIG.slackChannel, "C123");
   for (const key of Object.keys(env)) assert.equal(key.startsWith("SLACK_"), false, `${key} is a SLACK_ key`);
   for (const key of FORBIDDEN_KEYS) assert.equal(Object.hasOwn(env, key), false, `${key} should never be set`);
@@ -242,6 +246,7 @@ test("renderFactoryEnv omits every optional key whose source is absent", () => {
     linearApiKey: "lin_min",
     githubToken: "ghp_min",
     repoDir: "/srv/repo",
+    factorySourceDir: SOURCE_DIR,
   });
   assert.deepEqual(
     Object.keys(env).sort(),
@@ -271,7 +276,7 @@ test("runFactoryProcess starts the wrapper, streams every chunk to exit and hand
 
   assert.deepEqual(fake.calls.provision, [[{ scopeId: SCOPE_ID, mode: "rw", mountPath: "" }]]);
   assert.equal(fake.calls.startProcess.length, 1);
-  assert.equal(fake.calls.startProcess[0]?.command, `bash ${FACTORY_WRAPPER} ${TICKET}`);
+  assert.equal(fake.calls.startProcess[0]?.command, `bash ${SOURCE_DIR}/${FACTORY_WRAPPER} ${TICKET}`);
   assert.equal(fake.calls.startProcess[0]?.opts?.cwd, REPO_DIR);
   assert.equal(fake.calls.startProcess[0]?.opts?.env, env);
 

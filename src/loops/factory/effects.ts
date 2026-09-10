@@ -1,4 +1,9 @@
-import type { Sandbox, SandboxHandle } from "../../sandbox/sandbox.ts";
+import {
+  CapabilityUnsupportedError,
+  supportsProcessSessions,
+  type Sandbox,
+  type SandboxHandle,
+} from "../../sandbox/sandbox.ts";
 import type { FactoryConfig, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../../credentials/keychain.ts";
 import type { Loop, LoopItem, ScopeId } from "../../types.ts";
@@ -7,6 +12,8 @@ import type { CapturedArtifact, LoopRunnerEffects } from "../runner.ts";
 import type { SuccessVerdict } from "../success-evaluation.ts";
 import { createSweeper } from "../../util/sweeper.ts";
 import { swallow } from "../../util/errors.ts";
+import { shq } from "../../util/shell.ts";
+import { pollProcess } from "../../sandbox/process-poll.ts";
 import { enumerateFactoryCandidates } from "./linear-intake.ts";
 import { readFactoryCredentials } from "./credentials.ts";
 import { preflightFactorySandbox, type PreflightResult } from "./preflight.ts";
@@ -17,6 +24,23 @@ import type { ForgeRef } from "./ship.ts";
 
 const DEFAULT_FACTORY_REPO_DIR = "/workspace/repo";
 const DEFAULT_PAUSE_POLL_MS = 30_000;
+
+const FACTORY_SOURCE_CLONE_DIR = "/workspace/qm-yc";
+const FACTORY_SOURCE_CLONE_URL = "https://github.com/yc-software/qm-yc.git";
+const FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS = 300_000;
+
+export const FACTORY_SOURCE_DIR = `${FACTORY_SOURCE_CLONE_DIR}/layer/factory`;
+export const FACTORY_SOURCE_BRANCH = "qm-30-s18477";
+
+const FACTORY_SOURCE_BOOTSTRAP_SCRIPT = [
+  "set -e;",
+  `if [ -d ${shq(`${FACTORY_SOURCE_CLONE_DIR}/.git`)} ]; then`,
+  `git -C ${shq(FACTORY_SOURCE_CLONE_DIR)} fetch --depth 1 origin ${shq(FACTORY_SOURCE_BRANCH)};`,
+  `git -C ${shq(FACTORY_SOURCE_CLONE_DIR)} checkout -f FETCH_HEAD;`,
+  "else",
+  `git clone --depth 1 --single-branch --branch ${shq(FACTORY_SOURCE_BRANCH)} ${shq(FACTORY_SOURCE_CLONE_URL)} ${shq(FACTORY_SOURCE_CLONE_DIR)};`,
+  "fi",
+].join(" ");
 
 export const FACTORY_LOOP_SURFACE = "factory";
 
@@ -69,6 +93,34 @@ const prTarget = (artifacts: CapturedArtifact[], config: FactoryConfig): { ref: 
   return pr?.label && ref ? { ref, branch: pr.label } : null;
 };
 
+const factorySourceGitEnv = (githubToken: string): Record<string, string> => ({
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: `url.https://x-access-token:${githubToken}@github.com/.insteadOf`,
+  GIT_CONFIG_VALUE_0: "https://github.com/",
+});
+
+async function bootstrapFactorySource(sandbox: Sandbox, handle: SandboxHandle, githubToken: string): Promise<void> {
+  if (!supportsProcessSessions(sandbox)) {
+    throw new CapabilityUnsupportedError(sandbox.profile.backend, "process sessions");
+  }
+  const { processId } = await sandbox.startProcess(handle, FACTORY_SOURCE_BOOTSTRAP_SCRIPT, {
+    env: factorySourceGitEnv(githubToken),
+  });
+  const { output, status } = await pollProcess(sandbox, handle, processId, {
+    deadlineMs: FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS,
+    collect: true,
+  });
+  // Auth failures, a missing branch, and a missing repository all exit 128; only git's own words tell them apart.
+  const tail = output.replaceAll(githubToken, "***").trim().split("\n").slice(-5).join(" | ");
+  const detail = (reason: string): string => `factory_source_bootstrap_failed: ${reason}${tail ? ` — ${tail}` : ""}`;
+  if (status.state !== "exited") {
+    await sandbox.signalProcess(handle, processId, "TERM").catch((e: unknown) => swallow("factory bootstrap term", e));
+    throw new Error(detail("timeout"));
+  }
+  if (status.code !== 0) throw new Error(detail(`exit ${status.code}`));
+}
+
 export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<FactoryContext> {
   const config = deps.config.getFactoryConfig();
   if (!config) throw new Error("factory_config_missing");
@@ -112,12 +164,20 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       let preflight: PreflightResult;
       try {
         preflight = await preflightFactorySandbox(deps.sandbox, preflightHandle);
+        if (preflight.ok) await bootstrapFactorySource(deps.sandbox, preflightHandle, githubToken);
       } finally {
         await teardownWarm(preflightHandle);
       }
       if (!preflight.ok) throw new Error(`factory_preflight_failed: ${preflightDetail(preflight)}`);
 
-      const env = renderFactoryEnv({ config, guidance, linearApiKey, githubToken, repoDir });
+      const env = renderFactoryEnv({
+        config,
+        guidance,
+        linearApiKey,
+        githubToken,
+        repoDir,
+        factorySourceDir: FACTORY_SOURCE_DIR,
+      });
 
       const controller = new AbortController();
       const pausePoll = createSweeper(
@@ -136,6 +196,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
           sandbox: deps.sandbox,
           scopeId: loop.ownerScopeId,
           repoDir,
+          factorySourceDir: FACTORY_SOURCE_DIR,
           ticketId: item.sourceKey,
           env,
           signal: controller.signal,
