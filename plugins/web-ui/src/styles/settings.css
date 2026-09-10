@@ -1,0 +1,37 @@
+.settings-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-group-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.settings-group-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--blue-ink);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.settings-group-action:hover {
+  background: var(--blue-tint);
+}
+.settings-row-copy {
+  flex: 1 1 240px;
+  min-width: 0;
+}
