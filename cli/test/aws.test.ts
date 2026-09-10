@@ -153,7 +153,7 @@ else if (a.includes("elbv2 describe-rules")) {
   console.log(JSON.stringify({ Rules: rules }));
 }
 else if (a.includes("elbv2 describe-target-health")) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: process.env.AWS_FAKE_UNHEALTHY_TARGET === "1" ? "unhealthy" : "healthy" } }] }));
-else if (a.includes("secretsmanager describe-secret")) console.log(JSON.stringify({ ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf", DeletedDate: process.env.AWS_FAKE_SECRET_DELETED || undefined, VersionIdsToStages: { current: ["AWSCURRENT"] } }));
+else if (a.includes("secretsmanager describe-secret")) console.log(JSON.stringify({ ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf", DeletedDate: process.env.AWS_FAKE_SECRET_DELETED || undefined, VersionIdsToStages: { current: process.env.AWS_FAKE_SECRET_NO_CURRENT ? ["AWSPREVIOUS"] : ["AWSCURRENT"] } }));
 else {
 ${script}
 }
@@ -3946,6 +3946,8 @@ test("AWS plan uses the package-pinned source image without consulting or mutati
   try {
     await awsUp(single, dir, { dryRun: true });
     const calls = readFileSync(fake.log, "utf8");
+    assert.doesNotMatch(calls, /secretsmanager get-secret-value/);
+    assert.match(calls, /secretsmanager describe-secret/);
     assert.doesNotMatch(calls, /ecr describe-images|ecr batch-delete-image|dynamodb put-item|ecs update-service/);
     assert.doesNotMatch(readFileSync(dockerLog, "utf8"), /buildx imagetools inspect/);
     assert.match(lines.join("\n"), new RegExp(`qm-core@sha256:${"a".repeat(64)}`));
@@ -4823,6 +4825,30 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS metadata-only secret discovery rejects required deleted or non-current secrets", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-plan-"));
+  const fake = fakeAws(dir, 'console.log("");');
+  try {
+    for (const name of ["AWS_FAKE_SECRET_DELETED", "AWS_FAKE_SECRET_NO_CURRENT"]) {
+      const prior = process.env[name];
+      process.env[name] = "true";
+      try {
+        assert.throws(
+          () => secretArns(oneServiceConfig(), { metadataOnly: true }),
+          /required AWS secret .* has no available AWSCURRENT version/,
+        );
+      } finally {
+        if (prior === undefined) delete process.env[name];
+        else process.env[name] = prior;
+      }
+    }
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /secretsmanager get-secret-value/);
+  } finally {
+    fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });

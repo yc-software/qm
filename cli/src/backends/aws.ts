@@ -807,12 +807,12 @@ async function runAwsCandidateMigration(config: QmConfig, coreImage: string, lab
   }
 }
 
-export function secretArns(config: QmConfig): Record<string, string> {
+export function secretArns(config: QmConfig, options: { metadataOnly?: boolean } = {}): Record<string, string> {
   const aws = requireAws(config);
   const pairs = computedSecrets(config).flatMap((secret) => {
     const id = `${aws.secretsPrefix}${secret.name}`;
     try {
-      if (!secret.required) {
+      if (options.metadataOnly || !secret.required) {
         const metadata = awsJson<{
           ARN?: string;
           DeletedDate?: string;
@@ -821,7 +821,10 @@ export function secretArns(config: QmConfig): Record<string, string> {
         const hasCurrent = Object.values(metadata.VersionIdsToStages ?? {}).some((stages) =>
           stages.includes("AWSCURRENT"),
         );
-        return metadata.ARN && !metadata.DeletedDate && hasCurrent ? [[secret.name, metadata.ARN] as const] : [];
+        if (metadata.ARN && !metadata.DeletedDate && hasCurrent) return [[secret.name, metadata.ARN] as const];
+        if (secret.required)
+          throw new CliError(`required AWS secret ${secret.name} has no available AWSCURRENT version`);
+        return [];
       }
       const value = awsJson<{ ARN?: string; SecretString?: string }>(aws, [
         "secretsmanager",
@@ -2022,13 +2025,14 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   assertAwsCallerAccount(aws);
   assertAwsPublicFrontDoor(config);
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
-  assertAwsPublicApiUrl(config);
+  if (!opts.dryRun) assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
   header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
   const allServices = Object.keys(aws.services);
   assertOwnedServices(config, describedServices(config, allServices), allServices);
-  const arns = secretArns(config);
+  const arns = secretArns(config, { metadataOnly: opts.dryRun });
   if (opts.dryRun) {
+    note("Secret metadata verified; value and PUBLIC_API_URL validation run during qm up.");
     step(
       aws.predeployDbSnapshot === false
         ? "pre-deploy database restore point: disabled (aws.predeployDbSnapshot)"
