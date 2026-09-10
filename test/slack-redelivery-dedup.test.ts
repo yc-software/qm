@@ -152,3 +152,97 @@ test("a redelivery of a finished run posts nothing rather than the answer a seco
     await built.runtime.stop();
   }
 });
+
+for (const order of ["message-first", "mention-first", "concurrent"]) {
+  test(`B mention event copies share durable redelivery protection across independent adapters: ${order}`, async () => {
+    const { registerSlackEvents } = await import("../src/slack/events.ts");
+    const { createDeduper, dedupedRun, stripMention } = await import("../src/slack/lib.ts");
+    const built = fresh();
+    try {
+      const results: string[] = [];
+      const accepted: any[] = [];
+      const adapter = () => {
+        const deduper = createDeduper();
+        let onMessage: (args: any) => Promise<void>;
+        const events = new Map<string, (args: any) => Promise<void>>();
+        registerSlackEvents(
+          {
+            message: (fn) => {
+              onMessage = fn;
+            },
+            event: (name, fn) => {
+              events.set(name, fn);
+            },
+          },
+          {
+            ids: { botUserId: "UBOT", ownBotId: "BBOT" } as any,
+            deduper,
+            directory: { classifyUserCached: async () => ({ ok: true, actor }), syncForUnseenGroup: () => {} } as any,
+            mirror: { mirrorMessageEvent: async () => {} } as any,
+            handler: {
+              dispatch: async (key, inc) => {
+                await dedupedRun(
+                  deduper,
+                  key,
+                  async () => {
+                    const request = {
+                      ...slackTurn(
+                        stripMention(inc.rawText, "UBOT", "BBOT"),
+                        inc.ts,
+                        `ch:${inc.channel}:${inc.threadTs ?? inc.ts}`,
+                      ),
+                      redeliveryKey: `slack:UBOT:${inc.channel}:${inc.ts}`,
+                      unprompted: inc.unprompted,
+                    };
+                    const result = await built.app.turn(request);
+                    results.push(result.status);
+                    if (result.status === "queued") accepted.push(inc);
+                  },
+                  (err) => {
+                    throw err;
+                  },
+                );
+              },
+              botHasStakeInThread: async () => true,
+              handleIncoming: async () => {},
+              handleReactionEvent: async () => {},
+            },
+          },
+        );
+        const event = {
+          channel: "C1",
+          channel_type: "channel",
+          user: "U1",
+          text: "<@BBOT|qm> ping",
+          ts: "630.1",
+          thread_ts: "630.0",
+        };
+        const args = { event, message: event, body: {}, client: {}, context: {} };
+        return { message: () => onMessage!(args), mention: () => events.get("app_mention")!(args) };
+      };
+      const a = adapter(),
+        b = adapter();
+      if (order === "concurrent") await Promise.all([a.message(), b.mention()]);
+      else if (order === "message-first") {
+        await a.message();
+        await b.mention();
+      } else {
+        await b.mention();
+        await a.message();
+      }
+      assert.deepEqual(results.sort(), ["queued", "silent"]);
+      assert.equal(accepted.length, 1);
+      assert.equal(accepted[0].unprompted, undefined);
+      const run = await built.runs.getByDedupKey("slack:UBOT:C1:630.1");
+      assert.ok(run);
+      assert.equal(run.request.displayText, "ping");
+      const claimed = await built.runs.claim("w630", 30_000);
+      assert.equal(claimed?.id, run.id);
+      await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+      await adapter().message();
+      assert.equal(results.at(-1), "silent");
+    } finally {
+      await built.runtime.stop();
+    }
+  });
+}

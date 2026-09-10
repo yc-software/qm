@@ -374,3 +374,11 @@ test("a mention that fell out of the bounded draft history is still disarmed thr
   held.agentMentionKeys = ["!here"];
   assert.equal(renderSlackSendText(held, "human kept <!here>"), "human kept @\u200bhere");
 });
+
+test("bot-ID mentions retain the loop send provenance protection", () => {
+  const held = item("slack", slackMeta, { body: "ask <@BBOT|qm>" });
+  assert.equal(renderSlackSendText(held, "ask <@BBOT|qm>"), "ask @qm");
+  assert.equal(renderSlackSendText(held, "ask <@BBOT> and <@BOTHER>"), "ask @BBOT and <@BOTHER>");
+  assert.equal(renderSlackSendText(item("slack", slackMeta), "<@BBOT>", "agent"), "@BBOT");
+  assert.equal(renderSlackSendText(item("slack", slackMeta), "<@BBOT>", "human"), "<@BBOT>");
+});

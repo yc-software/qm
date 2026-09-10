@@ -277,3 +277,46 @@ test("a label-less wire mention is disarmed to the person's name when the direct
     setMentionIndex(new Map());
   }
 });
+
+test("stripMention removes all self encodings and labels but preserves other IDs and escaped literals", () => {
+  assert.equal(stripMention("<@BBOT|qm> <@UBOT> hi <@BBOT> <@U2|Alice>", "UBOT", "BBOT"), "hi  <@U2|Alice>");
+  assert.equal(stripMention("<@UBOT|qm><@BBOT|qm>", "UBOT", "BBOT"), "");
+  assert.equal(stripMention("&lt;@BBOT&gt; <@BBOT> &amp;", "UBOT", "BBOT"), "<@BBOT>  &");
+  assert.equal(stripMention("<@BBOT2> <@BOTHER|qm>", "UBOT", "BBOT"), "<@BBOT2> <@BOTHER|qm>");
+  assert.equal(stripMention("<@BBOT> ping", "", "BBOT"), "ping");
+  assert.equal(stripMention("<@BBOT> ping", "", ""), "<@BBOT> ping");
+});
+
+test("bot-ID mentions resolve and neutralize using the existing label and provenance rules", () => {
+  assert.equal(
+    resolveMentionsInText("<@BBOT> <@BOTHER|peer>", (id) => (id === "BBOT" ? "qm" : undefined)),
+    "@qm @peer",
+  );
+  assert.equal(
+    resolveMentionsInText("<@BOTHER>", () => undefined),
+    "@BOTHER",
+  );
+  assert.deepEqual([...wireMentionKeys("<@BBOT> <@BBOT|qm> <@U1> <@W1>")], ["@bbot", "@u1", "@w1"]);
+  assert.equal(neutralizeMentions("<@BBOT|qm> <@BOTHER>"), "@qm @BOTHER");
+  assert.equal(neutralizeMentions("<@BBOT> <@BOTHER>", wireMentionKeys("<@BBOT|qm>")), "@BBOT <@BOTHER>");
+});
+
+test("W user mentions resolve and strip consistently while pseudo tokens remain verbatim", () => {
+  assert.equal(
+    resolveMentionsInText("<@W123> <@W123|old>", () => "name"),
+    "@name @old",
+  );
+  assert.equal(stripMention("<@W123|qm> <@BBOT> request", "W123", "BBOT"), "request");
+  assert.deepEqual([...wireMentionKeys("<@W123|qm>")], ["@w123"]);
+  assert.equal(neutralizeMentions("<@W123|qm>"), "@qm");
+  for (const id of ["qm", "Q123", "123", "_name", "U", "B", "W", "U-1"]) {
+    const token = `<@${id}|label>`;
+    assert.equal(
+      resolveMentionsInText(token, () => "name"),
+      token,
+    );
+    assert.equal(stripMention(token, id, id), token);
+    assert.equal(neutralizeMentions(token), token);
+    assert.deepEqual([...wireMentionKeys(token)], []);
+  }
+});

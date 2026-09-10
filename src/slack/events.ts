@@ -253,15 +253,32 @@ export function registerSlackEvents(
     if (m.channel_type === "channel" || m.channel_type === "group" || m.channel_type === "mpim") {
       if (m.channel_type === "mpim" && m.channel) syncForUnseenGroup(client, m.channel);
       const threadReply = isThreadReply(m);
-      const isMention = mentionsBot(m.text ?? "", ids.botUserId);
+      const userMention = mentionsBot(m.text ?? "", ids.botUserId);
+      const botMention = mentionsBot(m.text ?? "", "", ids.ownBotId);
+      const isMention = userMention || botMention;
+      let botIdFallback = false;
+      if (
+        botMention &&
+        !userMention &&
+        m.user &&
+        m.channel &&
+        m.ts &&
+        !m.bot_id &&
+        !m.bot_profile &&
+        m.subtype !== "bot_message"
+      ) {
+        const classified = await directory
+          .classifyUserCached(client, m.user)
+          .catch(swallowAs("slack: bot-id mention author", undefined));
+        botIdFallback = Boolean(classified?.ok && classified.actor.externalId && !classified.actor.isBot);
+      }
       const threadTs = m.thread_ts;
       const willDispatch = Boolean(
         threadReply && !isMention && threadTs && (await botHasStakeInThread(client, m.channel, threadTs)),
       );
       await mirrorMessageEvent(m, client, willDispatch ? { handled: true } : {});
-      if (!threadReply) return;
-      if (isMention) return;
-      if (!willDispatch) {
+      if (!botIdFallback && (!threadReply || isMention)) return;
+      if (!botIdFallback && !willDispatch) {
         console.error(
           `[slack-plugin] thread-follow skipped: no bot stake detected in thread ch=${m.channel} thread_ts=${m.thread_ts} ts=${m.ts}`,
         );
@@ -287,7 +304,8 @@ export function registerSlackEvents(
           files: content.files,
           threadTs: m.thread_ts,
           ts: m.ts,
-          unprompted: true,
+          ...(willDispatch ? { unprompted: true } : {}),
+          ...(botIdFallback ? { botIdFallback: true } : {}),
           ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
           ackGate,
         },

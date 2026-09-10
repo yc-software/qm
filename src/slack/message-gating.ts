@@ -1,7 +1,11 @@
 import { LRUCache } from "lru-cache";
+import { SLACK_MENTION } from "./mrkdwn.ts";
 
-export function mentionsBot(text: string, botUserId: string): boolean {
-  return botUserId ? text.includes(`<@${botUserId}>`) : false;
+export function mentionsBot(text: string, botUserId: string, ownBotId = ""): boolean {
+  for (const match of text.matchAll(SLACK_MENTION)) {
+    if (match[1] === botUserId || match[1] === ownBotId) return true;
+  }
+  return false;
 }
 
 export function threadHasBotStake(
@@ -14,11 +18,7 @@ export function threadHasBotStake(
     const user = m.user ? String(m.user) : "";
     const bot = m.bot_id ? String(m.bot_id) : "";
     const text = m.text ? String(m.text) : "";
-    return Boolean(
-      (botUserId && user === botUserId) ||
-      (ownBotId && bot === ownBotId) ||
-      (botUserId && mentionsBot(text, botUserId)),
-    );
+    return Boolean((botUserId && user === botUserId) || (ownBotId && bot === ownBotId) || mentionsBot(text, botUserId));
   });
 }
 

@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { createRateLimiter } from "../ratelimit/rate-limiter.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import {
@@ -87,6 +88,7 @@ interface Incoming {
   ts: string;
   unprompted?: boolean;
   botAuthored?: boolean;
+  botIdFallback?: boolean;
   synthetic?: boolean;
   recvAt?: number;
   recvWall?: number;
@@ -166,6 +168,14 @@ export function createTurnHandler(deps: {
   const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
+  const botIdMentionLog = createRateLimiter({ maxPerWindow: 1, windowMs: 60_000 });
+
+  async function acceptBotIdFallback(inc: Incoming): Promise<void> {
+    if (!inc.botIdFallback) return;
+    if (inc.kind === "channel") threads.mark(inc.channel, inc.threadTs ?? inc.ts, true);
+    if ((await botIdMentionLog.check("accepted")).allowed)
+      console.error(`[slack-plugin] bot-id mention accepted ch=${inc.channel} ts=${inc.ts}`);
+  }
 
   async function botHasStakeInThread(client: any, channel: string, threadTs: string): Promise<boolean> {
     const cached = threads.get(channel, threadTs);
@@ -197,7 +207,7 @@ export function createTurnHandler(deps: {
     const actor = classified.actor;
     if (deps.allowActor && !deps.allowActor(actor)) return;
     const timezone = classified.timezone;
-    const text = stripMention(inc.rawText, ids.botUserId);
+    const text = stripMention(inc.rawText, ids.botUserId, ids.ownBotId);
     if (!hasContent(text, inc.files)) return;
 
     let audience: ActorAssertion[] = [actor];
@@ -406,7 +416,7 @@ export function createTurnHandler(deps: {
       );
     }
 
-    if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
+    if (!inc.botIdFallback && inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
 
     let conversationHeader: string | undefined;
     let priorTurns: ConversationTurn[] | undefined;
@@ -506,12 +516,14 @@ export function createTurnHandler(deps: {
             queuedRunId = runId;
             inFlightRunByThread.set(threadRef, runId);
             accepted = true;
+            void acceptBotIdFallback(inc);
             inc.ackGate?.persisted();
           },
           // Folded into a live run: the envelope is durably accepted just the same, but the run
           // stays pinned to its own handler — claiming it here would unpin it on the way out.
           onSteered: () => {
             accepted = true;
+            void acceptBotIdFallback(inc);
             inc.ackGate?.persisted();
           },
           ...(ack
@@ -539,6 +551,7 @@ export function createTurnHandler(deps: {
             : {}),
         },
       );
+      if (!accepted && (result.status === "ok" || result.status === "react")) await acceptBotIdFallback(inc);
       await taskList?.settle();
       await goalNotice?.settle();
     } catch (err) {

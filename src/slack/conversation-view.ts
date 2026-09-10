@@ -208,6 +208,9 @@ export function createConversationSerializer(deps: {
       const slackId = ctx.slackIdsByPrincipal?.get(a.externalId);
       if (slackId) nameById.set(slackId, a.displayName);
     }
+    if (ids.botHandle) {
+      for (const id of [ids.botUserId, ids.ownBotId]) if (id) nameById.set(id, ids.botHandle);
+    }
     const raw = await fetchRawConversation(client, inc.channel, inc.threadTs);
     const messages = recentWindow(
       await shapeRecentMessages(client, raw, inc.ts, nameById),
