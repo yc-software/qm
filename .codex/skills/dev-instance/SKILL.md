@@ -45,9 +45,10 @@ heartbeat so slot reclaim can tell "actively in use" from "abandoned".
 **`up` only prints success after proving the bot is reachable**: the Slack socket must be
 the app's _only_ connection (`num_connections == 1`, read from the hello frame) and — when
 the slot has a `CANARY_CHANNEL` — a posted canary message must arrive back over that same
-socket. If another machine/worktree holds a connection to the app (the classic "boots LIVE
-but deaf" failure), `up` detects it, flags the slot for 30 minutes, and auto-rotates to the
-next one, reporting the thief's hello host. A canary that never returns on a clean socket
+socket. If Slack reports multiple connections, `up` flags the slot for 30 minutes and
+auto-rotates to the next one. The count is a snapshot from the last hello frame, not
+a continuously refreshed inventory. Its `debug_info.host` identifies Slack's server,
+not another client's machine; it cannot locate a competing instance. A canary that never returns on a clean socket
 means a stale Slack app; `up` flags and rotates past that too.
 
 **Re-running `up` on a live instance is a reload, not a no-op**: it re-reads your shell
@@ -185,8 +186,11 @@ port squatters, machine-wide token orphans, Docker daemon — and prints a ranke
 with a remedy per finding. `doctor --fix` applies the safe ones (child restarts).
 
 **Bot never replies to a DM (silent bot).** The new `up` catches the two big causes at
-boot: another live connection to the same app (auto-rotates, names the thief's host) and a
-stale Slack app whose events never arrive (canary fails → flags the slot and rotates). If
+boot: multiple reported connections to the same app (flags the slot and auto-rotates)
+and a Slack app whose events never arrive (canary fails → flags the slot and rotates).
+Check local processes and other deployments before attributing a connection count to
+a live competitor. After cleanup, reconnect to obtain a fresh hello count; rereading
+health alone returns the previous snapshot. If
 deafness appears mid-session, the 10s health probe logs `DEGRADED: num_connections=N` in
 `supervisor.log` and the periodic canary flags delivery loss; `dev canary` gives you an
 on-demand proof either way. `dev up --rotate` moves to a fresh slot.

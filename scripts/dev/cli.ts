@@ -403,12 +403,12 @@ async function cmdUp(): Promise<number> {
         {
           reason: "stolen",
           at: nowEpoch(),
-          detail: `num_connections=${result.numConnections} host=${result.helloHost ?? "?"}`,
+          detail: `num_connections=${result.numConnections} slack_server=${result.helloHost ?? "?"}`,
         },
         store,
       );
       out(
-        `[!] slot ${slot} is STOLEN: ${result.numConnections} connections open to its Slack app (another machine/worktree holds one; hello host: ${result.helloHost ?? "?"}).`,
+        `[!] slot ${slot}: Slack reported ${result.numConnections} connections at the last hello; exclusivity is unverified (Slack server: ${result.helloHost ?? "?"}, not a client host).`,
       );
       out(`    flagged ${slot} for 30min and rotating to the next slot...`);
       excluded.add(slot);

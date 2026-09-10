@@ -534,7 +534,7 @@ function startLoops(): void {
       }
       if ((slackHealth.numConnections ?? 1) > 1 && (lastSlackHealth?.numConnections ?? 1) <= 1) {
         log(
-          `DEGRADED: num_connections=${slackHealth.numConnections} -- another connection to this Slack app is stealing events (host: ${slackHealth.helloHost ?? "?"})`,
+          `DEGRADED: num_connections=${slackHealth.numConnections} at last hello -- Slack socket exclusivity is unverified (Slack server: ${slackHealth.helloHost ?? "?"}, not a client host)`,
         );
       }
       lastSlackHealth = slackHealth;
