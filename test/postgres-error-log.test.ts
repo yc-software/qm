@@ -71,3 +71,22 @@ test("pg error log: flush makes writes visible to another process", { skip }, as
   await writer.flush();
   assert.equal((await reader.list({ sessionId: "sess-cross-process" })).length, 1);
 });
+
+test("pg error log pages equal-timestamp records deterministically beyond 200", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  try {
+    await pool.query(
+      "INSERT INTO error_events(ts, scope_label, category, code, message, session_id) SELECT 123, 'personal:pagination', 'turn', n::text, 'failure', 'pagination' FROM generate_series(0,259) n",
+    );
+    const log = createPostgresErrorLog(URL!);
+    const page = await log.list({ scopeId: "personal:pagination", sessionId: "pagination", limit: 50, offset: 200 });
+    assert.equal(page.length, 50);
+    assert.equal(page[0]?.code, "59");
+    assert.equal(page.at(-1)?.code, "10");
+    assert.equal((await log.list({ scopeId: "personal:pagination", offset: 250, limit: 50 })).length, 10);
+    assert.equal(await log.count({ scopeId: "personal:pagination" }), 260);
+  } finally {
+    await pool.end();
+  }
+});

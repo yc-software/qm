@@ -13,7 +13,7 @@ export interface ErrorEvent {
 export interface ErrorLog {
   record(e: Omit<ErrorEvent, "ts">): void;
   flush(): Promise<void>;
-  list(opts?: { scopeId?: string; sessionId?: string; limit?: number }): Promise<ErrorEvent[]>;
+  list(opts?: { scopeId?: string; sessionId?: string; limit?: number; offset?: number }): Promise<ErrorEvent[]>;
   count(opts?: { scopeId?: string; sessionId?: string }): Promise<number>;
 }
 

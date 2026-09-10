@@ -1066,6 +1066,53 @@
         color: var(--warn);
         font-size: 12px;
       }
+      .errors-table table {
+        table-layout: fixed;
+        min-width: 860px;
+      }
+      .errors-table th:nth-child(1) {
+        width: 10%;
+      }
+      .errors-table th:nth-child(2) {
+        width: 12%;
+      }
+      .errors-table th:nth-child(3) {
+        width: 16%;
+      }
+      .errors-table th:nth-child(4) {
+        width: 34%;
+      }
+      .errors-all th:nth-child(5) {
+        width: 18%;
+      }
+      .errors-scoped th:nth-child(4) {
+        width: 52%;
+      }
+      .errors-table th:last-child {
+        width: 10%;
+      }
+      .errors-table td {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .error-message {
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .error-message summary {
+        cursor: pointer;
+      }
+      .error-message .error-full {
+        display: none;
+        white-space: pre-wrap;
+      }
+      .error-message[open] .error-preview {
+        display: none;
+      }
+      .error-message[open] .error-full {
+        display: inline;
+      }
       .error-strip {
         margin: 0 0 14px;
         padding: 10px 12px;
@@ -6120,7 +6167,7 @@
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
         { views: ["governance", "models", "credentials", "connectors", "customize", "users"] },
-        { label: "Logs", views: ["history", "slack", "judgments", "audit", "egress", "metrics"] },
+        { label: "Logs", views: ["history", "slack", "judgments", "errors", "audit", "egress", "metrics"] },
         { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons", "retention"] },
       ];
 
@@ -6275,6 +6322,7 @@
         files: "Files",
         memory: "Memory",
         live: "Live",
+        errors: "Errors",
         audit: "Audit",
         skills: "Skills",
         crons: "Crons",
@@ -6294,6 +6342,7 @@
         "memory",
         "live",
         "audit",
+        "errors",
         "skills",
         "crons",
         "deployments",
@@ -6311,6 +6360,7 @@
       ]);
       const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
       const HISTORY_PAGE_SIZE = 50;
+      const ERRORS_PAGE_SIZE = 50;
 
       const TRANSCRIPT_PAGE_SIZE = 500;
       const DEFAULT_VIEW = "history";
@@ -6948,6 +6998,7 @@
           return q ? path + "?" + q : path;
         }
         if (st.scope && SCOPED.has(st.view)) p.set("scope", st.scope);
+        if (st.view === "errors" && st.page > 1) p.set("page", st.page);
         if (st.principal) p.set("principal", st.principal);
         if (st.view === "crons" && st.cron) p.set("cron", st.cron);
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
@@ -7003,7 +7054,10 @@
         else if (session) resolvedView = "history";
         return {
           view: resolvedView,
-          scope: pathScope || p.get("scope") || (resolvedView === "history" ? "org:" + orgId : scope),
+          scope:
+            pathScope ||
+            p.get("scope") ||
+            (resolvedView === "history" || resolvedView === "errors" ? "org:" + orgId : scope),
           session,
           turn: turnRaw == null || turnRaw === "" ? null : turnRaw,
           principal: p.get("principal") || null,
@@ -7119,7 +7173,12 @@
         });
       }
       function setView(v) {
-        go({ view: v, scope: v === "history" ? "org:" + orgId : scope, session: null, historyKind: "conversation" });
+        go({
+          view: v,
+          scope: v === "history" || v === "errors" ? "org:" + orgId : scope,
+          session: null,
+          historyKind: "conversation",
+        });
       }
       document.querySelectorAll("[data-viewlink]").forEach((button) => {
         button.onclick = () => setView(button.dataset.viewlink);
@@ -10884,6 +10943,7 @@
           files: renderFiles,
           memory: renderMemory,
           live: renderLive,
+          errors: renderErrors,
           audit: renderAudit,
           skills: renderSkills,
           crons: renderCrons,
@@ -10910,6 +10970,7 @@
           }
           if (historyKind === "background") path += "&origin=other_background";
         }
+        if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
         const cacheable = view !== "memory";
         const cached = cacheable ? dataCache.get(path) : undefined;
         if (cached !== undefined) {
@@ -11231,6 +11292,64 @@
           ),
         );
       }
+      function renderErrors(root, d) {
+        const all = orgWideView();
+        const errors = d.errors || [];
+        const total = d.total ?? errors.length;
+        const limit = d.limit || ERRORS_PAGE_SIZE;
+        const offset = d.offset || 0;
+        defaultShell({ count: plural(total, "error"), context: "Newest first" });
+        const rows = errors.map((e) => {
+          const scopeTarget = /^(personal|channel|team|org|group):.+/.test(e.scopeLabel || "") ? e.scopeLabel : null;
+          const fullText = e.message || "(no message)";
+          const previewText = firstLine(fullText, 160);
+          const expandable = previewText !== fullText;
+          const message = document.createElement(expandable ? "details" : "div");
+          message.className = "error-message";
+          if (expandable) {
+            const summary = document.createElement("summary");
+            const preview = document.createElement("span");
+            preview.className = "error-preview";
+            preview.textContent = previewText;
+            const full = document.createElement("span");
+            full.className = "error-full";
+            full.textContent = fullText;
+            summary.append(preview, full);
+            message.append(summary);
+          } else {
+            message.textContent = fullText;
+          }
+          return [
+            timeCell(e.ts),
+            { text: e.category || "uncategorized" },
+            { text: e.code || "—", cls: "mono" },
+            nodeCell(message),
+            ...(all
+              ? [
+                  scopeTarget
+                    ? nodeCell(navLink(shortName(scopeTarget), { view: "errors", scope: scopeTarget }))
+                    : { text: e.scopeLabel || "System" },
+                ]
+              : []),
+            e.sessionId
+              ? nodeCell(
+                  navLink("View session", { view: "history", scope: scopeTarget || scope, session: e.sessionId }),
+                )
+              : { text: "—" },
+          ];
+        });
+        const content = table(
+          ["Time", "Category", "Code", "Message", ...(all ? ["Scope"] : []), "Session"],
+          rows,
+          all ? "No errors recorded." : "No errors recorded for this scope.",
+        );
+        content.classList.add("errors-table", all ? "errors-all" : "errors-scoped");
+        const navigate = (n) => go({ view: "errors", scope, page: n });
+        root.appendChild(pager(total, limit, offset, navigate));
+        root.appendChild(bareDataCard(content));
+        root.appendChild(pager(total, limit, offset, navigate));
+      }
+
       function renderAudit(root, d) {
         const all = orgWideView();
         const events = d.events || [];

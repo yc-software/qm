@@ -48,7 +48,7 @@ test("admin shell uses the QM identity with org-injectable branding", () => {
 test("admin shell groups control, logs, and artifacts like the reorganization", () => {
   assert.match(
     html,
-    /const SECTIONS = \[\s*\{ views: \["governance", "models", "credentials", "connectors", "customize", "users"\] \},\s*\{ label: "Logs", views: \["history", "slack", "judgments", "audit", "egress", "metrics"\] \},\s*\{ label: "Artifacts", views: \["files", "skills", "memory", "deployments", "crons", "retention"\] \},\s*\];/,
+    /const SECTIONS = \[\s*\{ views: \["governance", "models", "credentials", "connectors", "customize", "users"\] \},\s*\{ label: "Logs", views: \["history", "slack", "judgments", "errors", "audit", "egress", "metrics"\] \},\s*\{ label: "Artifacts", views: \["files", "skills", "memory", "deployments", "crons", "retention"\] \},\s*\];/,
   );
   assert.match(html, /history: "Sessions"/);
   assert.match(

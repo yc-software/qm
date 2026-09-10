@@ -1691,3 +1691,33 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test("admin errors paginate all retained records with scoped totals and bounded page sizes", async () => {
+  const s = start();
+  try {
+    for (let i = 0; i < 260; i++)
+      s.built.errors.record({
+        category: "turn",
+        code: String(i),
+        message: "failure",
+        scopeLabel: "personal:U1",
+        sessionId: "test-session",
+      });
+    s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" });
+    const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
+    const page = await getJson(s.base, path + "&limit=50&offset=200");
+    assert.equal(page.total, 260);
+    assert.equal(page.offset, 200);
+    assert.equal(page.errors.length, 50);
+    assert.equal(page.errors[0].code, "59");
+    const last = await getJson(s.base, path + "&limit=50&offset=999");
+    assert.equal(last.offset, 250);
+    assert.equal(last.errors.length, 10);
+    assert.equal((await getJson(s.base, path + "&limit=999")).limit, 200);
+    for (const query of ["limit=-1", "offset=-1", "offset=1.5", "limit=Infinity", "offset=NaN"])
+      assert.equal((await get(s.base, path + "&" + query)).status, 400);
+    assert.equal((await getJson(s.base, path + "&count=1")).total, 260);
+  } finally {
+    await s.close();
+  }
+});
