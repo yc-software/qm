@@ -1,0 +1,7 @@
+.chat-search-input::placeholder {
+  color: var(--ink-3);
+}
+.chat-search-meta time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}

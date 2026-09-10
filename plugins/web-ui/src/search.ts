@@ -256,7 +256,13 @@ function resultRows(): TemplateResult[] {
           <span class="chat-search-snippet" dir="auto">${highlight(hitSnippet(hit))}</span>
           <span class="chat-search-meta"
             ><bdi>${hit.entryType === "user" ? (hit.author ?? "you") : "agent"}</bdi> ·
-            ${new Date(hit.createdAt).toLocaleDateString()}</span
+            ${
+              Number.isFinite(hit.createdAt)
+                ? html`<time datetime=${new Date(hit.createdAt).toISOString()}
+                    >${new Date(hit.createdAt).toLocaleDateString()}</time
+                  >`
+                : html`<span>Unknown date</span>`
+            }</span
           >
         </span>
       </button>
@@ -295,11 +301,11 @@ function paletteTpl(): TemplateResult {
   if (q.length < MIN_QUERY_LEN) {
     body = html`<div class="chat-search-empty">Search every chat you can see: messages, not just titles.</div>`;
   } else if (searchState.loading && !searchState.hits.length) {
-    body = html`<div class="chat-search-empty">Searching…</div>`;
+    body = html`<div class="chat-search-empty sheen-label thinking-sheen">Searching…</div>`;
   } else if (searchState.failed) {
     body = html`<div class="chat-search-empty chat-search-failed">Search failed. Try again.</div>`;
   } else if (!searchState.hits.length) {
-    body = html`<div class="chat-search-empty">No messages match “${q}”.</div>`;
+    body = html`<div class="chat-search-empty">No results for “${q}”</div>`;
   } else {
     body = html`${resultRows()}`;
   }
@@ -312,7 +318,7 @@ function paletteTpl(): TemplateResult {
     >
       <div class="chat-search-palette" role="dialog" aria-label="Search your chats" @keydown=${onPaletteKeydown}>
         <div class="chat-search-inputrow">
-          ${icon(Search, 16)}
+          ${icon(Search, 14)}
           <input
             class="chat-search-input"
             type="text"
