@@ -7628,6 +7628,15 @@ h3.ambient-field-label {
   padding: 4px 9px;
   cursor: pointer;
 }
+.settings-fast-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.settings-fast-toggle.active .icon {
+  fill: currentColor;
+}
 .settings-chip:hover {
   color: var(--foreground);
 }
