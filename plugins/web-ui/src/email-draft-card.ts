@@ -3,18 +3,20 @@ import { CheckCheck, Eye, PenLine, Send, Undo2 } from "lucide";
 import { api, ApiError } from "./core-bridge";
 import type { EmailDraftRef } from "./email-draft";
 import { toInboxItem, type InboxDraft, type InboxItem, type LedgerItem } from "./inbox";
-import { appState } from "./shell-state";
 import { icon, initials, relTime } from "./ui";
 
 interface DraftState {
   ref: EmailDraftRef;
   host: HTMLElement;
   item: InboxItem | null;
+  gone: boolean;
+  hidden: boolean;
   loading: boolean;
   mode: "preview" | "edit";
   edit: (InboxDraft & { basedOnAt?: number }) | null;
   busy: boolean;
   notice: string | null;
+  chain: Promise<void>;
 }
 
 const states = new Map<string, DraftState>();
@@ -33,7 +35,19 @@ export function emailDraftCard(ref: EmailDraftRef): HTMLElement {
   if (!state) {
     const host = document.createElement("section");
     host.className = "email-draft";
-    state = { ref, host, item: null, loading: false, mode: "preview", edit: null, busy: false, notice: null };
+    state = {
+      ref,
+      host,
+      item: null,
+      gone: false,
+      hidden: false,
+      loading: false,
+      mode: "preview",
+      edit: null,
+      busy: false,
+      notice: null,
+      chain: Promise.resolve(),
+    };
     states.set(ref.itemId, state);
     void load(state);
   }
@@ -48,9 +62,10 @@ async function load(state: DraftState): Promise<void> {
   try {
     const { item } = await api<{ item: LedgerItem }>(itemPath(state.ref));
     state.item = toInboxItem(item);
-    if (state.edit && state.item.draftAt !== undefined) state.edit.basedOnAt = state.item.draftAt;
   } catch (e) {
-    state.notice = `Couldn't load the draft: ${e instanceof Error ? e.message : e}`;
+    if (e instanceof ApiError && e.status === 404) state.gone = true;
+    else if (e instanceof ApiError && e.status === 403) state.hidden = true;
+    else state.notice = `Couldn't load the draft: ${e instanceof Error ? e.message : e}`;
   } finally {
     state.loading = false;
     draw(state);
@@ -102,44 +117,62 @@ function proposalArgs(state: DraftState): Record<string, unknown> {
   return { proposal: draft(state), ...(basedOnAt !== undefined ? { expectedProposalAt: basedOnAt } : {}) };
 }
 
-function isDraftConflict(e: unknown): boolean {
-  return e instanceof ApiError && e.status === 409 && /draft changed/i.test(e.message);
+function enqueue(state: DraftState, task: () => Promise<void>): Promise<void> {
+  const next = state.chain.then(task, task);
+  state.chain = next.catch(() => undefined);
+  return next;
 }
 
-async function withBusy(state: DraftState, work: () => Promise<void>, failure: string): Promise<void> {
-  if (state.busy) return;
+async function explainFailure(state: DraftState, e: unknown, failure: string): Promise<void> {
+  if (!(e instanceof ApiError && e.status === 409 && /draft changed/i.test(e.message))) {
+    state.notice = `${failure}: ${e instanceof Error ? e.message : e}`;
+    return;
+  }
+  await load(state);
+  if (state.edit && state.item?.draftAt !== undefined) {
+    state.edit.basedOnAt = state.item.draftAt;
+    const preview = (state.item.draft?.body ?? "").trim().slice(0, 140);
+    state.notice = `The agent redrafted this email while you were editing. Your text is kept in the box. New draft: "${preview}". Send again to use yours.`;
+  } else {
+    state.notice = "The agent changed this draft while you were looking. Review the new version, then try again.";
+  }
+}
+
+function persist(state: DraftState): Promise<void> {
+  if (!state.edit || !state.item) return Promise.resolve();
+  if (sameDraft(state.item.draft, draft(state))) {
+    state.edit = null;
+    return Promise.resolve();
+  }
+  return enqueue(state, async () => {
+    const sent = state.edit;
+    if (!sent || !state.item || sameDraft(state.item.draft, draft(state))) return;
+    try {
+      await postAction(state, "edit", proposalArgs(state));
+      if (state.edit === sent) state.edit = null;
+      else if (state.edit && state.item?.draftAt !== undefined) state.edit.basedOnAt = state.item.draftAt;
+    } catch (e) {
+      await explainFailure(state, e, "Couldn't save the draft");
+    }
+    draw(state);
+  });
+}
+
+function withBusy(state: DraftState, work: () => Promise<void>, failure: string): Promise<void> {
+  if (state.busy) return Promise.resolve();
   state.busy = true;
   state.notice = null;
   draw(state);
-  try {
-    await work();
-  } catch (e) {
-    if (isDraftConflict(e)) {
-      await load(state);
-      state.notice = "The agent changed this draft while you were looking. Review the new version, then try again.";
-    } else {
-      state.notice = `${failure}: ${e instanceof Error ? e.message : e}`;
+  return enqueue(state, async () => {
+    try {
+      await work();
+    } catch (e) {
+      await explainFailure(state, e, failure);
+    } finally {
+      state.busy = false;
+      draw(state);
     }
-  } finally {
-    state.busy = false;
-    draw(state);
-  }
-}
-
-async function persist(state: DraftState): Promise<void> {
-  if (!state.edit || !state.item) return;
-  if (sameDraft(state.item.draft, draft(state))) {
-    state.edit = null;
-    return;
-  }
-  await withBusy(
-    state,
-    async () => {
-      await postAction(state, "edit", proposalArgs(state));
-      state.edit = null;
-    },
-    "Couldn't save the draft",
-  );
+  });
 }
 
 function setMode(state: DraftState, mode: DraftState["mode"]): void {
@@ -191,6 +224,16 @@ function recipientsLine(current: InboxDraft): string {
 
 function cardTpl(state: DraftState): TemplateResult {
   const item = state.item;
+  if (state.hidden) return html`${nothing}`;
+  if (state.gone) {
+    const { to, subject } = state.ref;
+    return html`<div class="email-draft-receipt">
+      <span class="meta"
+        >Email draft${subject ? html` <b>${subject}</b>` : nothing}${to?.length ? ` to ${to.join(", ")}` : ""} is no longer
+        on the ledger.</span
+      >
+    </div>`;
+  }
   if (!item) {
     return html`<div class="email-draft-meta">
       ${state.notice ?? (state.loading ? "Loading the email draft…" : "The email draft is not available.")}
@@ -219,7 +262,7 @@ function cardTpl(state: DraftState): TemplateResult {
         </button>
       </span>
     </div>
-    <div class="email-draft-paper">${state.mode === "edit" ? editTpl(state, current) : previewTpl(current)}</div>
+    <div class="email-draft-paper">${state.mode === "edit" ? editTpl(state, item, current) : previewTpl(item, current)}</div>
     <div class="email-draft-foot">
       <button
         type="button"
@@ -237,12 +280,8 @@ function cardTpl(state: DraftState): TemplateResult {
   `;
 }
 
-function signedInUser(): string {
-  return appState.me?.user ?? "";
-}
-
-function previewTpl(current: InboxDraft): TemplateResult {
-  const from = signedInUser();
+function previewTpl(item: InboxItem, current: InboxDraft): TemplateResult {
+  const from = item.from;
   return html`
     <div class="email-draft-from">
       <span class="email-draft-avatar">${initials(from)}</span>
@@ -254,7 +293,7 @@ function previewTpl(current: InboxDraft): TemplateResult {
   `;
 }
 
-function editTpl(state: DraftState, current: InboxDraft): TemplateResult {
+function editTpl(state: DraftState, item: InboxItem, current: InboxDraft): TemplateResult {
   const field = (label: string, value: string, apply: (raw: string) => Partial<InboxDraft>): TemplateResult =>
     html`<label class="email-draft-field">
       <span>${label}</span>
@@ -267,7 +306,7 @@ function editTpl(state: DraftState, current: InboxDraft): TemplateResult {
     </label>`;
   return html`
     <div class="email-draft-fields">
-      <div class="email-draft-field"><span>From</span><span class="email-draft-static">${signedInUser()}</span></div>
+      <div class="email-draft-field"><span>From</span><span class="email-draft-static">${item.from}</span></div>
       ${field("To", (current.to ?? []).join(", "), (raw) => ({ to: splitAddresses(raw) }))}
       ${field("Cc", (current.cc ?? []).join(", "), (raw) => ({ cc: splitAddresses(raw) }))}
       ${field("Subject", current.subject ?? "", (raw) => ({ subject: raw }))}

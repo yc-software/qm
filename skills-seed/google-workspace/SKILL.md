@@ -132,6 +132,10 @@ events is a write. Prepare the exact action, show the user the exact text, and a
 approval before running it. `send-draft` only ever fires on an explicitly approved
 draft.
 
+When the `send_email` tool is available (web chat with Gmail connected), hand outgoing
+email to it instead of creating a Gmail draft: the person edits and sends it from the
+conversation, and nothing is written to Gmail until they do.
+
 Calendar event creation after approval:
 
 ```bash

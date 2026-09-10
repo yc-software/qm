@@ -6,7 +6,13 @@ import { emailDraftsIn, type EmailDraftActivity } from "../src/email-draft.ts";
 test("email drafts come only from successful send_email results, one card per item", () => {
   const activity: EmailDraftActivity[] = [
     { type: "tool_call", payload: { tool: "send_email", to: ["a@b.co"] } },
-    { type: "tool_result", payload: { tool: "send_email", display: { emailDraft: { loopId: "l1", itemId: "i1" } } } },
+    {
+      type: "tool_result",
+      payload: {
+        tool: "send_email",
+        display: { emailDraft: { loopId: "l1", itemId: "i1", to: ["a@b.co", 7], subject: "Hi" } },
+      },
+    },
     { type: "tool_result", payload: { tool: "send_email", display: { emailDraft: { loopId: "l1", itemId: "i1" } } } },
     {
       type: "tool_result",
@@ -15,7 +21,7 @@ test("email drafts come only from successful send_email results, one card per it
     { type: "tool_result", payload: { tool: "miniapp", display: { emailDraft: { loopId: "l1", itemId: "i3" } } } },
     { type: "tool_result", payload: { tool: "send_email", display: { emailDraft: { loopId: "l1" } } } },
   ];
-  assert.deepEqual(emailDraftsIn(activity), [{ loopId: "l1", itemId: "i1" }]);
+  assert.deepEqual(emailDraftsIn(activity), [{ loopId: "l1", itemId: "i1", to: ["a@b.co"], subject: "Hi" }]);
   assert.deepEqual(emailDraftsIn(undefined), []);
 });
 

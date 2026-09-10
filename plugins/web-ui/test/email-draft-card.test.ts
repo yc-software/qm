@@ -59,6 +59,10 @@ test("the email draft card previews, edits, and sends through the ledger with re
   let current = entry();
   const actions: Array<Record<string, unknown>> = [];
   let sendConflictsOnce = true;
+  let releaseEdit: (() => void) | null = null;
+  const editGate = new Promise<void>((resolve) => {
+    releaseEdit = resolve;
+  });
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     const itemPath = `/api/loops/${LOOP_ID}/items/${ITEM_ID}`;
@@ -68,7 +72,8 @@ test("the email draft card previews, edits, and sends through the ledger with re
       actions.push(body);
       const args = body.args as { proposal: Record<string, unknown>; expectedProposalAt?: number };
       if (body.kind === "edit") {
-        current = entry({ proposal: { data: args.proposal, by: "human", at: 2_000 } }, 2_000);
+        if (actions.length === 1) await editGate;
+        current = entry({ proposal: { data: args.proposal, by: "human", at: 2_000 + actions.length } });
         return Response.json({ item: current });
       }
       if (body.kind === "send") {
@@ -127,8 +132,7 @@ test("the email draft card previews, edits, and sends through the ledger with re
     subject.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     assert.match(host.querySelector(".email-draft-pill")?.textContent ?? "", /Edited/);
     subject.dispatchEvent(new dom.window.Event("blur"));
-    const sendEnabled = (): boolean => host.querySelector(".email-draft-send:not([disabled])") !== null;
-    await until(() => actions.length === 1 && sendEnabled(), "the edit to persist");
+    await until(() => actions.length === 1, "the edit to be posted");
     assert.equal(actions[0]!.kind, "edit");
     assert.deepEqual(actions[0]!.args, {
       proposal: {
@@ -139,17 +143,35 @@ test("the email draft card previews, edits, and sends through the ledger with re
       },
       expectedProposalAt: 1_000,
     });
+    assert.ok(host.querySelector(".email-draft-send:not([disabled])"), "a save in flight never disables Send");
+    textarea.value = "Hi Dana,\n\nShort answer: no. Typed mid-save.";
+    textarea.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    releaseEdit!();
+    await until(() => host.querySelector(".email-draft-pill")?.textContent?.includes("Edited") === true, "the pill");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(
+      host.querySelector<HTMLTextAreaElement>(".email-draft-textarea")?.value,
+      "Hi Dana,\n\nShort answer: no. Typed mid-save.",
+      "text typed while a save was in flight survives the save landing",
+    );
 
+    textarea.dispatchEvent(new dom.window.Event("blur"));
     click(".email-draft-send");
+    const sendEnabled = (): boolean => host.querySelector(".email-draft-send:not([disabled])") !== null;
     await until(() => host.querySelector(".email-draft-notice") !== null && sendEnabled(), "the conflict notice");
-    assert.equal(actions[1]!.kind, "send");
-    assert.equal((actions[1]!.args as { expectedProposalAt: number }).expectedProposalAt, 2_000);
-    assert.match(host.querySelector(".email-draft-notice")?.textContent ?? "", /agent changed this draft/);
+    assert.deepEqual(
+      actions.map((a) => a.kind),
+      ["edit", "edit", "send"],
+      "a Send clicked while the blur save is pending waits for it instead of being dropped",
+    );
+    assert.equal((actions[1]!.args as { proposal: { body: string } }).proposal.body, "Hi Dana,\n\nShort answer: no. Typed mid-save.");
+    assert.equal((actions[2]!.args as { expectedProposalAt: number }).expectedProposalAt, 2_002);
+    assert.match(host.querySelector(".email-draft-notice")?.textContent ?? "", /changed this draft while you were looking/);
     assert.equal(host.querySelector<HTMLTextAreaElement>(".email-draft-textarea")?.value, "Agent redraft.");
 
     click(".email-draft-send");
     await until(() => host.querySelector(".email-draft-receipt") !== null, "the sent receipt");
-    assert.equal((actions[2]!.args as { expectedProposalAt: number }).expectedProposalAt, 3_000);
+    assert.equal((actions[3]!.args as { expectedProposalAt: number }).expectedProposalAt, 3_000);
     assert.match(host.querySelector(".email-draft-receipt")?.textContent ?? "", /Sent.*Q3 pricing, updated.*dana@northwind\.io/);
     assert.equal(host.querySelector(".email-draft-send"), null, "a sent email offers no second send");
   } finally {

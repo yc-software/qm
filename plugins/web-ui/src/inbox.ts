@@ -94,6 +94,7 @@ export interface InboxItem {
   externalReplyText?: string;
   reactions?: string[];
   probablyResolved?: boolean;
+  compose?: true;
   images?: string[];
   updatedAt: number;
 }
@@ -200,7 +201,7 @@ function viewSources(viewId: string): InboxSource[] {
 export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[] {
   const sources = viewSources(viewId);
   return inboxState.items.filter(
-    (i) => sources.includes(i.source) && (status === "open" ? i.status === "open" : i.status !== "open"),
+    (i) => !i.compose && sources.includes(i.source) && (status === "open" ? i.status === "open" : i.status !== "open"),
   );
 }
 
@@ -257,6 +258,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(payload.slack ? { slack: payload.slack as InboxItem["slack"] } : {}),
     ...(reactions?.length ? { reactions } : {}),
     ...(payload.probablyResolved === true ? { probablyResolved: true } : {}),
+    ...(payload.compose === true ? { compose: true } : {}),
     ...(Array.isArray(payload.images)
       ? { images: (payload.images as unknown[]).filter((u): u is string => typeof u === "string") }
       : {}),

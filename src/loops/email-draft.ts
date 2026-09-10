@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ensureInboxLoop } from "./inbox-loop.ts";
+import { ensureInboxLoop, INBOX_LEDGER_MAX_ITEMS, INBOX_LEDGER_RETENTION_MS } from "./inbox-loop.ts";
 import { loopItemId, type LoopItemLedger } from "./item-ledger.ts";
 import type { LoopStore } from "./loop-store.ts";
 
@@ -47,5 +47,6 @@ export async function holdEmailDraft(
       },
     },
   ]);
+  await deps.items.prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
   return { loopId: loop.id, itemId: loopItemId(loop.id, dedupeKey) };
 }
