@@ -421,3 +421,85 @@ test("Mode 2 (spine channel): static prose stays within the word-count ceiling (
       "This is expected to fail until the menu deletions in CONTRACT.md S5 land.",
   );
 });
+
+const autonomousClaims = [
+  "You see every message posted here as it arrives",
+  "you do NOT need to be @mentioned",
+  "new messages come to you",
+  "A standing order for this conversation calls for it → do what it says.",
+  "You can clearly, concretely help → you may chime in.",
+  "The guidance is re-evaluated against every new message automatically — no cron, no poll.",
+];
+
+test("web-project addressed turn receives an addressed-only composed system prompt", async (t) => {
+  const conversation: Conversation = {
+    kind: "group",
+    channelRef: "web-project-prompt-317",
+    threadRef: "web:U1:prompt-317",
+    audience: [actor],
+  };
+  const orch = buildOrchestrator({
+    orgSoul: "ORG-PROJECT-PROMPT-MARKER",
+    scopeSoulFor: { conversation, soul: "PROJECT-PROMPT-MARKER: keep replies concise." },
+  });
+  const prompt = await sysprompt(orch, {
+    surface: "web",
+    actor,
+    conversation,
+    text: "",
+    surfaceTools: true,
+    addressed: true,
+    origin: { kind: "human" },
+    sessionParticipantIds: [actor.id],
+  });
+  assertNoTemplateTokens(prompt, "web-project addressed turn");
+  assert.match(prompt, /no one ever reads this transcript/);
+  assert.match(prompt, /ONLY through the `web` tool/);
+  assert.match(prompt, /`post` answers HERE/);
+  assert.match(prompt, /read it with the `guidance` tool, amend it/);
+  assert.match(prompt, /## Your computer/);
+  assert.match(prompt, /ORG-PROJECT-PROMPT-MARKER/);
+  assert.match(prompt, /PROJECT-PROMPT-MARKER: keep replies concise/);
+  await t.test("states addressed-only observation and guidance semantics", () => {
+    assert.match(prompt, /Web-project message handling is addressed-only/);
+    assert.match(prompt, /You do not automatically observe or evaluate other project messages/);
+    assert.match(prompt, /Standing orders affect addressed replies only; they never trigger unprompted turns/);
+    assert.match(
+      prompt,
+      /Saved guidance applies to addressed replies only, not automatically to every new project message/,
+    );
+    assert.match(prompt, /reply with the `web` tool's `post` action, or decline with `stay_silent`/);
+  });
+  for (const claim of autonomousClaims)
+    await t.test(`omits autonomous promise: ${claim}`, () => {
+      assert.ok(!prompt.includes(claim), `contradictory autonomous claim in the fully composed prompt: ${claim}`);
+    });
+});
+
+for (const kind of ["channel", "group"] as const)
+  test(`Slack ${kind} addressed turn keeps the autonomous composed system prompt`, async () => {
+    const prompt = await sysprompt(
+      buildOrchestrator(),
+      spineChannelTurn("", {
+        conversation: {
+          kind,
+          channelRef: kind === "channel" ? "C317" : "G317",
+          threadRef: `slack:${kind}:prompt-317`,
+          audience: [actor],
+        },
+        addressed: true,
+        origin: { kind: "human" },
+      }),
+    );
+    assertNoTemplateTokens(prompt, `Slack ${kind} addressed turn`);
+    assert.match(prompt, /no one ever reads this transcript/);
+    assert.match(prompt, /ONLY through the `slack` tool/);
+    assert.match(prompt, /You're on Slack: keep each posted message to at most two sentences/);
+    assert.match(prompt, /## Your computer/);
+    for (const claim of autonomousClaims)
+      assert.ok(prompt.includes(claim), `missing Slack autonomous promise: ${claim}`);
+    assert.doesNotMatch(
+      prompt,
+      /Web-project message handling is addressed-only|Standing orders affect addressed replies only|Saved guidance applies to addressed replies only/,
+    );
+  });

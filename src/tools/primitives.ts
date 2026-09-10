@@ -374,7 +374,7 @@ interface SurfaceFileResult {
 }
 
 type SurfaceStandingOrderResult =
-  | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
+  | { ok: true; orders: string; supportsAmbient?: boolean; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
   | { ok: false; message: string };
 
 export interface SurfaceToolDeps {

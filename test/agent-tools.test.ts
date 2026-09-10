@@ -4,6 +4,8 @@ import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import type { EntryType, SessionEntry } from "../src/types.ts";
+import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
+import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
@@ -2647,3 +2649,124 @@ test("execute output from a reached room is external even for a local-looking co
   await call(execute, { command: "cat notes.md", scope: "channel:C2" });
   assert.deepEqual(seen, [{ provenance: "external", source: "reached room" }]);
 });
+
+test("project guidance uses the real writer, preserves legacy options and refuses unsupported controls", async () => {
+  const channelPolicy = createMemoryChannelPolicyStore();
+  const ref = "web-project-317";
+  const bots = { CI: { mode: "action" as const } };
+  await channelPolicy.set(ref, "before", { bots, ambientEnabled: true });
+  const audits: unknown[] = [];
+  const context = {
+    deps: { deliveries: {}, channelPolicy, auditLog: { record: (e: unknown) => audits.push(e) } },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "group", channelRef: ref },
+    session: { id: "S1" },
+    scopeId: `group:${ref}`,
+    defaultDestination: {},
+    strictReadOnly: false,
+  } as unknown as SurfaceToolsContext;
+  const surface = createSurfaceToolDeps(context)!;
+  assert.equal(createSurfaceToolDeps({ ...context, strictReadOnly: true }), undefined);
+  assert.equal(createSurfaceToolDeps({ ...context, input: { ...context.input, surfaceTools: false } }), undefined);
+  const tc = {
+    ...fakeToolContext(),
+    getStandingOrder: surface.getStandingOrder,
+    setStandingOrder: surface.setStandingOrder,
+  };
+  const guidance = tool("guidance", tc);
+  const out = textOut(await call(guidance, { action: "read" }));
+  assert.match(out, /before/);
+  assert.match(out, /not supported/i);
+  assert.doesNotMatch(out, /Ambient replies: (on|off|default)|Bot ledger:/);
+  const before = await channelPolicy.get(ref);
+  const history = await channelPolicy.history(ref);
+  for (const field of [
+    { ambientEnabled: true },
+    { ambientEnabled: false },
+    { ambientEnabled: null },
+    { ambientEnabled: {} },
+    { bots: {} },
+    { bots: null },
+    { bots },
+  ]) {
+    for (const content of ["partial change forbidden", undefined]) {
+      const r = textOut(await call(guidance, { action: "write", content, ...field }));
+      assert.match(r, /\[error\].*standing orders.*not.*ambient/i);
+      assert.deepEqual(await channelPolicy.get(ref), before);
+      assert.deepEqual(await channelPolicy.history(ref), history);
+      assert.equal(audits.length, 0);
+    }
+  }
+  assert.match(textOut(await call(guidance, { action: "write", content: "after" })), /updated/);
+  const after = await channelPolicy.get(ref);
+  assert.equal(after!.orders, "after");
+  assert.equal(after!.ambientEnabled, true);
+  assert.deepEqual(after!.bots, bots);
+  assert.equal(audits.length, 1);
+  assert.deepEqual((await channelPolicy.history(ref)).slice(1), history);
+});
+
+test("guidance model-facing description states the web-project exception before any tool call", () => {
+  const guidance = createAgentTools({ current: null }, { surfaceTools: true }).find((t) => t.name === "guidance")!;
+  assert.match(guidance.description, /Slack channel or group DM/);
+  assert.match(guidance.description, /evaluated against every new message automatically/);
+  assert.match(guidance.description, /in web projects, `channel` orders affect addressed replies only/);
+  assert.match(guidance.description, /never trigger unprompted turns/);
+  assert.match(guidance.description, /Omit `ambientEnabled` and `bots` for web projects/);
+  assert.match(guidance.description, /Default scope: `channel` in a channel, group DM or web project/);
+});
+
+for (const field of ["ambientEnabled", "bots"])
+  test(`guidance model-facing ${field} schema excludes web projects`, () => {
+    const guidance = createAgentTools({ current: null }, { surfaceTools: true }).find((t) => t.name === "guidance")!;
+    const parameters = guidance.parameters as { properties: Record<string, { description?: string }> };
+    assert.match(parameters.properties[field]!.description!, /Slack/);
+    assert.match(parameters.properties[field]!.description!, /unsupported in web projects/);
+  });
+
+for (const [scope, kind, ref] of [
+  ["group:web-project-guidance-contract", "group", "web-project-guidance-contract"],
+  ["channel:C-guidance-contract", "channel", "C-guidance-contract"],
+  ["group:G-guidance-contract", "group", "G-guidance-contract"],
+] as const)
+  test(`guidance response semantics before and after orders-only write: ${scope}`, async (t) => {
+    const channelPolicy = createMemoryChannelPolicyStore();
+    const project = ref.startsWith("web-project-");
+    await channelPolicy.set(ref, "before", { ambientEnabled: true });
+    const surface = createSurfaceToolDeps({
+      deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+      input: { surfaceTools: true },
+      actor: { id: "U1" },
+      conversation: { kind, channelRef: ref },
+      session: { id: "S1" },
+      scopeId: scope,
+      defaultDestination: {},
+      strictReadOnly: false,
+    } as unknown as SurfaceToolsContext)!;
+    const guidance = tool("guidance", {
+      ...fakeToolContext(),
+      getStandingOrder: surface.getStandingOrder,
+      setStandingOrder: surface.setStandingOrder,
+    });
+    await t.test("read before write", async () => {
+      const read = textOut(await call(guidance, { action: "read" }));
+      assert.match(read, /before/);
+      if (project) assert.match(read, /addressed replies only/);
+      else assert.match(read, /Ambient replies: on/);
+    });
+    await t.test("write success and subsequent read", async () => {
+      const saved = textOut(await call(guidance, { action: "write", content: "after" }));
+      if (project) {
+        assert.match(saved, /project standing orders updated/);
+        assert.match(saved, /addressed replies only/);
+        assert.doesNotMatch(saved, /channel guidance updated/);
+      } else assert.equal(saved, "[channel guidance updated]");
+      const read = textOut(await call(guidance, { action: "read" }));
+      assert.match(read, /after/);
+      if (project) assert.match(read, /addressed replies only/);
+      else assert.match(read, /Ambient replies: on/);
+      assert.equal((await channelPolicy.get(ref))!.orders, "after");
+      assert.equal((await channelPolicy.get(ref))!.ambientEnabled, true);
+    });
+  });

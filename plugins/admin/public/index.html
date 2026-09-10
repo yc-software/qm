@@ -5312,49 +5312,58 @@
                 </section>
                 <section class="card sv-governance hidden" id="card-ambient-policy">
                   <div class="head">
-                    <h2>Ambient reply policy</h2>
-                    <p>
+                    <h2 id="ambient-policy-heading">Ambient reply policy</h2>
+                    <p class="ambient-controls">
                       What the agent proactively acts on in this channel. The standing order is plain prose the ambient
                       judge weighs each batch of new messages against. Empty means it stays silent unless addressed. The
                       bot ledger says how each automated poster is treated: <b>ignore</b> never wakes the judge,
                       <b>rollup</b> batches its posts (judged at most once per the given hours), <b>action</b> marks its
                       posts as triggers to act on, <b>user</b> reads it like a person.
                     </p>
+                    <p id="ambient-project-hint" class="hidden">
+                      Used when QM responds in this project. Ambient replies and automated-poster handling aren’t
+                      supported here.
+                    </p>
                   </div>
                   <div class="body">
-                    <label for="ambient-enabled">Ambient behavior</label>
-                    <p class="hint" style="margin: 2px 0 6px">
-                      When off, the agent never wakes on overheard messages in this channel; it only responds to direct
-                      @mentions. Default: on for channels with 8 or fewer members, off for larger ones.
-                    </p>
-                    <select id="ambient-enabled" style="margin-bottom: 14px">
-                      <option value="default">Default (by channel size)</option>
-                      <option value="on">On</option>
-                      <option value="off">Off</option>
-                    </select>
+                    <div class="ambient-controls">
+                      <label for="ambient-enabled">Ambient behavior</label>
+                      <p class="hint" style="margin: 2px 0 6px">
+                        When off, the agent never wakes on overheard messages in this channel; it only responds to
+                        direct @mentions. Default: on for channels with 8 or fewer members, off for larger ones.
+                      </p>
+                      <select id="ambient-enabled" style="margin-bottom: 14px">
+                        <option value="default">Default (by channel size)</option>
+                        <option value="on">On</option>
+                        <option value="off">Off</option>
+                      </select>
+                    </div>
                     <label for="ambient-orders">Standing order</label>
                     <textarea
                       id="ambient-orders"
                       placeholder="(none, the agent stays silent here unless addressed)"
                     ></textarea>
-                    <div class="tablewrap" style="margin-top: 14px">
-                      <table class="rules">
-                        <thead>
-                          <tr>
-                            <th style="width: 34%">Bot (author name)</th>
-                            <th style="width: 30%">Handling</th>
-                            <th>Rollup hours</th>
-                            <th></th>
-                          </tr>
-                        </thead>
-                        <tbody id="ambient-bots"></tbody>
-                      </table>
+                    <div class="ambient-controls">
+                      <div class="tablewrap" style="margin-top: 14px">
+                        <table class="rules">
+                          <thead>
+                            <tr>
+                              <th style="width: 34%">Bot (author name)</th>
+                              <th style="width: 30%">Handling</th>
+                              <th>Rollup hours</th>
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody id="ambient-bots"></tbody>
+                        </table>
+                      </div>
+                      <p class="hint rules-empty" id="ambient-bots-empty">No bots in the ledger yet.</p>
+                      <button id="add-bot" type="button" style="margin-top: 10px">+ Add bot</button>
                     </div>
-                    <p class="hint rules-empty" id="ambient-bots-empty">No bots in the ledger yet.</p>
-                    <button id="add-bot" type="button" style="margin-top: 10px">+ Add bot</button>
                   </div>
                   <div class="foot">
-                    <button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button
+                    <button type="button" class="viewlink ambient-controls" data-viewlink="judgments">
+                      View judgment log ›</button
                     ><button class="primary" data-save="ambient-policy">Save</button
                     ><span class="status" id="st-ambient-policy"></span>
                   </div>
@@ -7754,6 +7763,7 @@
         const requestedScope = scope;
         const requestId = ++governanceReq;
         const scopeChanged = scope !== loadedGovernanceScope;
+        if (scopeChanged) renderAmbientPolicy(undefined);
         const r = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
         if (requestId !== governanceReq || requestedScope !== scope) return;
         if (!r.ok) {
@@ -10187,6 +10197,16 @@
         return tr;
       }
       function renderAmbientPolicy(p) {
+        const card = $("card-ambient-policy");
+        const supportsAmbient = p?.supportsAmbient === true;
+        card.dataset.supportsAmbient = typeof p?.supportsAmbient === "boolean" ? String(p.supportsAmbient) : "";
+        card.querySelector('[data-save="ambient-policy"]').disabled = true;
+        card.querySelectorAll(".ambient-controls").forEach((el) => el.classList.toggle("hidden", !supportsAmbient));
+        $("ambient-policy-heading").textContent = supportsAmbient ? "Ambient reply policy" : "Standing orders";
+        $("ambient-project-hint").classList.toggle("hidden", p?.supportsAmbient !== false);
+        $("ambient-orders").placeholder = supportsAmbient
+          ? "(none, the agent stays silent here unless addressed)"
+          : "Standing instructions for addressed replies in this project.";
         $("card-ambient-policy").dataset.base = String(p?.updatedAt ?? 0);
         let ambientEnabled = "default";
         if (p?.ambientEnabled === true) ambientEnabled = "on";
@@ -10206,6 +10226,14 @@
         row.querySelector("input")?.focus();
       };
       function collectAmbientPolicy() {
+        const supportsAmbient = $("card-ambient-policy").dataset.supportsAmbient;
+        if (supportsAmbient !== "true" && supportsAmbient !== "false")
+          throw new Error("Reload to update standing-order settings.");
+        const orders = {
+          orders: $("ambient-orders").value,
+          baseUpdatedAt: Number($("card-ambient-policy").dataset.base || 0),
+        };
+        if (supportsAmbient === "false") return orders;
         const bots = {};
         const seen = new Set();
         for (const tr of $("ambient-bots").children) {
@@ -10226,10 +10254,9 @@
         }
         const ambientSel = $("ambient-enabled").value;
         return {
-          orders: $("ambient-orders").value,
+          ...orders,
           bots,
           ambientEnabled: ambientSel === "default" ? null : ambientSel === "on",
-          baseUpdatedAt: Number($("card-ambient-policy").dataset.base || 0),
         };
       }
       $("add-rule").onclick = () => {
@@ -10476,6 +10503,7 @@
         const btn = sectionButton(key);
         setCardDirty(btn?.closest(".card"), dirty, SAVE_ST[key], '[data-save="' + key + '"]');
         if (key === "egress" && $("card-egress").classList.contains("egress-disabled")) btn.disabled = true;
+        if (key === "ambient-policy" && !$("card-ambient-policy").dataset.supportsAmbient) btn.disabled = true;
       }
       function captureSection(key) {
         if (!SAVE[key] || !sectionButton(key)) return;
@@ -10550,6 +10578,7 @@
         btn.onclick = async () => {
           const key = btn.dataset.save;
           const requestedScope = scope;
+          const requestedGovernanceReq = governanceReq;
           let body;
           try {
             body = SAVE[key]();
@@ -10557,16 +10586,23 @@
             setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
             return;
           }
-          if (!(await governanceSaveReview(key, body)) || requestedScope !== scope) return;
+          if (
+            !(await governanceSaveReview(key, body)) ||
+            requestedScope !== scope ||
+            requestedGovernanceReq !== governanceReq
+          )
+            return;
           const saveRequest = String(++governanceSaveSeq);
           btn.dataset.saveRequest = saveRequest;
           btn.disabled = true;
           setStatus(SAVE_ST[key], "Saving...", "saving", true);
           const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + key, body);
-          if (requestedScope !== scope) {
+          if (requestedScope !== scope || requestedGovernanceReq !== governanceReq) {
             if (btn.dataset.saveRequest === saveRequest) {
               delete btn.dataset.saveRequest;
-              btn.disabled = !btn.classList.contains("dirty");
+              btn.disabled =
+                !btn.classList.contains("dirty") ||
+                (key === "ambient-policy" && !$("card-ambient-policy").dataset.supportsAmbient);
               setStatus(SAVE_ST[key], "", "");
             }
             return;
@@ -10574,7 +10610,8 @@
           if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
           if (r.ok) {
             if (key === "security-posture" || key === "ambient-policy") {
-              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
+              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope));
+              if (requestedScope !== scope || requestedGovernanceReq !== governanceReq) return;
               if (!fresh.ok) {
                 updateSectionDirty(key);
                 setStatus(SAVE_ST[key], "Saved, but could not refresh the applied value.", "err");

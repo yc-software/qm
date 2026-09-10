@@ -30,6 +30,7 @@ import {
   type PublicServiceCredential,
   type ServiceCredentialInput,
 } from "../../credentials/keychain.ts";
+import { supportsAmbientControls, UNSUPPORTED_AMBIENT_CONTROLS } from "../../surface-cache/policy-scope.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
@@ -264,6 +265,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const p = await deps.channelPolicy.get(ref).catch(() => undefined);
       if (p === undefined) return undefined;
       return {
+        supportsAmbient: supportsAmbientControls(scope),
         orders: p?.orders ?? "",
         bots: p?.bots ?? {},
         ambientEnabled: p?.ambientEnabled ?? null,
@@ -281,12 +283,15 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ambientEnabled?: unknown;
         baseUpdatedAt?: unknown;
       };
+      const supportsAmbient = supportsAmbientControls(scope);
+      if (!supportsAmbient && (Object.hasOwn(b, "bots") || Object.hasOwn(b, "ambientEnabled")))
+        return { error: UNSUPPORTED_AMBIENT_CONTROLS };
       if (typeof b.orders !== "string") return { error: "ambient-policy requires { orders: string }" };
       if (b.orders.length > MAX_ORDERS_CHARS)
         return {
-          error: `standing order is capped at ${MAX_ORDERS_CHARS} characters — it is rendered into every ambient judgment`,
+          error: `standing order is capped at ${MAX_ORDERS_CHARS} characters`,
         };
-      const parsed = parseBotLedger(b.bots);
+      const parsed = parseBotLedger(supportsAmbient ? b.bots : {});
       if ("error" in parsed) return { error: parsed.error };
       if (b.ambientEnabled !== undefined && b.ambientEnabled !== null && typeof b.ambientEnabled !== "boolean")
         return { error: "ambientEnabled must be a boolean or null (null = default rule)" };
@@ -300,8 +305,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       await deps.channelPolicy.set(ref, b.orders, {
         setBy: actor.id,
-        bots: parsed.bots,
-        ambientEnabled: b.ambientEnabled as boolean | null | undefined,
+        ...(supportsAmbient
+          ? { bots: parsed.bots, ambientEnabled: b.ambientEnabled as boolean | null | undefined }
+          : {}),
       });
       audit(ctx.deps, { principalId: actor.id, action: "surface.policy.set", resource: ref, scopeLabel: scope });
       return { ok: true };
