@@ -111,11 +111,13 @@ cannot compute — and pre-claim — a chosen mailbox's slots.
 ## Remembered browsers
 
 Verifying an email link creates a durable broker session in core's Postgres store.
-The browser receives an HttpOnly, Secure, SameSite=Lax cookie scoped to the issuer
-path (`/idp` behind the portal). Core stores only a hash of the random token; the
+The browser receives `__Host-qm_idp_session`, an HttpOnly, Secure, SameSite=Lax
+cookie with `Path=/` and no Domain. Core stores only a hash of the random token; the
 cookie also carries a broker-only MAC, so another plugin's core signing credential
 cannot manufacture an email sign-in. Rotating `AUTH_TOKEN_SECRET` invalidates all
-remembered cookies.
+remembered cookies. The old unprefixed cookie is not accepted for authentication;
+existing browsers must sign in again. Deploy the matching portal and auth plugin
+together; see [the migration contract](../../docs/published-app-serving.md#remembered-sign-in-compatibility).
 
 `AUTH_SESSION_IDLE_S` defaults to 30 days and `AUTH_SESSION_ABSOLUTE_S` defaults
 to 90 days. Both are whole seconds; the idle limit must not exceed the absolute

@@ -1,3 +1,4 @@
+import { deploymentPath } from "../../chassis/src/deployment-proxy.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
@@ -67,9 +68,11 @@ const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
 const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
-const COOKIE_DOMAIN =
-  process.env.PORTAL_COOKIE_DOMAIN ||
-  (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
+const COOKIE_DOMAIN = process.env.PORTAL_COOKIE_DOMAIN || undefined;
+const LEGACY_DERIVED_COOKIE_DOMAIN =
+  !COOKIE_DOMAIN && APPS_DOMAIN
+    ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN)
+    : undefined;
 const IS_PROD = process.env.NODE_ENV === "production";
 const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 const ORIGIN = (() => {
@@ -393,8 +396,13 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
   return (
-    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
-    localDevSession(req)
+    openSession(
+      readCookie(req.headers.cookie, "__Host-portal_session"),
+      sessionKey,
+      Date.now(),
+      ORG,
+      SESSION_MAX_TTL_S,
+    ) ?? localDevSession(req)
   );
 }
 
@@ -764,14 +772,29 @@ function isDeploymentLayerPassthrough(method: string, pathname: string): boolean
   return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
 }
 
+function legacySessionCleanup(): string[] {
+  const domains = new Set(
+    [COOKIE_DOMAIN, LEGACY_DERIVED_COOKIE_DOMAIN].filter((domain): domain is string => Boolean(domain)),
+  );
+  return [
+    clearCookie("portal_session", "/", SECURE_COOKIES),
+    ...[...domains].map((domain) => clearCookie("portal_session", "/", SECURE_COOKIES, domain)),
+    clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
+    clearCookie("portal_impersonate", "/", SECURE_COOKIES),
+    ...(AUTH_BROKER_UPSTREAM
+      ? [
+          clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true),
+          ...[...domains].map((domain) => clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true, domain)),
+        ]
+      : []),
+  ];
+}
+
 function sessionCookieSet(value: string): string[] {
-  const set = setCookie("portal_session", value, {
-    path: "/",
-    maxAge: SESSION_TTL_S,
-    secure: SECURE_COOKIES,
-    ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
-  });
-  return COOKIE_DOMAIN ? [set, clearCookie("portal_session", "/", SECURE_COOKIES)] : [set];
+  return [
+    setCookie("__Host-portal_session", value, { path: "/", maxAge: SESSION_TTL_S, secure: true }),
+    ...legacySessionCleanup(),
+  ];
 }
 
 function setSession(res: ServerResponse, headers: string[]): void {
@@ -849,7 +872,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
 
 function renewSessionCookie(req: IncomingMessage, res: ServerResponse): void {
   const session = openSession(
-    readCookie(req.headers.cookie, "portal_session"),
+    readCookie(req.headers.cookie, "__Host-portal_session"),
     sessionKey,
     Date.now(),
     ORG,
@@ -925,10 +948,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
     }
     setSession(res, [
-      clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      ...(COOKIE_DOMAIN ? [clearCookie("portal_session", "/", SECURE_COOKIES)] : []),
-      clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
+      clearCookie("__Host-portal_session", "/", true),
+      clearCookie("__Host-portal_oidc_tmp", "/", true),
+      clearCookie("__Host-portal_impersonate", "/", true),
+      ...legacySessionCleanup(),
+      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("__Host-qm_idp_session", "/", true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
         ? [setCookie(LOCAL_LOGOUT_COOKIE, "1", { path: "/", maxAge: SESSION_TTL_S, secure: SECURE_COOKIES })]
         : []),
@@ -954,7 +978,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         cookie: (req.headers.cookie ?? "")
           .split(";")
           .map((part) => part.trim())
-          .filter((part) => /^qm_idp_session=[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(part))
+          .filter((part) => /^__Host-qm_idp_session=[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(part))
           .join("; "),
       },
     );
@@ -988,10 +1012,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       exp: now + IMPERSONATE_TTL_S,
     };
     setSession(res, [
-      setCookie("portal_impersonate", seal(imp, impersonateKey), {
+      setCookie("__Host-portal_impersonate", seal(imp, impersonateKey), {
         path: "/",
         maxAge: IMPERSONATE_TTL_S,
-        secure: SECURE_COOKIES,
+        secure: true,
       }),
     ]);
     return json(res, 200, { ok: true, target, displayName: result.displayName ?? target });
@@ -999,8 +1023,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (pathname === "/auth/impersonate/stop" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
-    setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
+    const imp = openImpersonation(
+      readCookie(req.headers.cookie, "__Host-portal_impersonate"),
+      impersonateKey,
+      Date.now(),
+    );
+    setSession(res, [clearCookie("__Host-portal_impersonate", "/", true)]);
     if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
     if (wantsHtml(req)) {
       res.writeHead(303, { location: "/", "cache-control": "no-store" });
@@ -1123,15 +1151,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (isDeployment) {
     if (session.anon) return json(res, 403, { error: "forbidden", message: "sign in to view deployed apps" });
-    const rest = pathname.slice(`/${seg}/`.length);
-    const slash = rest.indexOf("/");
-    const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
-    const subPath = slash === -1 ? "/" : rest.slice(slash);
-    if (!id) return json(res, 404, { error: "not_found" });
+    const parts = deploymentPath(pathname);
+    if (!parts) return json(res, 400, { error: "invalid_deployment_path" });
     return proxyToDeployment(req, res, {
       coreBase: CORE,
-      id,
-      subPath,
+      launchOrigin: new URL(PUBLIC_URL).origin,
+      ...parts,
       search: url.search,
       principal: session.sub,
       signingSecret: CORE_SIGNING_SECRET,
@@ -1169,7 +1194,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   let principal = session.sub;
   let impersonator: string | undefined;
   if (key === "web-ui") {
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
+    const imp = openImpersonation(
+      readCookie(req.headers.cookie, "__Host-portal_impersonate"),
+      impersonateKey,
+      Date.now(),
+    );
     if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
       principal = imp.target;
       impersonator = session.sub;
@@ -1257,8 +1286,8 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = ""): v
   };
   setSession(res, [
     ...sessionCookieSet(seal(session, sessionKey)),
-    clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-    clearCookie("portal_impersonate", "/", SECURE_COOKIES),
+    clearCookie("__Host-portal_oidc_tmp", "/", true),
+    clearCookie("__Host-portal_impersonate", "/", true),
   ]);
 }
 
@@ -1268,8 +1297,8 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   if (localSession) {
     setSession(res, [
       ...sessionCookieSet(seal(localSession, sessionKey)),
-      clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
+      clearCookie("__Host-portal_oidc_tmp", "/", true),
+      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("__Host-qm_idp_session", "/", true)] : []),
       clearCookie(LOCAL_LOGOUT_COOKIE, "/", SECURE_COOKIES),
     ]);
     res.writeHead(302, { location: returnTo, "cache-control": "no-store" });
@@ -1281,7 +1310,7 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const now = Math.floor(Date.now() / 1000);
   const tmp: TmpClaims = { k: "tmp", state, nonce, pkceVerifier: verifier, returnTo, iat: now, exp: now + TMP_TTL_S };
   setSession(res, [
-    setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
+    setCookie("__Host-portal_oidc_tmp", seal(tmp, tmpKey), { path: "/", maxAge: TMP_TTL_S, secure: true }),
   ]);
   res.writeHead(302, { location: buildAuthorizeUrl(OIDC, { state, nonce, challenge }), "cache-control": "no-store" });
   res.end();
@@ -1289,7 +1318,7 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
 
 async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const fail = (detail: string): void => {
-    setSession(res, [clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES)]);
+    setSession(res, [clearCookie("__Host-portal_oidc_tmp", "/", true)]);
     sendHtml(res, 400, signInErrorHtml(detail));
   };
 
@@ -1297,7 +1326,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
 
-  const tmp = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now());
+  const tmp = openTmp(readCookie(req.headers.cookie, "__Host-portal_oidc_tmp"), tmpKey, Date.now());
   if (!tmp) return fail("login session expired, please try again");
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");
@@ -1371,16 +1400,8 @@ export function bootChecks(): void {
       );
     }
   }
-  if (APPS_DOMAIN && !COOKIE_DOMAIN) {
-    problems.push(
-      `the apps domain (${APPS_DOMAIN}) is not a subdomain of the portal host, so the cookie domain cannot be derived — set PORTAL_COOKIE_DOMAIN to the parent domain covering both (app returnTo without a domain-wide session cookie loops sign-in forever)`,
-    );
-  }
   if (COOKIE_DOMAIN && !hostIsWithinDomain(hostOf(PUBLIC_URL), COOKIE_DOMAIN)) {
     problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_PUBLIC_URL's host`);
-  }
-  if (APPS_DOMAIN && COOKIE_DOMAIN && !hostIsWithinDomain(APPS_DOMAIN, COOKIE_DOMAIN)) {
-    problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_APPS_DOMAIN (${APPS_DOMAIN})`);
   }
   if (PRINCIPAL_RULE.claim !== "sub" && PRINCIPAL_RULE.claim !== "email") {
     problems.push(`OIDC_PRINCIPAL_CLAIM must be "sub" or "email" (got "${PRINCIPAL_RULE.claim}")`);

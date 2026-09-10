@@ -162,8 +162,8 @@ export interface ServerDeps {
   brokeredServices?: () => readonly string[];
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
+  deployAppsOrgId?: string;
   deployGateSecret?: string;
-  deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;
   scheduler?: Scheduler;
   webhookReceiver?: WebhookReceiver;

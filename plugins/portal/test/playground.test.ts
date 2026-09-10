@@ -58,8 +58,10 @@ test.after(() => {
 const HTML = { accept: "text/html" };
 
 function sessionCookieOf(res: Response): string {
-  const raw = res.headers.getSetCookie().find((c) => c.startsWith("portal_session=") && !/portal_session=;/.test(c));
-  assert.ok(raw, "expected a portal_session cookie");
+  const raw = res.headers
+    .getSetCookie()
+    .find((c) => c.startsWith("__Host-portal_session=") && !/__Host-portal_session=;/.test(c));
+  assert.ok(raw, "expected a __Host-portal_session cookie");
   return raw.split(";")[0]!;
 }
 
@@ -115,7 +117,7 @@ test("sliding renewal preserves the anon flag", async () => {
     exp: now + SESSION_TTL_S / 2 - 600,
   };
   const res = await fetch(`${base}/`, {
-    headers: { ...HTML, cookie: `portal_session=${encodeURIComponent(seal(aged, key))}` },
+    headers: { ...HTML, cookie: `__Host-portal_session=${encodeURIComponent(seal(aged, key))}` },
     redirect: "manual",
   });
   assert.equal(res.status, 200);

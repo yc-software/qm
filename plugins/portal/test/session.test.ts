@@ -167,18 +167,18 @@ test("openImpersonation enforces kind, actor, target, and expiry; key is domain-
 });
 
 test("cookie helpers set HttpOnly/SameSite/Path and Secure only when asked", () => {
-  const secure = setCookie("portal_session", "v v", { path: "/", maxAge: 100, secure: true });
-  assert.match(secure, /^portal_session=v%20v; HttpOnly; SameSite=Lax; Path=\/; Secure; Max-Age=100$/);
-  const insecure = setCookie("portal_oidc_tmp", "x", { path: "/auth", maxAge: 600, secure: false });
+  const secure = setCookie("__Host-portal_session", "v v", { path: "/", maxAge: 100, secure: true });
+  assert.match(secure, /^__Host-portal_session=v%20v; HttpOnly; SameSite=Lax; Path=\/; Secure; Max-Age=100$/);
+  const insecure = setCookie("__Host-portal_oidc_tmp", "x", { path: "/auth", maxAge: 600, secure: false });
   assert.ok(!insecure.includes("Secure"));
-  assert.match(clearCookie("portal_session", "/", true), /Max-Age=0/);
+  assert.match(clearCookie("__Host-portal_session", "/", true), /Max-Age=0/);
 });
 
 test("readCookie extracts a named cookie and survives other pairs", () => {
-  const header = "a=1; portal_session=abc.def; webuiuser=EVIL";
-  assert.equal(readCookie(header, "portal_session"), "abc.def");
+  const header = "a=1; __Host-portal_session=abc.def; webuiuser=EVIL";
+  assert.equal(readCookie(header, "__Host-portal_session"), "abc.def");
   assert.equal(readCookie(header, "missing"), null);
-  assert.equal(readCookie(undefined, "portal_session"), null);
+  assert.equal(readCookie(undefined, "__Host-portal_session"), null);
 });
 
 test("safeEqual is length-aware and value-correct", () => {
@@ -215,12 +215,12 @@ test("sanitizeReturnTo with an apps domain admits exactly one-label app subdomai
 
 test("setCookie/clearCookie carry a Domain attribute only when asked", () => {
   assert.match(
-    setCookie("portal_session", "v", { secure: true, domain: "agent.example.com" }),
+    setCookie("test_session", "v", { secure: true, domain: "agent.example.com" }),
     /; Domain=agent\.example\.com;/,
   );
-  assert.doesNotMatch(setCookie("portal_session", "v", { secure: true }), /Domain=/);
-  assert.match(clearCookie("portal_session", "/", true, "agent.example.com"), /; Domain=agent\.example\.com;/);
-  assert.doesNotMatch(clearCookie("portal_session", "/", true), /Domain=/);
+  assert.doesNotMatch(setCookie("test_session", "v", { secure: true }), /Domain=/);
+  assert.match(clearCookie("test_session", "/", true, "agent.example.com"), /; Domain=agent\.example\.com;/);
+  assert.doesNotMatch(clearCookie("test_session", "/", true), /Domain=/);
 });
 
 test("sanitizeReturnTo accepts same-origin paths and rejects redirect escapes", () => {

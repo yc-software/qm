@@ -77,9 +77,11 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    headers: { "Content-Security-Policy": "frame-ancestors 'self'" },
     port: Number(process.env.VITE_PORT ?? 5173),
     fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] },
     proxy: {
+      "^/(?:d|deployments)(?:/|\\?|$)": { target: SERVER, changeOrigin: false },
       "/signin": SERVER,
       "/share": SERVER,
       "/me": SERVER,

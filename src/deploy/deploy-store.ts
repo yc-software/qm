@@ -34,6 +34,10 @@ export interface DeployEndpoint {
   proxyHeaders?: Record<string, string>;
 }
 
+export function deploymentLaunchUrl(deployment: { id: string; name?: string }, publicWebUrl = ""): string {
+  return `${publicWebUrl.replace(/\/$/, "")}/d/${encodeURIComponent(deployment.name ?? deployment.id)}/`;
+}
+
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {
   const raw = endpoint?.publicUrl;
   if (!raw) return raw ?? undefined;

@@ -647,7 +647,9 @@ test("remembered browsers silently reauthorize with fresh PKCE and the original 
   const verified = await openLink(h, linkFrom(h.mailer));
   assert.equal(verified.status, 302);
   const cookie = verified.headers.get("set-cookie")!;
-  assert.match(cookie, /HttpOnly; Secure; SameSite=Lax; Path=\/idp; Max-Age=/);
+  assert.ok(cookie.startsWith("__Host-qm_idp_session="));
+  assert.doesNotMatch(cookie, /; Domain=/i);
+  assert.match(cookie, /HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=/);
   const authTime = Math.floor(h.now.ms / 1000);
   h.now.ms += 60000;
   const { verifier, challenge } = pkcePair();
@@ -711,7 +713,7 @@ test("remembered-session backend failures fail closed", async (t) => {
   t.after(() => h.close());
   const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`, {
     headers: {
-      cookie: `qm_idp_session=${"a".repeat(43)}.${createHmac("sha256", h.cfg.tokenSecret)
+      cookie: `__Host-qm_idp_session=${"a".repeat(43)}.${createHmac("sha256", h.cfg.tokenSecret)
         .update(`qm-auth.browser.v1\n${h.cfg.issuer}\n${h.cfg.clientId}\n${"a".repeat(43)}`)
         .digest("base64url")}`,
     },
@@ -728,7 +730,7 @@ test("core source credentials cannot mint broker cookies", async (t) => {
   const forged = await h.sessions.create("admin@example.com", 3600, 7200);
   for (const value of [forged.token, `${forged.token}.${"x".repeat(43)}`]) {
     const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`, {
-      headers: { cookie: `qm_idp_session=${value}` },
+      headers: { cookie: `__Host-qm_idp_session=${value}` },
       redirect: "manual",
     });
     assert.equal(response.status, 200);
@@ -748,4 +750,20 @@ test("a remembered browser loses access when email eligibility is withdrawn", as
     redirect: "manual",
   });
   assert.equal(new URL(response.headers.get("location")!).searchParams.get("error"), "login_required");
+});
+
+test("legacy and duplicate remembered cookies cannot silently authenticate", async (t) => {
+  const h = await startHarness();
+  t.after(() => h.close());
+  await requestLink(h);
+  const verified = await openLink(h, linkFrom(h.mailer));
+  const pair = verified.headers.get("set-cookie")!.split(";")[0]!;
+  const value = pair.slice(pair.indexOf("=") + 1);
+  for (const cookie of [`qm_idp_session=${value}`, `__Host-qm_idp_session=${value}; __Host-qm_idp_session=${value}`]) {
+    const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`, {
+      headers: { cookie },
+      redirect: "manual",
+    });
+    assert.equal(response.status, 200);
+  }
 });

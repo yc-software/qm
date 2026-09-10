@@ -554,7 +554,7 @@ test("DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaul
   assert.equal(overridden.deployAppsDomain, "apps.example.com");
 });
 
-test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DOMAIN is unset", () => {
+test("only the legacy AWS gateway alias supplies a default app domain", () => {
   const porter = loadConfig({
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
@@ -562,7 +562,7 @@ test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DO
     PORTER_DEPLOY_CLUSTER_ID: "9",
     PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
   });
-  assert.equal(porter.deployAppsDomain, "apps.example.com");
+  assert.equal(porter.deployAppsDomain, undefined);
   assert.equal(porter.awsDeploy.appsDomain, undefined);
   assert.equal(porter.porterDeploy.appsDomain, "apps.example.com");
   const aws = loadConfig({
@@ -624,9 +624,9 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   });
   assert.equal(explicit.deployAppsLoginUrl, "https://portal.example.com");
   assert.throws(() => loadConfig({ DEPLOY_APPS_SESSION_SECRET: "s" }), /DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL/);
-  assert.throws(
-    () => loadConfig({ DEPLOY_APPS_LOGIN_URL: "https://portal.example.com" }),
-    /requires DEPLOY_APPS_SESSION_SECRET/,
+  assert.equal(
+    loadConfig({ DEPLOY_APPS_LOGIN_URL: "https://portal.example.com" }).deployAppsLoginUrl,
+    "https://portal.example.com",
   );
 });
 

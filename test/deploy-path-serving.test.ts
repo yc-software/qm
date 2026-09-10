@@ -13,6 +13,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { scopeId } from "../src/types.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
@@ -23,11 +24,14 @@ function httpGet(
   headers: Record<string, string>,
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: "localhost", port, path, method: "GET", headers }, (res) => {
-      let body = "";
-      res.on("data", (c) => (body += c));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
-    });
+    const req = httpRequest(
+      { host: "localhost", port, path, method: "GET", headers: { "sec-fetch-dest": "script", ...headers } },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+      },
+    );
     req.on("error", reject);
     req.end();
   });
@@ -63,21 +67,26 @@ async function fixture(
     sessions: createMemorySessionStore(),
     identity: createIdentityService(),
   } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
+  const d = await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),
     createdBy: "alice@example.com",
     entrypoint: "x",
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, deps);
+  const server = createInsecureTestServer(app, {
+    identity: createIdentityService(),
+    production: false,
+    replayDedupe: createMemoryReplayDedupe(),
+    ...deps,
+  });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   const close = async () => {
     await new Promise<void>((r) => (server as unknown as Server).close(() => r()));
     await new Promise<void>((r) => upstream.close(() => r()));
   };
-  return { port, close };
+  return { port, close, id: d.id };
 }
 
 test("/d/ path serving sandboxes proxied HTML so an app cannot act on the portal's origin", async () => {
@@ -119,11 +128,14 @@ test("subdomain serving stays unsandboxed — each app already has its own origi
   const f = await fixture({
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
-    deployAppsSessionSecret: "portal-session-secret",
     deployAppsLoginUrl: "https://portal.example.com",
   });
   try {
-    const page = await httpGet(f.port, "/", { Host: "mysite.apps.example.com", Accept: "text/html" });
+    const page = await httpGet(f.port, "/", {
+      Host: `${f.id}.apps.example.com`,
+      "sec-fetch-dest": "document",
+      Accept: "text/html",
+    });
     assert.equal(page.status, 302, "signed-out visitors bounce to sign-in, with no sandbox header");
     assert.equal(page.headers["content-security-policy"], undefined);
   } finally {
@@ -135,7 +147,6 @@ test("a /d/ document navigation upgrades to the app's subdomain once one is conf
   const f = await fixture({
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
-    deployAppsSessionSecret: "portal-session-secret",
     deployAppsLoginUrl: "https://portal.example.com",
   });
   try {
@@ -145,7 +156,10 @@ test("a /d/ document navigation upgrades to the app's subdomain once one is conf
       Accept: "text/html",
     });
     assert.equal(nav.status, 302);
-    assert.equal(nav.headers.location, "https://mysite.apps.example.com/page?a=1");
+    const target = new URL(String(nav.headers.location));
+    assert.equal(target.origin, `https://${f.id}.apps.example.com`);
+    assert.equal(target.pathname, "/__qm/start");
+    assert.ok(target.searchParams.get("request"));
 
     const sub = await httpGet(f.port, "/d/mysite/app.js", { "x-as-principal": "alice@example.com" });
     assert.equal(sub.status, 200, "subresource fetches keep proxying so open tabs never break");
@@ -154,7 +168,7 @@ test("a /d/ document navigation upgrades to the app's subdomain once one is conf
   }
 });
 
-test("without a subdomain configuration /d/ document navigations proxy in place", async () => {
+test("without isolated origin prerequisites /d/ document navigations explain configuration", async () => {
   const f = await fixture({});
   try {
     const nav = await httpGet(f.port, "/d/mysite/", {
@@ -162,8 +176,8 @@ test("without a subdomain configuration /d/ document navigations proxy in place"
       "sec-fetch-dest": "document",
       Accept: "text/html",
     });
-    assert.equal(nav.status, 200);
-    assert.equal(nav.body, "UPSTREAM OK");
+    assert.equal(nav.status, 503);
+    assert.match(nav.body, /DEPLOY_APPS_DOMAIN/);
   } finally {
     await f.close();
   }
@@ -175,7 +189,7 @@ test("owner-url without a subdomain configuration explains the /d/ path and the 
     const r = await httpGet(f.port, "/v1/deployments/mysite/owner-url?principalId=alice@example.com", {});
     assert.equal(r.status, 503);
     const { message } = JSON.parse(r.body) as { message: string };
-    assert.match(message, /\/d\/mysite\//);
+    assert.match(message, /Restricted \/d\//);
     assert.match(message, /DEPLOY_APPS_DOMAIN/);
   } finally {
     await f.close();

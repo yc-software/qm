@@ -1,3 +1,4 @@
+import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 import { deriveKey, seal } from "../src/session.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -17,8 +18,8 @@ const broker = createServer((req: IncomingMessage, res) => {
     });
     if (req.url?.startsWith("/verify")) {
       res.setHeader("set-cookie", [
-        "qm_idp_session=abc; Path=/idp; HttpOnly; Secure; SameSite=Lax",
-        "extra=1; Path=/idp",
+        "__Host-qm_idp_session=abc; Path=/; HttpOnly; Secure; SameSite=Lax",
+        "extra=1; Path=/",
       ]);
       res.writeHead(302, { location: "https://portal.test/auth/callback?code=c&state=s" });
       return void res.end();
@@ -30,7 +31,26 @@ const broker = createServer((req: IncomingMessage, res) => {
 await new Promise<void>((r) => broker.listen(0, "127.0.0.1", r));
 const brokerUrl = `http://127.0.0.1:${(broker.address() as AddressInfo).port}`;
 
+let revokeStatus = 200;
+const revocations: Array<{ body: string; identity: string; signature: string }> = [];
 const surface = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/auth/broker/sessions/revoke")) {
+    let body = "";
+    req.on("data", (chunk: Buffer) => {
+      body += chunk.toString();
+    });
+    req.on("end", () => {
+      revocations.push({
+        body,
+        identity: String(req.headers["x-portal-identity"] ?? ""),
+        signature: String(req.headers["x-signature"] ?? ""),
+      });
+      res.writeHead(revokeStatus, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: revokeStatus === 200 }));
+    });
+    return;
+  }
+  res.setHeader("set-cookie", "__Host-qm_idp_session=surface-must-not-set-this; Path=/");
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ surface: req.url }));
 });
@@ -73,7 +93,7 @@ test("the verify redirect is relayed back to the browser", async () => {
   const redirect = await fetch(`${base}/idp/verify?token=abc`, { redirect: "manual" });
   assert.equal(redirect.status, 302);
   assert.equal(redirect.headers.getSetCookie().length, 2);
-  assert.match(redirect.headers.getSetCookie()[0]!, /qm_idp_session=abc/);
+  assert.match(redirect.headers.getSetCookie()[0]!, /__Host-qm_idp_session=abc/);
   assert.equal(redirect.headers.get("location"), "https://portal.test/auth/callback?code=c&state=s");
 });
 
@@ -219,9 +239,11 @@ test("isPrivateNetworkUrl admits only unroutable hosts", () => {
 test("only broker cookies reach the broker", async () => {
   const token = `${"a".repeat(43)}.${"b".repeat(43)}`;
   await fetch(`${base}/idp/authorize`, {
-    headers: { cookie: `portal_session=secret; qm_idp_session=${token}; unrelated=secret` },
+    headers: {
+      cookie: `__Host-portal_session=secret; portal_session=legacy; qm_idp_session=legacy; __Host-qm_idp_session=${token}; unrelated=secret`,
+    },
   });
-  assert.equal(seen.at(-1)!.headers.cookie, `qm_idp_session=${token}`);
+  assert.equal(seen.at(-1)!.headers.cookie, `__Host-qm_idp_session=${token}`);
 });
 
 test("logout clears the remembered cookie and everywhere requires an authenticated caller", async () => {
@@ -231,24 +253,70 @@ test("logout clears the remembered cookie and everywhere requires an authenticat
     response.headers
       .getSetCookie()
       .some(
-        (value) => value.startsWith("qm_idp_session=") && value.includes("Path=/idp") && value.includes("Max-Age=0"),
+        (value) =>
+          value.startsWith("__Host-qm_idp_session=") && value.includes("Path=/") && value.includes("Max-Age=0"),
       ),
   );
   const unsigned = await fetch(`${base}/auth/logout?everywhere=1`, { method: "POST", headers: { origin: PUBLIC } });
   assert.equal(unsigned.status, 401);
-  const now = Date.now();
+  assert.ok(
+    response.headers
+      .getSetCookie()
+      .some(
+        (value) => value.startsWith("qm_idp_session=;") && value.includes("Path=/idp") && value.includes("Max-Age=0"),
+      ),
+  );
+  const now = Math.floor(Date.now() / 1000);
   const cookie = seal(
-    { k: "session", sub: "user@example.com", org: "acme", iat: now, exp: now + 60000 },
+    { k: "session", sub: "user@example.com", org: "acme", iat: now, exp: now + 60 },
     deriveKey(process.env.PORTAL_SESSION_SECRET!, "portal.session.v1"),
   );
   const signed = await fetch(`${base}/auth/logout?everywhere=1`, {
     method: "POST",
-    headers: { origin: PUBLIC, cookie: `portal_session=${cookie}` },
+    headers: { origin: PUBLIC, cookie: `__Host-portal_session=${cookie}` },
   });
   assert.equal(signed.status, 200);
+  assert.equal(revocations.at(-1)?.body, JSON.stringify({ email: "user@example.com" }));
+  assert.ok(revocations.at(-1)?.signature);
+  assert.equal(
+    verifyPortalIdentity(revocations.at(-1)!.identity, process.env.PORTAL_IDENTITY_SECRET!, Date.now())?.p,
+    "user@example.com",
+  );
+  for (const name of [
+    "__Host-portal_session",
+    "__Host-portal_oidc_tmp",
+    "__Host-portal_impersonate",
+    "__Host-qm_idp_session",
+  ]) {
+    assert.ok(
+      signed.headers.getSetCookie().some((value) => value.startsWith(name + "=;") && value.includes("Max-Age=0")),
+      name,
+    );
+  }
+  const before = revocations.length;
+  const legacy = await fetch(`${base}/auth/logout?everywhere=1`, {
+    method: "POST",
+    headers: { origin: PUBLIC, cookie: `portal_session=${cookie}` },
+  });
+  assert.equal(legacy.status, 401);
+  assert.equal(revocations.length, before);
+  revokeStatus = 503;
+  try {
+    const failed = await fetch(`${base}/auth/logout?everywhere=1`, {
+      method: "POST",
+      headers: { origin: PUBLIC, cookie: `__Host-portal_session=${cookie}` },
+    });
+    assert.equal(failed.status, 503);
+    assert.deepEqual(failed.headers.getSetCookie(), []);
+  } finally {
+    revokeStatus = 200;
+  }
+  const proxied = await fetch(`${base}/web-ui/api/me`, { headers: { cookie: `__Host-portal_session=${cookie}` } });
+  assert.equal(proxied.status, 200);
+  assert.deepEqual(proxied.headers.getSetCookie(), [], "broker cookie forwarding must not extend to ordinary surfaces");
   const crossOrigin = await fetch(`${base}/auth/logout?everywhere=1`, {
     method: "POST",
-    headers: { origin: "https://evil.test", cookie: `portal_session=${cookie}` },
+    headers: { origin: "https://evil.test", cookie: `__Host-portal_session=${cookie}` },
   });
   assert.equal(crossOrigin.status, 403);
 });

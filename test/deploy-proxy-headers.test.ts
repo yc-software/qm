@@ -1,12 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createServer as createHttpServer, request as httpRequest } from "node:http";
+import {
+  createServer as createHttpServer,
+  request as rawHttpRequest,
+  type RequestOptions,
+  type IncomingMessage,
+} from "node:http";
 import { constants as http2Constants, createServer as createHttp2Server, type ServerHttp2Session } from "node:http2";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer as insecureServer, createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+
+import { createIdentityService } from "../src/identity/identity-service.ts";
+
+function createInsecureTestServer(app: App, deps: Parameters<typeof insecureServer>[1] = {}) {
+  return insecureServer(app, { identity: createIdentityService(), ...deps });
+}
+
+function fetch(input: string, init: RequestInit = {}): Promise<Response> {
+  return globalThis.fetch(input, {
+    ...init,
+    headers: { "x-as-principal": "U1", "sec-fetch-dest": "empty", ...init.headers },
+  });
+}
+
+function httpRequest(options: RequestOptions, callback: (res: IncomingMessage) => void) {
+  return rawHttpRequest(
+    { ...options, headers: { "x-as-principal": "U1", "sec-fetch-dest": "empty", ...options.headers } },
+    callback,
+  );
+}
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;

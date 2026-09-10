@@ -6,7 +6,7 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 
 const core = createServer((req: IncomingMessage, res) => {
   if ((req.url ?? "").startsWith("/d/")) {
-    res.writeHead(200, {
+    res.writeHead(Number(new URL(req.url!, "http://core").searchParams.get("status") ?? "200"), {
       "content-type": "text/html; charset=utf-8",
       "content-security-policy": "default-src *",
     });
@@ -40,7 +40,7 @@ test("in-surface deployment preview is sandboxed to an opaque origin (no same-or
   assert.match(csp, /^sandbox\b/, "the response is served under a CSP sandbox");
   assert.ok(!/allow-same-origin/.test(csp), "the sandbox never grants same-origin (opaque origin only)");
   assert.match(csp, /allow-scripts/, "scripts still run inside the opaque origin");
-  assert.ok(!/default-src \*/.test(csp), "the surface CSP overrides the upstream's permissive one");
+  assert.match(csp, /default-src \*/, "upstream policy is retained alongside the independently enforced sandbox");
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
 });
 
@@ -48,3 +48,15 @@ test("the deployment preview still requires a signed-in user", async () => {
   const r = await fetch(`${base}/deployments/some-app/`);
   assert.equal(r.status, 401);
 });
+
+for (const status of [300, 302, 303, 305, 307, 308])
+  test(`unfollowed ${status} app response bodies remain sandboxed on QM origin`, async () => {
+    const identity = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, "deployment-preview-test-secret");
+    const response = await fetch(`${base}/d/app/?status=${status}`, {
+      redirect: "manual",
+      headers: { [PORTAL_IDENTITY_HEADER]: identity },
+    });
+    assert.equal(response.status, status);
+    assert.match(response.headers.get("content-security-policy") ?? "", /^sandbox\b/);
+    assert.doesNotMatch(response.headers.get("content-security-policy") ?? "", /allow-same-origin/);
+  });

@@ -32,16 +32,17 @@ test.after(() => {
 
 const APP_URL = "https://contracts.apps.qm.example.com/?dpl_signin=1";
 
-test("the session cookie is scoped to the parent domain so app subdomains receive it", async () => {
+test("the protected session cookie stays host-only even with legacy cookie-domain configuration", async () => {
   const login = await fetch(`${base}/auth/login?returnTo=/admin/`, { redirect: "manual" });
   assert.equal(login.status, 302);
   const cookies = login.headers.getSetCookie();
-  const session = cookies.find((c) => c.startsWith("portal_session=") && !/portal_session=;/.test(c));
-  assert.ok(session, "expected a portal_session cookie");
-  assert.match(session, /Domain=qm\.example\.com/);
+  const session = cookies.find((c) => c.startsWith("__Host-portal_session=") && !/__Host-portal_session=;/.test(c));
+  assert.ok(session, "expected a __Host-portal_session cookie");
+  assert.doesNotMatch(session, /Domain=/);
+  assert.match(session, /; Secure(?:;|$)/);
   assert.ok(
     cookies.some((c) => c.startsWith("portal_session=;") && !c.includes("Domain=")),
-    "expected the stale host-only portal_session to be cleared",
+    "expected the stale host-only __Host-portal_session to be cleared",
   );
 });
 
@@ -84,7 +85,7 @@ test("logout clears the cookie at both scopes", async () => {
     headers: { origin: "http://localhost:18198" },
     redirect: "manual",
   });
-  const cookies = out.headers.getSetCookie().filter((c) => c.startsWith("portal_session="));
+  const cookies = out.headers.getSetCookie().filter((c) => /^(?:__Host-)?portal_session=/.test(c));
   assert.ok(
     cookies.some((c) => /Domain=qm\.example\.com/.test(c)),
     "expected the domain-scoped cookie to be cleared",
