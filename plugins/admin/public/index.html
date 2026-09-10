@@ -5281,6 +5281,52 @@
                     ><span class="status" id="st-security-posture"></span>
                   </div>
                 </section>
+                <section class="card sv-governance hidden" id="card-auto-flagger">
+                  <div class="head">
+                    <h2>Auto flagger</h2>
+                    <p>
+                      Model and prompt that decide whether external context and tool results are quarantined in Auto
+                      mode. The security boundary and required verdict format remain fixed.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label for="auto-flagger-harness">Harness</label>
+                    <select id="auto-flagger-harness" style="max-width: 360px"></select>
+                    <label for="auto-flagger-model">Model</label>
+                    <select id="auto-flagger-model" style="max-width: 440px"></select>
+                    <label for="auto-flagger-rubric">Quarantine prompt (classification rubric)</label>
+                    <textarea id="auto-flagger-rubric" rows="10" maxlength="20000" style="width: 100%"></textarea>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="auto-flagger">Apply</button>
+                    <button id="auto-flagger-test" type="button">Test</button>
+                    <label
+                      for="auto-flagger-window"
+                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
+                      >on the last
+                      <input
+                        id="auto-flagger-window"
+                        type="number"
+                        min="1"
+                        max="500"
+                        step="1"
+                        value="100"
+                        style="width: 78px"
+                      />
+                      screenings</label
+                    >
+                    <label
+                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
+                      title="Also replay the configuration in effect today, so the flag rates are comparable"
+                      ><input type="checkbox" id="auto-flagger-compare" /> compare with current</label
+                    >
+                    <button id="auto-flagger-reset" type="button">Restore default</button>
+                    <span class="status" id="st-auto-flagger"></span>
+                  </div>
+                  <div class="foot" id="auto-flagger-test-result" hidden>
+                    <span class="status" id="st-auto-flagger-test"></span>
+                  </div>
+                </section>
                 <section class="card sv-governance setting-row hidden" id="card-approval-grant-modes">
                   <div class="head">
                     <h2>Approval grant options</h2>
@@ -6243,6 +6289,7 @@
         content.insertBefore(anchor, $("card-service-credentials"));
         [
           $("card-security-posture"),
+          $("card-auto-flagger"),
           governanceAmbient,
           $("card-external-slack"),
           $("card-command-policy"),
@@ -7835,6 +7882,44 @@
           document
             .querySelectorAll('[data-choice-for="security-posture"]')
             .forEach((input) => (input.checked = input.value === $("security-posture").value));
+        }
+        const showAutoFlagger = scope.startsWith("org:") && "autoFlagger" in (r.data || {});
+        $("card-auto-flagger").classList.toggle("hidden", !showAutoFlagger);
+        if (scopeChanged) $("auto-flagger-test-result").hidden = true;
+        if (showAutoFlagger) {
+          const current = r.data.autoFlagger || r.data.autoFlaggerDefault;
+          const harness = $("auto-flagger-harness");
+          const model = $("auto-flagger-model");
+          const harnessOptions = [...(r.data.harnessOptions || [])];
+          if (!harnessOptions.includes(current.harnessId)) harnessOptions.push(current.harnessId);
+          const modelsByHarness = r.data.modelsByHarness || {};
+          harness.textContent = "";
+          harnessOptions.forEach((id) => {
+            const option = document.createElement("option");
+            option.value = id;
+            option.textContent = { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
+            harness.appendChild(option);
+          });
+          harness.value = current.harnessId;
+          model.textContent = "";
+          const syncAutoFlaggerModels = () => {
+            const options = [...(modelsByHarness[harness.value] || [])];
+            const prior = model.value || current.modelId;
+            if (harness.value === current.harnessId && !options.some((entry) => entry.id === current.modelId)) {
+              options.push({ id: current.modelId, name: current.modelId + " (configured; unavailable)" });
+            }
+            model.textContent = "";
+            options.forEach((entry) => {
+              const option = document.createElement("option");
+              option.value = entry.id;
+              option.textContent = entry.name + " (" + entry.id + ")";
+              model.appendChild(option);
+            });
+            model.value = options.some((entry) => entry.id === prior) ? prior : (options[0] || {}).id || "";
+          };
+          harness.oninput = syncAutoFlaggerModels;
+          syncAutoFlaggerModels();
+          $("auto-flagger-rubric").value = current.rubric;
         }
         const showGrantModes = "approvalGrantModes" in (r.data || {});
         $("card-approval-grant-modes").classList.toggle("hidden", !showGrantModes);
@@ -10468,6 +10553,12 @@
       };
       const SAVE = {
         "security-posture": () => ({ posture: $("security-posture").value }),
+        "auto-flagger": () => ({
+          harnessId: $("auto-flagger-harness").value,
+          modelId: $("auto-flagger-model").value,
+          rubric: $("auto-flagger-rubric").value,
+        }),
+
         "approval-grant-modes": () => ({
           session: $("approval-grant-session").checked,
           always: $("approval-grant-always").checked,
@@ -10499,6 +10590,7 @@
       };
       const SAVE_ST = {
         "security-posture": "st-security-posture",
+        "auto-flagger": "st-auto-flagger",
         "approval-grant-modes": "st-approval-grant-modes",
         "command-policy": "st-policy",
         soul: "st-soul",
@@ -10515,6 +10607,7 @@
         branding: "st-branding",
       };
       const SAVE_RELOADS = new Set([
+        "auto-flagger",
         "soul",
         "external-slack-participants",
         "runtime",
@@ -10525,6 +10618,25 @@
         "branding",
       ]);
       const sectionSnapshots = new Map();
+      function autoFlaggerTestSummary(data) {
+        if (!data.sampled) return data.message || "No past screenings to replay yet.";
+        const pct = (value) => (value == null ? "n/a" : (value * 100).toFixed(1) + "%");
+        const parts = ["Flagged " + data.flagged + " of " + data.scored + " scored (" + pct(data.flagRate) + ")"];
+        if (data.baseline) {
+          parts.push(
+            "current rubric flags " +
+              pct(data.baseline.flagRate) +
+              " · " +
+              plural(data.baseline.changed, "verdict") +
+              " changed",
+          );
+        }
+        if (data.unscreened) parts.push(plural(data.unscreened, "sample") + " came back unscreened");
+        if (data.errors) parts.push(plural(data.errors, "sample") + " errored");
+        if (data.partial) parts.push("stopped at the time limit — partial result");
+        parts.push("sampled " + data.sampled + " · " + Math.round(data.durationMs / 100) / 10 + "s");
+        return parts.join(" · ");
+      }
       function sectionButton(key) {
         return document.querySelector('[data-save="' + key + '"]');
       }
@@ -10605,6 +10717,50 @@
         return Promise.resolve(true);
       }
       let governanceSaveSeq = 0;
+      $("auto-flagger-test").onclick = async () => {
+        const requestedScope = scope;
+        const button = $("auto-flagger-test");
+        $("auto-flagger-test-result").hidden = false;
+        const windowField = $("auto-flagger-window");
+        const requested = Number(windowField.value);
+        if (!Number.isInteger(requested) || requested < 1 || requested > 500) {
+          return setStatus("st-auto-flagger-test", "Window must be a whole number between 1 and 500.", "err", true);
+        }
+        setStatus(
+          "st-auto-flagger-test",
+          "Replaying the last " + requested + " screenings through this rubric…",
+          "",
+          true,
+        );
+        button.disabled = true;
+        try {
+          const r = await api("POST", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger/test", {
+            window: requested,
+            compare: $("auto-flagger-compare").checked,
+            harnessId: $("auto-flagger-harness").value,
+            modelId: $("auto-flagger-model").value,
+            rubric: $("auto-flagger-rubric").value,
+          });
+          if (requestedScope !== scope) return;
+          if (!r.ok) {
+            return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
+          }
+          setStatus("st-auto-flagger-test", autoFlaggerTestSummary(r.data), r.data.errors ? "warn" : "ok", true);
+        } finally {
+          button.disabled = false;
+        }
+      };
+      $("auto-flagger-reset").onclick = async () => {
+        const requestedScope = scope;
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger", {
+          reset: true,
+        });
+        if (requestedScope !== scope) return;
+        if (!r.ok) return setStatus("st-auto-flagger", r.data?.message || "Reset failed.", "err");
+        await loadScope();
+        if (requestedScope === scope) setStatus("st-auto-flagger", "Default restored", "ok");
+      };
+
       document.querySelectorAll("[data-save]").forEach((btn) => {
         btn.onclick = async () => {
           const key = btn.dataset.save;
