@@ -96,6 +96,7 @@ import {
   type ToolRowModel,
   type SegmentStatus,
   segmentStatus,
+  type ToolRowKind,
 } from "./timeline";
 import { CONNECTOR_NAMES, connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, UI_BASE } from "./deep-link";
@@ -2679,15 +2680,21 @@ export function createChatSurface(
     </div>`;
   }
 
+  function toolHead(glyph: SVGElement, kind: ToolRowKind, label: string, detail: string): TemplateResult {
+    const running = kind === "running";
+    const visible = detail || label;
+    const chip = detail ? "tool-chip" : "";
+    const title = detail ? `${label}: ${detail}` : label;
+    return html`<span class="tool-icon">${running ? html`<span class="tool-spinner"></span>` : glyph}</span>
+      ${detail ? html`<span class="tool-name">${running ? sheenLabel(label, true) : label}</span>` : nothing}
+      <span class="tool-label ${chip}" title=${title}>${visible}</span>`;
+  }
+
   function toolRow(row: ToolRowModel, work: WorkBlock, status: WorkBlock["status"], stale = false): TemplateResult {
     if (row.approval) {
       const p = (row.approval.payload ?? {}) as ToolPayload;
       return html`<div class="tool-row tool-approval">
-        <span class="tool-icon">${icon(Wrench, 13)}</span>
-        <span class="tool-label"
-          >Approval
-          needed${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
-        >
+        ${toolHead(icon(Wrench, 13), "approval", "Approval needed", firstLine(p.reason ?? "", 90))}
       </div>`;
     }
     const call = (row.call?.payload ?? {}) as ToolPayload;
@@ -2709,10 +2716,8 @@ export function createChatSurface(
     const base = kind === "approval" ? "" : toolDetail(tool, call, result);
     const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
     const detail = [base, why, attempts].filter(Boolean).join(" · ");
-    const visible = detail || label;
     const classes = ["tool-row", `tool-${kind}`].join(" ");
-    const head = html`<span class="tool-icon">${icon(meta.icon, 13)}</span>
-      <span class="tool-label" title=${detail ? `${label}: ${detail}` : label}>${visible}</span>`;
+    const head = toolHead(icon(meta.icon, 13), kind, label, detail);
     if (!row.call && !row.result) return html`<div class="${classes}">${head}</div>`;
     return html`<details class="${classes} tool-expandable">
       <summary class="tool-summary">${head}${icon(ChevronRight, 14)}</summary>
@@ -2722,11 +2727,14 @@ export function createChatSurface(
 
   function execOutputCard(result: ToolPayload, work: WorkBlock, activity: ToolActivity | null): TemplateResult {
     const out = toolExecutionOutput(result) ?? "";
+    const exitCode = result.code ?? 0;
     return html`<div class="code-card">
-      <div class="code-card-head"><span class="code-card-lang">bash</span></div>
+      <div class="code-card-head">${icon(Terminal, 13)}<span class="code-card-lang">bash</span></div>
       <pre class="code-card-body">${out}</pre>
       <div class="code-card-foot">
-        exit ${result.code ?? "unknown"}${result.timedOut ? " · timed out" : ""}
+        <span class="code-card-exit ${exitCode === 0 && !result.timedOut ? "exit-ok" : "exit-err"}">
+          exit ${exitCode}${result.timedOut ? " · timed out" : ""}
+        </span>
         ${
           activity?.truncated
             ? html`<button class="show-full-btn" type="button" @click=${() => void loadFullEntry(work, activity)}>

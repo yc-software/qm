@@ -57,7 +57,8 @@
         "hljs-real-json",
         "hljs-real-bash",
         "hljs-real-sql",
-        "hljs-real-markdown"
+        "hljs-real-markdown",
+        "hljs-real-diff"
       ]
     }
   }

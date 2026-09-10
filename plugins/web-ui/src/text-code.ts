@@ -31,25 +31,64 @@ export function normalizePlainTextFences(text: string): string {
 
 export function decorateTextCodeBlocks(root: ParentNode | null): void {
   if (!root) return;
-  for (const block of root.querySelectorAll<HTMLElement>('code-block[language="text"]')) {
-    const body = block.querySelector<HTMLElement>(":scope > div > div:last-child");
-    const footer = block.querySelector<HTMLElement>(":scope > div > div:first-child");
-    const pre = body?.querySelector("pre");
-    if (!body || !footer || !pre) continue;
-    body.classList.add("text-code-body");
-    footer.classList.add("text-code-footer");
-    if (footer.querySelector(".text-code-toggle") || pre.scrollHeight <= 76) continue;
-    const button = block.ownerDocument.createElement("button");
-    button.type = "button";
-    button.className = "text-code-toggle";
-    const update = (expanded: boolean) => {
-      block.dataset.expanded = String(expanded);
-      button.textContent = expanded ? "Show less" : "Show more";
-      button.setAttribute("aria-expanded", String(expanded));
-    };
-    button.addEventListener("click", () => update(block.dataset.expanded !== "true"));
-    footer.insertBefore(button, footer.lastElementChild);
-    block.classList.add("text-code-collapsible");
-    update(block.dataset.expanded === "true");
+  for (const block of root.querySelectorAll<HTMLElement>("code-block")) {
+    if (block.getAttribute("language") === "text") collapsePlainTextBlock(block);
+    else numberCodeLines(block);
   }
+}
+
+function collapsePlainTextBlock(block: HTMLElement): void {
+  const body = block.querySelector<HTMLElement>(":scope > div > div:last-child");
+  const footer = block.querySelector<HTMLElement>(":scope > div > div:first-child");
+  const pre = body?.querySelector("pre");
+  if (!body || !footer || !pre) return;
+  body.classList.add("text-code-body");
+  footer.classList.add("text-code-footer");
+  if (footer.querySelector(".text-code-toggle") || pre.scrollHeight <= 76) return;
+  const button = block.ownerDocument.createElement("button");
+  button.type = "button";
+  button.className = "text-code-toggle";
+  const update = (expanded: boolean) => {
+    block.dataset.expanded = String(expanded);
+    button.textContent = expanded ? "Show less" : "Show more";
+    button.setAttribute("aria-expanded", String(expanded));
+  };
+  button.addEventListener("click", () => update(block.dataset.expanded !== "true"));
+  footer.insertBefore(button, footer.lastElementChild);
+  block.classList.add("text-code-collapsible");
+  update(block.dataset.expanded === "true");
+}
+
+function numberCodeLines(block: HTMLElement): void {
+  const pre = block.querySelector("pre");
+  const code = pre?.querySelector("code");
+  if (!pre || !code) return;
+  const language = block.getAttribute("language") ?? "";
+  const existing = pre.querySelector<HTMLElement>(":scope > .code-gutter");
+  if (existing?.dataset.lang === language && !block.closest(".assistant-row.streaming")) return;
+  const lines = (code.textContent ?? "").replace(/\n$/u, "").split("\n");
+  if (lines.length < 2) return;
+  const diff = /^(?:diff|patch)$/u.test(language);
+  const gutter = existing ?? pre.insertBefore(block.ownerDocument.createElement("span"), code);
+  if (gutter.dataset.lang !== language) {
+    gutter.className = "code-gutter";
+    gutter.setAttribute("aria-hidden", "true");
+    gutter.dataset.lang = language;
+    gutter.replaceChildren();
+  }
+  const cells = gutter.children;
+  while (cells.length > lines.length) gutter.lastElementChild?.remove();
+  for (let i = diff ? Math.max(0, cells.length - 1) : cells.length; i < lines.length; i++) {
+    const cell = cells[i] ?? gutter.appendChild(block.ownerDocument.createElement("span"));
+    const mark = diff ? diffMark(lines[i] ?? "") : "";
+    cell.textContent = diff ? mark || " " : String(i + 1);
+    cell.className = MARK_CLASS[mark] ?? "";
+  }
+}
+
+const MARK_CLASS: Record<string, string> = { "+": "code-line-add", "-": "code-line-del" };
+
+function diffMark(line: string): string {
+  if (/^(?:\+\+\+|---)/u.test(line)) return "";
+  return line[0] === "+" || line[0] === "-" ? line[0] : "";
 }

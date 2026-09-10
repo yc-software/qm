@@ -2256,9 +2256,6 @@ summary.work-head:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tool-detail {
-  color: color-mix(in srgb, var(--muted-foreground) 70%, var(--background));
-}
 .thinking-row {
   display: block;
   min-width: 0;
@@ -2495,31 +2492,30 @@ summary.work-head:hover {
 .tool-disclosure {
   display: grid;
   gap: 6px;
-  margin: 5px 0 8px 19px;
+  margin: 4px 0 8px 24px;
 }
 .tool-payload-card {
   min-width: 0;
   overflow: hidden;
-  border-radius: 7px;
-  background: var(--secondary);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--inset);
 }
 .tool-payload-label {
-  padding: 7px 10px 3px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  padding: 6px 10px 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
 }
 .tool-payload-body {
   max-height: 320px;
   margin: 0;
-  padding: 3px 10px 9px;
+  padding: 4px 10px 8px;
   overflow: auto;
-  color: var(--foreground);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -2529,52 +2525,63 @@ summary.work-head:hover {
 
 .code-card {
   margin: 12px 0 0;
-  border-radius: 8px;
-  background: var(--secondary);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
   overflow: hidden;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .code-card-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px 6px;
+  gap: 7px;
+  height: 36px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-3);
 }
 .code-card-lang {
-  font-size: 13px;
-  color: var(--muted-foreground);
+  font-size: 12px;
+  color: var(--ink);
 }
 .code-card-body {
   margin: 0;
-  padding: 2px 12px 12px;
-  font-size: 15px;
-  line-height: 1.55;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 360px;
   overflow: auto;
-  color: var(--foreground);
+  color: var(--ink-2);
 }
 .code-card-foot {
-  padding: 0 12px 12px;
-  font-size: 13px;
-  color: var(--muted-foreground);
   display: flex;
   align-items: center;
   gap: 10px;
+  min-height: 32px;
+  padding: 0 6px 0 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--ink-3);
 }
 .show-full-btn {
-  border: 1px solid var(--border, #d0d0d0);
-  border-radius: 999px;
-  background: var(--bg, #fff);
-  color: var(--muted-fg, #666);
-  font-size: 12px;
-  padding: 3px 10px;
+  margin-left: auto;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--ink-3);
+  font: 500 11.5px/1 var(--app-font);
   cursor: pointer;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
 }
 .show-full-btn:hover {
-  border-color: var(--fg, #333);
-  color: var(--fg, #333);
+  background: var(--hover);
+  color: var(--ink);
 }
 
 .chat-bottom-dock {
@@ -2867,27 +2874,32 @@ summary.work-head:hover {
 
 .assistant-body markdown-block :not(pre) > code,
 .user-bubble markdown-block :not(pre) > code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.92em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
   padding: 1px 5px;
-  border-radius: 5px;
-  background: var(--secondary);
+  border-radius: 4px;
+  background: var(--field);
 }
 .assistant-body markdown-block pre,
 .user-bubble markdown-block pre {
   margin: 12px 0;
-  padding: 14px 12px;
-  border-radius: 8px;
-  background: var(--secondary);
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
   overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6em;
 }
 .assistant-body markdown-block pre code,
 .user-bubble markdown-block pre code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
-  line-height: 1.55;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: inherit;
   background: none;
   padding: 0;
+  color: var(--ink-2);
 }
 .assistant-body code-block[language="text"] pre,
 .user-bubble code-block[language="text"] pre {

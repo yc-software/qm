@@ -9,7 +9,7 @@ type Hljs = {
 let real: Hljs | null = null;
 let loading: Promise<void> | null = null;
 
-const LANGS = ["javascript", "typescript", "python", "xml", "css", "json", "bash", "sql", "markdown"] as const;
+const LANGS = ["javascript", "typescript", "python", "xml", "css", "json", "bash", "sql", "markdown", "diff"] as const;
 const LANG_ALIASES: Record<string, string> = { html: "xml" };
 
 function escapeHtml(text: string): string {
@@ -35,6 +35,7 @@ function ensureLoading(): void {
     import("hljs-real-bash"),
     import("hljs-real-sql"),
     import("hljs-real-markdown"),
+    import("hljs-real-diff"),
   ])
     .then(([core, ...langs]: Array<{ default: unknown }>) => {
       const hljs = core.default as Hljs;
