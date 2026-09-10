@@ -6,6 +6,7 @@ import {
   type SandboxResource,
   type SandboxDefault,
   type SandboxResources,
+  type SandboxResourceRollout,
 } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./harness/pi-harness.ts";
@@ -765,6 +766,9 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
+  const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
+  const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
+  const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
   const buildE2b = (): Sandbox => {
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey) throw new Error("SANDBOX_BACKEND=e2b requires E2B_API_KEY");
@@ -786,7 +790,7 @@ export function buildApp(
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies"),
+      store: e2bBodies,
       ...(e2b.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
         : {}),
@@ -835,7 +839,7 @@ export function buildApp(
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: artifactMap<StoredModalSandbox>("modal_sandbox_bodies"),
+      store: modalBodies,
       ...(modal.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
         : {}),
@@ -866,7 +870,7 @@ export function buildApp(
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: artifactMap<StoredMicrovm>("aws_sandbox_bodies"),
+      store: awsBodies,
       onError: sandboxOnError,
     });
   };
@@ -901,6 +905,17 @@ export function buildApp(
   }
   const sandboxRoutes = artifactMap<SandboxRoute>("sandbox_routing");
   const sandboxResources = createSandboxResources({
+    enabled: config.sandboxResourcesEnabled,
+    rollout: artifactMap<SandboxResourceRollout>("sandbox_resource_rollout"),
+    legacyScopes: async () => (await sessions.distinctScopes()).map((scope) => scope.scopeId),
+    legacySandboxes: async () => {
+      const [e2b, modal, aws] = await Promise.all([e2bBodies.entries(), modalBodies.entries(), awsBodies.entries()]);
+      return [
+        ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
+        ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
+        ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
+      ];
+    },
     records: artifactMap<SandboxResource>("sandbox_resources"),
     defaults: artifactMap<SandboxDefault>("sandbox_defaults"),
     routes: sandboxRoutes,
@@ -966,7 +981,13 @@ export function buildApp(
       );
       return { egressToken };
     },
-    hasLiveWork: async (scope) => !!processes && (await processes.liveByScope(scope)).length > 0,
+    hasLiveWork: async (scope) => {
+      if ((await sandboxResources.resolve(scope)) !== undefined)
+        throw new Error(
+          "sandbox migration is retired for explicit defaults; create a sandbox and set its default instead",
+        );
+      return !!processes && (await processes.liveByScope(scope)).length > 0;
+    },
   });
   const secretSource =
     config.secretsBackend === "aws"

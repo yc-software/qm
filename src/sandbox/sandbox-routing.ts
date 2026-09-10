@@ -139,6 +139,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
         return sandbox.profile;
       }
+      if (resource === null) return fallback.profile;
       return (await pick(scopeId)).sandbox.profile;
     },
 

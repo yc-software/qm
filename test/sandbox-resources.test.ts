@@ -2,16 +2,22 @@ import { createDeviceFlowCutoverStore } from "../src/credentials/device-flow-cut
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxDefault,
+  type SandboxResourceRollout,
+} from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter, type SandboxRoute } from "../src/sandbox/sandbox-routing.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
-function fixture(configure?: (backend: Sandbox) => void) {
+function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = createMemoryMap<SandboxResource>();
   const defaults = createMemoryMap<SandboxDefault>();
   const routes = createMemoryMap<SandboxRoute>();
+  const rollout = createMemoryMap<SandboxResourceRollout>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
   const backend: Sandbox = {
@@ -48,18 +54,22 @@ function fixture(configure?: (backend: Sandbox) => void) {
     },
   };
   configure?.(backend);
-  const resources = createSandboxResources({
+  const options = {
+    enabled: true,
+    rollout,
+    legacyScopes: async () => legacyScopes,
     records,
     defaults,
     routes,
     backends: { local: backend },
     defaultBackend: "local",
     lock: createMemoryAdvisoryLock(),
-    canUseScope: async (actor, scope) => actor === "admin" || scope === `personal:${actor}`,
-  });
+    canUseScope: async (actor: string, scope: string) => actor === "admin" || scope === `personal:${actor}`,
+  } satisfies Parameters<typeof createSandboxResources>[0];
+  const resources = createSandboxResources(options);
   const router = createSandboxRouter({ routes, backends: { local: backend }, defaultBackend: "local", resources });
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
-  return { records, defaults, routes, resources, router, provisioned, layers, backend };
+  return { records, defaults, routes, resources, router, provisioned, layers, backend, options, rollout };
 }
 
 test("blank sandbox identities coexist and default changes never copy files or redirect existing handles", async () => {
@@ -96,7 +106,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   const listed = await resources.list("alice", "personal:alice");
   assert.equal(listed.defaultSandboxId, null);
   assert.equal(listed.defaultMode, "none");
-  assert.equal(await resources.resolve("personal:new"), undefined);
+  assert.equal(await resources.resolve("personal:new"), null);
 });
 
 test("legacy adoption is deterministic and reconnects the existing backing identity", async () => {
@@ -134,11 +144,12 @@ test("status and restart resolve the selected backing machine rather than legacy
 });
 
 test("listing an untouched scope never invents a legacy machine", async () => {
-  const { resources, provisioned } = fixture();
+  const { resources, provisioned } = fixture(undefined, []);
   assert.deepEqual(await resources.list("alice", "personal:alice"), {
     sandboxes: [],
     defaultSandboxId: null,
-    defaultMode: "legacy",
+    defaultMode: "none",
+    providers: [{ name: "local", actions: ["create", "status", "restart", "retire"] }],
   });
   assert.deepEqual(provisioned, []);
   await assert.rejects(resources.create("alice", "personal:alice", "__proto__"), /unavailable/);
@@ -321,19 +332,22 @@ for (const shared of [false, true])
     const scope = shared ? "channel:team" : "personal:alice";
     const owner = shared ? scope : "alice";
     let failCleanupFor: string | undefined;
-    const { resources, router } = fixture((backend) => {
-      backend.run = async (handle, script) => {
-        scripts.push({ id: handle.id, script });
-        if (handle.id === failCleanupFor && script.includes("rm -rf --")) {
-          failCleanupFor = undefined;
-          return { stdout: "", stderr: "cleanup failed", code: 1, timedOut: false };
-        }
-        return { stdout: "", stderr: "", code: 0, timedOut: false };
-      };
-      backend.writeFileBytes = async (handle, path, bytes) => {
-        if (path.endsWith(".tar")) restoredTars.push({ id: handle.id, bytes });
-      };
-    });
+    const { resources, router } = fixture(
+      (backend) => {
+        backend.run = async (handle, script) => {
+          scripts.push({ id: handle.id, script });
+          if (handle.id === failCleanupFor && script.includes("rm -rf --")) {
+            failCleanupFor = undefined;
+            return { stdout: "", stderr: "cleanup failed", code: 1, timedOut: false };
+          }
+          return { stdout: "", stderr: "", code: 0, timedOut: false };
+        };
+        backend.writeFileBytes = async (handle, path, bytes) => {
+          if (path.endsWith(".tar")) restoredTars.push({ id: handle.id, bytes });
+        };
+      },
+      [scope],
+    );
     const record = await resources.create("admin", scope, "local");
     const owners: string[] = [];
     const resetMarks: unknown[][] = [];
@@ -364,7 +378,10 @@ for (const shared of [false, true])
                 service: "gh",
                 origin: "device-flow-auto-capture",
                 files: [
-                  { path: ".config/gh/hosts.yml", contentBase64: Buffer.from("quarantined-token").toString("base64") },
+                  {
+                    path: ".config/gh/hosts.yml",
+                    contentBase64: Buffer.from("quarantined-token").toString("base64"),
+                  },
                 ],
               },
             ];
@@ -433,3 +450,98 @@ for (const shared of [false, true])
       assert.ok(!Buffer.from(tar.bytes).includes(Buffer.from("quarantined-token")));
     }
   });
+
+test("disabled readers honor explicit defaults and refuse management without activating", async () => {
+  const { options, defaults, records, backend, routes, rollout, layers, provisioned } = fixture(undefined, []);
+  const resources = createSandboxResources({ ...options, enabled: false });
+  const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: "local", routes, resources });
+  assert.equal(await resources.resolve("personal:alice"), undefined);
+  const old = await router.provision(layers);
+  assert.equal(old.id, "personal:alice");
+  assert.equal(await rollout.get("explicit-defaults"), null);
+  const record = (await records.all())[0]!;
+  await defaults.put("personal:alice", { sandboxId: record.id });
+  assert.equal((await resources.resolve("personal:alice"))?.id, record.id);
+  await defaults.put("personal:alice", { sandboxId: null });
+  await assert.rejects(router.provision(layers), /no default sandbox/);
+  for (const action of [
+    () => resources.create("alice", "personal:alice", "local"),
+    () => resources.setDefault("alice", "personal:alice", record.id),
+    () => resources.restart("alice", record.id),
+    () => resources.retire("alice", record.id),
+  ])
+    await assert.rejects(action(), /management is disabled/);
+  assert.deepEqual(provisioned, ["personal:alice"]);
+});
+
+test("activation preserves routes, cold identities and explicit nulls without calling a provider", async () => {
+  const { options, records, defaults, routes, rollout, provisioned } = fixture(undefined, []);
+  await routes.put("personal:routed", { backend: "modal" });
+  await defaults.put("personal:unset", { sandboxId: null });
+  const managed: SandboxResource = {
+    id: "managed",
+    backend: "local",
+    ownerScopeId: "personal:selected",
+    backingScopeId: "sandbox-managed",
+    name: "managed",
+    createdBy: "selected",
+    createdAt: "2026-01-01",
+    legacy: false,
+    state: "ready",
+  };
+  await records.put(managed.id, managed);
+  await defaults.put(managed.ownerScopeId, { sandboxId: managed.id });
+  const resources = createSandboxResources({
+    ...options,
+    legacyScopes: async () => ["personal:old-session", "personal:unset"],
+    legacySandboxes: async () => [
+      { scopeId: "personal:routed", backend: "modal", machineId: "sb-old" },
+      { scopeId: "personal:routed", backend: "e2b", machineId: "e2b-cold" },
+      { scopeId: "sandbox-managed", backend: "local", machineId: "managed-machine" },
+    ],
+  });
+  const routed = await resources.resolve("personal:routed");
+  assert.equal(routed?.backend, "modal");
+  assert.equal(routed?.backingScopeId, "personal:routed");
+  assert.equal(routed?.machineId, "sb-old");
+  assert.equal(routed?.state, "unverified");
+  assert.equal((await resources.resolve("personal:old-session"))?.machineId, undefined);
+  assert.equal(await resources.resolve("personal:unset"), null);
+  assert.equal((await resources.resolve(managed.ownerScopeId))?.id, "managed");
+  assert.equal(await resources.resolve("personal:new-after-activation"), null);
+  assert.ok(await rollout.get("explicit-defaults"));
+  const inventory = await resources.list("admin", "personal:routed");
+  assert.ok(inventory.sandboxes.some((r) => r.backend === "e2b" && r.machineId === "e2b-cold"));
+  assert.ok(!inventory.sandboxes.some((r) => r.legacy && r.backingScopeId === "sandbox-managed"));
+  assert.deepEqual(inventory.sandboxes.find((r) => r.id === routed!.id)?.availableActions, []);
+  assert.deepEqual(provisioned, []);
+  assert.equal((await routes.get("personal:routed"))?.backend, "modal");
+  const rollbackReader = createSandboxResources({ ...options, enabled: false });
+  assert.equal(await rollbackReader.resolve("personal:new-after-activation"), null);
+  assert.equal((await rollbackReader.resolve("personal:routed"))?.id, routed?.id);
+});
+
+test("activation retries partial durable writes without losing defaults or creating machines", async () => {
+  const { options, defaults, rollout, records, provisioned } = fixture(undefined, [
+    "personal:first",
+    "personal:second",
+  ]);
+  const put = defaults.putIfAbsent;
+  let fail = true;
+  defaults.putIfAbsent = async (id, value) => {
+    if (id === "personal:second" && fail) throw new Error("database interrupted");
+    return put(id, value);
+  };
+  const resources = createSandboxResources(options);
+  await assert.rejects(resources.resolve("personal:first"), /database interrupted/);
+  assert.equal(await rollout.get("explicit-defaults"), null);
+  const first = await defaults.get("personal:first");
+  await defaults.put("personal:first", { sandboxId: null });
+  fail = false;
+  await Promise.all([resources.resolve("personal:first"), resources.resolve("personal:second")]);
+  assert.ok(first?.sandboxId);
+  assert.equal(await resources.resolve("personal:first"), null);
+  assert.equal((await records.all()).length, 2);
+  assert.ok(await rollout.get("explicit-defaults"));
+  assert.deepEqual(provisioned, []);
+});

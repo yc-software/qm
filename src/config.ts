@@ -42,6 +42,7 @@ export interface Config {
   databaseCaCertFile?: string;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
+  sandboxResourcesEnabled: boolean;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
   deployProvider: "docker" | "aws" | "fly" | "porter";
@@ -1207,6 +1208,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     sandboxBackend,
+    sandboxResourcesEnabled: env.SANDBOX_RESOURCES_ENABLED === "true",
     deployProvider,
     ...(env.EGRESS_SERVICE_HOSTS
       ? {

@@ -682,3 +682,8 @@ test("direct Files initiation defaults off and requires explicit activation", ()
   assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "false" }).filesDirectUploadsEnabled, false);
   assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
 });
+
+test("sandbox resource rollout requires explicit activation", () => {
+  assert.equal(loadConfig({ ...productionEnv }).sandboxResourcesEnabled, false);
+  assert.equal(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: "true" }).sandboxResourcesEnabled, true);
+});
