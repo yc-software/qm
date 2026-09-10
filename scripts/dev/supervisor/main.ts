@@ -621,12 +621,13 @@ function serveApi(): Server {
         return;
       }
       const body = await readBody(req);
-      if (req.method === "POST") lastControlAt = nowEpoch();
       if (req.method === "POST" && req.url === "/reload") {
+        lastControlAt = nowEpoch();
         respond(200, await reload(body));
         return;
       }
       if (req.method === "POST" && req.url === "/restart") {
+        lastControlAt = nowEpoch();
         const names = (body.children as ChildName[] | undefined) ?? [...children.keys()];
         const results: Record<string, unknown> = {};
         for (const name of CHILD_ORDER.filter((n) => names.includes(n))) {

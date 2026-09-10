@@ -101,7 +101,7 @@ export function tcpPortOpen(port: number, host = "127.0.0.1", timeoutMs = 500): 
 }
 
 export function portHolders(port: number): number[] {
-  const res = spawnSync("lsof", ["-ti", `tcp:${port}`], { encoding: "utf8" });
+  const res = spawnSync("lsof", ["-nP", "-a", "-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
   if (res.status !== 0 || !res.stdout) return [];
   return res.stdout
     .split("\n")

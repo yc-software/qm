@@ -96,6 +96,7 @@ export function installDevIntrospection(app: any, opts: DevIntrospectionOptions 
     state,
     markEvent: () => {
       state.lastEventAt = now();
+      state.lastActivityAt = state.lastEventAt;
     },
     ready: (info) => {
       state.connectedAs = info.connectedAs;
@@ -142,7 +143,7 @@ function attachRawFrameTap(
       const event = frame?.type === "events_api" ? frame.payload?.event : undefined;
       const text = event?.subtype === "message_deleted" ? event.previous_message?.text : event?.text;
       const isCanary = typeof text === "string" && text.includes(CANARY_PREFIX);
-      const isActivity = ["events_api", "interactive", "slash_commands"].includes(frame?.type);
+      const isActivity = ["interactive", "slash_commands"].includes(frame?.type);
       if (isActivity && !isCanary) state.lastActivityAt = now();
       if (frame?.type !== "events_api" || !isCanary || event?.subtype === "message_deleted") return;
       const nonce = text.slice(text.indexOf(CANARY_PREFIX) + CANARY_PREFIX.length).trim();

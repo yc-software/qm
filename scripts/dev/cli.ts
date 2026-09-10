@@ -358,7 +358,8 @@ async function cmdUp(): Promise<number> {
   const excluded = new Set<string>();
   const waitMax = Number(process.env.DEV_INSTANCE_WAIT || 120);
   const claim = (): string | null => (withSlack ? claimNext(excluded) : claimPortSlot(excluded));
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  const maxAttempts = withSlack ? Math.max(1, listSlots(store).length) : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let slot = claim();
     if (!slot && (await reclaimReclaimable())) slot = claim();
     if (!slot && waitMax > 0 && attempt === 1) {
