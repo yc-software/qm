@@ -1186,13 +1186,13 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           entryCount: turn.history.length,
         });
       }
-      if (result.status === "failed" && !state.stopped)
+      if (result.status === "failed" && !state.stopped && !ref.runtimeHandoff)
         throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
       if (turn.cancel?.aborted) {
         runtimeCleanupRequested = true;
         turnResult = { reply: "", stopped: true };
       } else {
-        const terminal = ref.silentRequested || ref.pausedOnApproval;
+        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : textFromTurn(result);
         for (const thinking of reasoningFromTurn(result))
           await turn.emit({ type: "thinking", payload: { thinking }, scopeLabel: turn.scopeLabel });
@@ -1207,6 +1207,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         turnResult = {
           reply,
           ...(state.stopped ? { stopped: true as const } : {}),
+          ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
           ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),

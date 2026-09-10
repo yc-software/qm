@@ -999,13 +999,25 @@ export function emptyEndingNote(opts: {
   cancelled: boolean;
   surfaceTools: boolean;
   pollFire: boolean;
-  ref: { silentRequested?: boolean; pausedOnApproval?: boolean; pendingApprovals?: unknown[]; modelCalls?: number };
+  ref: {
+    runtimeHandoff?: unknown;
+    silentRequested?: boolean;
+    pausedOnApproval?: boolean;
+    pendingApprovals?: unknown[];
+    modelCalls?: number;
+  };
   session: AssistantTextSession;
   turnWallClockMs: number;
   elapsedMs: number;
 }): string | null {
   if (opts.wallClock !== "ok" || opts.userAborted || opts.cancelled || opts.surfaceTools) return null;
-  if (opts.ref.silentRequested || opts.ref.pausedOnApproval || opts.ref.pendingApprovals?.length) return null;
+  if (
+    opts.ref.runtimeHandoff ||
+    opts.ref.silentRequested ||
+    opts.ref.pausedOnApproval ||
+    opts.ref.pendingApprovals?.length
+  )
+    return null;
   if (opts.pollFire) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;
@@ -1688,6 +1700,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
           entry.ref.current = turn.tools;
+          entry.ref.runtimeHandoff = undefined;
+          entry.ref.runtimeMutationPending = false;
+          entry.ref.runtimeInFlight = new Set();
+          entry.ref.runtimeRunId = turn.runId;
+          entry.ref.runtimeActorId = turn.runtimeActorId;
           entry.ref.pendingApprovals = [];
           entry.ref.pausedOnApproval = undefined;
           entry.ref.silentRequested = false;
@@ -2100,6 +2117,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 blocked: () =>
                   userAborted ||
                   !!turn.cancel?.aborted ||
+                  !!entry.ref.runtimeHandoff ||
                   !!entry.ref.pausedOnApproval ||
                   !!entry.ref.pendingApprovals?.length,
                 beforePrompt: async (note) => {
@@ -2124,7 +2142,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               wallClock = goalResult.outcome;
               grindWaiverNote = goalResult.waiverNote;
             }
-            if (wallClock === "ok" && !userAborted && !turn.cancel?.aborted) {
+            if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
               const refusal = providerRefusalError(entry.agentSession, messagesBefore);
               if (refusal) {
                 try {
@@ -2216,6 +2234,23 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               `the turn hit its ${capLabel} wall-clock limit and was stopped` +
                 (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
             );
+          }
+          if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
+            if (entry.ref.goal) {
+              const goalEntry = await turn.emit({
+                type: "system",
+                payload: { kind: "goal", goal: { ...entry.ref.goal } },
+                scopeLabel: turn.scopeLabel,
+              });
+              await tapeEntryMirror(goalEntry);
+            }
+            return {
+              reply: "",
+              runtimeHandoff: entry.ref.runtimeHandoff,
+              modelCalls: entry.ref.modelCalls ?? 0,
+              compileMs,
+              cacheUsage: sumCacheUsage(callStats) ?? undefined,
+            };
           }
           const freshStopReason = freshAssistantStopReason();
           const cancelStoppedCleanly =

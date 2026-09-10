@@ -1,3 +1,4 @@
+import type { RuntimeService } from "../../harness/runtime-control.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
@@ -105,6 +106,7 @@ export interface OrchestratorDeps {
   config?: ScopedConfigStore;
   /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
   defaultHarness?: string;
+  defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
@@ -162,6 +164,7 @@ export interface OrchestratorDeps {
   crons?: CronStore;
   webhooks?: WebhookStore;
   control?: ControlService;
+  runtime?: RuntimeService;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;

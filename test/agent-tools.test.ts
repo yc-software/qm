@@ -1417,7 +1417,7 @@ test("readOnly assembles ONLY observational tools — no execute/background/writ
   for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory"]);
+  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime"]);
   for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
@@ -3001,4 +3001,161 @@ test("sandbox call transcripts retain explicit process and lifecycle targets", a
   }
   await call(tool, { action: "set_default", sandbox_id: null, purpose: "Clear default" });
   assert.equal(entries.filter((e) => e.type === "tool_call").at(-1)!.payload.sandbox_id, null);
+});
+
+test("runtime persists its decision before terminating and blocks later effects", async () => {
+  const events: Emitted[] = [];
+  let release!: () => void;
+  const persisted = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
+  const ref: ToolContextRef = {
+    current: { ...fakeToolContext(), runtime: async () => ({ ok: true, handoff: { choice, lifetime: "task" } }) },
+    scopeLabel: "personal:U1",
+    runtimeRunId: "run",
+    runtimeActorId: "U1",
+    emit: async (e) => {
+      events.push(e as Emitted);
+      if (e.type === "tool_result") await persisted;
+    },
+  };
+  const tools = createAgentTools(ref);
+  const pending = call(
+    tools.find((t) => t.name === "runtime"),
+    { action: "set", model: "Astra" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ref.runtimeHandoff, undefined);
+  const blocked = (await call(
+    tools.find((t) => t.name === "write"),
+    { path: "should-not-exist", data: "x" },
+  )) as { terminate: boolean };
+  assert.equal(blocked.terminate, false);
+  release();
+  const result = (await pending) as { terminate: boolean };
+  assert.equal(result.terminate, true);
+  assert.deepEqual(ref.runtimeHandoff, { choice, lifetime: "task" });
+  assert.equal(events.filter((e) => e.type === "tool_result").length, 1);
+  assert.equal(events.at(-1)?.payload.runId, "run");
+});
+
+test("runtime persistence failure does not latch a handoff", async () => {
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      runtime: async () => ({
+        ok: true,
+        handoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" },
+      }),
+    },
+    scopeLabel: "personal:U1",
+    emit: async (e) => {
+      if (e.type === "tool_result") throw new Error("disk failed");
+    },
+  };
+  await assert.rejects(
+    () =>
+      call(
+        createAgentTools(ref).find((t) => t.name === "runtime"),
+        { action: "set", model: "Astra" },
+      ),
+    /disk failed/,
+  );
+  assert.equal(ref.runtimeHandoff, undefined);
+  assert.equal(ref.runtimeMutationPending, false);
+});
+
+test("runtime pending mutation drains existing calls without premature termination", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let selected = false;
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      runtime: async (request) => {
+        if (request.action === "get") {
+          await held;
+          return { ok: true };
+        }
+        selected = true;
+        return { ok: false, error: "unavailable" };
+      },
+    },
+  };
+  const runtime = createAgentTools(ref).find((t) => t.name === "runtime");
+  const first = call(runtime, { action: "get" });
+  const second = call(runtime, { action: "set", model: "Astra" });
+  const third = (await call(runtime, { action: "get" })) as { terminate?: boolean };
+  assert.equal(selected, false);
+  assert.equal(third.terminate, false);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(selected, true);
+  assert.equal(ref.runtimeHandoff, undefined);
+  assert.equal(ref.runtimeMutationPending, false);
+});
+
+test("runtime inspection is read-only but runtime changes cannot escape read-only or active goals", async () => {
+  let mutations = 0;
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      runtime: async (request) => {
+        if (request.action !== "get") mutations++;
+        return { ok: true };
+      },
+    },
+  };
+  const runtime = createAgentTools(ref, { readOnly: true }).find((t) => t.name === "runtime");
+  assert.match(textOut(await call(runtime, { action: "get" })), /"ok":true/);
+  assert.match(textOut(await call(runtime, { action: "set", model: "Astra" })), /read_only/);
+  const tools = createAgentTools(ref);
+  await call(
+    tools.find((t) => t.name === "create_goal"),
+    { objective: "finish the work" },
+  );
+  assert.match(
+    textOut(
+      await call(
+        tools.find((t) => t.name === "runtime"),
+        { action: "set", model: "Astra" },
+      ),
+    ),
+    /goal.*unfinished/,
+  );
+  assert.equal(mutations, 0);
+});
+
+test("a queued runtime change cannot mutate after cancellation while draining tools", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const controller = new AbortController();
+  let selected = false;
+  const ref: ToolContextRef = {
+    abortSignal: controller.signal,
+    current: {
+      ...fakeToolContext(),
+      runtime: async (request) => {
+        if (request.action === "get") {
+          await held;
+          return { ok: true };
+        }
+        selected = true;
+        return { ok: true };
+      },
+    },
+  };
+  const runtime = createAgentTools(ref).find((t) => t.name === "runtime");
+  const first = call(runtime, { action: "get" });
+  const second = call(runtime, { action: "set", model: "Astra", lifetime: "scope" });
+  controller.abort();
+  release();
+  await Promise.all([first, second]);
+  assert.equal(selected, false);
+  assert.equal(ref.runtimeHandoff, undefined);
 });

@@ -80,6 +80,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) => p === "/v1/runtime-config" && (m === "GET" || m === "PUT"),
+    when: () => false,
     guidance:
       "Runtime choice is scoped: changing it affects this personal or shared context, not the whole org. Confirm before changing a shared scope. An inherit reset follows future org defaults automatically.",
     routes: [

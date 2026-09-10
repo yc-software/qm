@@ -100,7 +100,7 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildOrchestrator(harness: Harness, maxContextTokens?: number) {
+function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultTurnWallClockMs?: number) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -128,6 +128,7 @@ function buildOrchestrator(harness: Harness, maxContextTokens?: number) {
     deploy,
     acl,
     maxContextTokens,
+    defaultTurnWallClockMs,
   });
   return { orch, sessions };
 }
@@ -1093,4 +1094,115 @@ test("the token estimate counts the environment note persisted on a user entry",
   const withEnv = { ...bare, seq: 2, payload: { text: "hi", environment } } as SessionEntry;
   const delta = estimateHistoryTokens([withEnv]) - estimateHistoryTokens([bare]);
   assert.ok(delta >= countTokens(environment) * 0.9, `environment tokens must be counted (delta ${delta})`);
+});
+
+test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
+  const base = createMockHarness();
+  const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
+  let resets = 0;
+  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      resetSession: async () => {
+        resets++;
+      },
+      runTurn: async (input) => {
+        seen.push(input);
+        if (seen.length === 1) {
+          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          await input.emit({
+            type: "tool_result",
+            payload: {
+              tool: "runtime",
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: { choice, lifetime: "task" },
+            },
+            scopeLabel: input.scopeLabel,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
+        }
+        assert.deepEqual(input.runtime, choice);
+        assert.equal(input.runId, "runtime-run");
+        assert.ok(input.history.some((e) => e.type === "tool_result"));
+        assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
+        await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
+        return { reply: "continued", modelCalls: 1 };
+      },
+    },
+  };
+  const { orch, sessions } = buildOrchestrator(harness, undefined, 60000);
+  await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
+  assert.equal(seen.length, 2);
+  assert.equal(resets, 1);
+  const session = await sessions.getByThread(conv.threadRef);
+  const entries = await sessions.getEntries(session!.id);
+  assert.deepEqual(
+    entries.filter((e) => e.type === "assistant").map((e) => (e.payload as { text: string }).text),
+    ["continued"],
+  );
+});
+
+test("runtime handoff cannot restart a stopped task", async () => {
+  const base = createMockHarness();
+  let calls = 0;
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      runTurn: async () => {
+        calls++;
+        return {
+          reply: "",
+          stopped: true,
+          runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" },
+        };
+      },
+    },
+  };
+  const { orch } = buildOrchestrator(harness);
+  await orch.handleTurn({ ...turn("switch"), surfaceTools: false });
+  assert.equal(calls, 1);
+});
+
+test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", async () => {
+  const base = createMockHarness();
+  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
+  let calls = 0;
+  const harness: Harness = {
+    ...base,
+    turns: {
+      ...base.turns,
+      resetSession: async () => {
+        throw new Error("worker died during reset");
+      },
+      runTurn: async (input) => {
+        calls++;
+        if (calls === 1) {
+          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          await input.emit({
+            type: "tool_result",
+            payload: {
+              tool: "runtime",
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: { choice, lifetime: "task" },
+            },
+            scopeLabel: input.scopeLabel,
+          });
+          return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
+        }
+        assert.deepEqual(input.runtime, choice);
+        return { reply: "resumed" };
+      },
+    },
+  };
+  const { orch } = buildOrchestrator(harness);
+  const input = { ...turn("switch and finish"), runId: "retry-runtime", surfaceTools: false };
+  await assert.rejects(() => orch.handleTurn(input), /worker died/);
+  await orch.handleTurn({ ...input, attempt: 2 });
+  assert.equal(calls, 2);
 });

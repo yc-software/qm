@@ -601,7 +601,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
               args?: unknown;
             };
             const tool = input.tool ? state.tools.get(input.tool) : undefined;
-            if (!tool) return json(res, 404, { output: `[tool unavailable: ${input.tool ?? "unknown"}]` });
+            if (!tool || (state.child && input.tool === "runtime"))
+              return json(res, 404, { output: `[tool unavailable: ${input.tool ?? "unknown"}]` });
             try {
               const result = await tool.execute(input.callID ?? randomBytes(8).toString("hex"), input.args ?? {});
               const output = (result.content ?? [])
@@ -610,7 +611,12 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                 .join("\n");
               return json(res, 200, {
                 output,
-                terminate: Boolean(state.ref.pausedOnApproval || state.ref.silentRequested),
+                terminate: Boolean(
+                  result.terminate ||
+                  state.ref.runtimeHandoff ||
+                  state.ref.pausedOnApproval ||
+                  state.ref.silentRequested,
+                ),
               });
             } catch (error) {
               return json(res, 200, { output: `[tool failed] ${errMessage(error)}` });
@@ -1027,7 +1033,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       }
       for (const thinking of reasoningFromParts(parts))
         await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
-      const reply = textFromParts(parts);
+      const reply = ref.runtimeHandoff ? "" : textFromParts(parts);
       if (reply) {
         const finalEntry = await turn.emit({
           type: "assistant",
@@ -1039,6 +1045,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       return {
         reply,
         ...(state.stopped ? { stopped: true as const } : {}),
+        ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
         ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),

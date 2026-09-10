@@ -1,3 +1,5 @@
+import { createGrindMeter, grindState } from "./grind.ts";
+import type { RuntimeHandoff, RuntimeRequest } from "./runtime-control.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
@@ -43,6 +45,11 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
 }
 
 export interface ToolContextRef {
+  runtimeHandoff?: RuntimeHandoff;
+  runtimeRunId?: string;
+  runtimeActorId?: string;
+  runtimeMutationPending?: boolean;
+  runtimeInFlight?: Set<Promise<unknown>>;
   current: ToolContext | null;
   pendingApprovals?: Array<{
     command: string;
@@ -333,10 +340,10 @@ export function coreToolOptions(config: Config): CoreToolOptions {
   };
 }
 
-const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently"]);
+const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime"]);
 
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested">,
+  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -344,7 +351,7 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested) return { ...upstream, terminate: true };
+    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
     return upstream;
   };
 }
@@ -3538,6 +3545,60 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
     );
 
+  const runtime = defineTool({
+    name: "runtime",
+    label: "runtime",
+    description:
+      "Inspect or change your model, harness, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved. lifetime defaults to task (this user request, including retries); scope changes the default for future requests in this scope too. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
+    parameters: Type.Object({
+      action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
+      model: Type.Optional(Type.String({ description: "Model ID or exact display name from get, such as Astra." })),
+      harness: Type.Optional(Type.String()),
+      effort: Type.Optional(Type.String()),
+      fastMode: Type.Optional(Type.Boolean()),
+      lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
+    }),
+    async execute(callId, params) {
+      const request = params as RuntimeRequest;
+      await recordCall(callId, { tool: "runtime", ...request });
+      if (
+        request.action !== "get" &&
+        ref.goal &&
+        (ref.goal.status === "active" ||
+          ref.goal.status === "paused" ||
+          (ref.goal.floor &&
+            !grindState(ref.goal.floor, goalFloorMeter(ref.goal, ref.goalMeter ?? createGrindMeter())).met))
+      ) {
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "runtime", error: "goal_in_progress" },
+          text(
+            "Runtime changes are unavailable while a goal or work floor is unfinished. Continue the goal on the current runtime.",
+          ),
+          true,
+        );
+      }
+      const result =
+        opts?.readOnly && request.action !== "get"
+          ? { ok: false as const, error: "read_only" }
+          : ((await ref.current?.runtime?.(request, ref.abortSignal)) ?? { ok: false, error: "runtime_unavailable" });
+      const handoff = result.ok ? result.handoff : undefined;
+      const ret = await recordCoreAuthoredResult(
+        callId,
+        {
+          tool: "runtime",
+          action: request.action,
+          ok: result.ok,
+          ...(handoff ? { runtimeHandoff: handoff, runId: ref.runtimeRunId, actorId: ref.runtimeActorId } : {}),
+        },
+        { ...text(JSON.stringify(result)), ...(handoff ? { terminate: true } : {}) },
+        !result.ok,
+      );
+      if (handoff) ref.runtimeHandoff = handoff;
+      return ret;
+    },
+  });
+
   const tools = [
     ...(!opts?.sandboxResources ? [execute] : []),
     ...(credentialExecServices.length ? [credentialExec] : []),
@@ -3555,11 +3616,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     createGoal,
     getGoal,
     updateGoal,
+    runtime,
     ...mcpTools,
   ];
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
-  return active.map((t) => withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref));
+  return active.map((t) =>
+    withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+  );
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "stay_silent"]);
@@ -3645,4 +3709,48 @@ function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
       }
     },
   } as ToolDefinition;
+}
+
+function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
+  return {
+    ...tool,
+    async execute(...args) {
+      const [, params] = args;
+      if (ref.runtimeHandoff || ref.runtimeMutationPending)
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
+            },
+          ],
+          details: {},
+          terminate: !!ref.runtimeHandoff,
+        };
+      const mutation = tool.name === "runtime" && (!isObj(params) || params.action !== "get");
+      if (mutation) {
+        ref.runtimeMutationPending = true;
+        try {
+          await Promise.allSettled([...(ref.runtimeInFlight ?? [])]);
+          if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
+            return {
+              content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],
+              details: {},
+              terminate: true,
+            };
+          return await tool.execute(...args);
+        } finally {
+          ref.runtimeMutationPending = false;
+        }
+      }
+      const inFlight = (ref.runtimeInFlight ??= new Set());
+      const result = Promise.resolve().then(() => tool.execute(...args));
+      inFlight.add(result);
+      try {
+        return await result;
+      } finally {
+        inFlight.delete(result);
+      }
+    },
+  };
 }

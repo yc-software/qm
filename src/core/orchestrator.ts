@@ -1,3 +1,4 @@
+import { recoveredRuntime } from "../harness/runtime-control.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import { shq } from "../util/shell.ts";
@@ -2602,7 +2603,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           configuredTurnWallClockSec === null || configuredTurnWallClockSec === undefined
             ? undefined
             : configuredTurnWallClockSec * 1000;
-        let effectiveTurnWallClockMs = configuredTurnWallClockMs;
+        let effectiveTurnWallClockMs =
+          configuredTurnWallClockMs ?? deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
         if (requestedTurnWallClockMs !== undefined) {
           effectiveTurnWallClockMs =
             configuredTurnWallClockMs !== undefined && configuredTurnWallClockMs > 0
@@ -2612,74 +2614,72 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const wantsOrgFastMode =
           typeof input.fastMode !== "boolean" && humanTurn && (await deps.config?.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanTurn, wantsOrgFastMode === true);
-        let userProviderKeys: ProviderKeys | undefined;
-        let userModelOverride: string | undefined;
-        let userHarnessOverride: string | undefined;
-        let claudeOauthToken: string | undefined;
-        let codexTurnAuth: CodexTurnAuth | undefined;
-        const userCredStore = deps.userModelCredentials;
-        if (userCredStore && humanTurn && (await deps.config?.getIndividualModelAuthDurable())) {
-          const [anthCred, oaiCred] = await Promise.all([
-            userCredStore.get(actor.id, "anthropic"),
-            userCredStore.get(actor.id, "openai"),
-          ]);
-          // The org's harness choice decides how a ChatGPT subscription is
-          // served: pi orgs stay on pi (Codex provider inside pi-ai), others
-          // hop to the codex harness.
-          const orgRuntime = await deps.config?.getRuntimeSelectionDurable(resolution.orgScopeId);
-          const preferredHarness = input.harness ?? orgRuntime?.harnessId ?? deps.defaultHarness;
-          const routing = resolveIndividualAuthRouting(
-            anthCred ?? null,
-            oaiCred ?? null,
-            input.model,
-            preferredHarness,
-          );
-          if (routing?.kind === "apikey") {
-            userHarnessOverride = "pi";
-            userProviderKeys = { [routing.provider]: routing.apiKey };
-            userModelOverride = routing.model;
-          } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
-            // Derived material only — the keychain refreshes centrally
-            // (single-flight, CAS) and the refresh token never leaves it.
-            const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
-            if (derived) {
-              claudeOauthToken = derived.accessToken;
-              userHarnessOverride = routing.harness;
-              userModelOverride = routing.model;
-            }
-          } else if (
-            routing?.kind === "oauth" &&
-            routing.provider === "openai" &&
-            routing.harness === "pi" &&
-            oaiCred?.oauth
-          ) {
-            // pi-on-ChatGPT: pi-ai's openai-codex provider takes the access
-            // token as its key (the account claim rides inside the JWT).
-            const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-            if (derived) {
-              userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-              userHarnessOverride = routing.harness;
-              userModelOverride = routing.model;
-            }
-          } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-            const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-            if (derived?.idToken) {
-              codexTurnAuth = {
-                accessToken: derived.accessToken,
-                idToken: derived.idToken,
-                ...(derived.accountId ? { accountId: derived.accountId } : {}),
-                ...(derived.expiresAt !== undefined ? { expiresAt: derived.expiresAt } : {}),
-              };
-              userHarnessOverride = routing.harness;
-              userModelOverride = routing.model;
-            }
-          }
-          if (!userHarnessOverride) {
-            throw new NonRetryableTurnError(
-              "This organization has each person chat on their own AI account, and yours isn't connected yet. Open the web app and connect Claude or ChatGPT from the AI account panel, then try again.",
+        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
+          let userProviderKeys: ProviderKeys | undefined;
+          let userModelOverride: string | undefined;
+          let userHarnessOverride: string | undefined;
+          let claudeOauthToken: string | undefined;
+          let codexTurnAuth: CodexTurnAuth | undefined;
+          const userCredStore = deps.userModelCredentials;
+          if (userCredStore && humanTurn && (await deps.config?.getIndividualModelAuthDurable())) {
+            const [anthCred, oaiCred] = await Promise.all([
+              userCredStore.get(actor.id, "anthropic"),
+              userCredStore.get(actor.id, "openai"),
+            ]);
+            const orgRuntime = await deps.config?.getRuntimeSelectionDurable(resolution.orgScopeId);
+            const preferredHarness = runtime.harnessId ?? input.harness ?? orgRuntime?.harnessId ?? deps.defaultHarness;
+            const routing = resolveIndividualAuthRouting(
+              anthCred ?? null,
+              oaiCred ?? null,
+              runtime.modelId ?? input.model,
+              preferredHarness,
             );
+            if (routing?.kind === "apikey") {
+              userHarnessOverride = "pi";
+              userProviderKeys = { [routing.provider]: routing.apiKey };
+              userModelOverride = routing.model;
+            } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
+              const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
+              if (derived) {
+                claudeOauthToken = derived.accessToken;
+                userHarnessOverride = routing.harness;
+                userModelOverride = routing.model;
+              }
+            } else if (
+              routing?.kind === "oauth" &&
+              routing.provider === "openai" &&
+              routing.harness === "pi" &&
+              oaiCred?.oauth
+            ) {
+              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
+              if (derived) {
+                userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
+                userHarnessOverride = routing.harness;
+                userModelOverride = routing.model;
+              }
+            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
+              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
+              if (derived?.idToken) {
+                codexTurnAuth = {
+                  accessToken: derived.accessToken,
+                  idToken: derived.idToken,
+                  ...(derived.accountId ? { accountId: derived.accountId } : {}),
+                  ...(derived.expiresAt !== undefined ? { expiresAt: derived.expiresAt } : {}),
+                };
+                userHarnessOverride = routing.harness;
+                userModelOverride = routing.model;
+              }
+            }
+            if (!userHarnessOverride) {
+              throw new NonRetryableTurnError(
+                "This organization has each person chat on their own AI account, and yours isn't connected yet. Open the web app and connect Claude or ChatGPT from the AI account panel, then try again.",
+              );
+            }
           }
-        }
+          return { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth };
+        };
+        let { userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
+          await loadRuntimeAuth({});
         const effectiveModel = userModelOverride ?? input.model;
         const effectiveHarness = userHarnessOverride ?? input.harness;
         if (userHarnessOverride) {
@@ -2693,13 +2693,44 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         if (input.harness && !isHarnessId(input.harness))
           throw new NonRetryableTurnError(`runtime ${input.harness} is not approved`);
-        const requestedRuntime: Partial<RuntimeChoice> = {
+        let requestedRuntime: Partial<RuntimeChoice> = {
           ...(effectiveHarness && isHarnessId(effectiveHarness) ? { harnessId: effectiveHarness } : {}),
           ...(effectiveModel ? { modelId: effectiveModel } : {}),
           ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
           ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
         };
-        const runHarnessTurn = (
+        const runtimeClaims: CapabilityClaims = controlClaims ?? {
+          ...scopeAttestation,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(liveAuthorTurn ? { liveAuthor: true } : {}),
+          ...(automatedTurn ? { triggered: true } : {}),
+        };
+        const restoredRuntime =
+          input.runId && isRetry
+            ? recoveredRuntime(filterHistory(await deps.sessions.getEntries(session.id)), input.runId, actor.id)
+            : undefined;
+        const checkRuntimeAuth = async (choice: RuntimeChoice): Promise<string | null> => {
+          try {
+            const auth = await loadRuntimeAuth(choice);
+            if (
+              auth.userHarnessOverride &&
+              (auth.userHarnessOverride !== choice.harnessId || auth.userModelOverride !== choice.modelId)
+            )
+              return "Your connected AI account cannot serve this model on that harness. Choose a compatible runtime from get.";
+            return null;
+          } catch (error) {
+            return errMessage(error);
+          }
+        };
+        const adoptRuntime = async (choice: RuntimeChoice) => {
+          const error = await checkRuntimeAuth(choice);
+          if (error) throw new NonRetryableTurnError(error);
+          ({ userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken, codexTurnAuth } =
+            await loadRuntimeAuth(choice));
+          requestedRuntime = choice;
+        };
+        if (restoredRuntime) await adoptRuntime(restoredRuntime);
+        const runHarnessSegment = (
           harnessInput: string,
           extras: {
             environment?: string;
@@ -2725,7 +2756,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             session,
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
             ...(claudeOauthToken ? { claudeOauthToken } : {}),
-            ...(userHarnessOverride ? { runtimePinned: true } : {}),
+            ...(userHarnessOverride && !restoredRuntime && runtimeHandoffs === 0 ? { runtimePinned: true } : {}),
+            runtimeActorId: actor.id,
+            ...(deps.runtime && input.runId
+              ? {
+                  runtimeControl: (
+                    active: RuntimeChoice,
+                    request: import("../harness/runtime-control.ts").RuntimeRequest,
+                    signal?: AbortSignal,
+                  ) => deps.runtime!(runtimeClaims, active, request, checkRuntimeAuth, !!userHarnessOverride, signal),
+                }
+              : {}),
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
@@ -2742,7 +2783,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             surfaceName,
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(isPollFire ? { pollFire: true } : {}),
-            ...(effectiveTurnWallClockMs !== undefined ? { turnWallClockMs: effectiveTurnWallClockMs } : {}),
+            ...(effectiveTurnWallClockMs !== undefined
+              ? {
+                  turnWallClockMs:
+                    effectiveTurnWallClockMs > 0
+                      ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
+                      : effectiveTurnWallClockMs,
+                }
+              : {}),
             ...(securityPolicy.inboundScreening === "external"
               ? {
                   screenToolResult: async ({
@@ -2871,7 +2919,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               const meta = {
                 ...rec.meta,
                 ...(actor.displayName?.trim() ? { author: actor.displayName.trim() } : {}),
-                ...(syntheticPrompt ? { hidden: true } : {}),
+                ...(syntheticPrompt || continuation ? { hidden: true } : {}),
                 ...(input.displayText?.trim() && rec.meta.bareText === input.text
                   ? { display: input.displayText }
                   : {}),
@@ -2897,7 +2945,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     payload.name = actor.displayName.trim();
                   if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
                     payload.display = input.displayText;
-                  if (syntheticPrompt) payload.hidden = true;
+                  if (syntheticPrompt || continuation) payload.hidden = true;
                   return { ...tainted, payload };
                 })();
                 const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
@@ -3000,6 +3048,53 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
           });
         };
+        let runtimeHandoffs = restoredRuntime ? 1 : 0;
+        const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
+          let segment = await runHarnessSegment(...args);
+          let modelCalls = segment.modelCalls ?? 0;
+          const usage = { cacheRead: 0, cacheWrite: 0, uncachedInput: 0 };
+          const addUsage = () => {
+            if (segment.cacheUsage)
+              for (const key of ["cacheRead", "cacheWrite", "uncachedInput"] as const)
+                usage[key] += segment.cacheUsage[key];
+          };
+          addUsage();
+          while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
+            if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
+            if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
+              throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
+            await adoptRuntime(segment.runtimeHandoff.choice);
+            await deps.harness.turns.resetSession?.(session.id);
+            const resumedHistory = filterHistory(
+              forModelContext((await deps.sessions.getContextWindow(session.id)).entries, {
+                includeSecurityTainted: false,
+              }),
+            );
+            const resumedTape = tapeRows
+              ? {
+                  rows: filterTapeForAudience(
+                    await deps.sessions.getTape(session.id),
+                    conversation.audience,
+                    scopeId,
+                    resolution.orgScopeId,
+                  ),
+                  mode: "shadow" as const,
+                }
+              : undefined;
+            segment = await runHarnessSegment(
+              resumeNote() +
+                "\nRuntime handoff completed. Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request.",
+              {
+                ...(turnEnvironment ? { environment: turnEnvironment } : {}),
+                ...(inbound.images.length ? { images: inbound.images } : {}),
+              },
+              { history: resumedHistory, ...(resumedTape ? { tape: resumedTape } : {}) },
+            );
+            modelCalls += segment.modelCalls ?? 0;
+            addUsage();
+          }
+          return { ...segment, modelCalls, cacheUsage: usage };
+        };
         const primaryServedTape = !!tapeRows?.serve && history === visibleHistory;
         let result = await runHarnessTurn(turnInput, {
           ...(turnEnvironment ? { environment: turnEnvironment } : {}),
@@ -3047,7 +3142,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !input.cancel?.aborted &&
           spine.surfaceOutboundCount === 0 &&
           spine.staySilentReason === undefined &&
-          !result.silent
+          !result.silent &&
+          !(result.runtimeHandoff && result.stopped)
         ) {
           await latchCoverage();
           const primaryStopped = !!result.stopped;

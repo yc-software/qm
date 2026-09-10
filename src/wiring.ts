@@ -1,3 +1,4 @@
+import { createRuntimeService } from "./harness/runtime-control.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
@@ -1473,6 +1474,7 @@ export function buildApp(
     resolution,
     config: configStore,
     defaultHarness: fallbackHarness,
+    defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessionTapeMode: config.sessionTapeMode,
@@ -1890,6 +1892,18 @@ export function buildApp(
   });
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
+  orchestratorDeps.runtime = createRuntimeService(
+    {
+      config: configStore,
+      harnessId: fallbackHarness,
+      baseModelDefault: fallback.modelId,
+      providerKeys: providerKeysPresent(config),
+      modelCredentials,
+      modelCredentialFetch: overrides.modelCredentialFetch,
+      refreshModels,
+    },
+    app,
+  );
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
