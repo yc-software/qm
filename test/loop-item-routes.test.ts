@@ -10,7 +10,11 @@ import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
-import type { Cron, Loop, LoopItem } from "../src/types.ts";
+import { scopeId, type Cron, type Loop, type LoopItem } from "../src/types.ts";
+import { orgId } from "../src/config.ts";
+import { createAdminService } from "../src/admin/admin-service.ts";
+import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
+import { ensureFactoryLoop } from "../src/loops/factory/factory-loop.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { sleep } from "../src/util/async.ts";
@@ -102,6 +106,7 @@ async function call(
     capability?: Record<string, unknown> | null;
     actor?: string;
     sessionForThread?: string;
+    deps?: Record<string, unknown>;
   },
 ): Promise<{ status: number; body: unknown }> {
   const url = new URL(`http://x${over.path}`);
@@ -150,6 +155,7 @@ async function call(
             loopSourceTokens: { connectorAccessToken: async () => "tok" },
           }
         : {}),
+      ...over.deps,
     },
     app,
   } as unknown as ApiCtx;
@@ -791,4 +797,152 @@ test("a capability caller's edit is stored as the agent's draft, so its mentions
   });
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Everyone @\u200bhere please look");
+});
+
+const ORG_SCOPE = scopeId("org", orgId());
+
+const FORBIDDEN = { error: "forbidden", message: "you may not administer this loop" };
+
+function adminDeps(deactivated: readonly string[] = ["admin-dave"]): Record<string, unknown> {
+  return {
+    admin: createAdminService(
+      createAdminGrantStore(createMemoryAdminGrantPersistence(), {
+        seed: [
+          { principalId: "admin-alice", scopeId: ORG_SCOPE, role: "org_admin" },
+          { principalId: "admin-bob", scopeId: ORG_SCOPE, role: "org_admin" },
+          { principalId: "admin-dave", scopeId: ORG_SCOPE, role: "org_admin" },
+        ],
+      }),
+    ),
+    identity: {
+      refresh: async () => {},
+      classify: (id: string) => ({ id, type: deactivated.includes(id) ? "guest" : "internal" }),
+    },
+  };
+}
+
+const BOB_CAP = { ...CAP, actorId: "admin-bob", scopeId: "personal:admin-bob" };
+
+const ITEM_TWO = { ...ITEM, sourceKey: "C1:1.3", slack: { channelId: "C1", ts: "1.3" } };
+
+async function orgLoop(w: World): Promise<Loop> {
+  return ensureFactoryLoop(w.loops.store, { owner: "admin-alice", orgScopeId: ORG_SCOPE });
+}
+
+test("a second org admin works the org loop's ledger items", async () => {
+  const w = world();
+  const loop = await orgLoop(w);
+  const deps = adminDeps();
+
+  const ingested = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    body: { items: [ITEM, ITEM_TWO] },
+    capability: BOB_CAP,
+    deps,
+  });
+  assert.equal(ingested.status, 200, JSON.stringify(ingested.body));
+  assert.deepEqual(ingested.body, { created: 2, updated: 0, skipped: 0 });
+
+  const listed = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: BOB_CAP, deps });
+  assert.equal(listed.status, 200);
+  const body = listed.body as { loop: Loop; items: LedgerItemView[]; counts: Record<string, number> };
+  assert.equal(body.loop.id, loop.id);
+  assert.equal(body.items.length, 2);
+  assert.ok(body.counts);
+  const [first, second] = body.items as [LedgerItemView, LedgerItemView];
+
+  const read = await call(w, {
+    method: "GET",
+    path: `/v1/loops/${loop.id}/items/${first.id}`,
+    capability: BOB_CAP,
+    deps,
+  });
+  assert.equal(read.status, 200);
+  assert.equal((read.body as { item: LedgerItemView }).item.id, first.id);
+
+  const dismissed = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${first.id}/action`,
+    body: { kind: "dismiss" },
+    capability: BOB_CAP,
+    deps,
+  });
+  assert.equal(dismissed.status, 200);
+  assert.ok((dismissed.body as { item: LedgerItemView }).item);
+
+  const followed = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${second.id}/followup`,
+    body: { message: "shorten it" },
+    capability: BOB_CAP,
+    deps,
+  });
+  assert.equal(followed.status, 200);
+  assert.deepEqual(w.followUps, [{ itemId: second.id, message: "shorten it", actorId: "admin-bob" }]);
+
+  const relayedList = await call(w, {
+    method: "GET",
+    path: `/v1/loops/${loop.id}/items?principalId=admin-bob`,
+    capability: PORTAL,
+    deps,
+  });
+  assert.equal(relayedList.status, 200);
+  const relayedIngest = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items?principalId=admin-bob`,
+    body: { items: [ITEM] },
+    capability: PORTAL,
+    deps,
+  });
+  assert.equal(relayedIngest.status, 403);
+  assert.equal((relayedIngest.body as { message: string }).message, "ledger items are ingested by the agent");
+});
+
+test("the org loop's ledger stays shut to non-admins and to admins of nothing else", async () => {
+  const w = world();
+  const loop = await orgLoop(w);
+  const deps = adminDeps();
+  const seeded = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    body: { items: [ITEM] },
+    capability: BOB_CAP,
+    deps,
+  });
+  assert.equal(seeded.status, 200);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  const personal = await ensureInboxLoop(w.loops.store, "josh");
+
+  const rows = (loopId: string, itemId: string) =>
+    [
+      ["POST", `/v1/loops/${loopId}/items`, { items: [ITEM] }],
+      ["GET", `/v1/loops/${loopId}/items`, undefined],
+      ["GET", `/v1/loops/${loopId}/items/${itemId}`, undefined],
+      ["POST", `/v1/loops/${loopId}/items/${itemId}/action`, { kind: "dismiss" }],
+      ["POST", `/v1/loops/${loopId}/items/${itemId}/followup`, { message: "hi" }],
+    ] as const;
+
+  for (const actor of ["carol", "admin-dave"]) {
+    for (const [method, path, body] of rows(loop.id, item!.id)) {
+      const out = await call(w, {
+        method,
+        path,
+        body,
+        capability: { ...CAP, actorId: actor, scopeId: `personal:${actor}` },
+        deps,
+      });
+      assert.deepEqual(out.body, FORBIDDEN, `${actor} ${method} ${path}`);
+      assert.equal(out.status, 403);
+    }
+  }
+  for (const [method, path, body] of rows(personal.id, item!.id)) {
+    const out = await call(w, { method, path, body, capability: BOB_CAP, deps });
+    assert.deepEqual(out.body, FORBIDDEN, `admin-bob ${method} ${path}`);
+    assert.equal(out.status, 403);
+  }
+
+  const inbox = await call(w, { method: "GET", path: "/v1/loops/inbox", capability: BOB_CAP, deps });
+  assert.equal(inbox.status, 200);
+  assert.equal((inbox.body as { loop: Loop | null }).loop, null);
 });
