@@ -387,8 +387,11 @@ test("create dedup survives a 'restart': a fresh store over the same backing sti
 test("claimSlot: exactly one claimant wins a slot; the claim advances the schedule", async () => {
   const store = createCronStore();
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), true, "the first claim wins");
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_600), false, "a second claim on the same slot loses");
+  await store.update(cron.id, { action: "fresh action" });
+  const claim = await store.claimSlot(cron.id, 1_000_000, 1_000_500);
+  assert.ok(claim, "the first claim wins");
+  assert.equal(claim.cron.action, "fresh action", "the claim carries the configuration read under its store lock");
+  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_600), null, "a second claim on the same slot loses");
   const after = (await store.get(cron.id))!;
   assert.equal(after.lastFiredAt, 1_000_500);
   assert.equal(after.nextFireAt, 1_060_500, "the claim advances like markFired");
@@ -410,37 +413,130 @@ test("claimSlot: concurrent claimants on one slot still yield exactly one winner
 test("claimSlot: refuses a stale slot, a disabled cron, and an archived cron", async () => {
   const store = createCronStore();
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
-  assert.equal(await store.claimSlot(cron.id, 999, 1_000_500), false, "a slot that isn't the next fire is stale");
+  assert.equal(await store.claimSlot(cron.id, 999, 1_000_500), null, "a slot that isn't the next fire is stale");
   await store.setEnabled(cron.id, false);
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), false, "a disabled cron cannot be claimed");
+  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), null, "a disabled cron cannot be claimed");
   await store.setEnabled(cron.id, true);
   await store.update(cron.id, { archived: true });
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), false, "an archived cron cannot be claimed");
-  assert.equal(await store.claimSlot("missing", 1_000_000, 1_000_500), false);
+  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), null, "an archived cron cannot be claimed");
+  assert.equal(await store.claimSlot("missing", 1_000_000, 1_000_500), null);
 });
 
 test("claimSlot: a one-shot claim consumes the slot for good", async () => {
   const store = createCronStore();
   const cron = await store.create({ ...base, schedule: { firstFireAt: 1_000_000 } });
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), true);
+  assert.ok(await store.claimSlot(cron.id, 1_000_000, 1_000_500));
   const after = (await store.get(cron.id))!;
   assert.equal(after.nextFireAt, undefined, "no next fire remains");
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_600), false);
+  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_600), null);
 });
 
-test("unclaimSlot: restores a failed claim so the slot retries, and only that exact claim", async () => {
+test("releaseSlot restores a claimed slot, and only its exact claim", async () => {
   const store = createCronStore();
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
   await store.markFired(cron.id, 940_000);
-  const prior = (await store.get(cron.id))!.lastFiredAt;
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), true);
-  await store.unclaimSlot(cron.id, 1_000_000, 1_000_500, prior);
+  const first = await store.claimSlot(cron.id, 1_000_000, 1_000_500);
+  assert.ok(first);
+  await store.releaseSlot(cron.id, first);
   const restored = (await store.get(cron.id))!;
   assert.equal(restored.lastFiredAt, 940_000);
   assert.equal(restored.nextFireAt, 1_000_000, "the slot is claimable again");
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_001_000), true);
-  await store.unclaimSlot(cron.id, 1_000_000, 999, prior);
-  assert.equal((await store.get(cron.id))!.lastFiredAt, 1_001_000, "an unclaim for a different claim is a no-op");
+  const second = await store.claimSlot(cron.id, 1_000_000, 1_001_000);
+  assert.ok(second);
+  await store.releaseSlot(cron.id, first);
+  assert.equal((await store.get(cron.id))!.lastFiredAt, 1_001_000, "a release for an older claim is a no-op");
+});
+
+test("failed slot backoff grows to five minutes and survives store reloads", async () => {
+  const backing = createMemoryMap<Cron>();
+  let store = createCronStore(backing);
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000 } });
+  let at = 1_000;
+  const delays = [5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000];
+  for (let i = 0; i < delays.length; i++) {
+    const claim = await store.claimSlot(cron.id, 1_000, at);
+    assert.ok(claim);
+    assert.equal(await store.failSlot(cron.id, claim, at), at + delays[i]!);
+    const failed = (await store.get(cron.id))!;
+    assert.deepEqual(failed.failureBackoff, { scheduledAt: 1_000, failures: Math.min(i + 1, 7) });
+    assert.equal(failed.nextFireAt, 1_000);
+    assert.equal(failed.deferUntil, at + delays[i]!);
+    assert.deepEqual(await store.due(failed.deferUntil - 1), []);
+    at = failed.deferUntil;
+    store = createCronStore(backing);
+  }
+});
+
+test("slot success, a new slot, and an action edit reset failure history", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000 } });
+  const failedClaim = await store.claimSlot(cron.id, 1_000, 1_000);
+  assert.ok(failedClaim);
+  await store.failSlot(cron.id, failedClaim, 1_000);
+
+  const retryClaim = await store.claimSlot(cron.id, 1_000, 6_000);
+  assert.ok(retryClaim);
+  assert.deepEqual((await store.get(cron.id))!.failureBackoff, { scheduledAt: 1_000, failures: 1 });
+  await store.completeSlot(cron.id, retryClaim);
+  assert.equal((await store.get(cron.id))!.failureBackoff, undefined);
+
+  const nextSlot = (await store.get(cron.id))!.nextFireAt!;
+  const nextClaim = await store.claimSlot(cron.id, nextSlot, nextSlot);
+  assert.ok(nextClaim);
+  await store.failSlot(cron.id, nextClaim, nextSlot);
+  assert.deepEqual((await store.get(cron.id))!.failureBackoff, { scheduledAt: nextSlot, failures: 1 });
+
+  const editedClaim = await store.claimSlot(cron.id, nextSlot, nextSlot + 5_000);
+  assert.ok(editedClaim);
+  await store.update(cron.id, { action: "new action" });
+  await store.failSlot(cron.id, editedClaim, nextSlot + 5_000);
+  const edited = (await store.get(cron.id))!;
+  assert.equal(edited.action, "new action");
+  assert.equal(edited.failureBackoff, undefined);
+  assert.equal(edited.activeClaimId, undefined);
+
+  const rescheduled = await store.create({
+    ...base,
+    action: "reschedule me",
+    schedule: { everyMs: 60_000, firstFireAt: 2_000 },
+  });
+  const staleScheduleClaim = await store.claimSlot(rescheduled.id, 2_000, 2_000);
+  assert.ok(staleScheduleClaim);
+  await store.update(rescheduled.id, { schedule: { everyMs: 120_000, firstFireAt: 500_000 } });
+  await store.failSlot(rescheduled.id, staleScheduleClaim, 2_000);
+  const afterScheduleEdit = (await store.get(rescheduled.id))!;
+  assert.deepEqual(afterScheduleEdit.schedule, { everyMs: 120_000, firstFireAt: 500_000 });
+  assert.equal(afterScheduleEdit.nextFireAt, 500_000);
+  assert.equal(afterScheduleEdit.failureBackoff, undefined);
+});
+
+test("stale failures cannot replace a newer claim, and busy deferrals preserve error history and later holds", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000 } });
+  const first = await store.claimSlot(cron.id, 1_000, 1_000);
+  assert.ok(first);
+  await store.releaseSlot(cron.id, first);
+  const second = await store.claimSlot(cron.id, 1_000, 1_001);
+  assert.ok(second);
+  await store.failSlot(cron.id, first, 1_001);
+  assert.equal((await store.get(cron.id))!.activeClaimId, second.id);
+  await store.failSlot(cron.id, second, 1_001);
+
+  const retry = await store.claimSlot(cron.id, 1_000, 6_001);
+  assert.ok(retry);
+  await store.defer(cron.id, 40_000);
+  await store.releaseSlot(cron.id, retry, 30_000);
+  let stored = (await store.get(cron.id))!;
+  assert.equal(stored.deferUntil, 40_000);
+  assert.deepEqual(stored.failureBackoff, { scheduledAt: 1_000, failures: 1 });
+  assert.equal(await store.claimSlot(cron.id, 1_000, 39_999), null, "claim rechecks the fresh durable hold");
+
+  const afterBusy = await store.claimSlot(cron.id, 1_000, 40_000);
+  assert.ok(afterBusy);
+  await store.failSlot(cron.id, afterBusy, 40_000);
+  stored = (await store.get(cron.id))!;
+  assert.deepEqual(stored.failureBackoff, { scheduledAt: 1_000, failures: 2 });
+  assert.equal(stored.deferUntil, 50_000);
 });
 
 test("beginFire journals a running entry; recordFire closes the same row with the outcome", async () => {
@@ -824,7 +920,7 @@ test("a deferred cron is not due until its deferral passes, and firing clears th
 
   await store.defer(cron.id, slot + 90_000);
   const next = await store.get(cron.id);
-  assert.equal(await store.claimSlot(cron.id, next!.nextFireAt!, slot + 90_000), true);
+  assert.ok(await store.claimSlot(cron.id, next!.nextFireAt!, slot + 90_000));
   assert.equal((await store.get(cron.id))?.deferUntil, undefined, "claimSlot clears the deferral");
 });
 

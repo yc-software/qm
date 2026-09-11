@@ -32,14 +32,26 @@ async function until(cond: () => boolean, ms: number): Promise<void> {
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
 }
 
-function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { scheduler: Scheduler; crons: CronStore } {
+async function untilAsync(cond: () => Promise<boolean>, ms: number): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!(await cond()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+}
+
+function instance(
+  calls: TurnRequest[],
+  turnMs = 0,
+  fires?: CronFireStore,
+  runOverride?: (req: TurnRequest) => Promise<TurnResult>,
+): { scheduler: Scheduler; crons: CronStore } {
   const maps = createPostgresMapFactory(URL!);
   const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), fires ? { fires } : undefined);
-  const run = async (req: TurnRequest): Promise<TurnResult> => {
-    calls.push(req);
-    if (turnMs) await new Promise((r) => setTimeout(r, turnMs));
-    return { status: "ok", reply: "QUEUE-OUTPUT" };
-  };
+  const run =
+    runOverride ??
+    (async (req: TurnRequest): Promise<TurnResult> => {
+      calls.push(req);
+      if (turnMs) await new Promise((r) => setTimeout(r, turnMs));
+      return { status: "ok", reply: "QUEUE-OUTPUT" };
+    });
   const scheduler = createScheduler({
     crons,
     deliveries: createDeliveryStore(),
@@ -79,6 +91,55 @@ test(
       a.scheduler.stop();
       b.scheduler.stop();
       await new Promise((r) => setTimeout(r, 500));
+    }
+  },
+);
+
+test(
+  "pg-boss queue: thrown failures persist a cooldown across instances without changing the fire key",
+  { skip, timeout: 120_000 },
+  async () => {
+    const calls: Array<{ req: TurnRequest; at: number }> = [];
+    const a = instance([], 0, undefined, async (req) => {
+      calls.push({ req, at: Date.now() });
+      throw new Error("provider down");
+    });
+    const b = instance([], 0, undefined, async (req) => {
+      calls.push({ req, at: Date.now() });
+      throw new Error("provider down");
+    });
+    a.scheduler.start(1_000);
+    b.scheduler.start(1_000);
+    try {
+      const cron = await a.crons.create({
+        schedule: { firstFireAt: Date.now() + 500 },
+        action: "durable failing queue fire",
+        owner: "U3",
+        createdBy: "U3",
+        ownerScopeId: scopeId("personal", "U3"),
+      });
+      await until(() => calls.length >= 1, 30_000);
+      assert.equal(calls.length, 1);
+      await untilAsync(async () => (await b.crons.get(cron.id))?.failureBackoff?.failures === 1, 5_000);
+      const persisted = await b.crons.get(cron.id);
+      assert.deepEqual(persisted?.failureBackoff, { scheduledAt: cron.nextFireAt, failures: 1 });
+      assert.ok((persisted?.deferUntil ?? 0) >= calls[0]!.at + 5_000);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      assert.equal(calls.length, 1, "a sibling reconcile cannot redeliver before the durable hold");
+
+      await until(() => calls.length >= 2, 20_000);
+      assert.equal(calls.length, 2);
+      assert.ok(calls[1]!.at - calls[0]!.at >= 4_500);
+      assert.equal(calls[1]!.req.idempotencyKey, calls[0]!.req.idempotencyKey);
+      await untilAsync(async () => (await a.crons.get(cron.id))?.failureBackoff?.failures === 2, 5_000);
+      assert.deepEqual((await a.crons.get(cron.id))?.failureBackoff, {
+        scheduledAt: cron.nextFireAt,
+        failures: 2,
+      });
+    } finally {
+      a.scheduler.stop();
+      b.scheduler.stop();
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   },
 );

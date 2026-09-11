@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Cron,
   CronFireLogEntry,
@@ -19,7 +20,6 @@ import {
   buildTriggerBase,
   contentPart,
   createDeduped,
-  setTriggerRecipientConsent,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
@@ -57,6 +57,18 @@ export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 export const FIRE_RETENTION_KEEP_PER_CRON = 100;
 
+const FAILURE_BACKOFF_BASE_MS = 5_000;
+const FAILURE_BACKOFF_MAX_MS = 5 * 60_000;
+const FAILURE_BACKOFF_MAX_FAILURES = 7;
+
+export interface CronSlotClaim {
+  id: string;
+  cron: Cron;
+  scheduledAt: number;
+  claimedAt: number;
+  priorLastFiredAt?: number;
+}
+
 export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
@@ -78,8 +90,10 @@ export interface CronStore {
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
-  claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
-  unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
+  claimSlot(id: string, scheduledAt: number, at: number): Promise<CronSlotClaim | null>;
+  completeSlot(id: string, claim: CronSlotClaim): Promise<void>;
+  releaseSlot(id: string, claim: CronSlotClaim, deferUntil?: number): Promise<void>;
+  failSlot(id: string, claim: CronSlotClaim, failedAt: number): Promise<number | undefined>;
   due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
 }
 
@@ -93,12 +107,43 @@ function normalizeTitle(title: string | undefined): string | undefined {
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
 }
 
+function mergeFields(cron: Cron, fields: Partial<Cron>): Cron {
+  const next = { ...cron };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) delete (next as Record<string, unknown>)[key];
+    else (next as Record<string, unknown>)[key] = value;
+  }
+  return next;
+}
+
+function clearAttemptState(cron: Cron): Cron {
+  const { activeClaimId: _activeClaimId, failureBackoff: _failureBackoff, ...rest } = cron;
+  return rest;
+}
+
+function requireAtomicUpdate(backing: DurableMap<Cron>): NonNullable<DurableMap<Cron>["update"]> {
+  if (!backing.update) throw new Error("cron store requires atomic durable-map updates");
+  return backing.update;
+}
+
+function failureBackoffMs(failures: number): number {
+  return Math.min(FAILURE_BACKOFF_MAX_MS, FAILURE_BACKOFF_BASE_MS * 2 ** (failures - 1));
+}
+
 export function createCronStore(
   backing: DurableMap<Cron> = createMemoryMap<Cron>(),
   opts?: { staleRunningMs?: number; fires?: CronFireStore },
 ): CronStore {
   const staleRunningMs = opts?.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts?.fires ?? createMemoryCronFireStore();
+  const updateCron = (id: string, fields: Partial<Cron>, resetAttempt = true): Promise<Cron | null> => {
+    if (backing.update)
+      return backing.update(id, (cron) => mergeFields(resetAttempt ? clearAttemptState(cron) : cron, fields));
+    return backing.merge(
+      id,
+      resetAttempt ? { ...fields, activeClaimId: undefined, failureBackoff: undefined } : fields,
+    );
+  };
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -150,17 +195,17 @@ export function createCronStore(
       if (patch.members !== undefined) fields.members = patch.members;
       if (patch.runAs !== undefined) fields.runAs = patch.runAs;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
-      return backing.merge(id, fields);
+      return updateCron(id, fields, Object.keys(fields).length > 0);
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {
-      await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
+      await updateCron(id, { enabled, ...(enabled ? { archived: false } : {}) });
     },
     async setDestination(id, destination) {
-      await backing.merge(id, { destination });
+      await updateCron(id, { destination });
     },
-    setRecipientConsent(id, recipientConsent) {
-      return setTriggerRecipientConsent(backing, id, recipientConsent);
+    async setRecipientConsent(id, recipientConsent) {
+      await updateCron(id, { recipientConsent });
     },
     async beginFire(id, entry, opts) {
       if ((await backing.get(id)) === null) return { begun: false };
@@ -224,55 +269,85 @@ export function createCronStore(
         lastFiredAt: at,
         nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
         deferUntil: undefined,
+        activeClaimId: undefined,
+        failureBackoff: undefined,
       });
     },
     async claimSlot(id, scheduledAt, at) {
-      let claimed = false;
-      const transform = (cron: Cron): Cron => {
-        claimed = false;
-        if (cron.archived || !cron.enabled) return cron;
+      const claimId = randomUUID();
+      let claim: CronSlotClaim | null = null;
+      await requireAtomicUpdate(backing)(id, (cron) => {
+        claim = null;
+        if (cron.archived || !cron.enabled || isDeferred(cron, at)) return cron;
         if (recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== scheduledAt)
           return cron;
-        claimed = true;
-        const advanceFrom = isCalendarSchedule(cron.schedule) ? scheduledAt : at;
-        const next = advanceNextFireAt(cron.schedule, advanceFrom);
-        const { nextFireAt: _dropped, deferUntil: _cleared, ...rest } = cron;
-        return { ...rest, lastFiredAt: at, ...(next !== undefined ? { nextFireAt: next } : {}) };
-      };
-      if (backing.update) {
-        await backing.update(id, transform);
-        return claimed;
-      }
-      const cron = await backing.get(id);
-      if (!cron) return false;
-      const next = transform(cron);
-      if (!claimed) return false;
-      await backing.merge(id, { lastFiredAt: next.lastFiredAt, nextFireAt: next.nextFireAt, deferUntil: undefined });
-      return true;
-    },
-    async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
-      const restore = (cron: Cron): Cron => {
-        if (cron.lastFiredAt !== at) return cron;
-        const { lastFiredAt: _dropped, ...rest } = cron;
-        return {
-          ...rest,
-          ...(priorLastFiredAt !== undefined ? { lastFiredAt: priorLastFiredAt } : {}),
-          nextFireAt: scheduledAt,
+        claim = {
+          id: claimId,
+          cron,
+          scheduledAt,
+          claimedAt: at,
+          ...(cron.lastFiredAt !== undefined ? { priorLastFiredAt: cron.lastFiredAt } : {}),
         };
-      };
-      if (backing.update) {
-        await backing.update(id, restore);
-        return;
-      }
-      const cron = await backing.get(id);
-      if (!cron || cron.lastFiredAt !== at) return;
-      await backing.merge(id, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt });
+        const advanceFrom = isCalendarSchedule(cron.schedule) ? scheduledAt : at;
+        const nextFireAt = advanceNextFireAt(cron.schedule, advanceFrom);
+        const failureBackoff = cron.failureBackoff?.scheduledAt === scheduledAt ? cron.failureBackoff : undefined;
+        return mergeFields(cron, {
+          lastFiredAt: at,
+          nextFireAt,
+          deferUntil: undefined,
+          activeClaimId: claimId,
+          failureBackoff,
+        });
+      });
+      return claim;
+    },
+    async completeSlot(id, claim) {
+      await requireAtomicUpdate(backing)(id, (cron) => {
+        if (cron.activeClaimId !== claim.id) return cron;
+        return mergeFields(cron, { activeClaimId: undefined, failureBackoff: undefined });
+      });
+    },
+    async releaseSlot(id, claim, deferUntil) {
+      await requireAtomicUpdate(backing)(id, (cron) => {
+        if (cron.activeClaimId !== claim.id || cron.lastFiredAt !== claim.claimedAt) return cron;
+        return mergeFields(cron, {
+          lastFiredAt: claim.priorLastFiredAt,
+          nextFireAt: claim.scheduledAt,
+          activeClaimId: undefined,
+          ...(deferUntil !== undefined ? { deferUntil: Math.max(cron.deferUntil ?? 0, deferUntil) } : {}),
+        });
+      });
+    },
+    async failSlot(id, claim, failedAt) {
+      let deferUntil: number | undefined;
+      await requireAtomicUpdate(backing)(id, (cron) => {
+        deferUntil = undefined;
+        if (cron.activeClaimId !== claim.id || cron.lastFiredAt !== claim.claimedAt) return cron;
+        const failures =
+          cron.failureBackoff?.scheduledAt === claim.scheduledAt
+            ? Math.min(FAILURE_BACKOFF_MAX_FAILURES, cron.failureBackoff.failures + 1)
+            : 1;
+        deferUntil = Math.max(cron.deferUntil ?? 0, failedAt + failureBackoffMs(failures));
+        return mergeFields(cron, {
+          lastFiredAt: claim.priorLastFiredAt,
+          nextFireAt: claim.scheduledAt,
+          activeClaimId: undefined,
+          failureBackoff: { scheduledAt: claim.scheduledAt, failures },
+          deferUntil,
+        });
+      });
+      return deferUntil;
     },
     async markAttempted(id, at) {
       await backing.merge(id, { lastAttemptAt: at });
     },
     async defer(id, until) {
-      await backing.merge(id, { deferUntil: until });
+      if (backing.update) {
+        await backing.update(id, (cron) => ({ ...cron, deferUntil: Math.max(cron.deferUntil ?? 0, until) }));
+        return;
+      }
+      const cron = await backing.get(id);
+      if (cron) await backing.merge(id, { deferUntil: Math.max(cron.deferUntil ?? 0, until) });
     },
     async due(now) {
       const due: Array<Cron & { scheduledAt: number }> = [];
