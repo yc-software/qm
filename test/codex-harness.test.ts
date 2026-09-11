@@ -1103,8 +1103,10 @@ test("cancelling an OAuth startup after spawn closes the provider", async (t) =>
   assert.equal(existsSync(join(dir, "starts")), true);
   cancel.abort();
   assert.deepEqual(await turn, { reply: "", stopped: true });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (existsSync(join(dir, "closed")) && readFileSync(join(dir, "closed"), "utf8") === "closed") break;
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
 });
 
@@ -1139,8 +1141,10 @@ test("cancelling a pending Codex turn/start stops and closes the runtime", async
   assert.equal(existsSync(join(dir, "turn-started")), true);
   cancel.abort();
   assert.deepEqual(await turn, { reply: "", stopped: true });
-  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (existsSync(join(dir, "closed")) && readFileSync(join(dir, "closed"), "utf8") === "closed") break;
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
 });
 
@@ -1512,7 +1516,7 @@ test("a user stop whose interrupted turn reports status=failed is a clean stop, 
   assert.equal(result.stopped, true, "an interrupted turn the provider calls failed is still a user stop");
   assert.equal(result.reply, "");
   assert.deepEqual(
-    (await signals.takePending("run-stop-failed")).map((s) => s.kind),
+    (await signals.pending("run-stop-failed")).map((s) => s.kind),
     ["abort"],
     "the stop stays pending for the terminal drain",
   );
@@ -1725,3 +1729,67 @@ test(
     assert.deepEqual(requests, []);
   },
 );
+
+for (const failure of ["emit", "tape"] as const) {
+  test(`Codex acceptance survives ${failure} failure`, async (context) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-accepted-"));
+    const binary = join(dir, "codex");
+    writeFileSync(
+      binary,
+      String.raw`#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") return send({ id: message.id, result: {} });
+  if (message.method === "thread/start") return send({ id: message.id, result: { thread: { id: "thread" } } });
+  if (message.method === "turn/start") {
+    send({ id: message.id, result: { turn: { id: "turn", status: "inProgress", items: [] } } });
+    fs.writeFileSync(${JSON.stringify(join(dir, "started"))}, "ready");
+  }
+  if (message.method === "turn/steer") {
+    fs.appendFileSync(${JSON.stringify(join(dir, "submissions"))}, "accepted\n");
+    send({ id: message.id, result: {} });
+    setTimeout(() => send({ method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed", items: [] } } }), 100);
+  }
+});
+`,
+    );
+    chmodSync(binary, 0o755);
+    const signals = createMemoryRunSignalStore();
+    const harness = createCodexHarness({ binaryPath: binary, env: process.env, signals, turnWallClockMs: 5_000 });
+    context.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const scope = "personal:tester" as ScopeId;
+    const running = harness.turns.runTurn({
+      session: { id: "accepted-session" } as Session,
+      input: "hi",
+      runId: "accepted-run",
+      systemPrompt: "system",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) => {
+        if (failure === "emit" && (entry.payload as { steered?: boolean }).steered) throw new Error("emit unavailable");
+        return { ...entry, sessionId: "accepted-session", seq: 1, createdAt: Date.now() } as SessionEntry;
+      },
+      tape: async (entry) => {
+        if (failure === "tape" && entry.meta?.bareText === "accepted") throw new Error("tape unavailable");
+      },
+      recordModelCall: () => {},
+    });
+    const deadline = Date.now() + 4000;
+    while (!existsSync(join(dir, "started"))) {
+      assert.ok(Date.now() < deadline);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await signals.send("accepted-run", { kind: "steer", text: "accepted" });
+    await running;
+    assert.equal(readFileSync(join(dir, "submissions"), "utf8"), "accepted\n");
+    assert.deepEqual(await signals.pending("accepted-run"), []);
+  });
+}

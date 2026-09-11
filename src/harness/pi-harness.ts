@@ -1,3 +1,4 @@
+import { createSignalReceipts } from "./signal-receipts.ts";
 import { Type } from "typebox";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1819,6 +1820,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const callId = role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined;
             const resultScope = typeof callId === "string" ? entry.ref.tapeResultScopes?.get(callId) : undefined;
             if (typeof callId === "string") entry.ref.tapeResultScopes?.delete(callId);
+            if (role === "user" && !isTrigger) await pendingSignal?.recorded;
             const steerStamp = role === "user" && !isTrigger ? steerTapeStamp(message) : undefined;
             const rec: NewTapeRecord = {
               kind: "message",
@@ -1857,7 +1859,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               "pi agent session exposes no message-end subscribe hook — refusing to run a taped turn without capture",
             );
           }
+          const signalReceipts = createSignalReceipts();
+          let pendingSignal: { id: string; recorded: Promise<void> } | undefined;
           const unsubscribe = entry.agentSession.subscribe((event) => {
+            if (event.type === "message_start" && (event.message as { role?: string }).role === "user") {
+              const signalId = (event.message as { signalId?: string }).signalId;
+              if (signalId) signalReceipts.accept(signalId);
+            }
             if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
               curStart = Date.now();
               curFirst = undefined;
@@ -2028,36 +2036,62 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             else turn.cancel.addEventListener("abort", onCancel, { once: true });
           }
           const steeredSeen = recordedMessageTimestamps(turn.history);
+          const steeredSignalIds = new Set(
+            turn.history.flatMap((entry) => {
+              const signalId = (entry.payload as { signalId?: unknown } | null)?.signalId;
+              return typeof signalId === "string" ? [signalId] : [];
+            }),
+          );
           const stopSignalPoll =
             signals && turn.runId
               ? startSignalPoll(
                   signals,
                   turn.runId,
                   {
-                    onSteer: async (text, ts) => {
-                      if (ts && !steeredSeen.has(ts)) {
-                        steeredSeen.add(ts);
-                        try {
-                          const steered = await turn.emit({
-                            type: "user",
-                            payload: { text, ts, steered: true },
-                            scopeLabel: turn.scopeLabel,
-                          });
-                          pendingSteerTapeMeta.push({ text, ts, entryCreatedAt: steered.createdAt });
-                        } catch (e) {
-                          swallow("pi: steer persist", e);
+                    onSteer: async (text, ts, signalId, delivery) => {
+                      const id = signalId!;
+                      const recorded = Promise.withResolvers<void>();
+                      pendingSignal = { id, recorded: recorded.promise };
+                      try {
+                        if (entry.agentSession.isStreaming) entry.ref.silentRequested = false;
+                        await signalReceipts.waitFor(id, async () => {
+                          const message = {
+                            role: "user" as const,
+                            content: [{ type: "text" as const, text }],
+                            timestamp: Date.now(),
+                            signalId: id,
+                          };
+                          entry.agentSession.agent.steer(message);
+                        });
+                        await delivery.accepted();
+                        if (!steeredSignalIds.has(id) && (!ts || !steeredSeen.has(ts))) {
+                          try {
+                            const steered = await turn.emit({
+                              type: "user",
+                              payload: { text, ...(ts ? { ts } : {}), signalId, steered: true },
+                              scopeLabel: turn.scopeLabel,
+                            });
+                            steeredSignalIds.add(id);
+                            if (ts) steeredSeen.add(ts);
+                            pendingSteerTapeMeta.push({ text, ts, entryCreatedAt: steered.createdAt });
+                          } catch (e) {
+                            swallow("pi: steer persist", e);
+                          }
                         }
+                      } finally {
+                        recorded.resolve();
+                        pendingSignal = undefined;
                       }
-                      if (entry.agentSession.isStreaming) entry.ref.silentRequested = false;
-                      await entry.agentSession.steer(text);
                     },
                     onAbort: async () => {
+                      signalReceipts.close();
+                      entry.agentSession.clearQueue();
                       userAborted = true;
                       toolAbort.abort();
                       await entry.agentSession.abort();
                     },
                   },
-                  { onError: (e) => swallow("pi: run signal poll", e) },
+                  { runLeaseToken: turn.runLeaseToken, onError: (e) => swallow("pi: run signal poll", e) },
                 )
               : null;
           const promptStart = Date.now();
@@ -2236,6 +2270,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             wallClock = "ok";
           } finally {
             turn.cancel?.removeEventListener("abort", onCancel);
+            signalReceipts.close();
+            entry.agentSession.clearQueue();
             await stopSignalPoll?.();
             unsubscribeTape?.();
             unsubscribe?.();

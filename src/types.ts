@@ -689,6 +689,7 @@ export interface TurnResult {
   adminUrl?: string;
   runId?: string;
   steered?: true;
+  signalId?: string;
   stopped?: boolean;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];

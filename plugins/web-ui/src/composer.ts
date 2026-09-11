@@ -1,4 +1,4 @@
-import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
 import { html, nothing, type TemplateResult } from "lit";
@@ -23,7 +23,6 @@ import {
   ApiError,
   approvalBlocksComposer,
   fetchRuntimeConfig,
-  latestTranscriptSeq,
   MAX_ATTACHMENT_BYTES,
   MAX_FILES_PER_MESSAGE,
   mintSendKey,
@@ -34,7 +33,6 @@ import {
   updateRuntimeConfig,
   uploadAttachments,
   userSendMessage,
-  verifySteerDelivered,
   withdrawRun,
   type ApprovalDecision,
   type CoreAttachment,
@@ -1415,95 +1413,23 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
     composerState.error = "";
     try {
-      if (!(await withdrawRun(queued.runId))) return ctx.chat.drawActiveChat(agent);
-    } catch (err) {
-      const started = err instanceof ApiError && err.status === 409;
-      const gone = err instanceof ApiError && err.status === 404;
-      if (started) composerState.error = "That message already started. It's the running turn now.";
-      else if (gone) composerState.error = "That message was already removed in another tab.";
-      else composerState.error = errMessage(err, "Could not steer with that message.");
-      if (started || gone) forgetQueuedRun(threadRef, queued.runId);
-      return ctx.chat.drawActiveChat(agent);
-    }
-    forgetQueuedRun(threadRef, queued.runId);
-    bumpSessionActivity(threadRef);
-    agent.state.messages.push({
-      role: "user",
-      content: queued.text,
-      timestamp: Date.now(),
-      steered: true,
-    } as unknown as AgentMessage);
-    ctx.chat.drawActiveChat(agent);
-
-    const sentAt = Date.now();
-    const steerSessionId = ctx.chat.state.sessionId;
-    const sinceSeq = steerSessionId
-      ? await latestTranscriptSeq(steerSessionId).catch((e: unknown) => {
-          swallow("web-ui: steer baseline", e);
-          return undefined;
-        })
-      : undefined;
-    try {
-      const outcome = await ctx.chat.signalLiveRun("steer", queued.text);
-      if (!outcome.ok) recoverEndedRunSteer(agent, queued.text, outcome);
-    } catch (err) {
-      if (steerSessionId && (await verifySteerDelivered(steerSessionId, queued.text, sentAt, undefined, sinceSeq))) {
-        composerState.error = "";
-        return ctx.chat.drawActiveChat(agent);
-      }
-      composerState.error = errMessage(err, "Could not steer the running task.");
-      const last = agent.state.messages[agent.state.messages.length - 1] as
-        { role?: string; content?: unknown } | undefined;
-      if (last?.role === "user" && last.content === queued.text) agent.state.messages.pop();
-      if (!(await enqueueTurn(agent, threadRef, queued.text))) composerState.draft = queued.text;
-      ctx.chat.drawActiveChat(agent);
-    }
-  }
-
-  // The run ended before the steer landed (the client believed it was still live).
-  // Core either replayed the text as a fresh turn (`replayed`) or never stored it.
-  // Either way the message must not silently vanish: detach from the stale stream,
-  // then attach to the replay run — or resend the text as an ordinary prompt.
-  function recoverEndedRunSteer(agent: Agent, text: string, outcome: { replayed?: boolean }): void {
-    agent.abort();
-    if (outcome.replayed) {
-      const last = agent.state.messages[agent.state.messages.length - 1] as
-        { role?: string; content?: unknown; steered?: boolean } | undefined;
-      // It is now an ordinary user turn in the transcript, not a mid-run steer.
-      if (last?.role === "user" && last.content === text && last.steered) delete last.steered;
-      ctx.chat.drawActiveChat(agent);
-      attachWhenIdle(agent, 0);
-      return;
-    }
-    const last = agent.state.messages[agent.state.messages.length - 1] as
-      { role?: string; content?: unknown } | undefined;
-    if (last?.role === "user" && last.content === text) agent.state.messages.pop();
-    composerState.draft = text;
-    ctx.chat.drawActiveChat(agent);
-    resendWhenIdle(agent, text, 0);
-  }
-
-  function attachWhenIdle(agent: Agent, attempt: number): void {
-    if (agent !== ctx.chat.state.agent) return;
-    if (agent.state.isStreaming) {
-      if (attempt < 20) window.setTimeout(() => attachWhenIdle(agent, attempt + 1), 250);
-      return;
-    }
-    ctx.chat.resumeIfIdle();
-  }
-
-  function resendWhenIdle(agent: Agent, text: string, attempt: number): void {
-    if (agent !== ctx.chat.state.agent) return;
-    if (agent.state.isStreaming) {
-      if (attempt < 20) window.setTimeout(() => resendWhenIdle(agent, text, attempt + 1), 250);
-      else {
+      const outcome = await ctx.chat.signalLiveRun("steer", undefined, queued.runId, queued.runId);
+      if (outcome.ok) {
+        forgetQueuedRun(threadRef, queued.runId);
+        bumpSessionActivity(threadRef);
+      } else {
         composerState.error =
-          "Could not deliver the message. The running task ended mid-send. It is back in the composer.";
-        ctx.chat.drawActiveChat(agent);
+          outcome.reason === "started"
+            ? "That message already started. It remains its own turn."
+            : "Could not transfer that queued message. It remains saved.";
       }
-      return;
+    } catch (error) {
+      composerState.error = errMessage(
+        error,
+        "Transfer is unconfirmed. Retry this queued message; do not send a new copy.",
+      );
     }
-    if (composerState.draft === text) void sendPrompt(agent);
+    ctx.chat.drawActiveChat(agent);
   }
 
   async function sendPrompt(agent: Agent): Promise<void> {

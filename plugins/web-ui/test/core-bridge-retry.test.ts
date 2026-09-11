@@ -2,7 +2,7 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AssistantMessage, Model, Api } from "@earendil-works/pi-ai";
-import { pollRun, setClock, RUN_IDLE_MS, type Acc } from "../src/core-bridge.ts";
+import { signalLiveRun, createRunSlot, pollRun, setClock, RUN_IDLE_MS, type Acc } from "../src/core-bridge.ts";
 
 const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
 
@@ -174,4 +174,52 @@ test("poll requests never put bearer credentials in the URL", async () => {
   assert.equal(urls.length, 1);
   assert.ok(urls[0]!.endsWith("/api/runs/run-r5"), urls[0]);
   assert.doesNotMatch(urls[0]!, /[?&](?:rt|token)=/);
+});
+
+test("queued transfer retries carry the same saved run ID and never reconstruct text", async () => {
+  instantSleep();
+  const slot = createRunSlot();
+  slot.runId = "target";
+  const requests: Array<{ path: string; body: string }> = [];
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    requests.push({ path: String(path), body: String(init?.body) });
+    if (requests.length === 1) throw new TypeError("connection lost");
+    return Response.json({ accepted: true, signalId: "saved", runId: "target", deliveryRunId: "replacement" });
+  }) as typeof fetch;
+  const result = await signalLiveRun(slot, "steer", undefined, { threadRef: "thread" }, "queued", "queued");
+  assert.deepEqual(result, {
+    ok: true,
+    accepted: true,
+    signalId: "saved",
+    runId: "target",
+    deliveryRunId: "replacement",
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.deepEqual(JSON.parse(requests[0]!.body), {
+    kind: "steer",
+    idempotencyKey: "queued",
+    queuedRunId: "queued",
+    threadRef: "thread",
+  });
+  assert.equal(slot.runId, "target");
+});
+
+test("unconfirmed queued transfer can retry the same identity without any transcript lookup", async () => {
+  instantSleep();
+  const slot = createRunSlot();
+  slot.runId = "target";
+  const bodies: string[] = [];
+  let offline = true;
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    assert.match(String(path), /\/target\/signal$/);
+    bodies.push(String(init?.body));
+    if (offline) throw new TypeError("offline");
+    return Response.json({ signalId: "saved", runId: "target" });
+  }) as typeof fetch;
+  await assert.rejects(signalLiveRun(slot, "steer", undefined, { threadRef: "thread" }, "queued", "queued"), /offline/);
+  offline = false;
+  const outcome = await signalLiveRun(slot, "steer", undefined, { threadRef: "thread" }, "queued", "queued");
+  assert.equal(outcome.ok, true);
+  assert.equal(new Set(bodies).size, 1);
 });

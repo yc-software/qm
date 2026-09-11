@@ -6,21 +6,25 @@ import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
-type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
+type Script = (
+  prompts: AsyncIterable<{ type: "user"; uuid?: string; message: { content: unknown } }>,
+) => AsyncGenerator<FakeSdkMessage>;
 
 const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
 
 let currentScript: Script = async function* () {};
+let beforeInterrupt: (() => Promise<void>) | undefined;
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
-    query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+    query: ({ prompt }: { prompt: AsyncIterable<{ type: "user"; uuid?: string; message: { content: unknown } }> }) => {
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
           return {};
         },
         async interrupt() {
+          await beforeInterrupt?.();
           await generator.return?.(undefined as never);
         },
         close() {
@@ -112,7 +116,8 @@ test("a steered turn persists every reply, not only the last result's", async ()
     const iterator = prompts[Symbol.asyncIterator]();
     await iterator.next();
     await signals.send(runId, { kind: "steer", text: "now do the other three", ts: "123.456" });
-    await iterator.next();
+    const steered = await iterator.next();
+    yield steered.value!;
     yield assistantMessage("msg_A", "The capital of France is Paris.", {
       input_tokens: 3,
       output_tokens: 8,
@@ -161,7 +166,7 @@ test("a user stop that surfaces as a non-success SDK result is a clean stop, and
   assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
   assert.equal(result.reply, "");
   assert.deepEqual(
-    (await signals.takePending(runId)).map((s) => s.kind),
+    (await signals.pending(runId)).map((s) => s.kind),
     ["abort"],
     "the stop stays pending for the terminal drain",
   );
@@ -241,7 +246,8 @@ test("each steered prompt gets its own LLM request record", async () => {
     const iterator = prompts[Symbol.asyncIterator]();
     await iterator.next();
     await signals.send(runId, { kind: "steer", text: "and another thing" });
-    await iterator.next();
+    const steered = await iterator.next();
+    yield steered.value!;
     yield assistantMessage("msg_A", "first", {
       input_tokens: 5,
       output_tokens: 2,
@@ -348,4 +354,76 @@ test("Claude preserves a committed runtime handoff when SDK interruption returns
   assert.equal(result.stopped, undefined);
   assert.equal(entries.filter((entry) => entry.type === "assistant").length, 0);
   assert.ok(entries.some((entry) => entry.type === "tool_result"));
+});
+
+test("Claude acceptance survives a failing steered-entry emit", async () => {
+  const signals = createMemoryRunSignalStore();
+  const runId = "claude-accepted-emit";
+  let submitted = 0;
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    await iterator.next();
+    await signals.send(runId, { kind: "steer", text: "accepted" });
+    const steered = await iterator.next();
+    submitted++;
+    yield steered.value!;
+    yield resultMessage("first");
+    yield resultMessage("second");
+  };
+  const harness = createClaudeHarness({ signals });
+  const { turn } = harnessTurn({ runId });
+  const emit = turn.emit;
+  turn.emit = async (entry) => {
+    if ((entry.payload as { steered?: boolean }).steered) throw new Error("steered entry unavailable");
+    return emit(entry);
+  };
+  await harness.turns.runTurn(turn);
+  assert.equal(submitted, 1);
+  assert.deepEqual(await signals.pending(runId), []);
+  assert.equal(await signals.claim(runId, { terminal: true }, 1000), null);
+});
+
+test("Claude observes acceptance while recipient interruption is still pending", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const signals = createMemoryRunSignalStore();
+  const runId = "claude-interrupt-acceptance";
+  const queued = Promise.withResolvers<void>();
+  const accept = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const interruptStarted = Promise.withResolvers<void>();
+  const interrupted = Promise.withResolvers<void>();
+  beforeInterrupt = async () => {
+    interruptStarted.resolve();
+    await interrupted.promise;
+  };
+  signals.renew = async () => false;
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    await iterator.next();
+    await signals.send(runId, { kind: "steer", text: "one" });
+    const steer = await iterator.next();
+    queued.resolve();
+    await accept.promise;
+    yield steer.value!;
+    await finish.promise;
+    yield resultMessage("stopped");
+  };
+  const harness = createClaudeHarness({ signals });
+  const { turn } = harnessTurn({ runId });
+  const running = harness.turns.runTurn(turn);
+  try {
+    await queued.promise;
+    t.mock.timers.tick(10_000);
+    await interruptStarted.promise;
+    accept.resolve();
+    for (let n = 0; n < 25 && (await signals.pending(runId)).length; n++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(await signals.pending(runId), []);
+  } finally {
+    interrupted.resolve();
+    finish.resolve();
+    accept.resolve();
+    await running;
+    beforeInterrupt = undefined;
+  }
 });

@@ -718,7 +718,8 @@ export function hasLiveRun(slot: RunSlot): boolean {
   return slot.runId !== null;
 }
 
-export type SignalOutcome = { ok: true } | { ok: false; reason: string; replayed?: boolean };
+export type SignalOutcome =
+  { ok: true; signalId: string; runId: string; deliveryRunId?: string } | { ok: false; reason: string };
 
 export interface SteerContext {
   threadRef: string | null;
@@ -731,6 +732,8 @@ export async function signalLiveRun(
   kind: "abort" | "steer",
   text: string | undefined,
   context: SteerContext,
+  idempotencyKey: string = crypto.randomUUID(),
+  queuedRunId?: string,
 ): Promise<SignalOutcome> {
   const run = slot.runId !== null ? { runId: slot.runId } : null;
   if (!run) throw new Error("No active run to signal.");
@@ -742,72 +745,29 @@ export async function signalLiveRun(
           ...(context.channelName ? { channelName: context.channelName } : {}),
         }
       : {};
-  try {
-    await api(runPath(run.runId, "/signal"), {
-      method: "POST",
-      body: JSON.stringify({ kind, ...(text !== undefined ? { text } : {}), ...steerContext }),
-    });
-    return { ok: true };
-  } catch (err) {
-    // The run ended before (or as) the signal arrived. For a steer, core replays the
-    // text as a fresh turn when it can; surface that outcome instead of failing so the
-    // caller can attach to the replay run or resend, rather than dropping the message.
-    if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
-      const body = (err.body ?? {}) as { reason?: string; replayed?: boolean };
-      return {
-        ok: false,
-        reason: body.reason ?? (err.status === 404 ? "not_found" : "terminal"),
-        ...(body.replayed ? { replayed: true } : {}),
-      };
-    }
-    throw err;
-  }
-}
-
-const STEER_VERIFY_DELAYS_MS = [1200, 2200, 3600];
-const STEER_VERIFY_SKEW_MS = 120_000;
-
-export async function latestTranscriptSeq(sessionId: string): Promise<number | undefined> {
-  const page = await fetchTranscript(sessionId, { tailTurns: 1 });
-  const seqs = (page.entries ?? []).flatMap((e) => (e.seq === undefined ? [] : [e.seq]));
-  return seqs.length ? Math.max(...seqs) : undefined;
-}
-
-function steerTextMatches(stored: string, wanted: string): boolean {
-  return stored === wanted || stored.endsWith(`: ${wanted}`);
-}
-
-export async function verifySteerDelivered(
-  sessionId: string | null,
-  text: string,
-  sentAt: number,
-  delays: readonly number[] = STEER_VERIFY_DELAYS_MS,
-  sinceSeq?: number,
-): Promise<boolean> {
-  if (!sessionId) return false;
-  const wanted = text.trim();
-  if (!wanted) return false;
-  for (const delay of delays) {
-    await sleep(delay);
+  const body = JSON.stringify({
+    kind,
+    idempotencyKey,
+    ...(queuedRunId ? { queuedRunId } : {}),
+    ...(text !== undefined ? { text } : {}),
+    ...steerContext,
+  });
+  for (let attempt = 0; ; attempt++) {
     try {
-      const page = await fetchTranscript(sessionId, { tailTurns: 3 });
-      const found = (page.entries ?? []).some((e) => {
-        if (e.type !== "user") return false;
-        if (sinceSeq !== undefined && !(e.seq !== undefined && e.seq > sinceSeq)) return false;
-        const p = e.payload as { text?: string; steered?: boolean } | null;
-        return (
-          p?.steered === true &&
-          typeof p.text === "string" &&
-          steerTextMatches(p.text.trim(), wanted) &&
-          e.createdAt >= sentAt - STEER_VERIFY_SKEW_MS
-        );
-      });
-      if (found) return true;
-    } catch (e) {
-      swallow("web-ui: verify steer delivery", e);
+      const outcome = await api<{ signalId: string; runId: string; deliveryRunId?: string }>(
+        runPath(run.runId, "/signal"),
+        { method: "POST", body },
+      );
+      return { ok: true, ...outcome };
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 409 || error.status === 404)) {
+        const response = (error.body ?? {}) as { reason?: string };
+        return { ok: false, reason: response.reason ?? (error.status === 404 ? "not_found" : "terminal") };
+      }
+      if (attempt >= 2 || (error instanceof ApiError && error.status < 500)) throw error;
+      await sleep(250 * (attempt + 1));
     }
   }
-  return false;
 }
 
 export function makeCoreStreamFn(

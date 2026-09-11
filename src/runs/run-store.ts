@@ -23,6 +23,7 @@ export interface Run {
   request: OrchestratorInput;
   result: TurnResult | null;
   deliveryState: RunDeliveryState | null;
+  signalTargetRunId?: string;
   turnUserSeq: number | null;
   dedupKey: string | null;
   attempts: number;
@@ -50,6 +51,11 @@ export interface EnqueueResult {
 
 export interface RunStore {
   readonly maxClaims?: number;
+
+  withAdmission<T>(key: string, fn: () => Promise<T>): Promise<T>;
+  beginSignalTransfer(runId: string, targetRunId: string): Promise<Run | null>;
+  pendingSignalTransfers(): Promise<Run[]>;
+  finishSignalTransfer(runId: string, result: TurnResult): Promise<void>;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;

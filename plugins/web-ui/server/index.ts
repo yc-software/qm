@@ -2245,6 +2245,8 @@ const apiRoutes: readonly WebRoute[] = [
       const id = c.params.id!;
       const p = await readJson<{
         kind?: unknown;
+        idempotencyKey?: unknown;
+        queuedRunId?: unknown;
         text?: unknown;
         threadRef?: unknown;
         scopeId?: unknown;
@@ -2267,7 +2269,13 @@ const apiRoutes: readonly WebRoute[] = [
         res,
         "POST",
         `/v1/runs/${encodeURIComponent(id)}/signal`,
-        JSON.stringify({ kind, ...(text !== undefined ? { text } : {}), ...steerFields }),
+        JSON.stringify({
+          kind,
+          ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
+          ...(text !== undefined ? { text } : {}),
+          ...(typeof p.idempotencyKey === "string" ? { idempotencyKey: p.idempotencyKey } : {}),
+          ...steerFields,
+        }),
       );
     },
   },

@@ -1,3 +1,4 @@
+import { createPostgresAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createPgPool } from "../persistence/pg-pool.ts";
@@ -30,6 +31,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
     deliveryState: r.delivery_state != null ? (JSON.parse(r.delivery_state as string) as RunDeliveryState) : null,
     turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
+    ...(r.signal_target_run_id ? { signalTargetRunId: r.signal_target_run_id as string } : {}),
     dedupKey: (r.idempotency_key as string | null) ?? null,
     attempts: Number(r.attempts),
     errorAttempts: Number(r.error_attempts),
@@ -50,7 +52,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
-  const { query: q, close: closePool } = createPgPool(
+  const pg = createPgPool(
     connectionString,
     [
       {
@@ -101,6 +103,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         expectedChecksum: "8594c46c02ee90d43292a4c083fedea6c72d93b5f414f75e9e20d2db51b1b595",
         statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS turn_user_seq BIGINT`],
       },
+      {
+        id: "runs/store/0004",
+        statements: [`ALTER TABLE runs ADD COLUMN IF NOT EXISTS signal_target_run_id TEXT`],
+      },
     ],
     [
       {
@@ -136,6 +142,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       },
     ],
   );
+  const { query: q, close: closePool } = pg;
+  const admission = createPostgresAdvisoryLock(pg);
 
   async function getRun(id: string): Promise<Run | null> {
     const { rows } = await q("SELECT * FROM runs WHERE id = $1", [id]);
@@ -184,6 +192,27 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const runs: RunStore = {
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
+    withAdmission: (key, fn) => admission.withLock(`turn-admission:${key}`, fn),
+    async beginSignalTransfer(runId, targetRunId) {
+      const { rows } = await q(
+        `UPDATE runs SET signal_target_run_id=$2 WHERE id=$1 AND status='pending' AND (signal_target_run_id IS NULL OR signal_target_run_id=$2) RETURNING *`,
+        [runId, targetRunId],
+      );
+      return rows[0] ? rowToRun(rows[0]) : null;
+    },
+    async pendingSignalTransfers() {
+      const { rows } = await q(
+        `SELECT * FROM runs WHERE status='pending' AND signal_target_run_id IS NOT NULL ORDER BY created_at, seq`,
+      );
+      return rows.map(rowToRun);
+    },
+    async finishSignalTransfer(runId, result) {
+      const { rows } = await q(
+        `UPDATE runs SET status='done', result=$2, finished_at=$3 WHERE id=$1 AND status='pending' AND signal_target_run_id IS NOT NULL RETURNING *`,
+        [runId, JSON.stringify(result), Date.now()],
+      );
+      if (rows[0]) settle(rowToRun(rows[0]));
+    },
     async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
       const id = randomUUID();
       const { rows } = await q(
@@ -210,7 +239,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
-             SELECT id FROM runs WHERE status='pending'
+             SELECT id FROM runs WHERE status='pending' AND signal_target_run_id IS NULL
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
              ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
@@ -231,7 +260,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
-             SELECT id FROM runs WHERE id=$5 AND status='pending'
+             SELECT id FROM runs WHERE id=$5 AND status='pending' AND signal_target_run_id IS NULL
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
              FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
@@ -261,9 +290,16 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
 
     async complete(runId, leaseToken, result): Promise<boolean> {
+      if (releasesDedupKey(result)) {
+        const retry = await q(
+          `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL WHERE id=$1 AND lease_token=$2 AND idempotency_key LIKE 'signal-delivery:%' RETURNING id`,
+          [runId, leaseToken],
+        );
+        if (retry.rowCount) return true;
+      }
       const { rowCount } = await q(
         `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
-           idempotency_key = CASE WHEN $5 THEN NULL ELSE idempotency_key END
+           idempotency_key = CASE WHEN $5 AND idempotency_key NOT LIKE 'signal-delivery:%' THEN NULL ELSE idempotency_key END
          WHERE id=$3 AND lease_token=$4`,
         [JSON.stringify(result), Date.now(), runId, leaseToken, releasesDedupKey(result)],
       );
@@ -308,7 +344,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async activeForThread(sessionId: string): Promise<Run | null> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM runs WHERE session_id = $1 AND signal_target_run_id IS NULL AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
         [sessionId],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
@@ -316,14 +352,23 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async inFlightForThread(sessionId: string): Promise<Run[]> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at ASC, seq ASC",
+        "SELECT * FROM runs WHERE session_id = $1 AND signal_target_run_id IS NULL AND status IN ('pending','running') ORDER BY created_at ASC, seq ASC",
         [sessionId],
       );
       return rows.map(rowToRun);
     },
 
     async withdraw(runId: string): Promise<boolean> {
-      const { rowCount } = await q("DELETE FROM runs WHERE id = $1 AND status = 'pending'", [runId]);
+      const retained = await q(
+        `UPDATE runs SET status='done', result=$2, finished_at=$3
+        WHERE id=$1 AND status='pending' AND signal_target_run_id IS NULL AND idempotency_key LIKE 'signal-delivery:%'`,
+        [runId, JSON.stringify({ status: "refused", reason: "withdrawn" }), Date.now()],
+      );
+      if (retained.rowCount) return true;
+      const { rowCount } = await q(
+        "DELETE FROM runs WHERE id = $1 AND status = 'pending' AND signal_target_run_id IS NULL AND (idempotency_key IS NULL OR idempotency_key NOT LIKE 'signal-delivery:%')",
+        [runId],
+      );
       return (rowCount ?? 0) > 0;
     },
 

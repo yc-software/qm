@@ -1,3 +1,4 @@
+import { signalReplayRequest } from "../runs/signal-request.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type {
   PendingApproval,
@@ -12,7 +13,7 @@ import { orgId as orgIdOf } from "../config.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { Run } from "../runs/run-store.ts";
-import type { RunSignal } from "../runs/run-signal-store.ts";
+import { SIGNAL_CLAIM_MS } from "../runs/run-signal-store.ts";
 import { processRun } from "../runs/worker.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
@@ -574,59 +575,97 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
   }
 
-  async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
-    if (!deps.signals) return [];
-    const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
+  async function resumeQueuedSignal(run: Run) {
+    if (!deps.signals || !run.signalTargetRunId) throw new Error("signal transfer unavailable");
+    const request = signalReplayRequest(run.request);
+    const target = await deps.runs.get(run.signalTargetRunId);
+    const text =
+      target && !samePerson(run.request.actor.id, target.request.actor.id)
+        ? `${run.request.actor.displayName?.trim() || run.request.actor.id}: ${request.text}`
+        : request.text;
+    const admission = await deps.signals.send(
+      run.signalTargetRunId,
+      {
+        kind: "steer",
+        text,
+        request,
+        dedupeKey: `queued-signal:${run.id}`,
+      },
+      { allowClosed: true },
+    );
+    if (admission.status === "closed") throw new Error("signal transfer closed");
+    await deps.runs.finishSignalTransfer(run.id, {
+      status: "queued",
+      runId: admission.signal.deliveryRunId ?? admission.signal.runId,
+      signalId: admission.signal.id,
+    });
+    await replayOrphanedRunSignals(run.signalTargetRunId);
+    return (await deps.signals.getByDedupeKey(`queued-signal:${run.id}`))!;
+  }
+
+  async function replayOrphanedRunSignals(runId: string): Promise<void> {
+    return deps.runs.withAdmission(JSON.stringify(["signal-replay", runId]), () => transferRunSignals(runId));
+  }
+
+  async function transferRunSignals(runId: string): Promise<void> {
+    if (!deps.signals) return;
     const run = await deps.runs.get(runId);
-    const pending =
-      run && !isTerminal(run.status) ? await deps.signals.takeClosed(runId) : await deps.signals.takePending(runId);
-    for (const signal of pending) {
-      if (signal.kind === "abort") continue;
-      let replayRunId: string | undefined;
-      let replayOutcomeKnown = true;
-      if (signal.request) {
-        try {
-          const { approval: _ap, redeliveryKey: _redeliveryKey, ...base } = signal.request;
-          const prior = (await deps.runs.get(runId))?.request;
-          const inheritedOptions = {
-            ...(base.model === undefined && prior?.model !== undefined ? { model: prior.model } : {}),
-            ...(base.harness === undefined && prior?.harness !== undefined ? { harness: prior.harness } : {}),
-            ...(base.thinkingLevel === undefined && prior?.thinkingLevel !== undefined
-              ? { thinkingLevel: prior.thinkingLevel }
-              : {}),
-            ...(base.fastMode === undefined && prior?.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
-            ...(base.timezone === undefined && prior?.timezone !== undefined ? { timezone: prior.timezone } : {}),
-          };
-          const replayed = await app.turn({ ...base, ...inheritedOptions, async: true });
-          replayRunId = replayed.runId;
-        } catch (err) {
-          replayOutcomeKnown = false;
-          swallow(`signals: orphaned-signal replay for run ${runId}`, err);
-        }
-      }
-      if (!replayRunId && replayOutcomeKnown && signal.text?.trim()) {
-        const orphanRun = await deps.runs.get(runId);
-        if (orphanRun) {
-          try {
-            const { displayText: _d, attachments: _a, approval: _ap, ...base } = orphanRun.request;
-            const { run: fresh } = await deps.runs.enqueue({
-              sessionId: orphanRun.sessionId,
-              request: { ...base, text: signal.text },
-            });
-            replayRunId = fresh.id;
-          } catch (err) {
-            swallow(`signals: requestless orphaned-steer replay for run ${runId}`, err);
+    const skipped: string[] = [];
+    for (;;) {
+      const claim = await deps.signals.claim(
+        runId,
+        { terminal: !run || isTerminal(run.status), skipIds: skipped },
+        SIGNAL_CLAIM_MS,
+      );
+      if (!claim) return;
+      let owned = true;
+      const heartbeat = setInterval(() => {
+        void deps
+          .signals!.renew(claim, SIGNAL_CLAIM_MS)
+          .then((renewed) => {
+            owned = renewed;
+          })
+          .catch((error: unknown) => {
+            owned = false;
+            swallow("signals: transfer heartbeat", error);
+          });
+      }, SIGNAL_CLAIM_MS / 3);
+      heartbeat.unref?.();
+      try {
+        const signal = claim.signal;
+        const key = `signal-delivery:${signal.id}`;
+        let replay = await deps.runs.getByDedupKey(key);
+        if (!replay) {
+          const request = signal.request;
+          if (!request || (!request.text.trim() && !request.attachments?.length)) {
+            skipped.push(signal.id);
+            continue;
           }
+          const { approval: _approval, redeliveryKey: _redelivery, idempotencyKey: _idempotency, ...base } = request;
+          if (!owned) return;
+          const result = await app.turn(
+            {
+              ...base,
+              async: true,
+            },
+            signal.id,
+          );
+          if (!result.runId) {
+            skipped.push(signal.id);
+            continue;
+          }
+          replay = await deps.runs.getByDedupKey(key);
+          if (!replay) throw new Error("signal transfer did not durably enqueue");
         }
+        if (!owned || !(await deps.signals.ack(claim, replay.id))) return;
+      } catch (error) {
+        swallow(`signals: orphaned-signal replay for run ${runId}`, error);
+        return;
+      } finally {
+        clearInterval(heartbeat);
+        await deps.signals.release(claim);
       }
-      if (!replayRunId) {
-        console.warn(
-          `[signals] orphaned ${signal.kind} for terminal run ${runId} could not be replayed — dropped: ${signal.text?.slice(0, 120) ?? ""}`,
-        );
-      }
-      drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
     }
-    return drained;
   }
 
   return {
@@ -668,6 +707,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     syncProjectChannelRoster,
     syncLinkedProjectRosters,
     replayOrphanedRunSignals,
+    resumeQueuedSignal,
   };
 }
 

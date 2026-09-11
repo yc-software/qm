@@ -112,9 +112,21 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
     request = sanitized.request;
   }
+  const idempotencyKey = isObj(body) && typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined;
+  if (idempotencyKey !== undefined && (!idempotencyKey || idempotencyKey.length > 200))
+    return sendJson(res, 400, { error: "bad_request", message: "invalid idempotencyKey" });
+  const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
+  if (queuedRunId && kind !== "steer") return sendJson(res, 400, { error: "bad_request" });
   const outcome = await app.signalRun(
     id,
-    { kind, ...(text !== undefined ? { text } : {}), ...(ts ? { ts } : {}), ...(request ? { request } : {}) },
+    {
+      kind,
+      ...(queuedRunId ? { queuedRunId } : {}),
+      ...(text !== undefined ? { text } : {}),
+      ...(ts ? { ts } : {}),
+      ...(request ? { request } : {}),
+      ...(idempotencyKey ? { dedupeKey: idempotencyKey } : {}),
+    },
     actor?.p,
   );
   if (outcome.accepted) return sendJson(res, 200, outcome);

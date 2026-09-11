@@ -1023,7 +1023,7 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
   ]);
   let signals: any[] = [];
   for (const deadline = Date.now() + 5_000; !signals.length && Date.now() < deadline;) {
-    signals = await built.signals.takePending(live!.id);
+    signals = await built.signals.pending(live!.id);
     if (!signals.length) await sleep(50);
   }
   assert.equal(signals.length, 1, "the second wake steered the live run");

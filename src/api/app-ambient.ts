@@ -291,8 +291,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
           spawned: true,
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
-    await app.turn(req).catch((e) => console.error("[ambient] spawn worker failed:", errMessage(e)));
+    await deps.runs
+      .withAdmission(JSON.stringify(["turn", req.idempotencyKey]), async () => {
+        if (await deps.runs.getByDedupKey(req.idempotencyKey!)) return;
+        if (await deps.signals?.getByDedupeKey(req.idempotencyKey!)) return;
+        if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
+        await app.turn(req);
+      })
+      .catch((error) => console.error("[ambient] spawn worker failed:", errMessage(error)));
   }
 
   async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {
@@ -319,7 +325,17 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       .catch(() => "block" as const);
     if (decision === "block") return false;
     const steerText = decision === "unscreened" ? `${unscreenedNotice("mid-turn message")}\n${req.text}` : req.text;
-    if ((await deps.signals.send(live.id, { kind: "steer", text: steerText, ts: latestTs, request: req })) === "closed")
+    if (
+      (
+        await deps.signals.send(live.id, {
+          kind: "steer",
+          text: steerText,
+          ts: latestTs,
+          request: req,
+          dedupeKey: req.idempotencyKey,
+        })
+      ).status === "closed"
+    )
       return false;
     const after = await deps.runs.get(live.id);
     if (!after || isTerminal(after.status)) await app.replayOrphanedRunSignals(live.id);

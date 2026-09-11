@@ -96,52 +96,16 @@ test("steering is reachable only as an explicit act on a queued row", () => {
   );
 });
 
-// The one ordering that matters: withdraw is atomic, so putting it first means the message is
-// either steered or run — never both, and never neither.
-test("Steer withdraws the queued run before it signals, and only then shows the steered row", () => {
-  const fn = composer.slice(
+test("Steer transfers a durable queued ID and forgets it only after acceptance", () => {
+  const body = composer.slice(
     composer.indexOf("async function steerQueued"),
     composer.indexOf("async function sendPrompt"),
   );
-  const withdraw = fn.indexOf("await withdrawRun(queued.runId)");
-  const signal = fn.indexOf('signalLiveRun("steer"');
-  const push = fn.indexOf("agent.state.messages.push");
-  assert.ok(withdraw > 0 && signal > withdraw, "the run is off the queue before its text is folded in");
-  assert.ok(
-    push > withdraw && signal > push,
-    "the steered row shows before the signal so a run that ended first can recover it in place",
-  );
-  assert.match(
-    fn,
-    /if \(!outcome\.ok\) recoverEndedRunSteer\(agent, queued\.text, outcome\);/,
-    "a steer the run outlived is recovered (replayed run followed, or resent as its own turn)",
-  );
-  assert.match(fn, /if \(!\(await withdrawRun\(queued\.runId\)\)\) return ctx\.chat\.drawActiveChat\(agent\);/);
-  assert.match(
-    fn,
-    /err instanceof ApiError && err\.status === 409[\s\S]{0,240}?already started/,
-    "losing to the claim is reported as running, not as a failure to steer",
-  );
-  assert.match(
-    fn,
-    /err instanceof ApiError && err\.status === 404[\s\S]{0,240}?already removed/,
-    "a run another tab withdrew is reported gone",
-  );
-  assert.match(
-    fn,
-    /if \(started \|\| gone\) forgetQueuedRun\(threadRef, queued\.runId\);/,
-    "both ways out of the queue clear the chip — no ghost row survives a lost race",
-  );
-  assert.match(
-    fn,
-    /catch \(err\) \{[\s\S]{0,1400}?Could not steer the running task[\s\S]{0,600}?await enqueueTurn\(agent, threadRef, queued\.text\)/,
-    "a steer that never reached core puts the message back on the queue as its own turn",
-  );
-  assert.match(
-    fn,
-    /if \(steerSessionId && \(await verifySteerDelivered\(steerSessionId, queued\.text, sentAt, undefined, sinceSeq\)\)\)[\s\S]{0,120}?return ctx\.chat\.drawActiveChat\(agent\)/,
-    "an ambiguous failure verifies the steer landed before it would re-enqueue",
-  );
+  assert.match(body, /signalLiveRun\("steer", undefined, queued\.runId, queued\.runId\)/);
+  assert.doesNotMatch(body, /withdrawRun|queued\.text|agent\.state\.messages\.push|enqueueTurn|verifySteerDelivered/);
+  assert.match(body, /if \(outcome\.ok\) \{\s*forgetQueuedRun/);
+  assert.match(body, /outcome\.reason === "started"/);
+  assert.match(body, /Transfer is unconfirmed/);
 });
 
 test("× cancels the queued run in core, and treats a lost race as running rather than removed", () => {

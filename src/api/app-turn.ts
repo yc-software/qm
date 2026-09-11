@@ -1,3 +1,5 @@
+import type { SavedRunSignal } from "../runs/run-signal-store.ts";
+import { signalReplayRequest } from "../runs/signal-request.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
@@ -72,439 +74,482 @@ export function createTurnMethods(
     viewerMayUseRun,
     sessionForViewer,
     replayOrphanedRunSignals,
+    resumeQueuedSignal,
   } = h;
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
+  async function signalResult(signal: SavedRunSignal, req: TurnRequest, steered = true): Promise<TurnResult> {
+    await replayOrphanedRunSignals(signal.runId);
+    let saved = (await deps.signals!.get(signal.id)) ?? signal;
+    if (saved.transferring && !saved.deliveryRunId) return { status: "queued", signalId: saved.id };
+    let deliveryRunId = saved.deliveryRunId ?? saved.runId;
+    if (req.async)
+      return {
+        status: "queued",
+        runId: deliveryRunId,
+        signalId: saved.id,
+        ...(!saved.deliveryRunId && steered ? { steered: true } : {}),
+      };
+    const result = await drive(deliveryRunId);
+    await replayOrphanedRunSignals(saved.runId);
+    saved = (await deps.signals!.get(saved.id)) ?? saved;
+    if (saved.transferring && !saved.deliveryRunId) return { status: "queued", signalId: saved.id };
+    if (saved.deliveryRunId && saved.deliveryRunId !== deliveryRunId) {
+      deliveryRunId = saved.deliveryRunId;
+      return { ...(await drive(deliveryRunId)), runId: deliveryRunId, signalId: saved.id };
+    }
+    return { ...result, runId: deliveryRunId, signalId: saved.id };
+  }
   return {
-    async turn(req: TurnRequest): Promise<TurnResult> {
-      await deps.refreshModels?.();
-      await deps.identity.refresh();
-      const actor: Principal = deps.identity.resolve(req.actor);
-      if (!deps.identity.isInternal(actor)) {
-        return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
-      }
-      let projectAudience: Principal[] | undefined;
-      let projectName: string | undefined;
-      let projectVersion: string | undefined;
-      let sessionParticipantIds: string[] | undefined;
-      const conversationRef = req.conversation.channelRef;
-      const projectGroup = req.conversation.kind === "group" && !!conversationRef && isProjectGroupRef(conversationRef);
-      const projectId = projectGroup ? projectIdFromGroupRef(conversationRef) : null;
-
-      if (projectGroup) {
-        if (!projectId) return { status: "refused", reason: "you're not a member of that context" };
-        const project = await deps.projects?.get(projectId);
+    async turn(req: TurnRequest, signalId?: string): Promise<TurnResult> {
+      const admit = async (): Promise<TurnResult> => {
         if (
-          !project ||
-          project.orgId !== orgIdOf() ||
-          !deps.identity.isInternal(deps.identity.classify(project.ownerId))
-        ) {
-          return { status: "refused", reason: "you're not a member of that context" };
+          !signalId &&
+          [req.idempotencyKey, req.redeliveryKey].some(
+            (key) => key?.startsWith("signal-delivery:") || key?.startsWith("queued-signal:"),
+          )
+        )
+          return { status: "refused", reason: "reserved idempotency key" };
+        await deps.refreshModels?.();
+        await deps.identity.refresh();
+        const actor: Principal = deps.identity.resolve(req.actor);
+        if (!deps.identity.isInternal(actor)) {
+          return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
         }
-        const activeMemberIds = project.memberIds.filter((memberId) =>
-          deps.identity.isInternal(deps.identity.classify(memberId)),
-        );
-        if (!activeMemberIds.includes(actor.id))
-          return { status: "refused", reason: "you're not a member of that context" };
-        projectAudience = await Promise.all(
-          activeMemberIds.map(async (memberId) => {
-            if (memberId === actor.id) return actor;
-            const principal = deps.identity.classify(memberId);
-            const member = await deps.directory.get(memberId).catch(() => null);
-            return member?.displayName ? { ...principal, displayName: member.displayName } : principal;
-          }),
-        );
-        projectName = project.name;
-        projectVersion = String(project.updatedAt);
-        sessionParticipantIds = [...activeMemberIds];
-      } else if (req.surface === "web" && req.conversation.kind !== "dm") {
-        if (!conversationRef || !(await mayUseSharedScope(req.conversation.kind, conversationRef, actor))) {
-          return { status: "refused", reason: "you're not a member of that context" };
+        let projectAudience: Principal[] | undefined;
+        let projectName: string | undefined;
+        let projectVersion: string | undefined;
+        let sessionParticipantIds: string[] | undefined;
+        const conversationRef = req.conversation.channelRef;
+        const projectGroup =
+          req.conversation.kind === "group" && !!conversationRef && isProjectGroupRef(conversationRef);
+        const projectId = projectGroup ? projectIdFromGroupRef(conversationRef) : null;
+
+        if (projectGroup) {
+          if (!projectId) return { status: "refused", reason: "you're not a member of that context" };
+          const project = await deps.projects?.get(projectId);
+          if (
+            !project ||
+            project.orgId !== orgIdOf() ||
+            !deps.identity.isInternal(deps.identity.classify(project.ownerId))
+          ) {
+            return { status: "refused", reason: "you're not a member of that context" };
+          }
+          const activeMemberIds = project.memberIds.filter((memberId) =>
+            deps.identity.isInternal(deps.identity.classify(memberId)),
+          );
+          if (!activeMemberIds.includes(actor.id))
+            return { status: "refused", reason: "you're not a member of that context" };
+          projectAudience = await Promise.all(
+            activeMemberIds.map(async (memberId) => {
+              if (memberId === actor.id) return actor;
+              const principal = deps.identity.classify(memberId);
+              const member = await deps.directory.get(memberId).catch(() => null);
+              return member?.displayName ? { ...principal, displayName: member.displayName } : principal;
+            }),
+          );
+          projectName = project.name;
+          projectVersion = String(project.updatedAt);
+          sessionParticipantIds = [...activeMemberIds];
+        } else if (req.surface === "web" && req.conversation.kind !== "dm") {
+          if (!conversationRef || !(await mayUseSharedScope(req.conversation.kind, conversationRef, actor))) {
+            return { status: "refused", reason: "you're not a member of that context" };
+          }
         }
-      }
 
-      const orgRuntimeScope = scopeId("org", orgIdOf());
-      const turnRuntimeScope =
-        req.conversation.kind === "dm"
-          ? scopeId("personal", actor.id)
-          : scopeId(req.conversation.kind, req.conversation.channelRef ?? req.conversation.threadRef);
-      const [storedOrgRuntime, storedTurnRuntime] = await Promise.all([
-        deps.config.getRuntimeSelectionDurable(orgRuntimeScope),
-        turnRuntimeScope === orgRuntimeScope ? null : deps.config.getRuntimeSelectionDurable(turnRuntimeScope),
-      ]);
-      const needsOpenRouterCatalog = [storedOrgRuntime?.modelId, storedTurnRuntime?.modelId].some(
-        (modelId) => modelId && !resolveModel(modelId),
-      );
-      if (needsOpenRouterCatalog && deps.modelCredentials && (await deps.modelCredentials.availability()).openrouter) {
-        await selectableModelCatalog(deps.modelCredentialFetch);
-      }
-
-      async function withCurrentProjectRoster<T>(fn: () => Promise<T>): Promise<T | null> {
-        if (!projectId || !deps.projects) return fn();
-        if (!conversationRef || !projectVersion) return null;
-        return (await deps.projects.withVersion(conversationRef, projectVersion, fn)) ?? null;
-      }
-
-      const individualAuth = !!deps.userModelCredentials && (await deps.config.getIndividualModelAuthDurable());
-      if (req.surface === "web") {
-        const threadRef = req.conversation.threadRef;
-        const existing = await deps.sessions.getByThread(threadRef);
-        if (existing) {
-          const claimed = conversationScope(req.conversation, actor.id);
-          if (existing.scopeId !== claimed) {
-            return { status: "refused", reason: "that conversation lives in a different context" };
-          }
-        } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
-          return { status: "refused", reason: "you can only start a new conversation on your own thread" };
-        }
-        const org = scopeId("org", orgIdOf());
-        const targetScope = conversationScope(req.conversation, actor.id);
-        const fallbackHarness = isHarnessId(deps.harnessId) ? deps.harnessId : "pi";
-        const runtimeFallback = deps.runtimeFallback ?? {
-          harnessId: fallbackHarness,
-          modelId: defaultModelForHarness(fallbackHarness),
-        };
-        if (!individualAuth) {
-          const configuredKeys = deps.providerKeys ??
-            deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
-          const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-          let orgRuntime;
-          let runtime;
-          try {
-            const orgModel =
-              storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
-            orgRuntime = modelUnavailableReason(orgModel)
-              ? { harnessId: storedOrgRuntime?.harnessId ?? runtimeFallback.harnessId, modelId: orgModel }
-              : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
-            runtime = await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
-              ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
-              ...(req.model ? { modelId: req.model } : {}),
-            });
-          } catch (error) {
-            swallow("turn: runtime resolution", error);
-            return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };
-          }
-          if (req.harness && !isHarnessId(req.harness)) {
-            return { status: "refused", reason: `runtime ${req.harness} is not approved` };
-          }
-          let providers = deps.modelProviders;
-          if (deps.modelCredentials) {
-            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys, managedKeys);
-          } else if (deps.providerKeys) {
-            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
-          }
-          if (providers && !modelServiceable(runtime.modelId, providers)) {
-            return {
-              status: "refused",
-              reason: "that model isn't available on this deployment (its provider isn't configured)",
-            };
-          }
-          const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
-          let enabledWebuiModels: string[] | null = null;
-          if (configuredWebuiModels != null) {
-            enabledWebuiModels = configuredWebuiModels.length
-              ? [...new Set([...configuredWebuiModels, orgRuntime.modelId])]
-              : [];
-          } else if (providers?.openrouter) {
-            enabledWebuiModels = [
-              ...new Set([
-                ...selectableCatalogForHarness(
-                  await selectableModelCatalog(deps.modelCredentialFetch),
-                  runtime.harnessId,
-                )
-                  .filter((model) => modelOfferedInWebui(model.id))
-                  .map((model) => model.id),
-                ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
-              ]),
-            ];
-          }
-          const invalidModelOption = validateWebTurnModelOptions(req, enabledWebuiModels, providers);
-          if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
-        }
-      }
-
-      const rawAudience = req.conversation.audience ?? [req.actor];
-      const audience: Principal[] =
-        projectAudience ??
-        rawAudience.map((a) => {
-          const p = deps.identity.classify(a.externalId, a.isExternalGuest);
-          if (p.id === actor.id) return actor;
-          return a.displayName ? { ...p, displayName: a.displayName } : p;
-        });
-      if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
-
-      const publishMembers =
-        projectAudience ??
-        req.conversation.publishMembers?.map((a) => deps.identity.classify(a.externalId, a.isExternalGuest));
-
-      const conversation: Conversation = {
-        kind: req.conversation.kind,
-        threadRef: req.conversation.threadRef,
-        ...(req.conversation.channelRef ? { channelRef: req.conversation.channelRef } : {}),
-        ...(projectName || req.conversation.channelName
-          ? { channelName: projectName ?? req.conversation.channelName }
-          : {}),
-        audience,
-        ...(req.conversation.isPrivate !== undefined ? { isPrivate: req.conversation.isPrivate } : {}),
-        ...(req.conversation.isMpim !== undefined ? { isMpim: req.conversation.isMpim } : {}),
-        ...(publishMembers ? { publishMembers } : {}),
-      };
-
-      const origin = resolveTurnOrigin(req);
-
-      const input = {
-        surface: req.surface,
-        ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
-        ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
-        actor,
-        conversation,
-        origin,
-        text: req.text,
-        ...(req.gatewayContext ? { gatewayContext: req.gatewayContext } : {}),
-        ...(req.proactiveOpener ? { proactiveOpener: true } : {}),
-        ...(req.conversationHeader ? { conversationHeader: req.conversationHeader } : {}),
-        ...(req.priorTurns?.length ? { priorTurns: req.priorTurns } : {}),
-        ...(req.overheard?.length ? { overheard: req.overheard } : {}),
-        ...(req.detectContext ? { detectContext: req.detectContext } : {}),
-        ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
-        ...(req.attachments?.length ? { attachments: req.attachments } : {}),
-        ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
-        ...(!individualAuth && req.harness ? { harness: req.harness } : {}),
-        ...(!individualAuth && req.model ? { model: req.model } : {}),
-        ...turnModelOptions(req),
-        ...(req.readOnly ? { readOnly: true } : {}),
-        ...(req.skipMemory ? { skipMemory: true } : {}),
-        ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
-        ...(req.botActor ? { botActor: true } : {}),
-        ...(req.surfaceTools ? { surfaceTools: true } : {}),
-        ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
-        ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
-        ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
-        ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
-        ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
-        ...(typeof req.intakePreambleMs === "number" ? { intakePreambleMs: req.intakePreambleMs } : {}),
-        ...(typeof req.clientSentAt === "number" ? { clientSentAt: req.clientSentAt } : {}),
-        ...(req.approval ? { approval: req.approval } : {}),
-        ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
-        ...(projectVersion ? { scopeVersion: projectVersion } : {}),
-      };
-
-      if (projectGroup && req.approval) {
-        const [approval, approvalSession] = await Promise.all([
-          deps.approvals?.get(req.approval.requestId),
-          deps.sessions.getByThread(conversation.threadRef),
+        const orgRuntimeScope = scopeId("org", orgIdOf());
+        const turnRuntimeScope =
+          req.conversation.kind === "dm"
+            ? scopeId("personal", actor.id)
+            : scopeId(req.conversation.kind, req.conversation.channelRef ?? req.conversation.threadRef);
+        const [storedOrgRuntime, storedTurnRuntime] = await Promise.all([
+          deps.config.getRuntimeSelectionDurable(orgRuntimeScope),
+          turnRuntimeScope === orgRuntimeScope ? null : deps.config.getRuntimeSelectionDurable(turnRuntimeScope),
         ]);
-        if (!approvalSession || (await approvalResumable(approvalSession, actor.id, approval)) !== "ok") {
-          return { status: "refused", reason: "approval isn't visible in your project tenure" };
+        const needsOpenRouterCatalog = [storedOrgRuntime?.modelId, storedTurnRuntime?.modelId].some(
+          (modelId) => modelId && !resolveModel(modelId),
+        );
+        if (
+          needsOpenRouterCatalog &&
+          deps.modelCredentials &&
+          (await deps.modelCredentials.availability()).openrouter
+        ) {
+          await selectableModelCatalog(deps.modelCredentialFetch);
         }
-      }
-      const blocked = await pendingApprovalResultForThread(conversation.threadRef, actor.id, { alwaysBlock: true });
-      let request = input;
-      if (blocked) {
-        const record = req.approval ? await deps.approvals?.get(req.approval.requestId) : undefined;
-        const blockedSession = blocked.sessionId ? await deps.sessions.get(blocked.sessionId) : null;
-        let cause: Awaited<ReturnType<typeof approvalResumable>> | "no_session" | "nonblocking" = blockedSession
-          ? await approvalResumable(blockedSession, actor.id, record)
-          : "no_session";
-        if (cause === "ok" && record?.blocksInput === false) cause = "nonblocking";
-        if (cause !== "ok") {
-          if (req.approval) {
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
-              action: `command_approval.${req.approval.approved ? "approve" : "deny"}`,
-              resource: req.approval.requestId,
-              scopeLabel: blockedSession?.scopeId ?? conversation.threadRef,
-              status: "refused",
-              detail: JSON.stringify({ approvalOutcome: "sealed_thread", cause }),
-            });
+
+        async function withCurrentProjectRoster<T>(fn: () => Promise<T>): Promise<T | null> {
+          if (!projectId || !deps.projects) return fn();
+          if (!conversationRef || !projectVersion) return null;
+          return (await deps.projects.withVersion(conversationRef, projectVersion, fn)) ?? null;
+        }
+
+        const individualAuth = !!deps.userModelCredentials && (await deps.config.getIndividualModelAuthDurable());
+        if (req.surface === "web") {
+          const threadRef = req.conversation.threadRef;
+          const existing = await deps.sessions.getByThread(threadRef);
+          if (existing) {
+            const claimed = conversationScope(req.conversation, actor.id);
+            if (existing.scopeId !== claimed) {
+              return { status: "refused", reason: "that conversation lives in a different context" };
+            }
+          } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
+            return { status: "refused", reason: "you can only start a new conversation on your own thread" };
           }
-          return blocked;
+          const org = scopeId("org", orgIdOf());
+          const targetScope = conversationScope(req.conversation, actor.id);
+          const fallbackHarness = isHarnessId(deps.harnessId) ? deps.harnessId : "pi";
+          const runtimeFallback = deps.runtimeFallback ?? {
+            harnessId: fallbackHarness,
+            modelId: defaultModelForHarness(fallbackHarness),
+          };
+          if (!individualAuth) {
+            const configuredKeys = deps.providerKeys ??
+              deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
+            const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
+            let orgRuntime;
+            let runtime;
+            try {
+              const orgModel =
+                storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
+              orgRuntime = modelUnavailableReason(orgModel)
+                ? { harnessId: storedOrgRuntime?.harnessId ?? runtimeFallback.harnessId, modelId: orgModel }
+                : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
+              runtime = await resolveRuntimeChoiceDurable(deps.config, org, targetScope, runtimeFallback, {
+                ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
+                ...(req.model ? { modelId: req.model } : {}),
+              });
+            } catch (error) {
+              swallow("turn: runtime resolution", error);
+              return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };
+            }
+            if (req.harness && !isHarnessId(req.harness)) {
+              return { status: "refused", reason: `runtime ${req.harness} is not approved` };
+            }
+            let providers = deps.modelProviders;
+            if (deps.modelCredentials) {
+              providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys, managedKeys);
+            } else if (deps.providerKeys) {
+              providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
+            }
+            if (providers && !modelServiceable(runtime.modelId, providers)) {
+              return {
+                status: "refused",
+                reason: "that model isn't available on this deployment (its provider isn't configured)",
+              };
+            }
+            const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
+            let enabledWebuiModels: string[] | null = null;
+            if (configuredWebuiModels != null) {
+              enabledWebuiModels = configuredWebuiModels.length
+                ? [...new Set([...configuredWebuiModels, orgRuntime.modelId])]
+                : [];
+            } else if (providers?.openrouter) {
+              enabledWebuiModels = [
+                ...new Set([
+                  ...selectableCatalogForHarness(
+                    await selectableModelCatalog(deps.modelCredentialFetch),
+                    runtime.harnessId,
+                  )
+                    .filter((model) => modelOfferedInWebui(model.id))
+                    .map((model) => model.id),
+                  ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
+                ]),
+              ];
+            }
+            const invalidModelOption = validateWebTurnModelOptions(req, enabledWebuiModels, providers);
+            if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
+          }
         }
-      }
 
-      const redeliveryKey = req.approval ? undefined : req.redeliveryKey;
-      if (redeliveryKey && deps.signals) {
-        const prior = await deps.runs.getByDedupKey(redeliveryKey);
-        if (prior) {
-          if (prior.request.conversation.threadRef !== conversation.threadRef)
-            console.error(
-              `[turn] redelivery ${redeliveryKey} names ${conversation.threadRef} but its run lives in ${prior.request.conversation.threadRef}`,
-            );
-          return { status: "silent" };
+        const rawAudience = req.conversation.audience ?? [req.actor];
+        const audience: Principal[] =
+          projectAudience ??
+          rawAudience.map((a) => {
+            const p = deps.identity.classify(a.externalId, a.isExternalGuest);
+            if (p.id === actor.id) return actor;
+            return a.displayName ? { ...p, displayName: a.displayName } : p;
+          });
+        if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
+
+        const publishMembers =
+          projectAudience ??
+          req.conversation.publishMembers?.map((a) => deps.identity.classify(a.externalId, a.isExternalGuest));
+
+        const conversation: Conversation = {
+          kind: req.conversation.kind,
+          threadRef: req.conversation.threadRef,
+          ...(req.conversation.channelRef ? { channelRef: req.conversation.channelRef } : {}),
+          ...(projectName || req.conversation.channelName
+            ? { channelName: projectName ?? req.conversation.channelName }
+            : {}),
+          audience,
+          ...(req.conversation.isPrivate !== undefined ? { isPrivate: req.conversation.isPrivate } : {}),
+          ...(req.conversation.isMpim !== undefined ? { isMpim: req.conversation.isMpim } : {}),
+          ...(publishMembers ? { publishMembers } : {}),
+        };
+
+        const origin = resolveTurnOrigin(req);
+
+        const input = {
+          surface: req.surface,
+          ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
+          ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
+          actor,
+          conversation,
+          origin,
+          text: req.text,
+          ...(req.gatewayContext ? { gatewayContext: req.gatewayContext } : {}),
+          ...(req.proactiveOpener ? { proactiveOpener: true } : {}),
+          ...(req.conversationHeader ? { conversationHeader: req.conversationHeader } : {}),
+          ...(req.priorTurns?.length ? { priorTurns: req.priorTurns } : {}),
+          ...(req.overheard?.length ? { overheard: req.overheard } : {}),
+          ...(req.detectContext ? { detectContext: req.detectContext } : {}),
+          ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
+          ...(req.attachments?.length ? { attachments: req.attachments } : {}),
+          ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
+          ...(!individualAuth && req.harness ? { harness: req.harness } : {}),
+          ...(!individualAuth && req.model ? { model: req.model } : {}),
+          ...turnModelOptions(req),
+          ...(req.readOnly ? { readOnly: true } : {}),
+          ...(req.skipMemory ? { skipMemory: true } : {}),
+          ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
+          ...(req.botActor ? { botActor: true } : {}),
+          ...(req.surfaceTools ? { surfaceTools: true } : {}),
+          ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
+          ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
+          ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
+          ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
+          ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
+          ...(typeof req.intakePreambleMs === "number" ? { intakePreambleMs: req.intakePreambleMs } : {}),
+          ...(typeof req.clientSentAt === "number" ? { clientSentAt: req.clientSentAt } : {}),
+          ...(req.approval ? { approval: req.approval } : {}),
+          ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
+          ...(projectVersion ? { scopeVersion: projectVersion } : {}),
+        };
+
+        if (projectGroup && req.approval) {
+          const [approval, approvalSession] = await Promise.all([
+            deps.approvals?.get(req.approval.requestId),
+            deps.sessions.getByThread(conversation.threadRef),
+          ]);
+          if (!approvalSession || (await approvalResumable(approvalSession, actor.id, approval)) !== "ok") {
+            return { status: "refused", reason: "approval isn't visible in your project tenure" };
+          }
         }
-        if (await deps.signals.hasDedupeKey(redeliveryKey)) return { status: "silent" };
-      }
-      let dedupKey: string | undefined = redeliveryKey;
-      if (req.idempotencyKey) {
-        dedupKey =
-          projectVersion === undefined ? req.idempotencyKey : `${req.idempotencyKey}:project-${projectVersion}`;
-        if (req.approval) dedupKey = `${dedupKey}:approval:${req.approval.requestId}:${req.approval.approved}`;
-      }
+        const blocked = await pendingApprovalResultForThread(conversation.threadRef, actor.id, { alwaysBlock: true });
+        let request = input;
+        if (blocked) {
+          const record = req.approval ? await deps.approvals?.get(req.approval.requestId) : undefined;
+          const blockedSession = blocked.sessionId ? await deps.sessions.get(blocked.sessionId) : null;
+          let cause: Awaited<ReturnType<typeof approvalResumable>> | "no_session" | "nonblocking" = blockedSession
+            ? await approvalResumable(blockedSession, actor.id, record)
+            : "no_session";
+          if (cause === "ok" && record?.blocksInput === false) cause = "nonblocking";
+          if (cause !== "ok") {
+            if (req.approval) {
+              deps.auditLog.record({
+                at: Date.now(),
+                principalId: actor.id,
+                action: `command_approval.${req.approval.approved ? "approve" : "deny"}`,
+                resource: req.approval.requestId,
+                scopeLabel: blockedSession?.scopeId ?? conversation.threadRef,
+                status: "refused",
+                detail: JSON.stringify({ approvalOutcome: "sealed_thread", cause }),
+              });
+            }
+            return blocked;
+          }
+        }
 
-      if (origin.kind === "human" && !req.approval) deps.reaperPoke?.();
+        const redeliveryKey = req.approval ? undefined : req.redeliveryKey;
+        if (redeliveryKey && deps.signals) {
+          const prior = await deps.runs.getByDedupKey(redeliveryKey);
+          if (prior) {
+            if (prior.request.conversation.threadRef !== conversation.threadRef)
+              console.error(
+                `[turn] redelivery ${redeliveryKey} names ${conversation.threadRef} but its run lives in ${prior.request.conversation.threadRef}`,
+              );
+            return { status: "silent" };
+          }
+          const saved = await deps.signals.getByDedupeKey(redeliveryKey);
+          if (saved) return signalResult(saved, req);
+        }
+        let dedupKey: string | undefined = redeliveryKey;
+        if (req.idempotencyKey) {
+          dedupKey =
+            projectVersion === undefined ? req.idempotencyKey : `${req.idempotencyKey}:project-${projectVersion}`;
+          if (req.approval) dedupKey = `${dedupKey}:approval:${req.approval.requestId}:${req.approval.approved}`;
+        }
 
-      if (
-        req.surface !== "web" &&
-        deps.signals &&
-        (origin.kind === "human" || origin.kind === "ambient") &&
-        !req.approval &&
-        !req.spawned &&
-        !req.idempotencyKey
-      ) {
-        const live = await deps.runs.activeForThread(conversation.threadRef);
-        const liveOriginKind = live ? resolveTurnOrigin(live.request).kind : undefined;
-        const personIntoAutomation =
-          liveOriginKind === "automation" &&
-          (origin.kind === "human" || (origin.kind === "ambient" && origin.live === true)) &&
-          !(origin.kind === "human" && isHalt(req.text));
-        if (live && redeliveryKey && live.dedupKey === redeliveryKey) return { status: "silent" };
-        if (live && !isTerminal(live.status) && !personIntoAutomation) {
-          const steerText = attributedSteerText(
-            actor,
-            origin.kind === "ambient" ? null : live.request.actor.id,
-            req.text,
-          );
-          let injectedText = steerText;
-          if (origin.kind === "ambient") {
-            const session = await deps.sessions.getByThread(conversation.threadRef);
-            const decision = await deps.orchestrator.screenSecuritySteer({
-              payload: steerText,
+        if (origin.kind === "human" && !req.approval) deps.reaperPoke?.();
+
+        if (
+          req.surface !== "web" &&
+          deps.signals &&
+          (origin.kind === "human" || origin.kind === "ambient") &&
+          !req.approval &&
+          !req.spawned &&
+          !req.idempotencyKey &&
+          !signalId
+        ) {
+          const live = await deps.runs.activeForThread(conversation.threadRef);
+          const liveOriginKind = live ? resolveTurnOrigin(live.request).kind : undefined;
+          const personIntoAutomation =
+            liveOriginKind === "automation" &&
+            (origin.kind === "human" || (origin.kind === "ambient" && origin.live === true)) &&
+            !(origin.kind === "human" && isHalt(req.text));
+          if (live && redeliveryKey && live.dedupKey === redeliveryKey) return { status: "silent" };
+          if (live && !isTerminal(live.status) && !personIntoAutomation) {
+            const steerText = attributedSteerText(
               actor,
-              conversation,
-              ...(session ? { sessionId: session.id } : {}),
-            });
-            if (decision === "block")
-              return req.async ? { status: "queued", runId: live.id, steered: true } : drive(live.id);
-            if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
-          }
-          // A mid-run message can carry files. They can't be materialized into
-          // the live turn's inbox, but the run must hear about them — name
-          // them in the steer (with the message ts so the agent can pull each
-          // via the surface-file API), and never report a captionless file as
-          // steered while silently dropping it.
-          const fileNames = (req.attachments ?? []).map((a) =>
-            a.sourceId
-              ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
-              : a.name,
-          );
-          const wake: Wake = {
-            situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
-            ts: String(req.clientSentAt ?? Date.now()),
-            text: injectedText,
-            halt: origin.kind === "human" && isHalt(req.text),
-            ...(fileNames.length ? { fileNames } : {}),
-          };
-          const route = routeWake(wake, true, resolveTurnOrigin(live.request).kind === "ambient");
-          if (route.kind === "steer" || route.kind === "drop") {
-            const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
-            const admission = await withCurrentProjectRoster(async () => {
-              if (route.kind === "steer")
-                return deps.signals!.send(live.id, {
-                  kind: route.signal,
-                  ...(route.text ? { text: route.text } : {}),
-                  ...(steerTs ? { ts: steerTs } : {}),
-                  ...(route.signal === "steer" ? { request: req } : {}),
-                  ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
-                });
-              return "sent" as const;
-            });
-            const routedRunId = live.id;
-            if (!admission)
-              return { status: "refused", reason: "project membership changed; retry from the current project" };
-            if (admission === "duplicate")
-              return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
-            if (admission !== "closed") {
-              if (route.kind === "steer") {
-                const after = await deps.runs.get(live.id);
-                if (!after || isTerminal(after.status)) {
-                  const own = (await replayOrphanedRunSignals(live.id)).find(
-                    (d) => d.signal.text === route.text && d.signal.ts === steerTs,
-                  );
-                  if (own?.replayRunId)
-                    return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+              origin.kind === "ambient" ? null : live.request.actor.id,
+              req.text,
+            );
+            let injectedText = steerText;
+            if (origin.kind === "ambient") {
+              const session = await deps.sessions.getByThread(conversation.threadRef);
+              const decision = await deps.orchestrator.screenSecuritySteer({
+                payload: steerText,
+                actor,
+                conversation,
+                ...(session ? { sessionId: session.id } : {}),
+              });
+              if (decision === "block")
+                return req.async ? { status: "queued", runId: live.id, steered: true } : drive(live.id);
+              if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
+            }
+            // A mid-run message can carry files. They can't be materialized into
+            // the live turn's inbox, but the run must hear about them — name
+            // them in the steer (with the message ts so the agent can pull each
+            // via the surface-file API), and never report a captionless file as
+            // steered while silently dropping it.
+            const fileNames = (req.attachments ?? []).map((a) =>
+              a.sourceId
+                ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
+                : a.name,
+            );
+            const wake: Wake = {
+              situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
+              ts: String(req.clientSentAt ?? Date.now()),
+              text: injectedText,
+              halt: origin.kind === "human" && isHalt(req.text),
+              ...(fileNames.length ? { fileNames } : {}),
+            };
+            const route = routeWake(wake, true, resolveTurnOrigin(live.request).kind === "ambient");
+            if (route.kind === "steer" || route.kind === "drop") {
+              const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
+              const admission = await withCurrentProjectRoster(async () => {
+                if (route.kind === "steer")
+                  return deps.signals!.send(live.id, {
+                    kind: route.signal,
+                    ...(route.text ? { text: route.text } : {}),
+                    ...(steerTs ? { ts: steerTs } : {}),
+                    ...(route.signal === "steer" ? { request: req } : {}),
+                    ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
+                  });
+                return { status: "sent" } as const;
+              });
+              const routedRunId = live.id;
+              if (!admission)
+                return { status: "refused", reason: "project membership changed; retry from the current project" };
+              if (admission.status === "duplicate") return signalResult(admission.signal, req);
+              if (admission.status !== "closed") {
+                if (route.kind === "steer") {
+                  const after = await deps.runs.get(live.id);
+                  if (!after || isTerminal(after.status)) {
+                    await replayOrphanedRunSignals(live.id);
+                  }
                 }
+                if ("signal" in admission) return signalResult(admission.signal, req);
+                return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
               }
-              return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
             }
           }
         }
-      }
 
-      const spineRouted = !req.approval && shouldRouteToSpine(request as OrchestratorInput);
-      if (spineRouted) {
-        request = { ...input, surfaceTools: true };
-        if (origin.kind !== "ambient")
-          request = {
-            ...request,
-            text: await addressedWakeText(input as OrchestratorInput),
-            displayText: input.text,
-            envelopeWrapped: true,
-          };
-      }
+        const spineRouted = !req.approval && shouldRouteToSpine(request as OrchestratorInput);
+        if (spineRouted) {
+          request = { ...input, surfaceTools: true };
+          if (origin.kind !== "ambient")
+            request = {
+              ...request,
+              text: await addressedWakeText(input as OrchestratorInput),
+              displayText: input.text,
+              envelopeWrapped: true,
+            };
+        }
 
-      if (spineRouted && origin.kind === "human" && !req.spawned && !req.idempotencyKey && origin.messageTs) {
-        const container = conversation.channelRef ?? conversation.threadRef;
-        const ambientRef = `${req.surface}:${container}:ambient:${origin.messageTs}`;
-        const ambientSession = await deps.sessions.getByThread(ambientRef);
-        if (ambientSession) {
-          const liveAmbient = await deps.runs.activeForThread(ambientRef);
-          if (liveAmbient && !isTerminal(liveAmbient.status)) {
-            const admission = await withCurrentProjectRoster(async () => {
-              if (deps.signals)
-                return deps.signals.send(liveAmbient.id, {
-                  kind: "steer",
-                  text: req.text,
-                  ts: origin.messageTs,
-                  request: req,
-                  ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
-                });
-              return "closed" as const;
-            });
-            const routedRunId = liveAmbient.id;
-            if (!admission)
-              return { status: "refused", reason: "project membership changed; retry from the current project" };
-            if (admission !== "closed") {
-              const after = await deps.runs.get(liveAmbient.id);
-              if (!after || isTerminal(after.status)) {
-                const own = (await replayOrphanedRunSignals(liveAmbient.id)).find(
-                  (d) => d.signal.text === req.text && d.signal.ts === origin.messageTs,
-                );
-                if (own?.replayRunId)
-                  return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+        if (
+          spineRouted &&
+          origin.kind === "human" &&
+          !req.spawned &&
+          !req.idempotencyKey &&
+          !signalId &&
+          origin.messageTs
+        ) {
+          const container = conversation.channelRef ?? conversation.threadRef;
+          const ambientRef = `${req.surface}:${container}:ambient:${origin.messageTs}`;
+          const ambientSession = await deps.sessions.getByThread(ambientRef);
+          if (ambientSession) {
+            const liveAmbient = await deps.runs.activeForThread(ambientRef);
+            if (liveAmbient && !isTerminal(liveAmbient.status)) {
+              const admission = await withCurrentProjectRoster(async () => {
+                if (deps.signals)
+                  return deps.signals.send(liveAmbient.id, {
+                    kind: "steer",
+                    text: req.text,
+                    ts: origin.messageTs,
+                    request: req,
+                    ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
+                  });
+                return { status: "closed" } as const;
+              });
+              if (!admission)
+                return { status: "refused", reason: "project membership changed; retry from the current project" };
+              if (admission.status !== "closed") {
+                const after = await deps.runs.get(liveAmbient.id);
+                if (!after || isTerminal(after.status)) {
+                  await replayOrphanedRunSignals(liveAmbient.id);
+                }
+                return signalResult(admission.signal, req, false);
               }
-              return req.async ? { status: "queued", runId: routedRunId } : drive(routedRunId);
             }
           }
         }
-      }
 
-      const known = await deps.sessions.getByThread(conversation.threadRef);
-      const participants = known ? await deps.sessions.participantsOf(known.id) : [];
-      const enqueue = () =>
-        deps.runs.enqueue({
-          sessionId: conversation.threadRef,
-          request,
-          maxAttempts: deps.maxAttempts,
-          ...(dedupKey ? { dedupKey } : {}),
-        });
-      const enqueued = await withCurrentProjectRoster(enqueue);
-      if (!enqueued) return { status: "refused", reason: "project membership changed; retry from the current project" };
-      const { run, deduped } = enqueued;
-      if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
-      if (!deduped) {
-        deps.sessionStateBus?.emit({
-          threadRef: conversation.threadRef,
-          ...(known ? { sessionId: known.id } : {}),
-          state: "working",
-          at: Date.now(),
-          participants: participants.length ? participants : [req.actor.externalId],
-        });
-      }
-      if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
-      if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
-      if (req.async) return { status: "queued", runId: run.id };
-      return drive(run.id);
+        if (signalId) dedupKey = `signal-delivery:${signalId}`;
+
+        const known = await deps.sessions.getByThread(conversation.threadRef);
+        const participants = known ? await deps.sessions.participantsOf(known.id) : [];
+        const enqueue = () =>
+          deps.runs.enqueue({
+            sessionId: conversation.threadRef,
+            request,
+            maxAttempts: deps.maxAttempts,
+            ...(dedupKey ? { dedupKey } : {}),
+          });
+        const enqueued = await withCurrentProjectRoster(enqueue);
+        if (!enqueued)
+          return { status: "refused", reason: "project membership changed; retry from the current project" };
+        const { run, deduped } = enqueued;
+        if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
+        if (!deduped) {
+          deps.sessionStateBus?.emit({
+            threadRef: conversation.threadRef,
+            ...(known ? { sessionId: known.id } : {}),
+            state: "working",
+            at: Date.now(),
+            participants: participants.length ? participants : [req.actor.externalId],
+          });
+        }
+        if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
+        if (spineRouted) deps.engaged?.engage(conversation.threadRef);
+        if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
+        if (req.async) return { status: "queued", runId: run.id };
+        return drive(run.id);
+      };
+      return req.redeliveryKey && !signalId
+        ? deps.runs.withAdmission(JSON.stringify(["turn", req.redeliveryKey]), admit)
+        : admit();
     },
 
     subscribeSessionStates(cb, opts) {
@@ -615,17 +660,99 @@ export function createTurnMethods(
 
     async signalRun(runId, signal, viewer) {
       if (!deps.signals) return { accepted: false, reason: "signals_unavailable" };
+      if (signal.dedupeKey && viewer) {
+        const prior = await deps.signals.getByDedupeKey(JSON.stringify(["signal", runId, viewer, signal.dedupeKey]));
+        if (prior)
+          return {
+            accepted: true,
+            signalId: prior.id,
+            runId: prior.runId,
+            ...(prior.deliveryRunId ? { deliveryRunId: prior.deliveryRunId } : {}),
+          };
+      }
       const run = await deps.runs.get(runId);
+      if (!run && !signal.queuedRunId) return { accepted: false, reason: "not_found" };
+      if (signal.queuedRunId) {
+        if (signal.kind !== "steer") return { accepted: false, reason: "invalid_kind" };
+        const source = await deps.runs.get(signal.queuedRunId);
+        if (!source || (viewer && !(await viewerMayUseRun(source, viewer))))
+          return { accepted: false, reason: "not_found" };
+        if (source.signalTargetRunId) {
+          const saved =
+            source.status === "pending"
+              ? await resumeQueuedSignal(source)
+              : await deps.signals.getByDedupeKey(`queued-signal:${source.id}`);
+          if (saved)
+            return {
+              accepted: true,
+              signalId: saved.id,
+              runId: saved.runId,
+              ...(saved.deliveryRunId ? { deliveryRunId: saved.deliveryRunId } : {}),
+            };
+          if (source.result?.signalId)
+            return {
+              accepted: true,
+              signalId: source.result.signalId,
+              runId: source.signalTargetRunId,
+              deliveryRunId: source.result.runId,
+            };
+          return { accepted: false, reason: "started" };
+        }
+        if (source.request.attachments?.length) return { accepted: false, reason: "attachments" };
+        if (source.id === runId || (run && source.sessionId !== run.sessionId))
+          return { accepted: false, reason: "conversation_mismatch" };
+        if (run && viewer && !(await viewerMayUseRun(run, viewer))) return { accepted: false, reason: "not_found" };
+        if (source.signalTargetRunId === runId && source.result?.signalId)
+          return {
+            accepted: true,
+            signalId: source.result.signalId,
+            runId,
+            ...(source.result.runId !== runId ? { deliveryRunId: source.result.runId } : {}),
+          };
+        if (!run && source.signalTargetRunId !== runId) return { accepted: false, reason: "not_found" };
+        const transferring = await deps.runs.beginSignalTransfer(source.id, runId);
+        if (!transferring) return { accepted: false, reason: "started" };
+        const saved = await resumeQueuedSignal(transferring);
+        return {
+          accepted: true,
+          signalId: saved.id,
+          runId: saved.runId,
+          ...(saved.deliveryRunId ? { deliveryRunId: saved.deliveryRunId } : {}),
+        };
+      }
       if (!run) return { accepted: false, reason: "not_found" };
       if (viewer && !(await viewerMayUseRun(run, viewer))) return { accepted: false, reason: "not_found" };
-      if (isTerminal(run.status)) return { accepted: false, reason: "terminal" };
+      if (signal.kind === "steer" && !signal.request) {
+        const original = signalReplayRequest(run.request);
+        const sender = viewer ?? original.actor.externalId;
+        signal = {
+          ...signal,
+          request: {
+            surface: original.surface,
+            actor: {
+              externalId: sender,
+              displayName: (await deps.directory.get(sender).catch(() => null))?.displayName,
+            },
+            conversation: original.conversation,
+            text: signal.text ?? "",
+          },
+        };
+      }
       if (signal.kind === "steer" && !signal.text?.trim()) {
         return { accepted: false, reason: "text_required" };
       }
       if (signal.request && signal.request.conversation.threadRef !== run.request.conversation.threadRef) {
         return { accepted: false, reason: "conversation_mismatch" };
       }
-      let outbound = signal;
+      const scopedKey = signal.dedupeKey
+        ? JSON.stringify([
+            "signal",
+            runId,
+            viewer ?? signal.request?.actor.externalId ?? run.request.actor.id,
+            signal.dedupeKey,
+          ])
+        : undefined;
+      let outbound = { ...signal, ...(scopedKey ? { dedupeKey: scopedKey } : {}) };
       if (signal.kind === "steer") {
         const requestActor = signal.request?.actor;
         let steerer: { id: string; displayName?: string | undefined } | undefined;
@@ -634,25 +761,34 @@ export function createTurnMethods(
           steerer = { id: viewer, displayName: (await deps.directory.get(viewer).catch(() => null))?.displayName };
         }
         outbound = {
-          ...signal,
+          ...outbound,
           ts: signal.ts ?? `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`,
           ...(steerer ? { text: attributedSteerText(steerer, run.request.actor.id, signal.text!) } : {}),
         };
       }
-      if ((await deps.signals.send(runId, outbound)) === "closed") return { accepted: false, reason: "terminal" };
-      const after = await deps.runs.get(runId);
-      if (!after || isTerminal(after.status)) {
-        const drained = await replayOrphanedRunSignals(runId);
-        if (signal.kind !== "steer") return { accepted: false, reason: "terminal" };
-        // The steer was stored before the run went terminal, so its text is replayed as
-        // a fresh turn (by this drain, the onTerminal hook, or the orphan sweeper —
-        // whoever drains first). Tell the caller so it attaches to the fresh run
-        // instead of treating the message as lost.
-        const own = drained.find((d) => d.signal.ts === outbound.ts);
-        if (own && !own.replayRunId) return { accepted: false, reason: "terminal" };
-        return { accepted: false, reason: "terminal", replayed: true };
+      if (outbound.dedupeKey) {
+        const prior = await deps.signals.getByDedupeKey(outbound.dedupeKey);
+        if (prior && prior.runId === runId)
+          return {
+            accepted: true,
+            signalId: prior.id,
+            runId: prior.runId,
+            ...(prior.deliveryRunId ? { deliveryRunId: prior.deliveryRunId } : {}),
+          };
       }
-      return { accepted: true };
+      if (isTerminal(run.status)) return { accepted: false, reason: "terminal" };
+      const admission = await deps.signals.send(runId, outbound);
+      if (admission.status === "closed") return { accepted: false, reason: "terminal" };
+      const after = await deps.runs.get(runId);
+      if (!after || isTerminal(after.status)) await replayOrphanedRunSignals(runId);
+      const saved = await deps.signals.get(admission.signal.id);
+      const resolved = saved ?? admission.signal;
+      return {
+        accepted: true,
+        signalId: resolved.id,
+        runId: resolved.runId,
+        ...(resolved.deliveryRunId ? { deliveryRunId: resolved.deliveryRunId } : {}),
+      };
     },
 
     replayOrphanedRunSignals(runId) {

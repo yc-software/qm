@@ -73,6 +73,7 @@ export interface CodexTurnAuth {
 export interface HarnessTurnInput {
   session: Session;
   runId?: string;
+  runLeaseToken?: string;
   cancel?: AbortSignal;
   input: string;
   triggerTs?: string;

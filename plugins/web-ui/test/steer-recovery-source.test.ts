@@ -7,12 +7,9 @@ const conversations = readFileSync(new URL("../src/conversations.ts", import.met
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 
 test("signalLiveRun reports a terminal/vanished run as an outcome instead of throwing", () => {
-  assert.match(
-    bridge,
-    /export type SignalOutcome = \{ ok: true \} \| \{ ok: false; reason: string; replayed\?: boolean \};/,
-  );
-  assert.match(bridge, /err\.status === 409 \|\| err\.status === 404/);
-  assert.match(bridge, /\.\.\.\(body\.replayed \? \{ replayed: true \} : \{\}\)/);
+  assert.match(bridge, /signalId: string;[\s\S]*deliveryRunId\?: string/);
+  assert.match(bridge, /error\.status === 409 \|\| error\.status === 404/);
+  assert.doesNotMatch(bridge, /replayed/);
 });
 
 test("a server-side run starting for an open conversation attaches the view (working event, not just visibilitychange)", () => {
@@ -45,14 +42,12 @@ test("a message typed mid-turn is never dropped by the run-slot window — it qu
   assert.ok(composer.indexOf("function steerWhenLive") < 0, "the held-steer shim is gone with its window");
 });
 
-test("a queued steer the run outlived settles every way: replay followed, ended resend, requeue", () => {
+test("queued steering retries the server-owned identity without reconstructing messages", () => {
   const at = composer.indexOf("async function steerQueued");
   assert.ok(at >= 0);
-  const body = composer.slice(at, composer.indexOf("function recoverEndedRunSteer", at));
-  assert.match(body, /if \(!outcome\.ok\) recoverEndedRunSteer\(agent, queued\.text, outcome\);/);
-  assert.match(
-    body,
-    /if \(!\(await enqueueTurn\(agent, threadRef, queued\.text\)\)\) composerState\.draft = queued\.text;/,
-    "a signal that never reached core re-queues the withdrawn text",
-  );
+  const body = composer.slice(at, composer.indexOf("async function sendPrompt", at));
+  assert.match(body, /signalLiveRun\("steer", undefined, queued\.runId, queued\.runId\)/);
+  assert.doesNotMatch(body, /withdrawRun|enqueueTurn|queued\.text|verifySteerDelivered/);
+  assert.match(body, /if \(outcome\.ok\)/);
+  assert.match(body, /Transfer is unconfirmed/);
 });

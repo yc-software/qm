@@ -2817,6 +2817,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : {}),
             ...(codexTurnAuth ? { codexAuth: codexTurnAuth } : {}),
             ...(input.runId ? { runId: input.runId } : {}),
+            ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
             cancel: turnAbort.signal,
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
