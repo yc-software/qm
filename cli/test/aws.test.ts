@@ -380,9 +380,10 @@ else if (a.includes("ecs describe-service-revisions")) {
 else if (a.includes("ecs list-tasks")) console.log(JSON.stringify({ taskArns: process.env.AWS_FAKE_NO_RUNNING_TASK ? [] : [...(process.env.AWS_FAKE_LARGE_ROLLOUT ? Array.from({ length: 100 }, (_, i) => "arn:aws:ecs:us-west-2:123456789012:task/old-core-" + i) : []), "arn:aws:ecs:us-west-2:123456789012:task/live-core"] }));
 else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) console.log(JSON.stringify({ tasks: [] }));
 else if (a.includes("ecs describe-tasks") && a.includes("task/live-core")) console.log(JSON.stringify({ tasks: [{ taskDefinitionArn: process.env.AWS_FAKE_STALE_CORE ? "stale-task-definition" : s.services["acme-core"].taskDefinition, lastStatus: "RUNNING", healthStatus: "HEALTHY", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
-else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
+else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/acme-qm/canary" }] }));
 else if (a.includes("ecs wait tasks-stopped")) console.log("");
 else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
+else if (a.includes("logs get-log-events")) console.log(JSON.stringify({ events: JSON.parse(process.env.AWS_FAKE_CANARY_LOGS || "[]").map((event, index) => typeof event === "string" ? { message: event, timestamp: index } : event) }));
 else if (a.includes("ecs describe-task-definition")) {
   const id = after("--task-definition");
   console.log(JSON.stringify({ taskDefinition: s.definitions[id] }));
@@ -1173,7 +1174,7 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
   }
 });
 
-test("AWS up scales services to the configured desired count and live check flags drift from it", async () => {
+test("AWS scaling and failed live canary diagnostics stay exact, bounded, redacted, and failure-only", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-desired-count-"));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
@@ -1185,6 +1186,7 @@ test("AWS up scales services to the configured desired count and live check flag
   const fake = statefulAws(dir, scaled());
   const priorPath = process.env.PATH;
   const priorCanaryExit = process.env.AWS_FAKE_CANARY_EXIT;
+  const priorCanaryLogs = process.env.AWS_FAKE_CANARY_LOGS;
   process.env.PATH = `${dir}:${priorPath}`;
   try {
     await awsUp(scaled(), dir, { yes: true });
@@ -1204,13 +1206,68 @@ test("AWS up scales services to the configured desired count and live check flag
       readFileSync(fake.log, "utf8"),
       /ecs run-task .*postdeploy-smoke\.ts.*session.*http:\/\/10\.0\.1\.8:8080/,
     );
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /logs get-log-events/);
     process.env.AWS_FAKE_CANARY_EXIT = "1";
-    await assert.rejects(
-      () => awsCheckLive(scaled(), { report: false }),
-      /core: private live session smoke failed: canary task exited 1/,
+    process.env.AWS_FAKE_CANARY_LOGS = JSON.stringify([
+      {
+        timestamp: 2,
+        message:
+          'newest request failed for alice@example.com authorization: Bearer bearer-value CORE_SIGNING_SECRET="signing-value" api_key=json-value xoxb-1234567890-secret ghp_1234567890secret eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.c2lnbmF0dXJl sk-proj-1234567890abcdefghijklmnop https://user:password@example.com/db',
+      },
+      {
+        timestamp: 1,
+        message: Array.from({ length: 60 }, (_, index) => `older-${index}-${"x".repeat(300)}`).join("\n"),
+      },
+    ]);
+    let canaryFailure: Error | undefined;
+    try {
+      await awsCheckLive(scaled(), { report: false });
+    } catch (error) {
+      canaryFailure = error as Error;
+    }
+    assert.ok(canaryFailure);
+    assert.match(canaryFailure.message, /core: private live session smoke failed: canary task exited 1/);
+    const marker = "canary task logs (core/core/canary):\n";
+    assert.ok(canaryFailure.message.includes(marker));
+    const diagnostic = canaryFailure.message.slice(canaryFailure.message.indexOf(marker) + marker.length);
+    assert.ok(diagnostic.split("\n").length <= 40);
+    assert.ok(Buffer.byteLength(diagnostic) <= 8 * 1024);
+    assert.doesNotMatch(
+      diagnostic,
+      /older-0-|alice@example\.com|bearer-value|signing-value|json-value|xoxb-|ghp_|eyJ|sk-proj-|user:password/,
     );
+    assert.match(diagnostic, /^…/);
+    assert.match(diagnostic, /older-59-/);
+    assert.match(diagnostic, /newest request failed/);
+    assert.ok(diagnostic.indexOf("older-59-") < diagnostic.indexOf("newest request failed"));
+    assert.match(diagnostic, /\[REDACTED_EMAIL\]|\[REDACTED\]/);
+    const keyLine = "c3ludGhldGljLWtleS1ieXRlcy1mb3ItcmVkYWN0aW9uLXRlc3Qtb25seQ==";
+    for (const fragment of [
+      ["-----BEGIN PRIVATE KEY-----", ...Array(60).fill(keyLine), "-----END PRIVATE KEY-----"].join("\n"),
+      [keyLine, "-----END PRIVATE KEY-----"].join("\n"),
+      ["-----BEGIN PRIVATE KEY-----", keyLine].join("\n"),
+    ]) {
+      process.env.AWS_FAKE_CANARY_LOGS = JSON.stringify([{ timestamp: 1, message: fragment }]);
+      await assert.rejects(
+        () => awsCheckLive(scaled(), { report: false }),
+        (error: Error) => {
+          assert.match(error.message, /canary task logs/);
+          assert.doesNotMatch(error.message, new RegExp(keyLine));
+          assert.match(error.message, /REDACTED/);
+          return true;
+        },
+      );
+    }
+    const canaryLogRead = readFileSync(fake.log, "utf8");
+    assert.match(
+      canaryLogRead,
+      /logs get-log-events --log-group-name \/ecs\/acme-core --log-stream-name core\/core\/canary --limit 40 --no-start-from-head/,
+    );
+    assert.doesNotMatch(canaryLogRead, /logs (?:filter-log-events|describe-log-streams|tail)/);
     if (priorCanaryExit === undefined) delete process.env.AWS_FAKE_CANARY_EXIT;
     else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
+    if (priorCanaryLogs === undefined) delete process.env.AWS_FAKE_CANARY_LOGS;
+    else process.env.AWS_FAKE_CANARY_LOGS = priorCanaryLogs;
     rolledBack.services["acme-core"].desiredCount = 1;
     writeFileSync(fake.state, JSON.stringify(rolledBack));
     await assert.rejects(
@@ -1220,6 +1277,8 @@ test("AWS up scales services to the configured desired count and live check flag
   } finally {
     if (priorCanaryExit === undefined) delete process.env.AWS_FAKE_CANARY_EXIT;
     else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
+    if (priorCanaryLogs === undefined) delete process.env.AWS_FAKE_CANARY_LOGS;
+    else process.env.AWS_FAKE_CANARY_LOGS = priorCanaryLogs;
     process.env.PATH = priorPath;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
