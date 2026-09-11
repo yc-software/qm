@@ -184,7 +184,7 @@ test("send_email hands the draft over and paints it for the UI, without sending 
   });
   assert.ok(tool);
   const result = await run({ to: [" dana@northwind.io "], subject: " Q3 pricing ", body: "Hi Dana\n" });
-  assert.match(result.content[0]?.text ?? "", /handed to the user for review/);
+  assert.match(result.content[0]?.text ?? "", /held for the user's review/);
   assert.deepEqual(seen, [{ to: ["dana@northwind.io"], subject: "Q3 pricing", body: "Hi Dana" }]);
   const persisted = emitted.find((e) => e.type === "tool_result")!.payload;
   assert.equal(persisted.tool, "send_email");
@@ -214,7 +214,7 @@ test("send_email stages workspace files for the email and refuses when staging f
   const bad = await run({ to: ["a@b.co"], subject: "x", body: "y", attachments: ["missing.pdf"] });
   assert.match(bad.content[0]?.text ?? "", /missing\.pdf \(not found\)/);
   const ok = await run({ to: ["a@b.co"], subject: "x", body: "y", attachments: [" report.pdf "] });
-  assert.match(ok.content[0]?.text ?? "", /handed to the user/);
+  assert.match(ok.content[0]?.text ?? "", /held for the user/);
   assert.deepEqual(seen.at(-2), ["report.pdf"]);
   assert.deepEqual((seen.at(-1) as { attachments: unknown }).attachments, [
     { artifactId: "art-9", name: "report.pdf", mimetype: "application/pdf", sizeBytes: 2048 },

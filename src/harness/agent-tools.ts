@@ -3120,7 +3120,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       };
       await recordCall(callId, summary);
       const fail = (message: string) =>
-        recordResult(callId, { ...summary, error: message }, text(`[error] ${message}`), true);
+        recordResult(callId, { ...summary, error: message }, text(`[error] ${message}`), true, undefined, true);
       if (!tc.holdEmailDraft) {
         return fail(
           "Gmail is not connected for this user here. Ask them to connect Google Workspace under Keychain in the web UI, then try again.",
@@ -3159,11 +3159,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { ...summary, ok: true, itemId: held.itemId },
           text(
-            `Draft handed to the user for review. It is now shown in this conversation with Send, Edit and Discard; only they can send it, and the ledger refuses a send from you. Tell them it is ready and stop.`,
+            `Draft ${held.itemId} is held for the user's review. The conversation now shows it with Send, Edit and Discard controls, and only the user can send it; a send from an agent is refused. Nothing more is needed from you beyond a one-line note that the draft is ready.`,
           ),
           false,
           undefined,
-          false,
+          true,
           { emailDraft: { ...held, to, ...(cc.length ? { cc } : {}), subject } },
         );
       } catch (e) {
