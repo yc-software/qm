@@ -467,6 +467,17 @@ test("failed slot backoff grows to five minutes and survives store reloads", asy
   }
 });
 
+test("malformed persisted failure counts restart at the first bounded delay", async () => {
+  const backing = createMemoryMap<Cron>();
+  const store = createCronStore(backing);
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000 } });
+  await backing.merge(cron.id, { failureBackoff: { scheduledAt: 1_000, failures: Number.NaN } });
+  const claim = await store.claimSlot(cron.id, 1_000, 1_000);
+  assert.ok(claim);
+  assert.equal(await store.failSlot(cron.id, claim, 1_000), 6_000);
+  assert.deepEqual((await store.get(cron.id))!.failureBackoff, { scheduledAt: 1_000, failures: 1 });
+});
+
 test("slot success, a new slot, and an action edit reset failure history", async () => {
   const store = createCronStore();
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000 } });
@@ -508,6 +519,25 @@ test("slot success, a new slot, and an action edit reset failure history", async
   assert.deepEqual(afterScheduleEdit.schedule, { everyMs: 120_000, firstFireAt: 500_000 });
   assert.equal(afterScheduleEdit.nextFireAt, 500_000);
   assert.equal(afterScheduleEdit.failureBackoff, undefined);
+});
+
+test("interval slot transitions ignore stale action and schedule snapshots", async () => {
+  const store = createCronStore();
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000 } });
+  const [stale] = await store.due(1_000);
+  assert.ok(stale);
+  await store.update(cron.id, { action: "edited action" });
+  await store.failDueSlot(cron.id, stale, 1_000);
+  assert.equal((await store.get(cron.id))!.failureBackoff, undefined);
+
+  const [beforeScheduleEdit] = await store.due(1_000);
+  assert.ok(beforeScheduleEdit);
+  await store.update(cron.id, { schedule: { everyMs: 120_000, firstFireAt: 500_000 } });
+  await store.completeDueSlot(cron.id, beforeScheduleEdit, 1_000);
+  const edited = (await store.get(cron.id))!;
+  assert.deepEqual(edited.schedule, { everyMs: 120_000, firstFireAt: 500_000 });
+  assert.equal(edited.nextFireAt, 500_000);
+  assert.equal(edited.lastFiredAt, undefined);
 });
 
 test("stale failures cannot replace a newer claim, and busy deferrals preserve error history and later holds", async () => {

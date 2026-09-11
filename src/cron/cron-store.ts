@@ -61,6 +61,8 @@ const FAILURE_BACKOFF_BASE_MS = 5_000;
 const FAILURE_BACKOFF_MAX_MS = 5 * 60_000;
 const FAILURE_BACKOFF_MAX_FAILURES = 7;
 
+export type DueCron = Cron & { scheduledAt: number };
+
 export interface CronSlotClaim {
   id: string;
   cron: Cron;
@@ -94,7 +96,11 @@ export interface CronStore {
   completeSlot(id: string, claim: CronSlotClaim): Promise<void>;
   releaseSlot(id: string, claim: CronSlotClaim, deferUntil?: number): Promise<void>;
   failSlot(id: string, claim: CronSlotClaim, failedAt: number): Promise<number | undefined>;
-  due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
+  completeDueSlot(id: string, cron: DueCron, at: number): Promise<void>;
+  deferDueSlot(id: string, cron: DueCron, until: number): Promise<void>;
+  failDueSlot(id: string, cron: DueCron, failedAt: number): Promise<number | undefined>;
+  disableDueSlot(id: string, cron: DueCron): Promise<void>;
+  due(now: number): Promise<DueCron[]>;
 }
 
 export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
@@ -128,6 +134,40 @@ function requireAtomicUpdate(backing: DurableMap<Cron>): NonNullable<DurableMap<
 
 function failureBackoffMs(failures: number): number {
   return Math.min(FAILURE_BACKOFF_MAX_MS, FAILURE_BACKOFF_BASE_MS * 2 ** (failures - 1));
+}
+
+function nextFailureCount(cron: Cron, scheduledAt: number): number {
+  if (cron.failureBackoff?.scheduledAt !== scheduledAt) return 1;
+  const failures = cron.failureBackoff.failures;
+  if (!Number.isFinite(failures) || failures < 1) return 1;
+  return Math.min(FAILURE_BACKOFF_MAX_FAILURES, Math.floor(failures) + 1);
+}
+
+function attemptIdentity(cron: Cron): string {
+  return contentPart([
+    cron.schedule,
+    cron.title,
+    cron.action,
+    cron.message,
+    cron.loopId,
+    cron.destination,
+    cron.runAs,
+    cron.members,
+    cron.unattendedGrants,
+    cron.recipientConsent,
+  ]);
+}
+
+function matchesDueSlot(cron: Cron, expected: DueCron, allowDisabledOneShot = false): boolean {
+  const enabled =
+    cron.enabled ||
+    (allowDisabledOneShot && expected.schedule.everyMs === undefined && expected.schedule.cron === undefined);
+  return (
+    enabled &&
+    !cron.archived &&
+    attemptIdentity(cron) === attemptIdentity(expected) &&
+    recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) === expected.scheduledAt
+  );
 }
 
 export function createCronStore(
@@ -323,10 +363,7 @@ export function createCronStore(
       await requireAtomicUpdate(backing)(id, (cron) => {
         deferUntil = undefined;
         if (cron.activeClaimId !== claim.id || cron.lastFiredAt !== claim.claimedAt) return cron;
-        const failures =
-          cron.failureBackoff?.scheduledAt === claim.scheduledAt
-            ? Math.min(FAILURE_BACKOFF_MAX_FAILURES, cron.failureBackoff.failures + 1)
-            : 1;
+        const failures = nextFailureCount(cron, claim.scheduledAt);
         deferUntil = Math.max(cron.deferUntil ?? 0, failedAt + failureBackoffMs(failures));
         return mergeFields(cron, {
           lastFiredAt: claim.priorLastFiredAt,
@@ -337,6 +374,44 @@ export function createCronStore(
         });
       });
       return deferUntil;
+    },
+    async completeDueSlot(id, expected, at) {
+      await requireAtomicUpdate(backing)(id, (cron) => {
+        if (!matchesDueSlot(cron, expected, true)) return cron;
+        const advanceFrom = isCalendarSchedule(cron.schedule) ? expected.scheduledAt : at;
+        return mergeFields(cron, {
+          lastFiredAt: at,
+          nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
+          deferUntil: undefined,
+          failureBackoff: undefined,
+          ...(cron.schedule.everyMs === undefined && cron.schedule.cron === undefined ? { enabled: false } : {}),
+        });
+      });
+    },
+    async deferDueSlot(id, expected, until) {
+      await requireAtomicUpdate(backing)(id, (cron) =>
+        matchesDueSlot(cron, expected) ? { ...cron, deferUntil: Math.max(cron.deferUntil ?? 0, until) } : cron,
+      );
+    },
+    async failDueSlot(id, expected, failedAt) {
+      let deferUntil: number | undefined;
+      await requireAtomicUpdate(backing)(id, (cron) => {
+        deferUntil = undefined;
+        if (!matchesDueSlot(cron, expected)) return cron;
+        const failures = nextFailureCount(cron, expected.scheduledAt);
+        deferUntil = Math.max(cron.deferUntil ?? 0, failedAt + failureBackoffMs(failures));
+        return {
+          ...cron,
+          failureBackoff: { scheduledAt: expected.scheduledAt, failures },
+          deferUntil,
+        };
+      });
+      return deferUntil;
+    },
+    async disableDueSlot(id, expected) {
+      await requireAtomicUpdate(backing)(id, (cron) =>
+        matchesDueSlot(cron, expected) ? mergeFields(clearAttemptState(cron), { enabled: false }) : cron,
+      );
     },
     async markAttempted(id, at) {
       await backing.merge(id, { lastAttemptAt: at });

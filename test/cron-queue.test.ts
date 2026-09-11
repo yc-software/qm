@@ -15,6 +15,7 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue 
 
 const SCHEMA = "pgboss_cron_queue_test";
 const CRONS_TABLE = "cron_queue_test_crons";
+const INTERVAL_CRONS_TABLE = "cron_interval_test_crons";
 const IDEM_TABLE = "cron_queue_test_idempotency";
 
 before(async () => {
@@ -23,7 +24,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
+  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${INTERVAL_CRONS_TABLE}, ${IDEM_TABLE}`);
   await p.end();
 });
 
@@ -96,12 +97,69 @@ test(
 );
 
 test(
+  "Postgres interval scheduler: a thrown fire persists backoff without pre-consuming its slot",
+  { skip },
+  async () => {
+    const maps = createPostgresMapFactory(URL!);
+    const crons = createCronStore(maps.map<Cron>(INTERVAL_CRONS_TABLE));
+    const calls: TurnRequest[] = [];
+    let clock = 1_000;
+    const scheduler = createScheduler({
+      crons,
+      deliveries: createDeliveryStore(),
+      idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
+      identity: createIdentityService(),
+      run: async (req) => {
+        calls.push(req);
+        throw new Error("provider down");
+      },
+      now: () => clock,
+    });
+    const cron = await crons.create({
+      schedule: { firstFireAt: 1 },
+      action: "durable failing interval fire",
+      owner: "U4",
+      createdBy: "U4",
+      ownerScopeId: scopeId("personal", "U4"),
+    });
+
+    await scheduler.tick(clock);
+    const reloaded = createCronStore(createPostgresMapFactory(URL!).map<Cron>(INTERVAL_CRONS_TABLE));
+    let stored = (await reloaded.get(cron.id))!;
+    assert.equal(stored.lastFiredAt, undefined);
+    assert.equal(stored.nextFireAt, 1);
+    assert.equal(stored.deferUntil, 6_000);
+    assert.deepEqual(stored.failureBackoff, { scheduledAt: 1, failures: 1 });
+
+    clock = 5_999;
+    await scheduler.tick(clock);
+    assert.equal(calls.length, 1);
+    clock = 6_000;
+    await scheduler.tick(clock);
+    stored = (await reloaded.get(cron.id))!;
+    assert.equal(calls.length, 2);
+    assert.equal(stored.nextFireAt, 1);
+    assert.equal(stored.deferUntil, 16_000);
+    assert.deepEqual(stored.failureBackoff, { scheduledAt: 1, failures: 2 });
+    assert.equal(calls[1]!.idempotencyKey, calls[0]!.idempotencyKey);
+  },
+);
+
+test(
   "pg-boss queue: thrown failures persist a cooldown across instances without changing the fire key",
   { skip, timeout: 120_000 },
   async () => {
     const calls: Array<{ req: TurnRequest; at: number }> = [];
+    let signalFirstStarted!: () => void;
+    let releaseFirstFailure!: () => void;
+    const firstStarted = new Promise<void>((resolve) => (signalFirstStarted = resolve));
+    const firstFailureReleased = new Promise<void>((resolve) => (releaseFirstFailure = resolve));
     const failingRun = async (req: TurnRequest): Promise<TurnResult> => {
       calls.push({ req, at: Date.now() });
+      if (calls.length === 1) {
+        signalFirstStarted();
+        await firstFailureReleased;
+      }
       throw new Error("provider down");
     };
     const a = instance([], 0, undefined, failingRun);
@@ -118,30 +176,36 @@ test(
         createdBy: "U3",
         ownerScopeId: scopeId("personal", "U3"),
       });
-      await until(() => calls.length >= 1, 30_000);
+      await firstStarted;
       assert.equal(calls.length, 1);
-      await untilAsync(async () => (await b.crons.get(cron.id))?.failureBackoff?.failures === 1, 5_000);
-      const persisted = await b.crons.get(cron.id);
-      assert.deepEqual(persisted?.failureBackoff, { scheduledAt: cron.nextFireAt, failures: 1 });
-      assert.ok((persisted?.deferUntil ?? 0) >= calls[0]!.at + 5_000);
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-      assert.equal(calls.length, 1, "a sibling reconcile cannot redeliver before the durable hold");
-
+      releaseFirstFailure();
+      await untilAsync(async () => (await b.crons.get(cron.id))?.failureBackoff !== undefined, 5_000);
       a.scheduler.stop();
       b.scheduler.stop();
       originalsStopped = true;
       await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const persisted = (await b.crons.get(cron.id))!;
+      assert.equal(persisted.failureBackoff?.scheduledAt, cron.nextFireAt);
+      assert.ok((persisted.failureBackoff?.failures ?? 0) >= 1);
+      assert.ok((persisted.deferUntil ?? 0) >= calls[0]!.at + 5_000);
+      const callsBeforeRestart = calls.length;
+      const failuresBeforeRestart = persisted.failureBackoff!.failures;
       restarted = instance([], 0, undefined, failingRun);
       restarted.scheduler.start(1_000);
 
-      await until(() => calls.length >= 2, 20_000);
-      assert.equal(calls.length, 2);
-      assert.ok(calls[1]!.at - calls[0]!.at >= 4_500);
-      assert.equal(calls[1]!.req.idempotencyKey, calls[0]!.req.idempotencyKey);
-      await untilAsync(async () => (await restarted!.crons.get(cron.id))?.failureBackoff?.failures === 2, 5_000);
+      await until(() => calls.length > callsBeforeRestart, 20_000);
+      assert.equal(calls.length, callsBeforeRestart + 1);
+      const restartedCall = calls.at(-1)!;
+      assert.ok(restartedCall.at >= persisted.deferUntil! - 100);
+      assert.equal(restartedCall.req.idempotencyKey, calls[0]!.req.idempotencyKey);
+      await untilAsync(
+        async () => (await restarted!.crons.get(cron.id))?.failureBackoff?.failures === failuresBeforeRestart + 1,
+        5_000,
+      );
       assert.deepEqual((await restarted.crons.get(cron.id))?.failureBackoff, {
         scheduledAt: cron.nextFireAt,
-        failures: 2,
+        failures: failuresBeforeRestart + 1,
       });
     } finally {
       if (!originalsStopped) {

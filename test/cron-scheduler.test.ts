@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { runNowSettled } from "./support/settle.ts";
-import { createCronStore } from "../src/cron/cron-store.ts";
+import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -1339,6 +1339,94 @@ test("interval mode backs off thrown failures without delaying healthy crons", a
   assert.deepEqual(
     calls.filter((call) => call.text.includes("broken task")).map((call) => call.idempotencyKey),
     Array(8).fill(`cron:${broken.id}:1000`),
+  );
+});
+
+test("an in-flight interval fire leaves its durable slot recoverable and overlapping ticks do not duplicate it", async () => {
+  const backing = createMemoryMap<Cron>();
+  const crons = createCronStore(backing);
+  let started!: () => void;
+  let finish!: () => void;
+  const runStarted = new Promise<void>((resolve) => (started = resolve));
+  const runFinished = new Promise<void>((resolve) => (finish = resolve));
+  let calls = 0;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => {
+      calls++;
+      started();
+      await runFinished;
+      return { status: "ok", reply: "done" };
+    },
+    now: () => 1_000,
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1_000 },
+    action: "slow task",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  const firstTick = scheduler.tick(1_000);
+  await runStarted;
+  await scheduler.tick(1_001);
+  assert.equal(calls, 1);
+  const reloaded = createCronStore(backing);
+  const stored = (await reloaded.get(cron.id))!;
+  assert.equal(stored.lastFiredAt, undefined);
+  assert.equal(stored.nextFireAt, 1_000);
+  assert.deepEqual(
+    (await reloaded.due(1_001)).map((due) => due.id),
+    [cron.id],
+  );
+
+  finish();
+  await firstTick;
+  const completed = (await reloaded.get(cron.id))!;
+  assert.equal(completed.lastFiredAt, 1_000);
+  assert.equal(completed.enabled, false);
+});
+
+test("a failed interval backoff write leaves the original slot recoverable after reload", async () => {
+  const backing = createMemoryMap<Cron>();
+  const baseCrons = createCronStore(backing);
+  const crons: CronStore = {
+    ...baseCrons,
+    async failDueSlot() {
+      throw new Error("backoff store unavailable");
+    },
+  };
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => {
+      throw new Error("provider down");
+    },
+    now: () => 1_000,
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1_000 },
+    action: "failing task",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  await scheduler.tick(1_000);
+  const reloaded = createCronStore(backing);
+  const stored = (await reloaded.get(cron.id))!;
+  assert.equal(stored.lastFiredAt, undefined);
+  assert.equal(stored.nextFireAt, 1_000);
+  assert.equal(stored.failureBackoff, undefined);
+  assert.deepEqual(
+    (await reloaded.due(1_001)).map((due) => due.id),
+    [cron.id],
   );
 });
 

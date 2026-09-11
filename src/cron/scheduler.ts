@@ -8,7 +8,7 @@ import {
   type TurnResult,
 } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import { isDeferred, type CronSlotClaim, type CronStore } from "./cron-store.ts";
+import { isDeferred, type CronStore, type DueCron } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
@@ -320,6 +320,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
+  const intervalInFlight = new Set<string>();
   const fireDue = async (t: number): Promise<void> => {
     const due = await deps.crons.due(t);
     let batch = due;
@@ -338,31 +339,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
     }
     for (const cron of batch) {
-      let claim: CronSlotClaim | null = null;
+      const fireKey = `cron:${cron.id}:${cron.scheduledAt}`;
+      if (intervalInFlight.has(fireKey)) continue;
+      intervalInFlight.add(fireKey);
+      let admitted: DueCron | null = null;
       try {
-        claim = await deps.crons.claimSlot(cron.id, cron.scheduledAt, t);
-        if (!claim) continue;
-        const { authzFailed, deferUntil } = await fire(
-          claim.cron,
-          t,
-          `cron:${cron.id}:${cron.scheduledAt}`,
-          cron.scheduledAt,
-        );
-        if (authzFailed || deferUntil !== undefined) {
-          await deps.crons.releaseSlot(cron.id, claim, deferUntil);
-          if (authzFailed) await deps.crons.setEnabled(cron.id, false);
-        } else {
-          await deps.crons.completeSlot(cron.id, claim);
-        }
+        const current = await deps.crons.get(cron.id);
+        if (
+          !current ||
+          current.archived ||
+          !current.enabled ||
+          isDeferred(current, t) ||
+          nextSlot(current) !== cron.scheduledAt
+        )
+          continue;
+        admitted = { ...current, scheduledAt: cron.scheduledAt };
+        const { authzFailed, deferUntil } = await fire(admitted, t, fireKey, cron.scheduledAt);
+        if (authzFailed) await deps.crons.disableDueSlot(cron.id, admitted);
+        else if (deferUntil !== undefined) await deps.crons.deferDueSlot(cron.id, admitted, deferUntil);
+        else await deps.crons.completeDueSlot(cron.id, admitted, t);
       } catch (e) {
         console.error("[scheduler] fire failed:", errMessage(e));
-        if (claim) {
+        if (admitted) {
           try {
-            await deps.crons.failSlot(cron.id, claim, now());
+            await deps.crons.failDueSlot(cron.id, admitted, now());
           } catch (transitionError) {
             console.error("[scheduler] failure backoff failed:", errMessage(transitionError));
           }
         }
+      } finally {
+        intervalInFlight.delete(fireKey);
       }
     }
   };
