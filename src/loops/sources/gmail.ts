@@ -82,7 +82,7 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export interface MimeAttachment {
+interface MimeAttachment {
   name: string;
   mimetype: string;
   bytes: Uint8Array;

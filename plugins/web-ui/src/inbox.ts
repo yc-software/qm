@@ -31,7 +31,7 @@ import { brandName, icon, initials, relTime, slackMark, workingWave } from "./ui
 
 export type InboxSource = "gmail" | "slack";
 
-export interface InboxAttachment {
+interface InboxAttachment {
   artifactId: string;
   name: string;
   mimetype: string;

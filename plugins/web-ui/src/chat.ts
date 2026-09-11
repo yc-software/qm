@@ -1288,8 +1288,8 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
-            ${ctx.composer.composerForm(agent, html`${glanceTier ? nothing : liveWorkStatus(agent)} ${backgroundActivityStrip()}`)}
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${liveWorkStatus(agent)}
+            ${ctx.composer.composerForm(agent, backgroundActivityStrip())}
           </div>
         </div>
       `,
