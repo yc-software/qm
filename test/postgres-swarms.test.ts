@@ -12,6 +12,82 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
 
+test(
+  "Postgres delayed ready acknowledgment cannot roll back a delivered worker across phase locks",
+  { skip },
+  async (context) => {
+    const factory = createPostgresMapFactory(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const backing = factory.map<SwarmStorage>("swarms");
+    const fixture = await swarmFixture({
+      store: createSwarmStore(backing),
+      sessions,
+      runs: runtime.runs,
+      lock: createPostgresAdvisoryLock(factory.pool),
+    });
+    const second = createSwarmService({
+      ...fixture.serviceOptions,
+      lock: createPostgresAdvisoryLock(factory.pool),
+    });
+    const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
+    const update = fixture.store.update.bind(fixture.store);
+    const readyWritten = Promise.withResolvers<void>();
+    const acknowledgment = Promise.withResolvers<void>();
+    const resourceLock = `swarm-reconcile:${fixture.root.id}`;
+    let gated = false;
+    fixture.store.update = async (id, mutate) => {
+      const updated = await update(id, mutate);
+      if (!gated && updated.members.find((member) => member.id === worker!.id)?.state === "ready") {
+        gated = true;
+        readyWritten.resolve();
+        await acknowledgment.promise;
+      }
+      return updated;
+    };
+    context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+    try {
+      const firstSweep = fixture.service.sweep();
+      await readyWritten.promise;
+      assert.equal(await fixture.serviceOptions.lock.tryWithLock!(resourceLock, async () => true), null);
+      await second.sweep();
+      const delivered = (await fixture.store.get(fixture.root.id))!;
+      const notification = delivered.messages[0]!.notifications[worker!.id]!;
+      assert.equal(notification.state, "queued");
+      const run = await fixture.runs.claimById(notification.runId!, "delayed-ready-worker", 60_000);
+      assert.ok(run);
+      assert.ok(await second.binding({ ...run.request, runId: run.id }));
+      context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
+      await firstSweep;
+      assert.equal(await fixture.serviceOptions.lock.tryWithLock!(resourceLock, async () => true), null);
+      acknowledgment.resolve();
+      context.mock.timers.reset();
+      await fixture.serviceOptions.lock.withLock(resourceLock, async () => undefined);
+      await second.sweep();
+      const final = (await fixture.store.get(fixture.root.id))!;
+      const member = final.members.find((peer) => peer.id === worker!.id)!;
+      assert.equal(member.state, "ready");
+      assert.equal(member.cleanupPending, undefined);
+      assert.equal(member.error, undefined);
+      assert.equal((await fixture.records.get(worker!.id))!.state, "ready");
+      assert.ok(await sessions.get(member.sessionId!));
+      assert.equal((await runtime.runs.get(run.id))!.status, "running");
+      assert.deepEqual(final.messages[0]!.notifications[worker!.id], notification);
+      assert.ok(await second.binding({ ...run.request, runId: run.id }));
+    } finally {
+      acknowledgment.resolve();
+      context.mock.timers.reset();
+      await fixture.serviceOptions.lock.withLock(resourceLock, async () => undefined);
+      await backing.delete(fixture.root.id);
+      const pool = await factory.pool.pool();
+      const clients = await Promise.all(Array.from({ length: pool.idleCount }, () => pool.connect()));
+      for (const client of clients) client.release(true);
+      await runtime.close();
+      await factory.pool.close();
+    }
+  },
+);
+
 test("Postgres pending selection retains one live query across sweep timeouts", { skip }, async (context) => {
   const factory = createPostgresMapFactory(databaseUrl!);
   const backing = factory.map<SwarmStorage>("swarms");
