@@ -66,7 +66,7 @@ Each worker gets a dedicated **blank** Modal computer owned by the parent's
 authorization scope. No parent files are copied. Data access, keychain policy,
 memory resolution, and approval grants continue through QM's existing scope and
 identity rules, with unattended rather than human-attended permissions. Session
-grants are referenced from the root, not copied. A computer's backing storage key
+grants belong only to the session that received them, not its workers. A computer's backing storage key
 is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.
 
@@ -170,9 +170,11 @@ Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
 
-Each outbox sweep selects at most 16 pending swarms and reconciles at most four
-concurrently, advancing through pending pages so failed cleanup cannot monopolize
-the batch. Each swarm has a 30-second reconciliation deadline and each provisioning
+Each outbox sweep selects at most 16 pending swarms and reconciles resources for at
+most four concurrently, advancing through pending pages so failed cleanup cannot
+monopolize the batch. Notification delivery uses a separate four-slot pool and
+per-swarm lock, so ready recipients can receive work even when all resource slots
+are occupied. Each phase has a 30-second reconciliation deadline and each provisioning
 attempt has a 10-second deadline. A timed-out worker fails without receiving work;
 its private-resource cleanup remains durable and retries on later sweeps, including
 after a late provider completion. The explicitly shared forum is never retired by
@@ -181,7 +183,9 @@ until their side effects finish; timeout never permits overlapping cleanup or
 unbounded provider calls. A later process can retire stale provisioning after the
 original process releases its locks or exits. Providers that never settle leave
 cleanup pending rather than being treated as successfully cleaned up; four stuck
-operations exhaust this instance's bounded capacity until a slot is released.
+resource operations exhaust only this instance's resource capacity until a slot is
+released. Pending selection remains single-flight until its underlying database
+query settles, even when a sweep reports a selection timeout.
 
 ## Enforced limits
 
