@@ -101,6 +101,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         expectedChecksum: "8594c46c02ee90d43292a4c083fedea6c72d93b5f414f75e9e20d2db51b1b595",
         statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS turn_user_seq BIGINT`],
       },
+      {
+        id: "runs/store/0004",
+        statements: [`ALTER TABLE runs ADD COLUMN IF NOT EXISTS retry_after BIGINT NOT NULL DEFAULT 0`],
+      },
     ],
     [
       {
@@ -151,7 +155,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     run: Run,
     error: string,
     retry: boolean,
-    opts?: { ifExpiredAt?: number; countsAsError?: boolean },
+    opts?: { ifExpiredAt?: number; countsAsError?: boolean; retryAfterMs?: number },
   ): Promise<{ requeued: boolean; applied: boolean }> {
     const ifExpiredAt = opts?.ifExpiredAt ?? null;
     const countsAsError = opts?.countsAsError ?? false;
@@ -160,9 +164,9 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     if (retry && errorAttemptsAfter < run.maxAttempts && !overClaimed) {
       const { rowCount } = await q(
         `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
-           error_attempts=error_attempts+$4
+           error_attempts=error_attempts+$4, retry_after=$5
          WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3)`,
-        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0],
+        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0)],
       );
       return { requeued: rowCount > 0, applied: rowCount > 0 };
     }
@@ -211,7 +215,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
              SELECT id FROM runs WHERE status='pending'
-               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
+               AND retry_after <= $4
+               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND retry_after > $4))
              ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
           [token, now + ttlMs, workerId, now],
@@ -232,7 +237,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
              SELECT id FROM runs WHERE id=$5 AND status='pending'
-               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
+               AND retry_after <= $4
+               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND retry_after > $4))
              FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
           [token, now + ttlMs, workerId, now, runId],
@@ -277,7 +283,11 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async fail(runId, leaseToken, error, opts): Promise<{ requeued: boolean }> {
       const run = await getRun(runId);
       if (!run || run.leaseToken !== leaseToken) return { requeued: false };
-      return { requeued: (await retire(run, error, opts?.retry !== false, { countsAsError: true })).requeued };
+      return {
+        requeued: (
+          await retire(run, error, opts?.retry !== false, { countsAsError: true, retryAfterMs: opts?.retryAfterMs })
+        ).requeued,
+      };
     },
 
     async noteTurnUserSeq(runId: string, seq: number): Promise<boolean> {
