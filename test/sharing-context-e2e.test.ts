@@ -366,7 +366,7 @@ test("sharing e2e: the execution capability excludes carried memories in both di
   assert.equal(dmClaims.memory.read.includes("channel:C1"), false);
 });
 
-test("sharing e2e: complete notebooks retain provenance without truncating late facts", async (t) => {
+test("sharing e2e: bounded recall retains provenance and omitted facts remain searchable", async (t) => {
   const b = await fixture(t);
   await b.memory.capture(
     "personal:U1",
@@ -376,7 +376,13 @@ test("sharing e2e: complete notebooks retain provenance without truncating late 
   );
   await b.memory.capture("channel:C1", ["ROOM_FACT_END"], Date.now(), "U1");
   const p = await b.turn("!sysprompt", true);
-  assert.match(p, /### personal:U1[\s\S]*PERSONAL_FACT_119/);
+  assert.match(p, /### personal:U1[\s\S]*PERSONAL_FACT_/);
+  const memory = p.split("## What you remember")[1]!.split("</environment>")[0]!;
+  const packed = memory.slice(memory.indexOf("### ")).trim();
+  assert.ok(packed.length <= 6000);
+  assert.ok(Array.from({ length: 120 }, (_, i) => `PERSONAL_FACT_${i} `).some((fact) => !packed.includes(fact)));
   assert.match(p, /### channel:C1[\s\S]*ROOM_FACT_END/);
   assert.match(await b.turn("!memorysearch PERSONAL_FACT_119", true), /\[personal:U1\].*PERSONAL_FACT_119/);
+  const full = await b.turn("!memoryread personal:U1", true);
+  assert.match(full, /### personal:U1[\s\S]*PERSONAL_FACT_0[\s\S]*PERSONAL_FACT_119/);
 });
