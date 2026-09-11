@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
@@ -413,6 +414,97 @@ test("governance credential editor previews effective capability and uses an in-
   assert.match(html, /matches multiple people/);
   assert.match(html, /reviewGovernanceChange/);
   assert.doesNotMatch(html, /confirm\("Delete shared credential/);
+});
+
+test("shared credential projects include canonical channels and groups with directory labels", () => {
+  const nodes = new Map<
+    string,
+    {
+      value: string;
+      checked: boolean;
+      textContent: string;
+      hidden?: boolean;
+      children: unknown[];
+      append: (...children: unknown[]) => void;
+      appendChild: (child: unknown) => void;
+      contains: () => boolean;
+    }
+  >();
+  const node = () => {
+    const children: unknown[] = [];
+    return {
+      value: "",
+      checked: false,
+      textContent: "",
+      children,
+      append: (...items: unknown[]) => {
+        children.push(...items);
+      },
+      appendChild: (item: unknown) => {
+        children.push(item);
+      },
+      contains: () => false,
+    };
+  };
+  for (const id of ["sc-picker-list", "sc-picker-search", "sc-share-org"]) nodes.set(id, node());
+  const directory = [
+    { scopeId: "channel:C1", label: "Engineering" },
+    { scopeId: "group:G1", label: "Website" },
+    { scopeId: "team:T1", label: "Team" },
+  ];
+  const functions = [
+    html.slice(html.indexOf("      function drawScPicker()"), html.indexOf("      function initScPicker()")),
+    html.slice(
+      html.indexOf("      function serviceCredentialPrincipalLabel("),
+      html.indexOf("      function renderServiceCredentialCapability()"),
+    ),
+    html.slice(
+      html.indexOf("      function validateServiceCredential("),
+      html.indexOf("      async function deleteSc("),
+    ),
+  ].join("\n");
+  const context = {
+    document: { createElement: node, activeElement: nodes.get("sc-picker-search") },
+    $: (id: string) => nodes.get(id),
+    scope: "org:default-org",
+    scopeDir: directory,
+    dirLabel: (id: string) => directory.find((item) => item.scopeId === id)?.label,
+    scSelectedIds: () => [],
+    serviceCredDirectory: [],
+    serviceCredentialResolutionError: "",
+  };
+  const api = runInNewContext(
+    functions + "\n({drawScPicker, serviceCredentialPrincipalLabel, validateServiceCredential})",
+    context,
+  );
+  api.drawScPicker();
+  const rendered = JSON.stringify(nodes.get("sc-picker-list")?.children);
+  assert.match(rendered, /Projects/);
+  assert.match(rendered, /Engineering.*channel:C1/);
+  assert.match(rendered, /Website.*group:G1/);
+  assert.doesNotMatch(rendered, /team:T1/);
+  assert.match(api.serviceCredentialPrincipalLabel("group:G1"), /Website.*group:G1/);
+  const body = {
+    slug: "test",
+    name: "Test",
+    host: "h.example",
+    delivery: "broker",
+    grantees: ["group:G1", "channel:C1"],
+  };
+  assert.equal(api.validateServiceCredential(body), "");
+  for (const grantee of [
+    "group:",
+    "group:group:G1",
+    "group:G1\u0000",
+    "group:G1\n",
+    "group: G1",
+    "personal:channel:C1",
+    "org:other-org",
+  ]) {
+    assert.notEqual(api.validateServiceCredential({ ...body, grantees: [grantee] }), "", grantee);
+  }
+  context.serviceCredentialResolutionError = "Ambiguous person";
+  assert.equal(api.validateServiceCredential(body), "Ambiguous person");
 });
 
 test("governance SOUL workbench shows draft diff, history, and conflict-safe restore", () => {

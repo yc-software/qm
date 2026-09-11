@@ -1160,14 +1160,17 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const badGrantee = desired?.find((g) => {
         const parsed = parseScopeId(g);
         return (
-          !["org", "personal", "team", "channel"].includes(parsed.kind ?? "") ||
+          !["org", "personal", "team", "channel", "group"].includes(parsed.kind ?? "") ||
           !parsed.ref ||
           parsed.ref.includes(":") ||
+          /[\s\p{Cc}]/u.test(parsed.ref) ||
           (parsed.kind === "org" && g !== scope)
         );
       });
       if (badGrantee !== undefined)
-        return { error: `grantee must be this org or a valid personal:/team:/channel: scope (got ${badGrantee})` };
+        return {
+          error: `grantee must be this org or a valid personal:/team:/channel:/group: scope (got ${badGrantee})`,
+        };
       if (b.deployments !== undefined && typeof b.deployments !== "boolean")
         return { error: "deployments must be true or false" };
       const injectionError = credentialInjectionError(b.injection);

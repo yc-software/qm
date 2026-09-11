@@ -8704,23 +8704,23 @@
           more.textContent = "…" + (candidates.length - 30) + " more — keep typing";
           list.appendChild(more);
         }
-        const channels = (scopeDir || []).filter((s) => {
-          if (!s.scopeId.startsWith("channel:") || selSet.has(s.scopeId)) return false;
+        const projects = (scopeDir || []).filter((s) => {
+          if (!/^(channel|group):/.test(s.scopeId) || selSet.has(s.scopeId)) return false;
           if (!q) return true;
           return s.scopeId.toLowerCase().includes(q) || (s.label || "").toLowerCase().includes(q);
         });
-        if (channels.length) {
+        if (projects.length) {
           const h = document.createElement("div");
           h.className = "sc-picker-group";
-          h.textContent = "Channels";
+          h.textContent = "Projects";
           list.appendChild(h);
-          channels.slice(0, 15).forEach((s) => {
-            list.appendChild(item(s.scopeId, s.label ? "#" + s.label + " (" + s.scopeId + ")" : s.scopeId, false));
+          projects.slice(0, 15).forEach((s) => {
+            list.appendChild(item(s.scopeId, serviceCredentialPrincipalLabel(s.scopeId), false));
           });
-          if (channels.length > 15) {
+          if (projects.length > 15) {
             const more = document.createElement("div");
             more.className = "sc-picker-more";
-            more.textContent = "…" + (channels.length - 15) + " more channels — keep typing";
+            more.textContent = "…" + (projects.length - 15) + " more projects — keep typing";
             list.appendChild(more);
           }
         }
@@ -8780,9 +8780,9 @@
       }
       function serviceCredentialPrincipalLabel(grantee) {
         if (grantee.startsWith("org:")) return "Everyone in this organization";
-        if (grantee.startsWith("channel:")) {
+        if (/^(channel|group):/.test(grantee)) {
           const label = dirLabel(grantee);
-          return label ? "#" + label + " (" + grantee + ")" : grantee;
+          return label ? (grantee.startsWith("channel:") ? "#" : "") + label + " (" + grantee + ")" : grantee;
         }
         const id = grantee.startsWith("personal:") ? grantee.slice("personal:".length) : grantee;
         const member = serviceCredDirectory.find(
@@ -8842,13 +8842,9 @@
             chip.className = "identity-chip";
             const label = serviceCredentialPrincipalLabel(grantee);
             chip.textContent = label;
-            if (/^group:/.test(grantee)) {
-              const unsupported = document.createElement("small");
-              unsupported.textContent = "unsupported · remove before saving";
-              chip.appendChild(unsupported);
-            } else if (/^channel:/.test(grantee)) {
+            if (/^(channel|group):/.test(grantee)) {
               const tag = document.createElement("small");
-              tag.textContent = "channel";
+              tag.textContent = "project";
               chip.appendChild(tag);
             } else if (label === grantee) {
               const unresolved = document.createElement("small");
@@ -8914,16 +8910,18 @@
           if (body.envKey.startsWith("AGENT_")) return "AGENT_* env vars are reserved for the platform.";
         } else if (!body.host) return "Host is required.";
         if (body.delivery !== "env" && !$("sc-share-org").checked && !body.grantees.length)
-          return "Add at least one person or choose org-wide access.";
+          return "Add at least one person or project, or choose org-wide access.";
         if (body.delivery !== "env" && serviceCredentialResolutionError) return serviceCredentialResolutionError;
         const unsupported = body.grantees.find(
-          (grantee) => /^group:/.test(grantee) || /^personal:[^,]*:/.test(grantee),
+          (grantee) =>
+            !/^(personal|team|channel|group|org):[^:\s\p{Cc}]+$/u.test(grantee) ||
+            (grantee.startsWith("org:") && grantee !== scope),
         );
         if (unsupported)
           return (
             "Remove unsupported legacy grant “" +
             unsupported +
-            "” before saving. Shared credentials support people, teams, channels, or the organization."
+            "” before saving. Shared credentials support people, teams, projects, or the organization."
           );
         return "";
       }
