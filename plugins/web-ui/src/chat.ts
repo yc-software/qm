@@ -1294,9 +1294,13 @@ export function createChatSurface(
       chatState.host,
     );
     decorateStreamingTail();
-    requestAnimationFrame(() => decorateTextCodeBlocks(chatState.host));
-    ctx.composer.resizeComposer();
-    scrollTranscript(opts.forceScroll);
+    const host = chatState.host;
+    requestAnimationFrame(() => {
+      if (chatState.host !== host || chatState.agent !== agent || !host.isConnected) return;
+      decorateTextCodeBlocks(host);
+      ctx.composer.resizeComposer();
+      scrollTranscript(opts.forceScroll);
+    });
     postCurrentPaneState();
   }
 
