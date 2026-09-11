@@ -139,8 +139,12 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     sandboxId: sbx.sandboxId,
     async runCommand(command, runOpts): Promise<ModalCommandResult> {
       const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
+      // The Modal SDK only accepts exec timeouts in whole seconds; round up so callers
+      // passing arbitrary millisecond deadlines (e.g. snapshot clocks) never trip its
+      // "timeoutMs must be a multiple of 1000ms" rejection.
+      const execTimeoutMs = Math.ceil((timeoutMs + 30_000) / 1000) * 1000;
       try {
-        const p = await sbx.exec(["sh", "-c", command], { mode: "text", timeoutMs: timeoutMs + 30_000 });
+        const p = await sbx.exec(["sh", "-c", command], { mode: "text", timeoutMs: execTimeoutMs });
         const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
         return { stdout, stderr, exitCode };
       } catch (err) {
