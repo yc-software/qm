@@ -196,6 +196,18 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
       "the omitted key is gone from every row",
     );
     assert.deepEqual(mine[0]!.nested, { n: 1 }, "nested fields survive the projection");
+    for (const limit of [0, 1, 2]) {
+      const query = { limit, afterId: "sel-a", where: { field: "owner" as const, anyOfFold: ["u7"] } };
+      assert.deepEqual(await pgMap.select(query), await memMap.select(query));
+      assert.deepEqual(
+        (await pgMap.select(query)).map((row) => row.name),
+        limit === 0 ? [] : ["sel-b"],
+      );
+    }
+    assert.deepEqual(
+      (await pgMap.select({ limit: 1, afterId: "sel-b" })).map((row) => row.name),
+      ["sel-c"],
+    );
 
     const email = await pgMap.select({ where: { field: "owner", anyOfFold: ["SOMEONE@x.com"] } });
     assert.deepEqual(email, await memMap.select({ where: { field: "owner", anyOfFold: ["SOMEONE@x.com"] } }));

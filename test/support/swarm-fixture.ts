@@ -97,6 +97,7 @@ export async function swarmFixture(
     deliveryTarget: "private-dm",
   };
   const { run } = await runs.enqueue({ sessionId: root.threadRef, request: template });
+  await runs.claimById(run.id, "swarm-fixture", 60_000);
   const caller: SwarmCaller = {
     kind: "agent",
     claims: {
@@ -116,6 +117,8 @@ export async function swarmFixture(
     const notification = swarm.messages
       .flatMap((message) => Object.entries(message.notifications))
       .find(([recipient]) => recipient === id)![1];
+    const run = await runs.get(notification.runId!);
+    if (run?.status === "pending") await runs.claimById(run.id, "swarm-fixture-worker", 60_000);
     return {
       kind: "agent",
       claims: {

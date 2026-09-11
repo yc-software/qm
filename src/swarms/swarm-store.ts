@@ -12,6 +12,10 @@ export const SWARM_LIMITS = {
   waitMs: 10_000,
   turnMs: 120_000,
   lifetimeMs: 60 * 60_000,
+  sweepBatch: 16,
+  sweepConcurrency: 4,
+  reconcileMs: 30_000,
+  provisionMs: 10_000,
 } as const;
 
 export interface SwarmMember {
@@ -64,7 +68,7 @@ export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
   create(swarm: Swarm): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void): Promise<Swarm>;
-  pending(): Promise<Swarm[]>;
+  pending(afterId?: string): Promise<Swarm[]>;
 }
 
 export interface SwarmStorage extends Omit<Swarm, "members" | "messages"> {
@@ -113,8 +117,14 @@ export function createSwarmStore(backing: DurableMap<SwarmStorage>): SwarmStore 
       if (!updated) throw new Error("swarm not found");
       return decode(updated);
     },
-    async pending() {
-      return (await backing.select({ where: { field: "pending", anyOfFold: ["true"] } })).map(decode);
+    async pending(afterId) {
+      return (
+        await backing.select({
+          where: { field: "pending", anyOfFold: ["true"] },
+          limit: SWARM_LIMITS.sweepBatch,
+          afterId,
+        })
+      ).map(decode);
     },
   };
 }

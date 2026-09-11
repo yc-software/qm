@@ -157,10 +157,31 @@ with different content fails. Context updates are simple replacements.
 Human callers use `GET` and `POST /v1/sessions/:id/swarm` through the existing
 source-authenticated API with a signed portal identity. The caller must already
 be allowed to view that session and belong to the swarm scope. Request actor
-fields cannot override the signed identity. Bodies and read parameters match the
+and provenance selector fields are rejected rather than ignored. Arbitrary keys
+inside `context` remain permitted. Bodies and read parameters match the
 agent API. Initializing a root from this endpoint additionally requires a `runId`
 belonging to that session and actor. Human-origin actions are separately recorded;
 their asynchronous notifications still run unattended.
+
+Agent operations require the signed run to be running with an unexpired execution
+lease. Completed, failed, queued, and expired runs cannot authorize agent swarm
+operations. Authenticated human initialization may reference a historical run.
+Worker sessions never inherit the root session's command or security-screen
+approval grants; a worker must obtain its own approval. Frozen swarm roster checks
+apply to swarm notifications, not ordinary human follow-ups in the root session.
+
+Each outbox sweep selects at most 16 pending swarms and reconciles at most four
+concurrently, advancing through pending pages so failed cleanup cannot monopolize
+the batch. Each swarm has a 30-second reconciliation deadline and each provisioning
+attempt has a 10-second deadline. A timed-out worker fails without receiving work;
+its private-resource cleanup remains durable and retries on later sweeps, including
+after a late provider completion. The explicitly shared forum is never retired by
+worker cleanup. Unsettled operations retain their execution slot and swarm lock
+until their side effects finish; timeout never permits overlapping cleanup or
+unbounded provider calls. A later process can retire stale provisioning after the
+original process releases its locks or exits. Providers that never settle leave
+cleanup pending rather than being treated as successfully cleaned up; four stuck
+operations exhaust this instance's bounded capacity until a slot is released.
 
 ## Enforced limits
 

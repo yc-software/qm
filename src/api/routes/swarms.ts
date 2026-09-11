@@ -32,6 +32,14 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 200, await app.swarms.inspect(caller));
     }
     if (!isObj(body)) throw new Error("expected an object");
+    const allowed = new Set([
+      "action",
+      ...(caller.kind === "human" ? ["runId"] : []),
+      ...(body.action === "context" ? ["context"] : ["requestId", "text"]),
+      ...(body.action === "spawn" ? ["count", "context", "contexts", "forumSandboxId"] : []),
+      ...(body.action === "send" ? ["audience", "replyTo", "notify"] : []),
+    ]);
+    if (Object.keys(body).some((key) => !allowed.has(key))) throw new Error("unsupported swarm request field");
     if (body.action === "context") {
       if (!("context" in body)) throw new Error("context required");
       return sendJson(res, 200, await app.swarms.context(caller, body.context));
