@@ -3196,3 +3196,14 @@ test("a queued runtime change cannot mutate after cancellation while draining to
   assert.equal(selected, false);
   assert.equal(ref.runtimeHandoff, undefined);
 });
+
+test("surface messages use Markdown and only Slack tools teach Slack mentions", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  for (const name of ["web", "slack", "telegram"]) {
+    const tool = surfaceTool(ref, name);
+    const text = (tool.parameters as { properties: { text: { description: string } } }).properties.text.description;
+    assert.match(text, /Use Markdown, including \[label\]\(url\) links/);
+    if (name === "slack") assert.match(text, /<@U…>/);
+    else assert.doesNotMatch(text, /Slack|<@U…>|<!subteam/);
+  }
+});

@@ -978,7 +978,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           userEmail: actor.id.includes("@") ? actor.id : undefined,
           surfaceLabel: isWeb ? `the ${botName} web app` : "Slack",
           slack: isSlack,
-          web: isWeb,
         };
       }
       let modeFrame = applyPromptVars(frameMd, frameVars);

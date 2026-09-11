@@ -14577,7 +14577,7 @@
           drow.className = "who";
           const dlabel = document.createElement("span");
           dlabel.className = "entry-label important";
-          dlabel.textContent = delivery.shadow ? "Shadow delivery" : "Slack delivery";
+          dlabel.textContent = deliveryLabel(delivery);
           drow.appendChild(dlabel);
           if (delivery.shadow) {
             const sb = document.createElement("span");
@@ -14586,7 +14586,7 @@
             sb.textContent = "not sent";
             drow.appendChild(sb);
           }
-          drow.appendChild(badge(delivery.destination?.type === "principal" ? "Slack DM" : "Slack", "info"));
+          drow.appendChild(badge(deliverySurfaceLabel(delivery), "info"));
           const mirror = slackMirrorRef(delivery);
           if (mirror) {
             const ml = navLink("View in Slack mirror ↗", { view: "slack", container: mirror.container, ts: mirror.ts });
@@ -16136,6 +16136,19 @@
         }
       }
 
+      function deliverySurfaceLabel(event) {
+        const type = event?.destination?.type;
+        if (type === "principal") return "Slack DM";
+        if (type === "slack") return "Slack";
+        if (type === "web") return "Web";
+        return type || "Unknown surface";
+      }
+
+      function deliveryLabel(event) {
+        if (event.shadow) return "Shadow delivery";
+        return `${deliverySurfaceLabel(event)} delivery`;
+      }
+
       function slackMirrorRef(event) {
         const d = event?.destination || {};
         if (d.type !== "slack" || !d.editRef || typeof d.target !== "string" || !d.target) return null;
@@ -17027,19 +17040,16 @@
             const who = document.createElement("div");
             who.className = "who";
             const outbound = event.type === "outbound_delivery";
-            const slackDelivery = outbound || event.type === "principal_delivery";
+            const isDelivery = outbound || event.type === "principal_delivery";
             const label = document.createElement("span");
             label.className = "entry-label important";
-            let deliveryLabel = "Delivery event";
-            if (event.shadow) deliveryLabel = "Shadow delivery";
-            else if (slackDelivery) deliveryLabel = "Slack delivery";
-            label.textContent = deliveryLabel;
+            label.textContent = event.shadow || isDelivery ? deliveryLabel(event) : "Delivery event";
             const when = document.createElement("span");
             when.className = "when";
             let deliveryState = "delivery";
             if (event.shadow) deliveryState = "shadow";
             else if (event.expiredAt) deliveryState = "dropped";
-            else if (slackDelivery) deliveryState = "delivered";
+            else if (isDelivery) deliveryState = "delivered";
             when.textContent = `${deliveryState} · ${fmtTime(event.createdAt)}`;
             const text = event.text || "";
             who.append(label);
@@ -17056,8 +17066,7 @@
               xb.textContent = "never sent";
               who.append(xb);
             }
-            if (slackDelivery)
-              who.appendChild(badge(event.destination?.type === "principal" ? "Slack DM" : "Slack", "info"));
+            if (isDelivery) who.appendChild(badge(deliverySurfaceLabel(event), "info"));
             const provenanceLink = originNodeForDeliveryEvent(event);
             if (!outbound && provenanceLink) who.appendChild(provenanceLink);
             const originLink = cronLinkForDeliveryEvent(event);

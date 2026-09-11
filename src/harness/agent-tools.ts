@@ -2693,7 +2693,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       text: Type.Optional(
         Type.String({
           description:
-            "post/reach: the message to send (the surface renders it). To @-mention, use real Slack syntax — `<@U…>` for a person, `<!subteam^S…>` for a user group (both ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping. edit: the new message content.",
+            "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
+            (surfaceName === "slack"
+              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
+              : ""),
         }),
       ),
       channel: Type.Optional(
