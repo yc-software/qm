@@ -15,6 +15,7 @@ import {
 } from "./harness.ts";
 import { renderGallery } from "./gallery.ts";
 import { scenarios } from "./scenarios.ts";
+import { sandboxProviderScenarios } from "./scenarios-sandbox-providers.ts";
 import { startEventPump, TwinAdmin } from "./arga.ts";
 
 const OUT_DIR = path.join(import.meta.dirname, "out");
@@ -162,10 +163,11 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
   const filter = raw === "all" ? undefined : raw;
   const skipped: ScenarioResult[] = [];
   const selected: Scenario[] = [];
-  for (const s of scenarios) {
+  const allProviders = process.env.LIVE_E2E_SANDBOX_PROVIDERS === "all";
+  for (const s of [...scenarios, ...(allProviders ? sandboxProviderScenarios : [])]) {
     if (filter) {
       const byTag = filter.startsWith("@") && (s.tags ?? []).includes(filter.slice(1));
-      if (!byTag && !s.name.includes(filter)) continue;
+      if (!byTag && !s.name.includes(filter) && !(allProviders && s.tags?.includes("provider-execution"))) continue;
     }
     const tags = s.tags ?? [];
     if (tags.includes("sandbox") && !env.sandbox) {
@@ -393,6 +395,12 @@ async function runCatalog(env: Env): Promise<void> {
   await warmUp(env, releaseGate);
   const picked = selectScenarios(env);
   const { selected, skipped } = applyShard(picked.selected, picked.skipped);
+  if (releaseGate && process.env.LIVE_E2E_SANDBOX_PROVIDERS === "all") {
+    for (const provider of sandboxProviderScenarios) {
+      if (!selected.some((scenario) => scenario.name === provider.name))
+        throw new Error(`required provider scenario missing from release gate: ${provider.name}`);
+    }
+  }
   if (releaseGate && selected.length === 0) throw new Error("release gate selected no scenarios");
   for (const s of skipped) console.log(`  ⏭️  ${s.name}: skipped — ${s.skipReason}`);
   const concurrency = Number(process.env.LIVE_E2E_CONCURRENCY) || 8;
@@ -400,16 +408,18 @@ async function runCatalog(env: Env): Promise<void> {
     `live-e2e run ${env.runId}: ${selected.length} scenarios (concurrency ${concurrency}), agent <@${env.botUserId}>, QA user <@${env.qaUserId}>`,
   );
 
-  const parallelLane = selected.filter((s) => s.lane === "parallel");
+  const providerLane = selected.filter((s) => s.tags?.includes("provider-execution"));
+  const parallelLane = selected.filter((s) => s.lane === "parallel" && !s.tags?.includes("provider-execution"));
   const dmLane = selected.filter((s) => s.lane === "dm");
   const exclusiveLane = selected.filter((s) => s.lane === "exclusive");
-  const [parallelResults, dmResults] = await Promise.all([
+  const [parallelResults, dmResults, providerResults] = await Promise.all([
     runLane(env, parallelLane, concurrency),
     runLane(env, dmLane, 1),
+    runLane(env, providerLane, sandboxProviderScenarios.length),
   ]);
   const exclusiveResults = await runLane(env, exclusiveLane, 1);
 
-  const results = [...parallelResults, ...dmResults, ...exclusiveResults, ...skipped];
+  const results = [...parallelResults, ...dmResults, ...providerResults, ...exclusiveResults, ...skipped];
   results.sort((a, b) => a.name.localeCompare(b.name));
   const failures = results.filter((r) => r.status === "fail" && !r.quarantined);
   const quarantinedFails = results.filter((r) => r.status === "fail" && r.quarantined);

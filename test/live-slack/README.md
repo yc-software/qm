@@ -179,3 +179,25 @@ For deeper debugging, the artifact also has `out/summary.md` (also in the step s
 scenario's full session entries **and LLM requests** (ground truth for "what did the agent
 actually see") — and `.ci-instance/{core,slack}.log`. Don't trust the agent's in-channel
 self-explanations; read the transcript.
+
+## All-provider release qualification
+
+Set `LIVE_E2E_SANDBOX_PROVIDERS=all` with `LIVE_E2E_GATE=1` to require a real
+agent `sandbox exec` on every implemented provider: Sprites, AWS, local Docker,
+Smolmachines, E2B, Modal, Porter, and Agent37. These eight scenarios run concurrently
+in their own lane alongside the selected catalog. The source type requires a
+coverage entry when a provider is added. Missing providers, skips, retries,
+execution errors, and cleanup errors block release. Release qualification cannot
+shard away a provider check.
+
+Each check creates an isolated sandbox, makes it the default only for its fresh
+test channel, and asks the agent to execute a nonce command on its explicit ID.
+The assertion requires a correlated tool call and result with exit code zero,
+no timeout, and exact stdout. Agent reply text cannot satisfy it. Cleanup clears
+the test channel default and retires its named test resources, including failed
+provisioning records.
+
+The target instance must enable sandbox resources and configure all eight
+providers with real credentials and infrastructure. Local Docker additionally
+requires a Docker-capable host and a built sandbox image; a Fargate service alone
+cannot supply it. Unconfigured providers are failures, never optional coverage.

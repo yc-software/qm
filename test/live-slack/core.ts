@@ -40,14 +40,26 @@ export class CoreClient {
     return data;
   }
 
-  private async admin(method: string, pathWithQuery: string): Promise<any> {
+  private async admin(method: string, pathWithQuery: string, body?: unknown): Promise<any> {
     const orgId = this.orgScope.split(":")[1] ?? "acme";
     const portalSecret = process.env.PORTAL_IDENTITY_SECRET || this.signingSecret;
     const identity = await mintPortalIdentity({ p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 }, portalSecret);
-    return this.request(method, pathWithQuery, undefined, {
+    return this.request(method, pathWithQuery, body, {
       "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}`,
       [PORTAL_IDENTITY_HEADER]: identity,
     });
+  }
+
+  listSandboxes(scopeId: string): Promise<{
+    providers: Array<{ name: string; actions: string[] }>;
+    sandboxes: Array<{ id: string; name: string; backend: string; state: string }>;
+  }> {
+    return this.admin("GET", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`);
+  }
+
+  manageSandbox(scopeId: string, body: Record<string, unknown>): Promise<{ id: string; backend: string }> {
+    return this.admin("POST", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`, body);
+
   }
 
   listSessions(): Promise<{ sessions: SessionSummary[] }> {
