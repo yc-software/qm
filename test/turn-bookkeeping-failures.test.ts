@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator, type OrchestratorDeps, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
@@ -22,8 +22,10 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { scopeId, type Conversation, type PendingApprovalRecord, type Principal } from "../src/types.ts";
 import type { HarnessTurnResult } from "../src/harness/harness.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMetricsSink } from "../src/admin/metrics-sink.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 const ORG = "default-org";
@@ -54,7 +56,13 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
+function buildScenario(
+  turnResult?: Partial<HarnessTurnResult>,
+  options: {
+    conversation?: Conversation;
+    managedGroups?: NonNullable<OrchestratorDeps["managedGroups"]>;
+  } = {},
+) {
   const posted: string[] = [];
   const harness = defineHarness(
     {
@@ -116,6 +124,8 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     acl,
   });
   const deliveries = createDeliveryStore();
+  const approvals = createMemoryMap<PendingApprovalRecord>();
+  const metrics = createMetricsSink();
   const orchestrator = createOrchestrator({
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
@@ -129,19 +139,23 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
     harness,
     memory: createMemoryService(workspace),
+    memoryPolicy: { recall: "off", capture: "off" },
     deploy,
     acl,
     deliveries,
+    approvals,
+    metrics,
+    ...(options.managedGroups ? { managedGroups: options.managedGroups } : {}),
   });
   const input = (text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
     surface: "slack",
     actor,
-    conversation,
+    conversation: options.conversation ?? conversation,
     origin: { kind: "direct" },
     text,
     ...extra,
   });
-  return { orchestrator, sessions, deliveries, posted, input };
+  return { orchestrator, sessions, deliveries, posted, approvals, metrics, input };
 }
 
 test("a turn-end coverage append failure after a surface post fails loudly but non-retryably", async () => {
@@ -201,6 +215,101 @@ test("a cancel-stopped turn still persists and surfaces its pending approvals", 
   assert.equal(result.status, "pending_approval", "the approval is surfaced, not orphaned by the cancel");
   assert.equal(result.pendingApprovals?.length, 1);
   assert.equal(result.pendingApprovals?.[0]?.command, "rm -rf /srv/data");
+});
+
+test("a cancel-stopped completion records one silent metric row", async () => {
+  const { orchestrator, metrics, input } = buildScenario({ reply: "", stopped: true });
+  const controller = new AbortController();
+  controller.abort();
+  const result = await orchestrator.handleTurn(
+    input("stop this turn", { cancel: controller.signal, runId: "cancelled-metric" }),
+  );
+  assert.deepEqual(result, { status: "silent", sessionId: result.sessionId, stopped: true });
+  const rows = await metrics.list({ sessionId: result.sessionId });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "silent");
+  assert.equal(rows[0]!.runId, "cancelled-metric");
+});
+
+test("a stopped surface-tools completion keeps its stopped flag and records one silent metric row", async () => {
+  const { orchestrator, metrics, input } = buildScenario({ reply: "done", stopped: true });
+  const result = await orchestrator.handleTurn(
+    input("surface turn stopped", {
+      runId: "surface-stopped-metric",
+      surfaceTools: true,
+      deliveryTarget: "slack:C1:bookkeeping",
+    }),
+  );
+  assert.deepEqual(result, { status: "silent", sessionId: result.sessionId, stopped: true });
+  const rows = await metrics.list({ sessionId: result.sessionId });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "silent");
+  assert.equal(rows[0]!.runId, "surface-stopped-metric");
+});
+
+test("an approval write failure leaves the completed harness metric at its baseline emission point", async () => {
+  const { orchestrator, approvals, metrics, input } = buildScenario({
+    reply: "",
+    pendingApprovals: [{ command: "gated-check", reason: "requires approval" }],
+    pausedOnApproval: true,
+  });
+  approvals.put = async () => {
+    throw new Error("approval write refused");
+  };
+  await assert.rejects(
+    orchestrator.handleTurn(input("pause for approval", { runId: "approval-write-metric" })),
+    /approval write refused/,
+  );
+  const rows = await metrics.list();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "paused");
+  assert.equal(rows[0]!.runId, "approval-write-metric");
+});
+
+test("a final approval roster mismatch leaves the completed harness metric at its baseline emission point", async () => {
+  let approvalWritten = false;
+  const managedGroups: NonNullable<OrchestratorDeps["managedGroups"]> = {
+    recognizes: () => true,
+    members: async () => ["U1"],
+    version: async () => "roster-v1",
+    withVersion: async (_groupId, _version, fn) => {
+      const value = await fn();
+      return approvalWritten ? undefined : value;
+    },
+    slackChannel: async () => undefined,
+  };
+  const groupConversation: Conversation = {
+    kind: "group",
+    threadRef: "group:metric-roster",
+    channelRef: "web-project-metric-roster",
+    audience: [actor],
+  };
+  const { orchestrator, approvals, metrics, input } = buildScenario(
+    {
+      reply: "",
+      pendingApprovals: [{ command: "gated-check", reason: "requires approval" }],
+      pausedOnApproval: true,
+    },
+    { conversation: groupConversation, managedGroups },
+  );
+  const put = approvals.put.bind(approvals);
+  approvals.put = async (id, value) => {
+    await put(id, value);
+    approvalWritten = true;
+  };
+  const result = await orchestrator.handleTurn(
+    input("pause for roster approval", {
+      runId: "roster-mismatch-metric",
+      sessionParticipantIds: ["U1"],
+      scopeVersion: "roster-v1",
+    }),
+  );
+  assert.equal(result.status, "refused");
+  assert.match(result.reason ?? "", /project membership changed/);
+  const rows = await metrics.list({ sessionId: result.sessionId });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "paused");
+  assert.equal(rows[0]!.runId, "roster-mismatch-metric");
 });
 
 test("an overheard import failure aborts the batch instead of skipping one message", async () => {
