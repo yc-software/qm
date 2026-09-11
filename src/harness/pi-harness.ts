@@ -2452,13 +2452,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             inputTokens: countTokens(systemPrompt) + countTokens(payload),
             entryCount: 1,
           });
-          await recordLlmRequest?.({
-            turnSeq: null,
-            step: SECURITY_SCREEN_STEP,
-            model: modelId,
-            promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
-            truncated: false,
-          });
+          if (captureRequests) {
+            await recordLlmRequest?.({
+              turnSeq: null,
+              step: SECURITY_SCREEN_STEP,
+              model: modelId,
+              promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
+              truncated: false,
+            });
+          }
           return parseSecurityScreenVerdict(
             await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
               signal,
