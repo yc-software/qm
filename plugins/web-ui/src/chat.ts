@@ -2292,7 +2292,7 @@ export function createChatSurface(
     if (!browserRenderableImage(a.mimeType)) return undefined;
     const href = artifactHref(a.artifactId);
     const src = href ?? (a.content ? inlineImageSrc(a.mimeType, a.content) : undefined);
-    return src ? { src, name: a.fileName, size: a.size, href } : undefined;
+    return src ? { src, name: a.fileName, href } : undefined;
   }
 
   function userAttachmentChip(a: UserAttachmentView): TemplateResult {
@@ -2307,7 +2307,7 @@ export function createChatSurface(
   function deliveredImage(file: DeliveredFile): LightboxImage | undefined {
     const href = artifactHref(file.artifactId);
     if (!href || !browserRenderableImage(file.mimetype)) return undefined;
-    return { src: href, name: file.name, size: file.sizeBytes, href };
+    return { src: href, name: file.name, href };
   }
 
   function deliveredFileChip(file: DeliveredFile): TemplateResult {

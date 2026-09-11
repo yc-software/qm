@@ -31,8 +31,7 @@ import {
   type RuntimeConfig,
 } from "./core-bridge";
 import { errMessage, swallow } from "../../chassis/src/errors";
-import { browserRenderableImage, icon, inlineImageSrc } from "./ui";
-import { openLightbox, type LightboxImage } from "./lightbox";
+import { icon } from "./ui";
 import {
   EFFORT_LEVELS,
   applyRuntimeOptions,
@@ -504,7 +503,21 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   ${composerState.attachments.map(
                     (a) => html`
                       <span class="file-chip">
-                        ${attachmentChipBody(a, agent)}
+                        ${
+                          pastedTextIds.has(a.id)
+                            ? html`
+                                <button
+                                  type="button"
+                                  class="chip-open"
+                                  title="View pasted text"
+                                  @click=${() => openPasteView(a.id, agent)}
+                                >
+                                  ${icon(FileText, 14)}
+                                  <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
+                                </button>
+                              `
+                            : html`${icon(Paperclip, 14)}<span>${a.fileName}</span>`
+                        }
                         <button
                           type="button"
                           class="chip-x"
@@ -599,44 +612,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       </form>
       ${pasteViewDialog(agent)}
     `;
-  }
-
-  function attachmentImage(a: Attachment): LightboxImage | undefined {
-    if (!browserRenderableImage(a.mimeType) || !a.content) return undefined;
-    return { src: inlineImageSrc(a.mimeType, a.content), name: a.fileName, size: a.size };
-  }
-
-  function openAttachmentPreview(a: Attachment, from: HTMLElement): void {
-    const gallery = composerState.attachments.map(attachmentImage);
-    const current = gallery[composerState.attachments.indexOf(a)];
-    const images = gallery.filter((image): image is LightboxImage => image !== undefined);
-    if (current) openLightbox(images, images.indexOf(current), from);
-  }
-
-  function attachmentChipBody(a: Attachment, agent: Agent): TemplateResult {
-    if (pastedTextIds.has(a.id)) {
-      return html`
-        <button type="button" class="chip-open" title="View pasted text" @click=${() => openPasteView(a.id, agent)}>
-          ${icon(FileText, 14)}
-          <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
-        </button>
-      `;
-    }
-    const image = attachmentImage(a);
-    if (image) {
-      return html`
-        <button
-          type="button"
-          class="chip-open"
-          title="Preview image"
-          @click=${(e: MouseEvent) => openAttachmentPreview(a, e.currentTarget as HTMLElement)}
-        >
-          <img class="chip-thumb" src=${image.src} alt="" />
-          <span>${a.fileName}</span>
-        </button>
-      `;
-    }
-    return html`${icon(Paperclip, 14)}<span>${a.fileName}</span>`;
   }
 
   function pasteViewDialog(agent: Agent): TemplateResult | typeof nothing {
