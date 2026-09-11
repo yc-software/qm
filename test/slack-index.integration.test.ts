@@ -1689,7 +1689,7 @@ test("a denyMessage account stays silent on ambient channel chatter from unliste
   }
 });
 
-test("a human bot-ID-only mention is one addressed turn across message/app_mention fan-out and seeds thread stake", async () => {
+test("a human bot-ID-only mention is one addressed turn even when app_mention and a redelivery follow", async () => {
   const f = await fixture();
   try {
     const m = {
@@ -1701,10 +1701,10 @@ test("a human bot-ID-only mention is one addressed turn across message/app_menti
       thread_ts: "630.0",
     };
     f.client.messagesByChannel.set("C1", [{ user: "U1", text: "<@BBOT> earlier", ts: "630.0" }, m]);
-    await Promise.all([f.app.emitMessage(m, "Ev-message"), f.app.emitEvent("app_mention", m, "Ev-mention")]);
-    await f.app.emitMessage(m, "Ev-retry");
+    await f.app.emitMessage(m, "Ev-message");
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.client.posts.length, 1);
+    await Promise.all([f.app.emitEvent("app_mention", m, "Ev-mention"), f.app.emitMessage(m, "Ev-retry")]);
+    assert.equal(f.core.turns.length, 1);
     const turn = f.core.turns[0];
     assert.equal(turn.text, "ping");
     assert.equal(turn.unprompted, undefined);
@@ -1714,21 +1714,20 @@ test("a human bot-ID-only mention is one addressed turn across message/app_menti
     assert.ok(
       f.core.ingests.flat().some((e) => e.ts === "630.1" && e.handled && e.mentionsSelf && e.text === "@qmbot ping"),
     );
-    await f.app.emitMessage({ ...m, text: "follow-up", ts: "630.2" });
-    assert.equal(f.core.turns.length, 2);
-    assert.equal(f.core.turns[1].unprompted, true);
   } finally {
     await f.stop();
   }
 });
 
-test("a bot-ID mention from a rejected author or refused by core never becomes a turn or seeds thread stake", async () => {
+test("a bot-ID mention seeds thread stake only once core accepts it, never for rejected authors", async () => {
   const f = await fixture({ externalParticipants: true });
   try {
     f.client.usersById.set("UPEER", { id: "UPEER", team_id: "T1", name: "peer", is_bot: true });
     f.client.membersByChannel.set("C1", ["U1", "U2", "UBOT", "UPEER"]);
     const info = f.client.users.info;
+    const lookedUp: string[] = [];
     f.client.users.info = async (args) => {
+      lookedUp.push(args.user);
       if (args.user === "UFAILED") throw new Error("users.info unavailable");
       return info(args);
     };
@@ -1739,21 +1738,26 @@ test("a bot-ID mention from a rejected author or refused by core never becomes a
       { subtype: "bot_message" },
       { user: "UPEER" },
       { user: "UFAILED" },
-      { text: "&lt;@BBOT&gt; ping" },
     ];
     for (const [i, extra] of rejected.entries()) await f.app.emitMessage({ ...m, ...extra, ts: `631.${i + 1}` });
     assert.equal(f.core.turns.length, 0);
+    assert.equal(lookedUp.includes("BBOT"), false);
     f.core.result = { status: "refused" };
     await f.app.emitMessage({ ...m, ts: "632.0" });
     assert.equal(f.core.turns.length, 1);
-    f.core.result = { status: "ok", reply: "agent reply" };
+    assert.equal(f.core.turns[0].unprompted, undefined);
+    f.core.result = { status: "react", reactions: ["eyes"] };
+    await f.app.emitMessage({ ...m, ts: "633.0" });
     f.client.messagesByChannel.set("C1", [
       { ...m, user: "UPEER", ts: "631.4" },
       { ...m, ts: "632.0" },
+      { ...m, ts: "633.0" },
     ]);
-    await f.app.emitMessage({ ...m, text: "unmentioned reply", ts: "631.5", thread_ts: "631.4" });
-    await f.app.emitMessage({ ...m, text: "unmentioned reply", ts: "632.1", thread_ts: "632.0" });
-    assert.equal(f.core.turns.length, 1);
+    for (const thread of ["631.4", "632.0", "633.0"])
+      await f.app.emitMessage({ ...m, text: "unmentioned reply", ts: `${thread}1`, thread_ts: thread });
+    assert.equal(f.core.turns.length, 3);
+    assert.equal(f.core.turns[2].unprompted, true);
+    assert.equal(f.core.turns[2].conversation.threadRef, "ch:C1:633.0");
     assert.equal(f.client.posts.length, 0);
   } finally {
     await f.stop();
