@@ -72,6 +72,7 @@ const ENV_INPUT: FactoryEnvInput = {
   linearApiKey: "lin_api_secret",
   githubToken: "ghp_secret",
   anthropicApiKey: "sk-ant-secret",
+  factorySessionId: 4242,
   repoDir: REPO_DIR,
   factorySourceDir: SOURCE_DIR,
 };
@@ -224,6 +225,7 @@ test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or
     IO_VERIFY_LINT_CMD: "npm run lint",
     IO_REPO_DIR: REPO_DIR,
     IO_FACTORY_SOURCE_DIR: SOURCE_DIR,
+    IO_FACTORY_SESSION_ID: "4242",
     IO_REPO_CLONE_URL: "https://github.com/acme/widgets.git",
     IO_REPO_SETUP_CMD: "npm ci",
     IO_PROOF_START_CMD: "npm run dev",
@@ -248,6 +250,7 @@ test("renderFactoryEnv omits every optional key whose source is absent", () => {
     linearApiKey: "lin_min",
     githubToken: "ghp_min",
     anthropicApiKey: "sk-ant-min",
+    factorySessionId: 7,
     repoDir: "/srv/repo",
     factorySourceDir: SOURCE_DIR,
   });

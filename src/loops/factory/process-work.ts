@@ -16,12 +16,14 @@ export interface FactoryEnvInput {
   linearApiKey: string;
   githubToken: string;
   anthropicApiKey: string;
+  factorySessionId: number;
   repoDir: string;
   factorySourceDir: string;
 }
 
 export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string> {
-  const { config, guidance, linearApiKey, githubToken, anthropicApiKey, repoDir, factorySourceDir } = input;
+  const { config, guidance, linearApiKey, githubToken, anthropicApiKey, factorySessionId, repoDir, factorySourceDir } =
+    input;
   return {
     ...(guidance !== undefined ? { IO_FEEDBACK: guidance } : {}),
     IO_LINEAR_API_KEY: linearApiKey,
@@ -40,6 +42,7 @@ export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string>
     IO_VERIFY_LINT_CMD: config.verifyLintCmd,
     IO_REPO_DIR: repoDir,
     IO_FACTORY_SOURCE_DIR: factorySourceDir,
+    IO_FACTORY_SESSION_ID: String(factorySessionId),
     IO_REPO_CLONE_URL: config.repoCloneUrl,
     ...(config.repoSetupCmd !== undefined ? { IO_REPO_SETUP_CMD: config.repoSetupCmd } : {}),
     ...(config.proofStartCmd !== undefined ? { IO_PROOF_START_CMD: config.proofStartCmd } : {}),

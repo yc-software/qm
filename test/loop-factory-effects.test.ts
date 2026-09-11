@@ -12,6 +12,7 @@ import {
   type FactoryContext,
   type FactoryEffectsDeps,
   type FactoryWorkEffects,
+  factorySessionIdFor,
 } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
 import { FACTORY_ANTHROPIC_SLUG, FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
@@ -526,6 +527,7 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
       linearApiKey: LINEAR_KEY,
       githubToken: GITHUB_TOKEN,
       anthropicApiKey: ANTHROPIC_KEY,
+      factorySessionId: factorySessionIdFor("factory:loop-1:item-1:1"),
       repoDir: REPO_DIR,
       factorySourceDir: FACTORY_SOURCE_DIR,
     }),
@@ -546,6 +548,14 @@ test("work omits IO_FEEDBACK without guidance, honours repoDir, and numbers the 
   assert.equal(started.opts?.env?.IO_FACTORY_SOURCE_DIR, FACTORY_SOURCE_DIR);
   assert.notEqual(started.opts?.env?.IO_FACTORY_SOURCE_DIR, started.opts?.env?.IO_REPO_DIR);
   assert.equal(runId, "factory:loop-1:item-1:3");
+});
+
+test("factorySessionIdFor is a stable positive integer that differs across runs", () => {
+  const a = factorySessionIdFor("factory:loop-1:item-1:1");
+  assert.equal(a, factorySessionIdFor("factory:loop-1:item-1:1"));
+  assert.ok(Number.isInteger(a) && a > 0 && a <= 2_000_000_000);
+  assert.notEqual(a, factorySessionIdFor("factory:loop-1:item-1:2"));
+  assert.notEqual(a, factorySessionIdFor("factory:loop-1:item-2:1"));
 });
 
 test("work bootstraps the factory control plane on the preflight handle before the wrapper, once per call", async () => {
