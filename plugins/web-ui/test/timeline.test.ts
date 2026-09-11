@@ -369,3 +369,47 @@ test("unscreened execution retains its warning and failure status without parsin
     "failed",
   );
 });
+
+test("a successful surface post renders as the message it is, not a tool chip", () => {
+  const work: WorkBlock = {
+    status: "working",
+    activity: [
+      act(1, "tool_call", { tool: "web", action: "post", text: "Here's the summary you asked for.", callId: "c1" }),
+      act(2, "tool_result", { tool: "web", action: "post", ok: true, callId: "c1", result: "[sent]" }),
+    ],
+  };
+  const items = buildTimeline(work);
+  assert.equal(items.length, 1);
+  assert.ok(items[0].kind === "posted", "mid-turn post is promoted to a posted item");
+  assert.equal(items[0].kind === "posted" && items[0].text, "Here's the summary you asked for.");
+});
+
+test("a failed or unresolved post stays a tool row", () => {
+  const failed: WorkBlock = {
+    status: "complete",
+    activity: [
+      act(1, "tool_call", { tool: "web", action: "post", text: "hello", callId: "c1" }),
+      act(2, "tool_result", {
+        tool: "web",
+        action: "post",
+        ok: false,
+        callId: "c1",
+        result: "[not sent] rate limited",
+      }),
+    ],
+  };
+  assert.deepEqual(
+    buildTimeline(failed).map((i) => i.kind),
+    ["tool"],
+    "failed post is visible as a tool row so the failure is inspectable",
+  );
+  const inflight: WorkBlock = {
+    status: "working",
+    activity: [act(1, "tool_call", { tool: "web", action: "post", text: "hello", callId: "c1" })],
+  };
+  assert.deepEqual(
+    buildTimeline(inflight).map((i) => i.kind),
+    ["tool"],
+    "a post without its result yet renders as a running tool row",
+  );
+});

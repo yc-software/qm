@@ -41,6 +41,7 @@ export type TimelineItem =
   | { kind: "thinking"; activity: ToolActivity }
   | { kind: "text"; activity: ToolActivity }
   | { kind: "tool"; row: ToolRowModel }
+  | { kind: "posted"; text: string; row: ToolRowModel }
   | { kind: "approval"; approval: PendingApproval };
 
 function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
@@ -113,6 +114,19 @@ function orphanCallSignature(row: ToolRowModel): string | null {
   ].join("");
 }
 
+// A successful surface post IS the assistant's message — mid-turn it must read as one, not as a
+// tool chip. The transcript conversion (entriesToMessages) promotes settled posts to real message
+// bubbles, but the LIVE work block renders raw run activity: without this, a mid-turn post shows
+// only its tool row + "[sent]" until the turn ends (and never, if the tab misses the turn's end).
+function postedRowText(row: ToolRowModel): string | null {
+  const call = (row.call?.payload ?? {}) as ToolPayload & { text?: unknown };
+  if (call.action !== "post" || typeof call.text !== "string" || !call.text.trim()) return null;
+  if (!row.result) return null;
+  const result = (row.result.payload ?? {}) as ToolPayload & { ok?: unknown };
+  if (result.isError === true || result.ok === false || result.error || result.blocked) return null;
+  return call.text;
+}
+
 const timelineMemo = new WeakMap<
   WorkBlock,
   {
@@ -172,7 +186,12 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
       open = null;
     }
   }
-  const collapsed = collapseToolItems(items, work.status);
+  const promoted = items.map((it): TimelineItem => {
+    if (it.kind !== "tool") return it;
+    const text = postedRowText(it.row);
+    return text === null ? it : { kind: "posted", text, row: it.row };
+  });
+  const collapsed = collapseToolItems(promoted, work.status);
   for (const item of collapsed) {
     if (item.kind !== "tool") continue;
     const cmd = (item.row.call?.payload as ToolPayload | undefined)?.command;
