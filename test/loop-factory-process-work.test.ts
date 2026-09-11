@@ -71,6 +71,8 @@ const ENV_INPUT: FactoryEnvInput = {
   guidance: "reviewer asked for a smaller diff",
   linearApiKey: "lin_api_secret",
   githubToken: "ghp_secret",
+  anthropicApiKey: "sk-ant-secret",
+  factorySessionId: 4242,
   repoDir: REPO_DIR,
   factorySourceDir: SOURCE_DIR,
 };
@@ -209,6 +211,7 @@ test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or
     IO_FEEDBACK: "reviewer asked for a smaller diff",
     IO_LINEAR_API_KEY: "lin_api_secret",
     IO_GITHUB_TOKEN: "ghp_secret",
+    ANTHROPIC_API_KEY: "sk-ant-secret",
     IO_PUBLISH_FORGE: "github",
     IO_PUBLISH_PROJECT: "acme/widgets",
     IO_PUBLISH_TARGET: "main",
@@ -222,6 +225,7 @@ test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or
     IO_VERIFY_LINT_CMD: "npm run lint",
     IO_REPO_DIR: REPO_DIR,
     IO_FACTORY_SOURCE_DIR: SOURCE_DIR,
+    IO_FACTORY_SESSION_ID: "4242",
     IO_REPO_CLONE_URL: "https://github.com/acme/widgets.git",
     IO_REPO_SETUP_CMD: "npm ci",
     IO_PROOF_START_CMD: "npm run dev",
@@ -245,6 +249,8 @@ test("renderFactoryEnv omits every optional key whose source is absent", () => {
     config: MINIMAL_CONFIG,
     linearApiKey: "lin_min",
     githubToken: "ghp_min",
+    anthropicApiKey: "sk-ant-min",
+    factorySessionId: 7,
     repoDir: "/srv/repo",
     factorySourceDir: SOURCE_DIR,
   });
@@ -521,7 +527,12 @@ test("a signal aborted before the call terminates on the first pass and the defa
 });
 
 test("no path logs to the console or puts a credential in an error", async () => {
-  const env = renderFactoryEnv({ ...ENV_INPUT, linearApiKey: "LEAK-LINEAR", githubToken: "LEAK-GITHUB" });
+  const env = renderFactoryEnv({
+    ...ENV_INPUT,
+    linearApiKey: "LEAK-LINEAR",
+    githubToken: "LEAK-GITHUB",
+    anthropicApiKey: "LEAK-ANTHROPIC",
+  });
   const failures: Array<() => Promise<unknown>> = [
     () => runFactoryProcess(baseInput(fakeSandbox({}), { env, ticketId: "QM-12; rm -rf /" })),
     () => runFactoryProcess(baseInput(fakeSandbox({ processSessions: false }), { env })),
@@ -547,7 +558,7 @@ test("no path logs to the console or puts a credential in an error", async () =>
     for (const run of failures) {
       const error = await rejection(run());
       const rendered = [error.message, error.stack ?? "", JSON.stringify(Object.entries(error))].join("\n");
-      for (const sentinel of ["LEAK-LINEAR", "LEAK-GITHUB"]) {
+      for (const sentinel of ["LEAK-LINEAR", "LEAK-GITHUB", "LEAK-ANTHROPIC"]) {
         assert.equal(rendered.includes(sentinel), false, `${error.message} leaked ${sentinel}`);
       }
     }

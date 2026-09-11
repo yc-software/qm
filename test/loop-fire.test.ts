@@ -9,7 +9,7 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { FACTORY_LOOP_SURFACE, type FactoryEffectsDeps } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_ANTHROPIC_SLUG, FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER } from "../src/loops/factory/process-work.ts";
 import type { FactoryConfig } from "../src/resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
@@ -565,6 +565,12 @@ const GH_REPO = "https://api.github.com/repos/acme/app";
 const HEAD_SHA = "1".repeat(40);
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
+const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
+const SECRET_BY_SLUG: Record<string, string> = {
+  [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
+  [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
+  [FACTORY_ANTHROPIC_SLUG]: ANTHROPIC_KEY,
+};
 const WRAPPER_STDOUT = `working\nBRANCH:${FACTORY_BRANCH}\nMR:42\n`;
 const ALREADY_FIXED_STDOUT = "ALREADY_FIXED:true\nALREADY_FIXED_EVIDENCE:fixed by #40\n";
 
@@ -757,7 +763,7 @@ function factoryCredentials(missing: string[] = []): ServiceCredentialReader {
         : {
             slug,
             name: slug,
-            secret: slug === FACTORY_LINEAR_SLUG ? LINEAR_KEY : GITHUB_TOKEN,
+            secret: SECRET_BY_SLUG[slug] ?? "",
             delivery: "broker",
             host: "api.example.com",
             deployments: false,
@@ -922,8 +928,8 @@ test("factory surface: a missing config or credential fails the fire before the 
     ["config", /factory_config_missing/, { config: null }],
     [
       "credential",
-      /factory_credentials_missing: factory-github/,
-      { credentials: factoryCredentials([FACTORY_GITHUB_SLUG]) },
+      /factory_credentials_missing: factory-github, factory-anthropic/,
+      { credentials: factoryCredentials([FACTORY_GITHUB_SLUG, FACTORY_ANTHROPIC_SLUG]) },
     ],
   ];
   for (const [name, expected, over] of cases) {

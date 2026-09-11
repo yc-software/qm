@@ -44,6 +44,17 @@ const FACTORY_SOURCE_BOOTSTRAP_SCRIPT = [
 
 export const FACTORY_LOOP_SURFACE = "factory";
 
+// The wrapper's ownership marker and session branch need a positive integer that is stable for one run
+// and distinct across runs; a loop has no ECS session, so the run id is hashed into one.
+export function factorySessionIdFor(runId: string): number {
+  let hash = 0x811c9dc5;
+  for (const ch of runId) {
+    hash ^= ch.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return (hash % 2_000_000_000) + 1;
+}
+
 export const isFactoryLoop = (loop: Loop): boolean => loop.surface === FACTORY_LOOP_SURFACE;
 
 export const factoryForgeRef = (config: FactoryConfig, externalRef: string | undefined): ForgeRef | null => {
@@ -68,6 +79,7 @@ export interface FactoryContext {
   config: FactoryConfig;
   linearApiKey: string;
   githubToken: string;
+  anthropicApiKey: string;
 }
 
 export type FactoryWorkEffects = Pick<LoopRunnerEffects, "enumerate" | "work" | "captureOutputs" | "evaluate">;
@@ -126,7 +138,12 @@ export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<Fact
   if (!config) throw new Error("factory_config_missing");
   const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId);
   if (!credentials.ok) throw new Error(`factory_credentials_missing: ${credentials.missing.join(", ")}`);
-  return { config, linearApiKey: credentials.linearApiKey, githubToken: credentials.githubToken };
+  return {
+    config,
+    linearApiKey: credentials.linearApiKey,
+    githubToken: credentials.githubToken,
+    anthropicApiKey: credentials.anthropicApiKey,
+  };
 }
 
 export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkEffects {
@@ -158,7 +175,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
     },
 
     async work({ loop, item, guidance }) {
-      const { config, linearApiKey, githubToken } = await loadFactoryContext(deps);
+      const { config, linearApiKey, githubToken, anthropicApiKey } = await loadFactoryContext(deps);
 
       const preflightHandle = await provisionWorkspace(loop.ownerScopeId);
       let preflight: PreflightResult;
@@ -170,11 +187,15 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       }
       if (!preflight.ok) throw new Error(`factory_preflight_failed: ${preflightDetail(preflight)}`);
 
+      const itemPrefix = `factory:${loop.id}:${item.id}:`;
+      const runId = `${itemPrefix}${item.attempts + 1}`;
       const env = renderFactoryEnv({
         config,
         guidance,
         linearApiKey,
         githubToken,
+        anthropicApiKey,
+        factorySessionId: factorySessionIdFor(runId),
         repoDir,
         factorySourceDir: FACTORY_SOURCE_DIR,
       });
@@ -207,9 +228,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       }
       if (result.aborted) throw new Error("factory_run_aborted");
 
-      const itemPrefix = `factory:${loop.id}:${item.id}:`;
       for (const key of runs.keys()) if (key.startsWith(itemPrefix)) runs.delete(key);
-      const runId = `${itemPrefix}${item.attempts + 1}`;
       runs.set(runId, { result, config });
       return { runId };
     },

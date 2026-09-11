@@ -12,9 +12,10 @@ import {
   type FactoryContext,
   type FactoryEffectsDeps,
   type FactoryWorkEffects,
+  factorySessionIdFor,
 } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import { FACTORY_ANTHROPIC_SLUG, FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER, renderFactoryEnv } from "../src/loops/factory/process-work.ts";
 import { shq } from "../src/util/shell.ts";
 import { LINEAR_GRAPHQL_URL } from "../src/loops/factory/linear-intake.ts";
@@ -34,6 +35,12 @@ import type { Loop, LoopItem, LoopState, WorkspaceLayer } from "../src/types.ts"
 const ORG_SCOPE = "org:acme";
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
+const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
+const SECRET_BY_SLUG: Record<string, string> = {
+  [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
+  [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
+  [FACTORY_ANTHROPIC_SLUG]: ANTHROPIC_KEY,
+};
 const REPO_DIR = "/workspace/repo";
 const CLONE_DIR = "/workspace/qm-yc";
 const CLONE_URL = "https://github.com/yc-software/qm-yc.git";
@@ -272,7 +279,7 @@ const credentialRecord = (
 ): DecryptedServiceCredential => ({
   slug,
   name: slug,
-  secret: slug === FACTORY_LINEAR_SLUG ? LINEAR_KEY : GITHUB_TOKEN,
+  secret: SECRET_BY_SLUG[slug] ?? "",
   delivery: "broker",
   host: "api.example.com",
   deployments: false,
@@ -286,7 +293,11 @@ function fakeCredentials(records: (DecryptedServiceCredential | null)[]): Servic
 }
 
 const healthyCredentials = (): ServiceCredentialReader =>
-  fakeCredentials([credentialRecord(FACTORY_LINEAR_SLUG), credentialRecord(FACTORY_GITHUB_SLUG)]);
+  fakeCredentials([
+    credentialRecord(FACTORY_LINEAR_SLUG),
+    credentialRecord(FACTORY_GITHUB_SLUG),
+    credentialRecord(FACTORY_ANTHROPIC_SLUG),
+  ]);
 
 function fakeLoops(states: (LoopState | null)[]): { loops: FactoryEffectsDeps["loops"]; ids: string[] } {
   const ids: string[] = [];
@@ -429,7 +440,12 @@ test("a Linear failure propagates unwrapped out of enumerate", async () => {
 
 test("loadFactoryContext resolves the org config and both credentials", async () => {
   const context: FactoryContext = await loadFactoryContext(deps());
-  assert.deepEqual(context, { config: CONFIG, linearApiKey: LINEAR_KEY, githubToken: GITHUB_TOKEN });
+  assert.deepEqual(context, {
+    config: CONFIG,
+    linearApiKey: LINEAR_KEY,
+    githubToken: GITHUB_TOKEN,
+    anthropicApiKey: ANTHROPIC_KEY,
+  });
 });
 
 test("a missing factory config fails every entry point before any sandbox or network call", async () => {
@@ -449,7 +465,7 @@ test("missing credentials name every absent slug, linear first, without leaking 
   const fake = fakeSandbox();
   const base = deps({
     sandbox: fake.sandbox,
-    credentials: fakeCredentials([credentialRecord(FACTORY_GITHUB_SLUG)]),
+    credentials: fakeCredentials([credentialRecord(FACTORY_GITHUB_SLUG), credentialRecord(FACTORY_ANTHROPIC_SLUG)]),
   });
   const effects = createFactoryLoopEffects(base);
   for (const promise of [loadFactoryContext(base), effects.enumerate(LOOP), workedRunId(effects)]) {
@@ -464,6 +480,7 @@ test("missing credentials name every absent slug, linear first, without leaking 
       credentials: fakeCredentials([
         credentialRecord(FACTORY_LINEAR_SLUG, { secret: "   " }),
         credentialRecord(FACTORY_GITHUB_SLUG, { enabled: false }),
+        credentialRecord(FACTORY_ANTHROPIC_SLUG),
       ]),
     }),
   );
@@ -509,6 +526,8 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
       guidance: "smaller diff please",
       linearApiKey: LINEAR_KEY,
       githubToken: GITHUB_TOKEN,
+      anthropicApiKey: ANTHROPIC_KEY,
+      factorySessionId: factorySessionIdFor("factory:loop-1:item-1:1"),
       repoDir: REPO_DIR,
       factorySourceDir: FACTORY_SOURCE_DIR,
     }),
@@ -529,6 +548,14 @@ test("work omits IO_FEEDBACK without guidance, honours repoDir, and numbers the 
   assert.equal(started.opts?.env?.IO_FACTORY_SOURCE_DIR, FACTORY_SOURCE_DIR);
   assert.notEqual(started.opts?.env?.IO_FACTORY_SOURCE_DIR, started.opts?.env?.IO_REPO_DIR);
   assert.equal(runId, "factory:loop-1:item-1:3");
+});
+
+test("factorySessionIdFor is a stable positive integer that differs across runs", () => {
+  const a = factorySessionIdFor("factory:loop-1:item-1:1");
+  assert.equal(a, factorySessionIdFor("factory:loop-1:item-1:1"));
+  assert.ok(Number.isInteger(a) && a > 0 && a <= 2_000_000_000);
+  assert.notEqual(a, factorySessionIdFor("factory:loop-1:item-1:2"));
+  assert.notEqual(a, factorySessionIdFor("factory:loop-1:item-2:1"));
 });
 
 test("work bootstraps the factory control plane on the preflight handle before the wrapper, once per call", async () => {
