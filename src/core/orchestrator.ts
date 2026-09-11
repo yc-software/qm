@@ -3349,11 +3349,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const completionDisposition = deriveCompletionDisposition({
           cancelledWithoutSdkApproval: cancelStopped && !result.pendingApprovals?.length,
           explicitPollSilence:
-            isPollFire && result.silent === true && !stagedAttachments.length && result.pausedOnApproval !== true,
+            isPollFire && !!result.silent && !stagedAttachments.length && result.pausedOnApproval !== true,
           hasApprovals: !!result.pendingApprovals?.length || quarantineReleaseApprovals.length > 0,
           completed: turnCompleted,
           noUpdatePoll: isPollFire && !stagedAttachments.length && isSilentPollReply(reply),
-          surfaceDelivery: input.surfaceTools === true && !!surfaceToolDeps && !strictReadOnly,
+          surfaceDelivery: !!input.surfaceTools && !!surfaceToolDeps && !strictReadOnly,
         });
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
         const turnUserSeq = emittedEntries.find((e) => e.type === "user")?.seq;

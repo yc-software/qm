@@ -83,6 +83,14 @@ function buildScenario(
           entrySeq: userEntry.seq,
           meta: { bareText: turn.input },
         });
+        if (turn.input.startsWith("quarantine then stop")) {
+          await turn.screenToolResult?.({
+            tool: "execute",
+            result: "!security-risk quarantined output",
+            unscreenable: false,
+            provenance: "external",
+          });
+        }
         if (turn.surfaceTools && turn.input.startsWith("post then fail bookkeeping")) {
           const result = await turn.tools.post("mid-turn surface post");
           posted.push(result.ok ? "ok" : "failed");
@@ -107,8 +115,10 @@ function buildScenario(
         });
         return { reply, modelCalls: 1, ...turnResult };
       },
-      async screenSecurity() {
-        return { decision: "auto" as const };
+      async screenSecurity({ payload }) {
+        return payload.includes("!security-risk")
+          ? { decision: "strict" as const, reason: "test quarantine" }
+          : { decision: "auto" as const };
       },
     },
   );
@@ -155,7 +165,7 @@ function buildScenario(
     text,
     ...extra,
   });
-  return { orchestrator, sessions, deliveries, posted, approvals, metrics, input };
+  return { orchestrator, sessions, deliveries, posted, approvals, metrics, auditLog, input };
 }
 
 test("a turn-end coverage append failure after a surface post fails loudly but non-retryably", async () => {
@@ -204,17 +214,33 @@ test("a pre-effect tape write failure stays retryable turn-fatal", async () => {
 });
 
 test("a cancel-stopped turn still persists and surfaces its pending approvals", async () => {
-  const { orchestrator, input } = buildScenario({
+  const { orchestrator, metrics, input } = buildScenario({
     reply: "",
     stopped: true,
     pendingApprovals: [{ command: "rm -rf /srv/data", reason: "destructive command" }],
   });
   const controller = new AbortController();
   controller.abort();
-  const result = await orchestrator.handleTurn(input("wipe the data dir", { cancel: controller.signal }));
-  assert.equal(result.status, "pending_approval", "the approval is surfaced, not orphaned by the cancel");
-  assert.equal(result.pendingApprovals?.length, 1);
-  assert.equal(result.pendingApprovals?.[0]?.command, "rm -rf /srv/data");
+  const result = await orchestrator.handleTurn(
+    input("wipe the data dir", { cancel: controller.signal, runId: "cancelled-sdk-approval" }),
+  );
+  const approval = result.pendingApprovals?.[0];
+  assert.deepEqual(result, {
+    status: "pending_approval",
+    sessionId: result.sessionId,
+    pendingApprovals: [
+      {
+        requestId: approval?.requestId,
+        command: "rm -rf /srv/data",
+        reason: "destructive command",
+        blocksInput: true,
+      },
+    ],
+  });
+  const rows = await metrics.list({ sessionId: result.sessionId });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "paused");
+  assert.equal(rows[0]!.runId, "cancelled-sdk-approval");
 });
 
 test("a cancel-stopped completion records one silent metric row", async () => {
@@ -229,6 +255,76 @@ test("a cancel-stopped completion records one silent metric row", async () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.status, "silent");
   assert.equal(rows[0]!.runId, "cancelled-metric");
+});
+
+test("cancelled wins over explicit and no-update poll silence while retaining stopped", async () => {
+  const { orchestrator, metrics, input } = buildScenario({
+    reply: "[no-update]",
+    stopped: true,
+    silent: true,
+  });
+  const controller = new AbortController();
+  controller.abort();
+  const result = await orchestrator.handleTurn(
+    input("cancelled poll", {
+      surface: "monitor",
+      origin: { kind: "automation" },
+      cancel: controller.signal,
+      runId: "cancelled-poll-priority",
+    }),
+  );
+  assert.deepEqual(result, { status: "silent", sessionId: result.sessionId, stopped: true });
+  const rows = await metrics.list({ sessionId: result.sessionId });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "silent");
+  assert.equal(rows[0]!.runId, "cancelled-poll-priority");
+});
+
+test("cancelled ignores a quarantine-only release approval but not an SDK approval", async () => {
+  const { orchestrator, approvals, metrics, auditLog, input } = buildScenario({ reply: "", stopped: true });
+  const controller = new AbortController();
+  controller.abort();
+  const result = await orchestrator.handleTurn(
+    input("quarantine then stop", { cancel: controller.signal, runId: "cancelled-quarantine-priority" }),
+  );
+  assert.deepEqual(result, { status: "silent", sessionId: result.sessionId, stopped: true });
+  assert.equal(
+    (await auditLog.events()).filter((event) => event.action === "security_posture.tool_result_quarantine").length,
+    1,
+  );
+  assert.deepEqual(await approvals.all(), []);
+  const rows = await metrics.list({ sessionId: result.sessionId });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.status, "silent");
+  assert.equal(rows[0]!.runId, "cancelled-quarantine-priority");
+});
+
+test("legacy truthy silent and surface-tools values keep their completion semantics", async () => {
+  const poll = buildScenario({ reply: "", silent: "legacy" as never });
+  const pollResult = await poll.orchestrator.handleTurn(
+    poll.input("legacy silent poll", {
+      surface: "monitor",
+      origin: { kind: "automation" },
+      runId: "legacy-truthy-silent",
+    }),
+  );
+  assert.deepEqual(pollResult, { status: "silent", sessionId: pollResult.sessionId });
+  const pollRows = await poll.metrics.list({ sessionId: pollResult.sessionId });
+  assert.equal(pollRows.length, 1);
+  assert.equal(pollRows[0]!.status, "silent");
+
+  const surface = buildScenario({ reply: "done" });
+  const surfaceResult = await surface.orchestrator.handleTurn(
+    surface.input("legacy surface tools", {
+      runId: "legacy-truthy-surface",
+      surfaceTools: "legacy" as never,
+      deliveryTarget: "slack:C1:bookkeeping",
+    }),
+  );
+  assert.deepEqual(surfaceResult, { status: "silent", sessionId: surfaceResult.sessionId });
+  const surfaceRows = await surface.metrics.list({ sessionId: surfaceResult.sessionId });
+  assert.equal(surfaceRows.length, 1);
+  assert.equal(surfaceRows[0]!.status, "silent");
 });
 
 test("a stopped surface-tools completion keeps its stopped flag and records one silent metric row", async () => {
