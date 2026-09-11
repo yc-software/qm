@@ -721,7 +721,7 @@ test("re-sharing reconciles the ACL allow-list (org-wide → specific people →
   }
 });
 
-test("a channel grantee is accepted and saved", async () => {
+test("channel and group project grantees are accepted and saved", async () => {
   const srv = start();
   try {
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
@@ -730,50 +730,48 @@ test("a channel grantee is accepted and saved", async () => {
       slug: "k",
       name: "K",
       host: "h.example",
-      grantees: ["channel:C1", "personal:bob"],
+      grantees: ["channel:C1", "group:G1", "personal:bob"],
       expectedUpdatedAt: version,
     });
     assert.equal(r.status, 200);
-    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(), ["channel:C1", "personal:bob"]);
+    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(), [
+      "channel:C1",
+      "group:G1",
+      "personal:bob",
+    ]);
   } finally {
     await srv.close();
   }
 });
 
-test("a non-org/personal/team/channel grantee is rejected", async () => {
+test("malformed and cross-org grantees are rejected without changing grants", async () => {
   const srv = start();
   try {
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
     const version = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
-    const r = await putCred(srv.base, {
-      slug: "k",
-      name: "K",
-      host: "h.example",
-      grantees: ["group:G1"],
-      expectedUpdatedAt: version,
-    });
-    assert.equal(r.status, 400);
-    assert.match(await r.text(), /grantee must be/);
-
-    const disguised = await putCred(srv.base, {
-      slug: "k",
-      name: "K",
-      host: "h.example",
-      grantees: ["personal:channel:C1"],
-      expectedUpdatedAt: version,
-    });
-    assert.equal(disguised.status, 400);
-    assert.match(await disguised.text(), /personal:channel:C1/);
-
-    const emptyRef = await putCred(srv.base, {
-      slug: "k",
-      name: "K",
-      host: "h.example",
-      grantees: ["channel:"],
-      expectedUpdatedAt: version,
-    });
-    assert.equal(emptyRef.status, 400);
-    assert.match(await emptyRef.text(), /grantee must be/);
+    for (const grantee of [
+      "unknown:G1",
+      "group:",
+      "group:group:G1",
+      "group:G1\n",
+      "group:G1\u0000",
+      "group: G1",
+      "channel:C1\t",
+      "personal:channel:C1",
+      "channel:",
+      "org:other-org",
+    ]) {
+      const r = await putCred(srv.base, {
+        slug: "k",
+        name: "K",
+        host: "h.example",
+        grantees: [grantee],
+        expectedUpdatedAt: version,
+      });
+      assert.equal(r.status, 400);
+      assert.match(await r.text(), /grantee must be/);
+    }
+    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees, ["org:default-org"]);
   } finally {
     await srv.close();
   }
@@ -850,7 +848,14 @@ test("broker route: a slug NOT in the token's set is refused (403)", async () =>
       secret: "s",
       host: "api.x.com",
     });
-    const res = await broker(srv.base, await brokerToken([]), { credential: "x-firehose", url: "https://api.x.com/x" });
+    const res = await broker(srv.base, await brokerToken([]), {
+      credential: "x-firehose",
+      url: "https://api.x.com/x",
+      scopeId: "group:G1",
+      credentials: ["x-firehose"],
+      liveActor: true,
+      actorId: "admin",
+    });
     assert.equal(res.status, 403);
     assert.match(await res.text(), /not_entitled/);
   } finally {
@@ -996,6 +1001,7 @@ test("git http broker enforces broker-token audience, entitlement, method, and p
 const internalActor = { externalId: "U1" };
 const dm = (text: string): TurnRequest => ({
   surface: "test",
+  origin: { kind: "human" },
   actor: internalActor,
   conversation: { kind: "dm", threadRef: "dm:U1:t1" },
   text,
@@ -1103,6 +1109,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
 
   const channelTurn = (channelRef: string): TurnRequest => ({
     surface: "slack",
+    origin: { kind: "human" },
     actor: internalActor,
     conversation: {
       kind: "channel",
@@ -1128,6 +1135,119 @@ test("a channel grantee stamps the credential in that channel's conversations an
   res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "a member's DM must not get a channel-granted credential");
+});
+
+test("group project credentials follow the current turn across projects and a DM", async () => {
+  const { built, env } = buildWithCapture();
+  for (const project of ["A", "B"]) {
+    await built.serviceCreds.setServiceCredential("org:default-org", {
+      slug: `project-${project.toLowerCase()}`,
+      name: project,
+      secret: "s",
+      host: "h.example",
+    });
+    await built.acl.grant({
+      ownerScopeId: "org:default-org",
+      ref: `service-cred:project-${project.toLowerCase()}`,
+      granteeScopeId: `group:${project}`,
+      permission: "read",
+      grantedBy: "admin",
+    });
+  }
+  for (const project of ["A", "B", "A"]) {
+    const request: TurnRequest = {
+      ...dm("!run echo hi"),
+      conversation: {
+        kind: "group",
+        channelRef: project,
+        threadRef: `grp:${project}:t1`,
+        audience: [internalActor],
+        publishMembers: [internalActor],
+      },
+    };
+    const result = await built.app.turn(request);
+    assert.equal(result.status, "ok", result.reason);
+    const token = env()?.AGENT_CREDENTIAL_TOKEN;
+    assert.ok(token);
+    const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+    assert.equal(claims?.scopeId, `group:${project}`);
+    assert.deepEqual(claims?.credentials, [`project-${project.toLowerCase()}`]);
+    const prompt = await built.app.turn({ ...request, text: "!sysprompt" });
+    assert.match(prompt.reply ?? "", new RegExp(`project-${project.toLowerCase()}`));
+    assert.doesNotMatch(prompt.reply ?? "", new RegExp(`project-${project === "A" ? "b" : "a"}`));
+  }
+  const result = await built.app.turn(dm("!run echo hi"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
+  const prompt = await built.app.turn(dm("!sysprompt"));
+  assert.doesNotMatch(prompt.reply ?? "", /Shared org credentials available to you|project-a|project-b/);
+});
+
+test("broker credentials and their prompt require a human turn with only internal participants", async () => {
+  const { built, env } = buildWithCapture();
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "shared",
+    name: "Shared",
+    secret: "s",
+    host: "h.example",
+  });
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "env-shared",
+    name: "Env",
+    secret: "env-value",
+    delivery: "env",
+    envKey: "SHARED_ENV",
+    host: "",
+  });
+  for (const slug of ["shared", "env-shared"]) {
+    await built.acl.grant({
+      ownerScopeId: "org:default-org",
+      ref: `service-cred:${slug}`,
+      granteeScopeId: "org:default-org",
+      permission: "read",
+      grantedBy: "admin",
+    });
+  }
+  const guest = { externalId: "guest", isExternalGuest: true };
+  const requests: TurnRequest[] = [
+    ...(["direct", "automation", "ambient"] as const).map((kind) => ({
+      ...dm("!run echo hi"),
+      origin: { kind },
+      ...(kind !== "direct" ? { liveActor: true } : {}),
+    })),
+    {
+      ...dm("!run echo hi"),
+      conversation: {
+        kind: "channel" as const,
+        threadRef: "ch:C1:guest",
+        channelRef: "C1",
+        audience: [internalActor],
+        publishMembers: [internalActor, guest],
+      },
+    },
+  ];
+  for (const request of requests) {
+    const result = await built.app.turn(request);
+    assert.equal(result.status, "ok", result.reason);
+    assert.ok(!env()?.AGENT_CREDENTIAL_TOKEN, JSON.stringify(request.origin));
+    assert.equal(env()?.SHARED_ENV, request.conversation.kind === "dm" ? "env-value" : undefined);
+    const prompt = await built.app.turn({ ...request, text: "!sysprompt" });
+    assert.doesNotMatch(prompt.reply ?? "", /Shared org credentials available to you|AGENT_CREDENTIAL_TOKEN/);
+  }
+  const beforeRefusal = env();
+  const refused = await built.app.turn({
+    ...dm("!sysprompt"),
+    conversation: {
+      kind: "channel",
+      threadRef: "ch:C1:external-audience",
+      channelRef: "C1",
+      audience: [internalActor, guest],
+      publishMembers: [internalActor],
+    },
+  });
+  assert.equal(refused.status, "refused");
+  assert.equal(env(), beforeRefusal);
+  assert.doesNotMatch(refused.reply ?? "", /Shared org credentials available to you|AGENT_CREDENTIAL_TOKEN/);
 });
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
