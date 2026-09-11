@@ -28,7 +28,11 @@ function requireEnv(name: string): string {
 async function buildEnv(): Promise<Env> {
   const qa = new SlackClient(requireEnv("SLACK_QA_USER_TOKEN"));
   const bot = new SlackClient(requireEnv("SLACK_BOT_TOKEN"));
-  const core = new CoreClient(requireEnv("CORE_API_URL"), requireEnv("CORE_SIGNING_SECRET"));
+  const core = new CoreClient(
+    requireEnv("CORE_API_URL"),
+    requireEnv("CORE_SIGNING_SECRET"),
+    process.env.LIVE_E2E_ORG_SCOPE || undefined,
+  );
   const [qaAuth, botAuth] = await Promise.all([
     qa.authTest(),
     process.env.LIVE_E2E_BOT_USER_ID ? undefined : bot.authTest(),

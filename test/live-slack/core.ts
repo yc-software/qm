@@ -1,7 +1,8 @@
 import { signedRequestHeaders } from "../../src/auth/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
 
-const ADMIN_PRINCIPAL = "admin-alice";
+const ADMIN_PRINCIPAL = process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice";
 
 export interface SessionSummary {
   id: string;
@@ -39,9 +40,14 @@ export class CoreClient {
     return data;
   }
 
-  private admin(method: string, pathWithQuery: string): Promise<any> {
+  private async admin(method: string, pathWithQuery: string): Promise<any> {
     const orgId = this.orgScope.split(":")[1] ?? "acme";
-    return this.request(method, pathWithQuery, undefined, { "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}` });
+    const portalSecret = process.env.PORTAL_IDENTITY_SECRET || this.signingSecret;
+    const identity = await mintPortalIdentity({ p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 }, portalSecret);
+    return this.request(method, pathWithQuery, undefined, {
+      "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}`,
+      [PORTAL_IDENTITY_HEADER]: identity,
+    });
   }
 
   listSessions(): Promise<{ sessions: SessionSummary[] }> {
