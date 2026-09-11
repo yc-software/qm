@@ -68,6 +68,7 @@ export interface CronSlotClaim {
   cron: Cron;
   scheduledAt: number;
   claimedAt: number;
+  executionRevision: number;
   priorLastFiredAt?: number;
 }
 
@@ -122,8 +123,13 @@ function mergeFields(cron: Cron, fields: Partial<Cron>): Cron {
   return next;
 }
 
+function clearFailureState(cron: Cron): Cron {
+  const { failureBackoff: _failureBackoff, ...rest } = cron;
+  return { ...rest, failureGeneration: 0 };
+}
+
 function clearAttemptState(cron: Cron): Cron {
-  const { activeClaimId: _activeClaimId, failureBackoff: _failureBackoff, ...rest } = cron;
+  const { activeClaimId: _activeClaimId, ...rest } = clearFailureState(cron);
   return rest;
 }
 
@@ -143,29 +149,29 @@ function nextFailureCount(cron: Cron, scheduledAt: number): number {
   return Math.min(FAILURE_BACKOFF_MAX_FAILURES, Math.floor(failures) + 1);
 }
 
-function attemptIdentity(cron: Cron): string {
-  return contentPart([
-    cron.schedule,
-    cron.title,
-    cron.action,
-    cron.message,
-    cron.loopId,
-    cron.destination,
-    cron.runAs,
-    cron.members,
-    cron.unattendedGrants,
-    cron.recipientConsent,
-  ]);
+function generation(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value === Number.MAX_SAFE_INTEGER)
+    return 0;
+  return value;
 }
 
-function matchesDueSlot(cron: Cron, expected: DueCron, allowDisabledOneShot = false): boolean {
-  const enabled =
-    cron.enabled ||
-    (allowDisabledOneShot && expected.schedule.everyMs === undefined && expected.schedule.cron === undefined);
+function nextGeneration(value: number | undefined): number {
+  return generation(value) + 1;
+}
+
+function sameFailureState(cron: Cron, expected: Cron): boolean {
   return (
-    enabled &&
+    generation(cron.failureGeneration) === generation(expected.failureGeneration) &&
+    contentPart(cron.failureBackoff) === contentPart(expected.failureBackoff)
+  );
+}
+
+function matchesDueSlot(cron: Cron, expected: DueCron): boolean {
+  return (
+    cron.enabled &&
     !cron.archived &&
-    attemptIdentity(cron) === attemptIdentity(expected) &&
+    generation(cron.executionRevision) === generation(expected.executionRevision) &&
+    sameFailureState(cron, expected) &&
     recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) === expected.scheduledAt
   );
 }
@@ -176,14 +182,32 @@ export function createCronStore(
 ): CronStore {
   const staleRunningMs = opts?.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts?.fires ?? createMemoryCronFireStore();
-  const updateCron = (id: string, fields: Partial<Cron>, resetAttempt = true): Promise<Cron | null> => {
-    if (backing.update)
-      return backing.update(id, (cron) => mergeFields(resetAttempt ? clearAttemptState(cron) : cron, fields));
-    return backing.merge(
-      id,
-      resetAttempt ? { ...fields, activeClaimId: undefined, failureBackoff: undefined } : fields,
-    );
-  };
+  const updateCron = (
+    id: string,
+    fields: Partial<Cron>,
+    kind: "execution" | "schedule" = "execution",
+  ): Promise<Cron | null> =>
+    requireAtomicUpdate(backing)(id, (cron) => {
+      const effectiveFields = { ...fields };
+      let effectiveKind = kind;
+      if (
+        kind === "schedule" &&
+        fields.schedule !== undefined &&
+        contentPart(fields.schedule) === contentPart(cron.schedule)
+      ) {
+        delete effectiveFields.schedule;
+        delete effectiveFields.nextFireAt;
+        effectiveKind = "execution";
+      }
+      const updated = mergeFields(cron, effectiveFields);
+      const unchanged = Object.keys(effectiveFields).every((key) => {
+        if (key === "archived" && !cron.archived && updated.archived === false) return true;
+        return contentPart(cron[key as keyof Cron]) === contentPart(updated[key as keyof Cron]);
+      });
+      if (unchanged) return cron;
+      const revised = { ...updated, executionRevision: nextGeneration(cron.executionRevision) };
+      return effectiveKind === "schedule" ? clearAttemptState(revised) : clearFailureState(revised);
+    });
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -206,6 +230,8 @@ export function createCronStore(
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
         schedule,
+        executionRevision: 0,
+        failureGeneration: 0,
         ...(nextFireAt !== undefined ? { nextFireAt } : {}),
         ...(title ? { title } : {}),
         ...(input.action !== undefined ? { action: input.action } : {}),
@@ -235,7 +261,7 @@ export function createCronStore(
       if (patch.members !== undefined) fields.members = patch.members;
       if (patch.runAs !== undefined) fields.runAs = patch.runAs;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
-      return updateCron(id, fields, Object.keys(fields).length > 0);
+      return updateCron(id, fields, patch.schedule !== undefined ? "schedule" : "execution");
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {
@@ -311,6 +337,7 @@ export function createCronStore(
         deferUntil: undefined,
         activeClaimId: undefined,
         failureBackoff: undefined,
+        failureGeneration: 0,
       });
     },
     async claimSlot(id, scheduledAt, at) {
@@ -326,17 +353,19 @@ export function createCronStore(
           cron,
           scheduledAt,
           claimedAt: at,
+          executionRevision: generation(cron.executionRevision),
           ...(cron.lastFiredAt !== undefined ? { priorLastFiredAt: cron.lastFiredAt } : {}),
         };
         const advanceFrom = isCalendarSchedule(cron.schedule) ? scheduledAt : at;
         const nextFireAt = advanceNextFireAt(cron.schedule, advanceFrom);
-        const failureBackoff = cron.failureBackoff?.scheduledAt === scheduledAt ? cron.failureBackoff : undefined;
+        const sameFailureSlot = cron.failureBackoff?.scheduledAt === scheduledAt;
         return mergeFields(cron, {
           lastFiredAt: at,
           nextFireAt,
           deferUntil: undefined,
           activeClaimId: claimId,
-          failureBackoff,
+          failureBackoff: sameFailureSlot ? cron.failureBackoff : undefined,
+          failureGeneration: sameFailureSlot ? generation(cron.failureGeneration) : 0,
         });
       });
       return claim;
@@ -344,17 +373,27 @@ export function createCronStore(
     async completeSlot(id, claim) {
       await requireAtomicUpdate(backing)(id, (cron) => {
         if (cron.activeClaimId !== claim.id) return cron;
-        return mergeFields(cron, { activeClaimId: undefined, failureBackoff: undefined });
+        return mergeFields(cron, {
+          activeClaimId: undefined,
+          failureBackoff: undefined,
+          failureGeneration: 0,
+          ...(claim.cron.schedule.everyMs === undefined && claim.cron.schedule.cron === undefined
+            ? { enabled: false }
+            : {}),
+        });
       });
     },
     async releaseSlot(id, claim, deferUntil) {
       await requireAtomicUpdate(backing)(id, (cron) => {
         if (cron.activeClaimId !== claim.id || cron.lastFiredAt !== claim.claimedAt) return cron;
+        const configurationChanged = generation(cron.executionRevision) !== claim.executionRevision;
         return mergeFields(cron, {
           lastFiredAt: claim.priorLastFiredAt,
           nextFireAt: claim.scheduledAt,
           activeClaimId: undefined,
-          ...(deferUntil !== undefined ? { deferUntil: Math.max(cron.deferUntil ?? 0, deferUntil) } : {}),
+          ...(!configurationChanged && deferUntil !== undefined
+            ? { deferUntil: Math.max(cron.deferUntil ?? 0, deferUntil) }
+            : {}),
         });
       });
     },
@@ -363,6 +402,13 @@ export function createCronStore(
       await requireAtomicUpdate(backing)(id, (cron) => {
         deferUntil = undefined;
         if (cron.activeClaimId !== claim.id || cron.lastFiredAt !== claim.claimedAt) return cron;
+        if (generation(cron.executionRevision) !== claim.executionRevision) {
+          return mergeFields(cron, {
+            lastFiredAt: claim.priorLastFiredAt,
+            nextFireAt: claim.scheduledAt,
+            activeClaimId: undefined,
+          });
+        }
         const failures = nextFailureCount(cron, claim.scheduledAt);
         deferUntil = Math.max(cron.deferUntil ?? 0, failedAt + failureBackoffMs(failures));
         return mergeFields(cron, {
@@ -370,6 +416,7 @@ export function createCronStore(
           nextFireAt: claim.scheduledAt,
           activeClaimId: undefined,
           failureBackoff: { scheduledAt: claim.scheduledAt, failures },
+          failureGeneration: nextGeneration(cron.failureGeneration),
           deferUntil,
         });
       });
@@ -377,13 +424,14 @@ export function createCronStore(
     },
     async completeDueSlot(id, expected, at) {
       await requireAtomicUpdate(backing)(id, (cron) => {
-        if (!matchesDueSlot(cron, expected, true)) return cron;
+        if (!matchesDueSlot(cron, expected)) return cron;
         const advanceFrom = isCalendarSchedule(cron.schedule) ? expected.scheduledAt : at;
         return mergeFields(cron, {
           lastFiredAt: at,
           nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
-          deferUntil: undefined,
+          deferUntil: cron.deferUntil === expected.deferUntil ? undefined : cron.deferUntil,
           failureBackoff: undefined,
+          failureGeneration: 0,
           ...(cron.schedule.everyMs === undefined && cron.schedule.cron === undefined ? { enabled: false } : {}),
         });
       });
@@ -403,6 +451,7 @@ export function createCronStore(
         return {
           ...cron,
           failureBackoff: { scheduledAt: expected.scheduledAt, failures },
+          failureGeneration: nextGeneration(cron.failureGeneration),
           deferUntil,
         };
       });

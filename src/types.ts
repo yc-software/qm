@@ -246,6 +246,8 @@ export interface Cron extends TriggerBase {
   lastAttemptAt?: number;
   deferUntil?: number;
   failureBackoff?: CronFailureBackoff;
+  failureGeneration?: number;
+  executionRevision?: number;
   activeClaimId?: string;
   title?: string;
   archived?: boolean;

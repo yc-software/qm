@@ -1024,6 +1024,80 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   scheduler.stop();
 });
 
+test("queue mode: one-shot failures and busy releases survive in-flight edits", async () => {
+  for (const transition of ["failure", "busy"] as const) {
+    for (const edit of ["title", "action", "idempotent-enable"] as const) {
+      const crons = createCronStore();
+      const calls: TurnRequest[] = [];
+      const enqueued: Array<{ cronId: string; scheduledAt: number; notBefore?: number }> = [];
+      let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<void>) | undefined;
+      let signalStarted!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => (signalStarted = resolve));
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const scheduler = createScheduler({
+        crons,
+        deliveries: createDeliveryStore(),
+        idempotency: createIdempotencyStore(),
+        identity: createIdentityService(),
+        now: () => 1_000,
+        run: async (req) => {
+          calls.push(req);
+          signalStarted();
+          await released;
+          if (transition === "failure") throw new Error("provider down");
+          return { status: "refused", refusalKind: "session_busy", reason: "busy" };
+        },
+        jobQueue: {
+          async start(handlers) {
+            onFire = handlers.onFire;
+          },
+          async enqueueFire(job) {
+            enqueued.push(job);
+          },
+          healthy: () => true,
+          async stop() {},
+        },
+      });
+      scheduler.start(1_000);
+      for (let i = 0; i < 20 && !onFire; i++) await new Promise((resolve) => setImmediate(resolve));
+      const cron = await crons.create({
+        schedule: { firstFireAt: 1 },
+        action: "original action",
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      });
+      enqueued.length = 0;
+      const firing = onFire!({ cronId: cron.id, scheduledAt: 1 });
+      await started;
+      if (edit === "title") await crons.update(cron.id, { title: "edited title" });
+      else if (edit === "action") await crons.update(cron.id, { action: "edited action" });
+      else await crons.setEnabled(cron.id, true);
+      release();
+      await firing;
+
+      const stored = (await crons.get(cron.id))!;
+      const changed = edit !== "idempotent-enable";
+      assert.equal(stored.enabled, true, `${transition}/${edit}: one-shot remains enabled`);
+      assert.equal(stored.lastFiredAt, undefined, `${transition}/${edit}: claim cursor is restored`);
+      assert.equal(stored.nextFireAt, 1, `${transition}/${edit}: original slot is restored`);
+      assert.equal(stored.activeClaimId, undefined);
+      if (changed) {
+        assert.equal(stored.deferUntil, undefined, `${transition}/${edit}: stale cooldown is discarded`);
+        assert.equal(stored.failureBackoff, undefined);
+        assert.deepEqual(enqueued.at(-1), { cronId: cron.id, scheduledAt: 1 });
+      } else {
+        const notBefore = transition === "failure" ? 6_000 : 31_000;
+        assert.equal(stored.deferUntil, notBefore);
+        assert.deepEqual(enqueued.at(-1), { cronId: cron.id, scheduledAt: 1, notBefore });
+      }
+      assert.equal(calls.length, 1);
+      scheduler.stop();
+    }
+  }
+});
+
 test("queue mode: while the queue runs, the interval scheduler's leader lease is held as a guard", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const heldKeys: string[] = [];

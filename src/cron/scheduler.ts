@@ -31,7 +31,7 @@ const FIRE_GC_INTERVAL_MS = 6 * 60 * 60_000;
 const BUSY_DEFER_MS = 30_000;
 const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
 
-type FireResult = { authzFailed: boolean; deferUntil?: number };
+type FireResult = { authzFailed: boolean; deferUntil?: number; disable?: boolean };
 
 type RunNowResult =
   | { started: true; fireKey: string; settled: Promise<void> }
@@ -216,8 +216,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         status: result.status ?? "ok",
         ...(result.note ? { note: truncate(result.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
       });
-      if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
-      return { authzFailed: false };
+      return { authzFailed: false, ...(isOneShotSchedule(cron.schedule) ? { disable: true } : {}) };
     }
     const mentionRoster = await cronMentionRoster(deps, cron).catch(() => undefined);
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
@@ -291,9 +290,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
       });
     }
-    if (outcome.authzFailed) return { authzFailed: true };
-    if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
-    return { authzFailed: false };
+    if (outcome.authzFailed) return { authzFailed: true, disable: true };
+    return { authzFailed: false, ...(isOneShotSchedule(cron.schedule) ? { disable: true } : {}) };
   }
 
   let lastStrandedSweep = 0;
@@ -439,6 +437,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       console.error("[scheduler] fire failed:", errMessage(e));
       const deferUntil = await deps.crons.failSlot(job.cronId, claim, now());
       if (deferUntil !== undefined) await deps.jobQueue!.enqueueFire({ ...job, notBefore: deferUntil });
+      else await enqueueNext(job.cronId);
       return;
     }
     await enqueueNext(job.cronId);
@@ -492,8 +491,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           : { started: false, reason: "unavailable" };
       }
       const settled = fire(cron, t, fireKey).then(
-        async ({ authzFailed }) => {
-          if (authzFailed) await deps.crons.setEnabled(cronId, false);
+        async ({ disable }) => {
+          if (disable) await deps.crons.setEnabled(cronId, false);
         },
         (e: unknown) => console.error("%s", `[scheduler] manual fire of cron ${cronId} failed:`, errMessage(e)),
       );
