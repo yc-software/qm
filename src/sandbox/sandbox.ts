@@ -176,7 +176,7 @@ export interface TeardownOptions {
 
 export interface Sandbox {
   readonly profile: AgentComputerProfile;
-  profileFor?(scopeId: string): Promise<AgentComputerProfile>;
+  profileFor?(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile>;
   provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
   readFile(handle: SandboxHandle, relPath: string): Promise<string | null>;

@@ -303,6 +303,8 @@ import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus
 import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
+import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
+import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackAgentRequestContext, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
@@ -1252,6 +1254,21 @@ export function buildApp(
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
   const runs: RunStore = runStore.runs;
+  const swarms = createSwarmService({
+    store: createSwarmStore(artifactMap<SwarmStorage>("swarms")),
+    sessions,
+    runs,
+    sandboxes: sandboxResources,
+    lock: advisoryLock,
+    authorize: async (claims) => {
+      await identity.refresh();
+      return (
+        identity.isInternal(identity.classify(claims.actorId)) &&
+        (claims.members ?? []).every((member) => identity.isInternal(identity.classify(member.id))) &&
+        app.authorizesCapabilityScope(claims)
+      );
+    },
+  });
   const ledger = runStore.ledger;
 
   let processes: ProcessRegistry | undefined;
@@ -1496,6 +1513,7 @@ export function buildApp(
     sandbox,
     sandboxMigration,
     sandboxResources,
+    swarms,
     connectorTokens,
     modelGateway,
     auditLog,
@@ -1667,6 +1685,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    swarms,
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
@@ -2036,6 +2055,7 @@ export function buildApp(
       keepWarmSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
+      swarms.start();
       orphanedSignalSweeper.start();
       drain.start();
     },
@@ -2054,6 +2074,7 @@ export function buildApp(
       blobSweeper.stop();
       fileUploads?.stop();
       wakeSweep.stop();
+      swarms.stop();
       orphanedSignalSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
         swallowAs("wiring: worker drain failed", undefined),

@@ -39,6 +39,7 @@ export function runResultDelivery(
   taskList: Task[] = [],
   adminUrlFor?: AdminUrlFor,
 ): RunResultDelivery | null {
+  if (run.request.swarm) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;

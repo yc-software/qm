@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
-  "ignoreBinaries": ["tail", "cloudflared"],
+  "ignoreBinaries": ["tail", "cloudflared", "prlimit"],
   "ignoreDependencies": ["opencode-ai"],
   "ignoreIssues": {
     "scripts/migrate-principals-to-email.d.mts": ["files"],

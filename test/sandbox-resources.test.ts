@@ -101,6 +101,18 @@ test("blank sandbox identities coexist and default changes never copy files or r
   assert.equal(a.resourceId, first.id);
 });
 
+test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
+  const { backend, options, routes } = fixture();
+  const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
+  const backends = { local: backend, modal };
+  const resources = createSandboxResources({ ...options, backends });
+  const router = createSandboxRouter({ backends, routes, defaultBackend: "local", resources });
+  const worker = await resources.create("alice", "personal:alice", "modal", "Worker");
+  assert.equal((await router.profileFor!("personal:alice")).backend, "local");
+  assert.equal((await router.profileFor!("personal:alice", worker.id)).backend, "modal");
+  assert.equal((await router.profileFor!("personal:alice")).backend, "local");
+});
+
 test("unset defaults remain unset durably while explicit execution remains usable", async () => {
   const { resources, router, layers, defaults } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
