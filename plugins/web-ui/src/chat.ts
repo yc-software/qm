@@ -1490,8 +1490,8 @@ export function createChatSurface(
               ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
+            <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
           </div>
-          <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
           ${
             sendFailure
               ? html`<div class="send-failure">

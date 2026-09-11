@@ -38,8 +38,7 @@ export function createTranscriptViewport() {
       `${Math.round(Math.min(320, Math.max(96, scroller.clientHeight * 0.35)))}px`,
     );
     prompt.classList.toggle("pin-expanded", expanded);
-    const bubble = prompt.querySelector<HTMLElement>(".user-bubble");
-    const clipped = !expanded && !!bubble && bubble.scrollHeight > bubble.clientHeight + 1;
+    const clipped = !expanded && content.scrollHeight > content.clientHeight + 1;
     const toggle = prompt.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) {
       toggle.hidden = !clipped && !expanded;

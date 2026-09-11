@@ -130,11 +130,11 @@ test("resizing a settled transcript updates the prompt expansion control", () =>
   const f = fixture();
   try {
     f.prompt.innerHTML =
-      '<div class="user-bubble"><div class="pin-content"><markdown-block></markdown-block></div></div><button class="pin-toggle" hidden>Show more</button>';
-    const bubble = f.prompt.querySelector<HTMLElement>(".user-bubble")!;
+      '<div class="user-bubble"><div class="pin-content"><markdown-block></markdown-block></div><button class="pin-toggle" hidden>Show more</button></div>';
+    const content = f.prompt.querySelector<HTMLElement>(".pin-content")!;
     const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
     let availableHeight = 240;
-    Object.defineProperties(bubble, {
+    Object.defineProperties(content, {
       scrollHeight: { value: 240 },
       clientHeight: { get: () => availableHeight },
     });
@@ -285,4 +285,25 @@ test("a prompt stays in flow when pins leave too little room, and can stick agai
   } finally {
     f.close();
   }
+});
+
+test("prompt expansion control belongs inside the bubble in both renderers", () => {
+  for (const [source, start] of [
+    [chat, '<article class="message-row user-row'],
+    [readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8"), "<article class=${"],
+  ]) {
+    const rowStart = source!.indexOf(start!);
+    assert.ok(rowStart >= 0);
+    const row = source!.slice(rowStart, source!.indexOf("</article>", rowStart) + "</article>".length);
+    const dom = new JSDOM(row);
+    try {
+      const toggle = dom.window.document.querySelector(".pin-toggle");
+      assert.equal(toggle?.parentElement?.tagName, "DIV");
+      assert.equal(toggle?.parentElement?.parentElement?.tagName, "ARTICLE");
+    } finally {
+      dom.window.close();
+    }
+  }
+  assert.match(css, /:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{/);
+  assert.match(css, /\.user-bubble > \.pin-toggle:not\(\[hidden\]\)/);
 });

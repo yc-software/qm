@@ -1775,24 +1775,26 @@ a.chat-row-open {
 .user-bubble > .pin-content {
   display: flow-root;
 }
-.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble {
+.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
   max-height: var(--pin-clamp, 320px);
   overflow: hidden;
 }
 .pin-toggle {
   display: none;
+  width: fit-content;
+  margin: 6px 0 0 auto;
   pointer-events: auto;
   border: 0;
   border-radius: 6px;
-  background: var(--background);
+  background: transparent;
   color: var(--muted-foreground);
   font: inherit;
   font-size: 12px;
   padding: 6px 8px;
   cursor: pointer;
 }
-.message-stack .user-row:not(:has(~ .user-row)) > .pin-toggle:not([hidden]) {
-  display: inline-flex;
+.message-stack .user-row:not(:has(~ .user-row)) > .user-bubble > .pin-toggle:not([hidden]) {
+  display: flex;
 }
 .pin-toggle:hover {
   color: var(--foreground);
@@ -8954,7 +8956,7 @@ h3.ambient-field-label {
 .mini-convo-body .message-stack {
   width: 100%;
 }
-.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble {
+.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
   max-height: 100px;
 }
 .mini-convo-missing {
