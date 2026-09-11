@@ -21,7 +21,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_widgets, map_crons, map_cron_races, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -82,6 +82,53 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
   const got = await reader.get(c.id);
   assert.equal(got?.action, "digest");
   assert.equal(got?.lastFiredAt, 123);
+});
+
+test("pg map: cron claim recovery and interval failure CAS survive independent store instances", { skip }, async () => {
+  const map = () => createPostgresMapFactory(URL!).map<Cron>("map_cron_races");
+  const first = createCronStore(map());
+  const second = createCronStore(map());
+  const cron = await first.create({
+    schedule: { firstFireAt: 1_000 },
+    action: "A",
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+  });
+  const claim = await first.claimSlot(cron.id, 1_000, 1_000);
+  assert.ok(claim);
+  await second.update(cron.id, { action: "B" });
+  assert.equal(await first.failSlot(cron.id, claim, 1_000), undefined);
+
+  const reloaded = createCronStore(map());
+  let stored = (await reloaded.get(cron.id))!;
+  assert.equal(stored.action, "B");
+  assert.equal(stored.lastFiredAt, undefined);
+  assert.equal(stored.nextFireAt, 1_000);
+  assert.equal(stored.deferUntil, undefined);
+  const [admitted] = await reloaded.due(1_000);
+  assert.ok(admitted);
+
+  const results = await Promise.all([
+    first.failDueSlot(cron.id, admitted, 1_000),
+    second.failDueSlot(cron.id, admitted, 1_000),
+  ]);
+  assert.equal(results.filter((result) => result === 6_000).length, 1);
+  assert.equal(results.filter((result) => result === undefined).length, 1);
+  stored = (await createCronStore(map()).get(cron.id))!;
+  assert.deepEqual(stored.failureBackoff, { scheduledAt: 1_000, failures: 1 });
+  assert.equal(stored.failureGeneration, 1);
+
+  const [retry] = await reloaded.due(6_000);
+  assert.ok(retry);
+  await first.update(cron.id, { action: "C" });
+  await second.update(cron.id, { action: "B" });
+  await reloaded.failDueSlot(cron.id, retry, 6_000);
+  stored = (await createCronStore(map()).get(cron.id))!;
+  assert.equal(stored.action, "B");
+  assert.equal(stored.executionRevision, 3);
+  assert.equal(stored.failureBackoff, undefined);
+  assert.equal(stored.deferUntil, 6_000);
 });
 
 test(
