@@ -2,6 +2,7 @@ import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
+import { deployReleaseRoutes } from "./deploy-releases.ts";
 import { blobRoutes } from "./blobs.ts";
 import { sessionStateRawRoutes } from "./session-state.ts";
 import { loopItemEventsRawRoutes } from "./loop-item-events.ts";
@@ -46,6 +47,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...connectorRawRoutes,
   ...deploymentRawRoutes,
   ...blobRoutes,
+  ...deployReleaseRoutes,
   ...sessionStateRawRoutes,
   ...loopItemEventsRawRoutes,
   ...webhookRawRoutes,

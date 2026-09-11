@@ -180,6 +180,7 @@ export interface Config {
   awsDeploy: AwsDeployEnv;
   deployAppsDomain?: string;
   flyDeploy: FlyDeployEnv;
+  flyLegacyDeploymentIds: string[];
 }
 
 export function configuredModelForHarness(config: Config, harness: string): string | undefined {
@@ -730,6 +731,22 @@ interface FlyDeployEnv {
   baseImage: string;
   org: string;
   region?: string;
+}
+
+function flyLegacyDeploymentIds(env: NodeJS.ProcessEnv): string[] {
+  const ids = (env.FLY_LEGACY_DEPLOYMENT_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (
+    ids.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) ||
+    new Set(ids).size !== ids.length
+  ) {
+    throw new Error("FLY_LEGACY_DEPLOYMENT_IDS must contain unique lowercase deployment UUIDs separated by commas");
+  }
+  if (ids.length && env.DEPLOY_PROVIDER !== "fly")
+    throw new Error("FLY_LEGACY_DEPLOYMENT_IDS requires DEPLOY_PROVIDER=fly");
+  return ids;
 }
 
 function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
@@ -1410,5 +1427,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     ...(deployAppsDomain ? { deployAppsDomain } : {}),
     flyDeploy: flyDeployEnv(env),
+    flyLegacyDeploymentIds: flyLegacyDeploymentIds(env),
   };
 }

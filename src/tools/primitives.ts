@@ -1045,7 +1045,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             : base;
         const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
         const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
-        const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
+        const dataDir = effectiveEntrypoint
+          ? (deps.deploy.providerProfileFor?.(d) ?? deps.deploy.providerProfile)?.dataDir
+          : undefined;
         return {
           id: d.id,
           ...(d.name ? { name: d.name } : {}),
