@@ -19,7 +19,12 @@ export class SlackClient {
   private readonly web: WebClient;
 
   constructor(token: string, apiUrl = process.env.SLACK_API_URL) {
-    this.web = new WebClient(token, apiUrl ? { slackApiUrl: apiUrlOf(apiUrl) } : {});
+    this.web = new WebClient(token, {
+      ...(apiUrl ? { slackApiUrl: apiUrlOf(apiUrl) } : {}),
+      timeout: 30_000,
+      retryConfig: { retries: 0 },
+      rejectRateLimitedCalls: true,
+    });
   }
 
   async authTest(): Promise<{ userId: string; user: string; teamId: string; url: string }> {

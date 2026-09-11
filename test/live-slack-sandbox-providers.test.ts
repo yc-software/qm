@@ -4,6 +4,7 @@ import {
   assertSandboxExecution,
   sandboxProviders,
   sandboxProviderScenarios,
+  selectSandboxProviderScenarios,
 } from "./live-slack/scenarios-sandbox-providers.ts";
 import type { Ctx } from "./live-slack/harness.ts";
 
@@ -56,7 +57,12 @@ for (const backend of sandboxProviders) {
   test(`${backend} fails qualification when unavailable`, async () => {
     const ctx = {
       freshChannel: async () => ({ id: "test" }),
-      core: { listSandboxes: async () => ({ providers: [], sandboxes: [] }) },
+      core: {
+        withSignal() {
+          return this;
+        },
+        listSandboxes: async () => ({ providers: [], sandboxes: [] }),
+      },
     } as unknown as Ctx;
     await assert.rejects(
       sandboxProviderScenarios.find((s) => s.name === `sandbox-execute-${backend}`)!.run(ctx),
@@ -85,6 +91,9 @@ for (const failExecution of [false, true]) {
         },
       }),
       core: {
+        withSignal() {
+          return this;
+        },
         listSandboxes: async () => ({
           providers: [{ name: "sprites", actions: ["create", "retire"] }],
           sandboxes: actions.some((a) => a.action === "create")
@@ -107,3 +116,22 @@ for (const failExecution of [false, true]) {
     ]);
   });
 }
+
+test("explicit provider selection retains strict coverage without treating deferred providers as failed skips", () => {
+  const selected = selectSandboxProviderScenarios("sprites,aws,local,smolmachines,e2b,modal");
+  assert.deepEqual(
+    selected.map((s) => s.name),
+    [
+      "sandbox-execute-sprites",
+      "sandbox-execute-aws",
+      "sandbox-execute-local",
+      "sandbox-execute-smolmachines",
+      "sandbox-execute-e2b",
+      "sandbox-execute-modal",
+    ],
+  );
+  assert.equal(selectSandboxProviderScenarios("all").length, 8);
+  assert.deepEqual(selectSandboxProviderScenarios(undefined), []);
+  for (const value of ["", "sprites,", "typo", "sprites,sprites", "all,sprites", "constructor", "__proto__"])
+    assert.throws(() => selectSandboxProviderScenarios(value));
+});

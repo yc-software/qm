@@ -15,7 +15,7 @@ import {
 } from "./harness.ts";
 import { renderGallery } from "./gallery.ts";
 import { scenarios } from "./scenarios.ts";
-import { sandboxProviderScenarios } from "./scenarios-sandbox-providers.ts";
+import { sandboxProviderScenarios, selectSandboxProviderScenarios } from "./scenarios-sandbox-providers.ts";
 import { startEventPump, TwinAdmin } from "./arga.ts";
 
 const OUT_DIR = path.join(import.meta.dirname, "out");
@@ -163,11 +163,11 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
   const filter = raw === "all" ? undefined : raw;
   const skipped: ScenarioResult[] = [];
   const selected: Scenario[] = [];
-  const allProviders = process.env.LIVE_E2E_SANDBOX_PROVIDERS === "all";
-  for (const s of [...scenarios, ...(allProviders ? sandboxProviderScenarios : [])]) {
+  const providerScenarios = selectSandboxProviderScenarios(process.env.LIVE_E2E_SANDBOX_PROVIDERS);
+  for (const s of [...scenarios, ...providerScenarios]) {
     if (filter) {
       const byTag = filter.startsWith("@") && (s.tags ?? []).includes(filter.slice(1));
-      if (!byTag && !s.name.includes(filter) && !(allProviders && s.tags?.includes("provider-execution"))) continue;
+      if (!byTag && !s.name.includes(filter) && !s.tags?.includes("provider-execution")) continue;
     }
     const tags = s.tags ?? [];
     if (tags.includes("sandbox") && !env.sandbox) {
@@ -279,13 +279,15 @@ async function runScenario(env: Env, scenario: Scenario): Promise<ScenarioResult
   const started = Date.now();
   const quarantined = (scenario.tags ?? []).includes("quarantine");
   const sessionIds: string[] = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  const maxAttempts = scenario.tags?.includes("provider-execution") ? 1 : 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const ctx = new Ctx(env, scenario, attempt);
     const timeoutMs = scenario.timeoutMs ?? 4 * 60_000;
     let timer: NodeJS.Timeout | undefined;
+    const operation = scenario.run(ctx);
     try {
       await Promise.race([
-        scenario.run(ctx),
+        operation,
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error(`scenario timed out after ${timeoutMs}ms`)), timeoutMs);
         }),
@@ -305,13 +307,14 @@ async function runScenario(env: Env, scenario: Scenario): Promise<ScenarioResult
         ...(quarantined ? { quarantined } : {}),
       };
     } catch (err) {
+      if (scenario.tags?.includes("provider-execution")) await operation.catch(() => {});
       const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
       console.error(`  ❌ ${scenario.name} attempt ${attempt}: ${message.split("\n")[0]}`);
       const timeline = ctx.timeline.toJSON();
       const ids = await dumpTranscript(env, scenario, ctx).catch(() => [] as string[]);
       sessionIds.push(...ids);
       await ctx.cleanup().catch(() => {});
-      if (attempt === 2) {
+      if (attempt === maxAttempts) {
         const coreErrors = await env.core
           .listErrors()
           .then((r) =>
@@ -324,7 +327,7 @@ async function runScenario(env: Env, scenario: Scenario): Promise<ScenarioResult
         return {
           name: scenario.name,
           status: "fail",
-          attempts: 2,
+          attempts: maxAttempts,
           durationMs: Date.now() - started,
           error: message,
           timeline,
@@ -395,8 +398,8 @@ async function runCatalog(env: Env): Promise<void> {
   await warmUp(env, releaseGate);
   const picked = selectScenarios(env);
   const { selected, skipped } = applyShard(picked.selected, picked.skipped);
-  if (releaseGate && process.env.LIVE_E2E_SANDBOX_PROVIDERS === "all") {
-    for (const provider of sandboxProviderScenarios) {
+  if (releaseGate) {
+    for (const provider of selectSandboxProviderScenarios(process.env.LIVE_E2E_SANDBOX_PROVIDERS)) {
       if (!selected.some((scenario) => scenario.name === provider.name))
         throw new Error(`required provider scenario missing from release gate: ${provider.name}`);
     }

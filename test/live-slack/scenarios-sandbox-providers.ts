@@ -53,9 +53,10 @@ export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backen
   tags: ["sandbox", "provider-execution"],
   timeoutMs: 6 * 60_000,
   async run(ctx) {
+    const core = ctx.core.withSignal(AbortSignal.timeout(4 * 60_000));
     const ch = await ctx.freshChannel();
     const scopeId = `channel:${ch.id}`;
-    const inventory = await ctx.core.listSandboxes(scopeId);
+    const inventory = await core.listSandboxes(scopeId);
     const provider = inventory.providers.find((p) => p.name === backend);
     assert.ok(provider, `required sandbox provider ${backend} is unavailable`);
     assert.ok(provider.actions.includes("create"), `${backend} cannot create a test sandbox`);
@@ -63,29 +64,30 @@ export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backen
     const name = ctx.marker();
     const failures: unknown[] = [];
     try {
-      const sandbox = await ctx.core.manageSandbox(scopeId, { action: "create", backend, name });
+      const sandbox = await core.manageSandbox(scopeId, { action: "create", backend, name });
       assert.equal(sandbox.backend, backend);
       assert.ok(sandbox.id);
-      await ctx.core.manageSandbox(scopeId, { action: "default", sandboxId: sandbox.id });
+      await core.manageSandbox(scopeId, { action: "default", sandboxId: sandbox.id });
       const left = randomUUID();
       const right = randomUUID();
       const root = await ch.mention(
         `Use the sandbox tool with action exec and sandbox_id ${sandbox.id} to run exactly this command: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result. Do not use another sandbox or a background process.`,
       );
       await ch.waitForBotReply(root, { timeoutMs: 3 * 60_000 });
-      const session = await ctx.core.findSessionByThread(ch.id, root);
+      const session = await core.findSessionByThread(ch.id, root);
       assert.ok(session, `no session for ${backend} execution`);
       assertSandboxExecution(session.entries, sandbox.id, `${left}${right}\n`);
     } catch (error) {
       failures.push(error);
     }
     try {
-      const inventory = await ctx.core.listSandboxes(scopeId);
+      const core = ctx.core.withSignal(AbortSignal.timeout(90_000));
+      const inventory = await core.listSandboxes(scopeId);
       const created = inventory.sandboxes.filter((s) => s.name === name && s.backend === backend);
       if (created.length) {
-        await ctx.core.manageSandbox(scopeId, { action: "default", sandboxId: null });
+        await core.manageSandbox(scopeId, { action: "default", sandboxId: null });
         const cleanup = await Promise.allSettled(
-          created.map((s) => ctx.core.manageSandbox(scopeId, { action: "retire", sandboxId: s.id })),
+          created.map((s) => core.manageSandbox(scopeId, { action: "retire", sandboxId: s.id })),
         );
         const failures = cleanup.filter((r) => r.status === "rejected");
         if (failures.length)
@@ -101,3 +103,17 @@ export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backen
       throw new AggregateError(failures, `${backend} execution or cleanup failed: ${failures.map(String).join("; ")}`);
   },
 }));
+
+export function selectSandboxProviderScenarios(value: string | undefined): Scenario[] {
+  if (value === undefined) return [];
+  if (value === "all") return sandboxProviderScenarios;
+  const names = value.split(",").map((name) => name.trim());
+  assert.ok(
+    names.length && names.every((name) => name && Object.hasOwn(providerCoverage, name)),
+    "LIVE_E2E_SANDBOX_PROVIDERS must be all or a comma-separated list of supported providers",
+  );
+  assert.equal(new Set(names).size, names.length, "sandbox provider list contains duplicates");
+  return sandboxProviderScenarios.filter((scenario) =>
+    names.some((name) => scenario.name === `sandbox-execute-${name}`),
+  );
+}

@@ -180,24 +180,33 @@ scenario's full session entries **and LLM requests** (ground truth for "what did
 actually see") — and `.ci-instance/{core,slack}.log`. Don't trust the agent's in-channel
 self-explanations; read the transcript.
 
-## All-provider release qualification
+## Sandbox-provider release qualification
 
 Set `LIVE_E2E_SANDBOX_PROVIDERS=all` with `LIVE_E2E_GATE=1` to require a real
 agent `sandbox exec` on every implemented provider: Sprites, AWS, local Docker,
 Smolmachines, E2B, Modal, Porter, and Agent37. These eight scenarios run concurrently
 in their own lane alongside the selected catalog. The source type requires a
 coverage entry when a provider is added. Missing providers, skips, retries,
-execution errors, and cleanup errors block release. Release qualification cannot
-shard away a provider check.
+execution errors, and cleanup errors block release. Provider checks do not retry; a failed first execution blocks qualification.
+Release qualification cannot shard away a required provider check.
+
+Alternatively, set `LIVE_E2E_SANDBOX_PROVIDERS` to an explicit comma-separated
+provider list. Every listed provider remains mandatory and runs concurrently.
+Providers omitted from that list are outside the gate, not failed or skipped
+required tests. Empty, unknown, and duplicate provider names are rejected.
 
 Each check creates an isolated sandbox, makes it the default only for its fresh
 test channel, and asks the agent to execute a nonce command on its explicit ID.
 The assertion requires a correlated tool call and result with exit code zero,
 no timeout, and exact stdout. Agent reply text cannot satisfy it. Cleanup clears
 the test channel default and retires its named test resources, including failed
-provisioning records.
+provisioning records. Core requests are bounded, cleanup uses a separate deadline,
+and the runner waits for provider cleanup to settle before recording an attempt
+as timed out. Slack requests time out after 30 seconds without SDK retries
+or automatic rate-limit waits; the scenario runner owns retry policy. A cleanup deadline failure remains a release blocker and requires
+operator reconciliation of retained resource records.
 
-The target instance must enable sandbox resources and configure all eight
-providers with real credentials and infrastructure. Local Docker additionally
+The target instance must enable sandbox resources and configure every required
+provider with real credentials and infrastructure. Local Docker additionally
 requires a Docker-capable host and a built sandbox image; a Fargate service alone
 cannot supply it. Unconfigured providers are failures, never optional coverage.

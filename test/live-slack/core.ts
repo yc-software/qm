@@ -15,11 +15,17 @@ export class CoreClient {
   private readonly baseUrl: string;
   private readonly signingSecret: string;
   readonly orgScope: string;
+  private readonly requestSignal?: AbortSignal;
 
-  constructor(baseUrl: string, signingSecret: string, orgScope = "org:acme") {
+  constructor(baseUrl: string, signingSecret: string, orgScope = "org:acme", requestSignal?: AbortSignal) {
     this.baseUrl = baseUrl;
     this.signingSecret = signingSecret;
     this.orgScope = orgScope;
+    this.requestSignal = requestSignal;
+  }
+
+  withSignal(signal: AbortSignal): CoreClient {
+    return new CoreClient(this.baseUrl, this.signingSecret, this.orgScope, signal);
   }
 
   private async request(
@@ -34,7 +40,9 @@ export class CoreClient {
       "content-type": "application/json",
       ...extra,
     });
-    const res = await fetch(`${this.baseUrl}${salted}`, { method, headers, ...(raw ? { body: raw } : {}) });
+    const deadline = AbortSignal.timeout(120_000);
+    const signal = this.requestSignal ? AbortSignal.any([deadline, this.requestSignal]) : deadline;
+    const res = await fetch(`${this.baseUrl}${salted}`, { method, headers, signal, ...(raw ? { body: raw } : {}) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`core ${method} ${pathWithQuery}: ${res.status} ${JSON.stringify(data)}`);
     return data;
