@@ -5295,6 +5295,54 @@ a.chat-row-open {
   flex: 1;
   min-width: 0;
 }
+.project-detail-title {
+  min-width: 0;
+}
+.project-detail-title .project-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-detail-title .project-icon-button {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+}
+.project-detail-title .project-title-edit {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.project-detail-title:hover .project-title-edit,
+.project-detail-title .project-title-edit:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .project-detail-title .project-title-edit {
+    opacity: 1;
+  }
+}
+.project-title-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.project-title-input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: min(360px, 60vw);
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 20px;
+  font-weight: 600;
+}
+.project-title-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
+}
 .context-sub {
   margin-top: 4px;
   max-width: 640px;
