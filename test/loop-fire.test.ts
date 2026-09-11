@@ -9,7 +9,12 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { FACTORY_LOOP_SURFACE, type FactoryEffectsDeps } from "../src/loops/factory/effects.ts";
 import { FACTORY_REQUIRED_TOOLS } from "../src/loops/factory/preflight.ts";
-import { FACTORY_ANTHROPIC_SLUG, FACTORY_GITHUB_SLUG, FACTORY_LINEAR_SLUG } from "../src/loops/factory/credentials.ts";
+import {
+  FACTORY_ANTHROPIC_SLUG,
+  FACTORY_GITHUB_SLUG,
+  FACTORY_LINEAR_SLUG,
+  FACTORY_SLACK_SLUG,
+} from "../src/loops/factory/credentials.ts";
 import { FACTORY_WRAPPER } from "../src/loops/factory/process-work.ts";
 import type { FactoryConfig } from "../src/resolution/config-store.ts";
 import type { ServiceCredentialReader } from "../src/credentials/keychain.ts";
@@ -566,10 +571,12 @@ const HEAD_SHA = "1".repeat(40);
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
 const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
+const SLACK_TOKEN = "xoxb-FAKE_SLACK_TOKEN";
 const SECRET_BY_SLUG: Record<string, string> = {
   [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
   [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
   [FACTORY_ANTHROPIC_SLUG]: ANTHROPIC_KEY,
+  [FACTORY_SLACK_SLUG]: SLACK_TOKEN,
 };
 const WRAPPER_STDOUT = `working\nBRANCH:${FACTORY_BRANCH}\nMR:42\n`;
 const ALREADY_FIXED_STDOUT = "ALREADY_FIXED:true\nALREADY_FIXED_EVIDENCE:fixed by #40\n";
@@ -777,6 +784,7 @@ interface FactoryFake {
   sandbox: FactorySandbox;
   fetch: FactoryFetch;
   instances: () => number;
+  setConfig: (next: FactoryConfig | null) => void;
 }
 
 function factoryFake(
@@ -789,12 +797,15 @@ function factoryFake(
 ): FactoryFake {
   const sandbox = over.sandbox ?? factorySandbox();
   const fetched = over.fetch ?? factoryFetch();
-  const config = over.config === undefined ? FACTORY_CONFIG : over.config;
+  let config = over.config === undefined ? FACTORY_CONFIG : over.config;
   let repoDirReads = 0;
   return {
     sandbox,
     fetch: fetched,
     instances: () => repoDirReads,
+    setConfig: (next) => {
+      config = next;
+    },
     deps: (loops) => ({
       sandbox: sandbox.sandbox,
       config: { getFactoryConfig: () => config },
@@ -995,6 +1006,40 @@ test("factory surface: shipping an open_pr output undrafts the request and advan
   assert.match(sent[1]!.query, /markPullRequestReadyForReview/);
   assert.match(sent[3]!.query, /issueUpdate\(id: "issue-1", input: \{ stateId: "st-review" \}\)/);
   assert.match(sent[5]!.query, /issueAddLabel\(id: "issue-1", labelId: "label-ready"\)/);
+});
+
+test("factory surface: a configured slack channel with no factory-slack credential blocks the ship path", async () => {
+  const fake = factoryFake({ credentials: factoryCredentials([FACTORY_SLACK_SLUG]) });
+  const { s, loop, output, before } = await heldFactoryOutput(fake);
+  fake.setConfig({ ...FACTORY_CONFIG, slackChannel: "#factory-runs" });
+
+  await assert.rejects(
+    s.fire.shipOutput(loop.id, output.id, "josh"),
+    new RegExp(`factory_credentials_missing: ${FACTORY_SLACK_SLUG}`),
+  );
+
+  assert.equal((await s.outputs.get(output.id))?.state, "ready");
+  assert.equal((await s.items.get(output.itemId))?.status, "ready");
+  assert.deepEqual(traffic(fake.fetch.calls.slice(before)), []);
+});
+
+test("factory surface: a configured slack channel with the credential present leaves the ship path unchanged", async () => {
+  const fake = factoryFake();
+  const { s, loop, output, before } = await heldFactoryOutput(fake);
+  fake.setConfig({ ...FACTORY_CONFIG, slackChannel: "#factory-runs" });
+
+  const shipped = await s.fire.shipOutput(loop.id, output.id, "josh");
+
+  assert.equal(shipped?.state, "shipped");
+  assert.equal(shipped?.shipResult?.note, "undraft=true, linear-state=true, linear-label=true");
+  assert.deepEqual(traffic(fake.fetch.calls.slice(before)), [
+    `GET ${GH_REPO}/pulls/42`,
+    `POST ${GH_GRAPHQL}`,
+    `POST ${LINEAR_URL}`,
+    `POST ${LINEAR_URL}`,
+    `POST ${LINEAR_URL}`,
+    `POST ${LINEAR_URL}`,
+  ]);
 });
 
 test("factory surface: re-deciding an already-shipped pull request reports every step unchanged", async () => {

@@ -199,7 +199,8 @@ function parseFactoryConfig(body: unknown): { value: FactoryConfig } | { error: 
     const v = raw[key];
     if (v === undefined) continue;
     if (typeof v !== "string") return { error: `factory-config: ${key} must be a string` };
-    value[key] = v;
+    if (v.trim() === "") continue;
+    value[key] = v.trim();
   }
   for (const key of FACTORY_BOOLEANS) {
     const v = raw[key];

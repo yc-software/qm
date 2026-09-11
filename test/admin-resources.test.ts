@@ -1038,6 +1038,25 @@ test("factory-config round-trips through the org scope, replaces wholesale, and 
   }
 });
 
+test("factory-config stores a blank optional string as unset and trims the rest", async () => {
+  const srv = start();
+  try {
+    const blanks = { ...FACTORY_BODY, slackChannel: "   ", repoSetupCmd: "", proofStartCmd: "\t\n" };
+    assert.equal((await putFactory(srv.base, "org:default-org", blanks)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+
+    const trimmable = { ...FACTORY_BODY, slackChannel: "  C0123ABC  ", proofBaseUrlCmd: " echo url " };
+    assert.equal((await putFactory(srv.base, "org:default-org", trimmable)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, {
+      ...FACTORY_BODY,
+      slackChannel: "C0123ABC",
+      proofBaseUrlCmd: "echo url",
+    });
+  } finally {
+    await srv.close();
+  }
+});
+
 test("factory-config rejects every malformed body by name and leaves the stored record intact", async () => {
   const srv = start();
   try {

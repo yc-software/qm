@@ -10,25 +10,46 @@ export const FACTORY_DRAIN_EMPTY_READS = 2;
 const FACTORY_READ_MAX_BYTES = 65_536;
 const TICKET_RE = /^[A-Z][A-Z0-9]*-\d+$/;
 
+export const isFactoryTicketId = (id: string): boolean => TICKET_RE.test(id);
+
+export interface FactorySlackTarget {
+  botToken: string;
+  channelId: string;
+  threadTs: string;
+}
+
 export interface FactoryEnvInput {
   config: FactoryConfig;
   guidance?: string;
   linearApiKey: string;
   githubToken: string;
   anthropicApiKey: string;
+  slack?: FactorySlackTarget;
   factorySessionId: number;
   repoDir: string;
   factorySourceDir: string;
 }
 
 export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string> {
-  const { config, guidance, linearApiKey, githubToken, anthropicApiKey, factorySessionId, repoDir, factorySourceDir } =
-    input;
+  const {
+    config,
+    guidance,
+    linearApiKey,
+    githubToken,
+    anthropicApiKey,
+    slack,
+    factorySessionId,
+    repoDir,
+    factorySourceDir,
+  } = input;
   return {
     ...(guidance !== undefined ? { IO_FEEDBACK: guidance } : {}),
     IO_LINEAR_API_KEY: linearApiKey,
     IO_GITHUB_TOKEN: githubToken,
     ANTHROPIC_API_KEY: anthropicApiKey,
+    ...(slack?.botToken && slack.channelId && slack.threadTs
+      ? { SLACK_BOT_TOKEN: slack.botToken, SLACK_CHANNEL_ID: slack.channelId, SLACK_THREAD_TS: slack.threadTs }
+      : {}),
     IO_PUBLISH_FORGE: config.forge,
     IO_PUBLISH_PROJECT: config.publishProject,
     IO_PUBLISH_TARGET: config.targetBranch,
@@ -78,7 +99,7 @@ export interface FactoryProcessResult {
 
 export async function runFactoryProcess(input: FactoryProcessInput): Promise<FactoryProcessResult> {
   const { scopeId, repoDir, factorySourceDir, ticketId, env, onChunk, signal } = input;
-  if (!TICKET_RE.test(ticketId)) throw new Error("factory_ticket_invalid");
+  if (!isFactoryTicketId(ticketId)) throw new Error("factory_ticket_invalid");
   const sandbox = input.sandbox;
   if (!supportsProcessSessions(sandbox)) {
     throw new CapabilityUnsupportedError(sandbox.profile.backend, "process sessions");
