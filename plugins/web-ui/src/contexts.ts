@@ -105,6 +105,12 @@ export const contextsState = {
   titleValue: "",
   titleBusy: false,
   titleError: "",
+  // Bumped whenever the title-edit session is torn down or a new one begins (reset,
+  // navigating to a different scope, opening a fresh edit). A commit in flight captures
+  // this generation plus the project id it's editing, so a late response from an old
+  // session can never overwrite a newer or different one (including A -> B -> A again).
+  titleEditGen: 0,
+  titleEditProjectId: null as string | null,
 };
 
 let contextsLoading = false;
@@ -167,6 +173,8 @@ export function resetContextsState(): void {
   contextsState.titleValue = "";
   contextsState.titleBusy = false;
   contextsState.titleError = "";
+  contextsState.titleEditProjectId = null;
+  contextsState.titleEditGen++;
   cancelMemberSearchTimer();
   contextsNotice = "";
   memberSearchSeq++;
@@ -192,6 +200,21 @@ export async function renderContexts(): Promise<void> {
     contextsNotice = errMessage(e, "Failed to load contexts.");
   }
   contextsLoading = false;
+  // Cheap ownership recheck: a refresh can find the signed-in user is no longer the
+  // project's owner (e.g. ownership changed elsewhere) while its title editor was open.
+  // Hide/cancel that dual state on the client; the PATCH's own server-side ownership
+  // check is unchanged and would have refused the write regardless.
+  if (contextsState.titleEditing && contextsState.selected) {
+    const editing = contextsState.list.find((c) => c.scopeId === contextsState.selected);
+    if (!editing?.project || editing.project.ownerId !== appState.me?.user) {
+      contextsState.titleEditing = false;
+      contextsState.titleValue = "";
+      contextsState.titleBusy = false;
+      contextsState.titleError = "";
+      contextsState.titleEditProjectId = null;
+      contextsState.titleEditGen++;
+    }
+  }
   if (
     contextsState.selected &&
     contextsState.list.some((c) => c.scopeId === contextsState.selected) &&
@@ -524,7 +547,10 @@ function isProjectOwner(context: CoreContext): boolean {
 }
 
 function projectTitleBlock(context: CoreContext, project: CoreProject, title: string): TemplateResult {
-  if (contextsState.titleEditing) return projectTitleEditor(project);
+  // Owner check gates the editor too (not just the idle pencil): if a refresh finds
+  // ownership no longer held while editing was open, fall back to the plain idle view
+  // instead of showing a dual state a non-owner can't actually save.
+  if (contextsState.titleEditing && isProjectOwner(context)) return projectTitleEditor(project);
   return html`
     <span class="project-title-text" dir="auto">${title}</span>
     ${
@@ -532,6 +558,7 @@ function projectTitleBlock(context: CoreContext, project: CoreProject, title: st
         ? html`<button
             class="project-icon-button project-title-edit"
             type="button"
+            data-focus-key="project-title"
             aria-label="Rename project"
             ${tip("Rename project")}
             @click=${() => beginProjectTitleRename(project)}
@@ -575,6 +602,7 @@ function projectTitleEditor(project: CoreProject): TemplateResult {
       <button
         class="project-icon-button project-title-save"
         type="submit"
+        data-focus-key="project-title"
         aria-label="Save project name"
         ${tip("Save")}
         ?disabled=${contextsState.titleBusy}
@@ -584,6 +612,7 @@ function projectTitleEditor(project: CoreProject): TemplateResult {
       <button
         class="project-icon-button project-title-cancel"
         type="button"
+        data-focus-key="project-title"
         aria-label="Cancel renaming project"
         ${tip("Cancel")}
         ?disabled=${contextsState.titleBusy}
@@ -599,6 +628,8 @@ function beginProjectTitleRename(project: CoreProject): void {
   contextsState.titleEditing = true;
   contextsState.titleValue = project.name;
   contextsState.titleError = "";
+  contextsState.titleEditProjectId = project.id;
+  contextsState.titleEditGen++;
   drawContexts();
   requestAnimationFrame(() => {
     const input = appState.mainEl?.querySelector<HTMLInputElement>(".project-title-input");
@@ -612,6 +643,7 @@ function cancelProjectTitleRename(): void {
   contextsState.titleEditing = false;
   contextsState.titleValue = "";
   contextsState.titleError = "";
+  contextsState.titleEditProjectId = null;
   drawContexts();
 }
 
@@ -627,21 +659,47 @@ async function commitProjectTitleRename(project: CoreProject): Promise<void> {
     cancelProjectTitleRename();
     return;
   }
+  // Capture the reset generation, the title-edit generation, and which project this
+  // request belongs to. A slow save that resolves after the user has navigated away
+  // (which bumps titleEditGen and clears titleEditProjectId) or reopened editing on the
+  // same project again (which also bumps titleEditGen) must not touch state that now
+  // belongs to a different session — whether that's a different project's draft/error or
+  // a fresh draft reopened on this same project (A -> B -> A again).
   const resetSeq = contextsResetSeq;
+  const editGen = contextsState.titleEditGen;
+  const projectId = project.id;
   contextsState.titleBusy = true;
   contextsState.titleError = "";
   drawContexts();
   const ok = await renameProject(project, next);
-  if (resetSeq !== contextsResetSeq) return;
+  const stale =
+    resetSeq !== contextsResetSeq ||
+    editGen !== contextsState.titleEditGen ||
+    contextsState.titleEditProjectId !== projectId;
+  if (stale) return;
   contextsState.titleBusy = false;
   if (ok) {
     contextsState.titleEditing = false;
     contextsState.titleValue = "";
     contextsState.titleError = "";
+    contextsState.titleEditProjectId = null;
   } else {
     contextsState.titleError = "Couldn't rename this project. Try again.";
   }
   drawContexts();
+  // The busy-disabled inputs above break the generic replaceChildrenPreservingFocus key
+  // match (a disabled element can't hold focus, so the pre-await render already dropped
+  // focus to <body>), so explicitly restore it here for the two real-request outcomes.
+  // Only do this if focus is still sitting on <body> — if the user deliberately focused
+  // something else on the page while the save was in flight, leave it alone; a slow save
+  // must never steal focus back from wherever the user has since moved on to.
+  if (document.activeElement === document.body) {
+    requestAnimationFrame(() => {
+      if (document.activeElement !== document.body) return;
+      const el = appState.mainEl?.querySelector<HTMLElement>(ok ? ".project-title-edit" : ".project-title-input");
+      el?.focus();
+    });
+  }
 }
 
 function memberLabel(context: CoreContext, principalId: string): string {
@@ -1565,6 +1623,8 @@ function selectContext(scopeId: string | null): void {
   contextsState.titleValue = "";
   contextsState.titleBusy = false;
   contextsState.titleError = "";
+  contextsState.titleEditProjectId = null;
+  contextsState.titleEditGen++;
   contextsState.selected = scopeId;
   contextsState.resources = null;
   contextsState.resourcesScope = null;

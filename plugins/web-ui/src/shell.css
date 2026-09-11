@@ -5304,12 +5304,19 @@ a.chat-row-open {
   width: 26px;
   height: 26px;
   flex: 0 0 26px;
+}
+.project-detail-title .project-title-edit {
   opacity: 0;
   transition: opacity 0.12s ease;
 }
-.project-detail-title:hover .project-icon-button,
-.project-detail-title .project-icon-button:focus-visible {
+.project-detail-title:hover .project-title-edit,
+.project-detail-title .project-title-edit:focus-visible {
   opacity: 1;
+}
+@media (hover: none) {
+  .project-detail-title .project-title-edit {
+    opacity: 1;
+  }
 }
 .project-title-form {
   display: inline-flex;
