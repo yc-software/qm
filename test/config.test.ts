@@ -702,3 +702,14 @@ test("sandbox resource rollout requires explicit activation", () => {
     /not a recognized boolean/,
   );
 });
+
+test("legacy Fly routing accepts only an explicit unique deployment allowlist", () => {
+  const env = { DEPLOY_PROVIDER: "fly", FLY_DEPLOY_API_TOKEN: "test-token" };
+  const id = "00000000-0000-4000-8000-000000000001";
+  assert.deepEqual(loadConfig(env).flyLegacyDeploymentIds, []);
+  assert.deepEqual(loadConfig({ ...env, FLY_LEGACY_DEPLOYMENT_IDS: id }).flyLegacyDeploymentIds, [id]);
+  for (const value of ["*", "existing", `${id},${id}`, "00000000-0000-4000-8000-00000000000A"]) {
+    assert.throws(() => loadConfig({ ...env, FLY_LEGACY_DEPLOYMENT_IDS: value }), /FLY_LEGACY_DEPLOYMENT_IDS/);
+  }
+  assert.throws(() => loadConfig({ FLY_LEGACY_DEPLOYMENT_IDS: id }), /requires DEPLOY_PROVIDER=fly/);
+});
