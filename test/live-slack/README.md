@@ -210,3 +210,14 @@ The target instance must enable sandbox resources and configure every required
 provider with real credentials and infrastructure. Local Docker additionally
 requires a Docker-capable host and a built sandbox image; a Fargate service alone
 cannot supply it. Unconfigured providers are failures, never optional coverage.
+
+When staging cannot host Docker, run `scripts/qualify-local-provider.sh
+/path/to/release-candidate.json` as a separate required job on an ephemeral
+Docker-capable ARM64 runner. It pulls the candidate's immutable core image from
+ECR and checks its embedded source SHA against the checkout. The runner builds
+the local sandbox from that source, then invokes the candidate's real application,
+Pi harness, model, and sandbox tools. Only the probe and transcript assertion are
+mounted into the core container; application code comes from the candidate image.
+Provide AWS ECR access and `ANTHROPIC_API_KEY`. Require this job alongside cloud
+qualification before promotion. If capturing output through a pipe, use a shell
+with `pipefail` so a failed probe cannot become a successful job.

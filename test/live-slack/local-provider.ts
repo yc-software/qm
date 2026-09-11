@@ -48,14 +48,6 @@ async function main(): Promise<void> {
     assert.equal(result.status, "ok", result.reason ?? result.reply);
     assert.ok(result.sessionId);
     assertSandboxExecution(await built.sessions.getEntries(result.sessionId), sandbox.id, `${left}${right}\n`);
-    console.log(
-      JSON.stringify({
-        provider: "local",
-        source: process.env.GIT_SHA,
-        sandboxImage: process.env.LOCAL_SANDBOX_IMAGE,
-        status: "pass",
-      }),
-    );
   } catch (error) {
     failures.push(error);
   }
@@ -70,6 +62,14 @@ async function main(): Promise<void> {
   await built.runtime.stop();
   if (failures.length)
     throw new AggregateError(failures, `local qualification failed: ${failures.map(String).join("; ")}`);
+  console.log(
+    JSON.stringify({
+      provider: "local",
+      source: process.env.GIT_SHA,
+      sandboxImage: process.env.LOCAL_SANDBOX_IMAGE,
+      status: "pass",
+    }),
+  );
 }
 
 main()
