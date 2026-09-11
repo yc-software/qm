@@ -100,14 +100,14 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: Array<{ req: TurnRequest; at: number }> = [];
-    const a = instance([], 0, undefined, async (req) => {
+    const failingRun = async (req: TurnRequest): Promise<TurnResult> => {
       calls.push({ req, at: Date.now() });
       throw new Error("provider down");
-    });
-    const b = instance([], 0, undefined, async (req) => {
-      calls.push({ req, at: Date.now() });
-      throw new Error("provider down");
-    });
+    };
+    const a = instance([], 0, undefined, failingRun);
+    const b = instance([], 0, undefined, failingRun);
+    let originalsStopped = false;
+    let restarted: { scheduler: Scheduler; crons: CronStore } | undefined;
     a.scheduler.start(1_000);
     b.scheduler.start(1_000);
     try {
@@ -127,18 +127,28 @@ test(
       await new Promise((resolve) => setTimeout(resolve, 2_000));
       assert.equal(calls.length, 1, "a sibling reconcile cannot redeliver before the durable hold");
 
+      a.scheduler.stop();
+      b.scheduler.stop();
+      originalsStopped = true;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      restarted = instance([], 0, undefined, failingRun);
+      restarted.scheduler.start(1_000);
+
       await until(() => calls.length >= 2, 20_000);
       assert.equal(calls.length, 2);
       assert.ok(calls[1]!.at - calls[0]!.at >= 4_500);
       assert.equal(calls[1]!.req.idempotencyKey, calls[0]!.req.idempotencyKey);
-      await untilAsync(async () => (await a.crons.get(cron.id))?.failureBackoff?.failures === 2, 5_000);
-      assert.deepEqual((await a.crons.get(cron.id))?.failureBackoff, {
+      await untilAsync(async () => (await restarted!.crons.get(cron.id))?.failureBackoff?.failures === 2, 5_000);
+      assert.deepEqual((await restarted.crons.get(cron.id))?.failureBackoff, {
         scheduledAt: cron.nextFireAt,
         failures: 2,
       });
     } finally {
-      a.scheduler.stop();
-      b.scheduler.stop();
+      if (!originalsStopped) {
+        a.scheduler.stop();
+        b.scheduler.stop();
+      }
+      restarted?.scheduler.stop();
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   },
