@@ -28,6 +28,8 @@ const env = {
   NOTION_OAUTH_CLIENT_SECRET: "nsecret",
   GITHUB_OAUTH_CLIENT_ID: "ghid",
   GITHUB_OAUTH_CLIENT_SECRET: "ghsecret",
+  LINEAR_OAUTH_CLIENT_ID: "linear-id",
+  LINEAR_OAUTH_CLIENT_SECRET: "linear-secret",
   X_OAUTH_CLIENT_ID: "xid",
   X_OAUTH_CLIENT_SECRET: "xsecret",
 } as NodeJS.ProcessEnv;
@@ -504,4 +506,37 @@ test("oauth flow store — a short opaque state resolves once, then expires", as
   const stale = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000, ttlMs: 10 });
   const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
   assert.equal(await stale.finish(staleId), null, "expired");
+});
+
+test("Linear refresh exchanges and retains rotated tokens with their expiry", async () => {
+  const refresh = makeRefresh({
+    resolveClient: resolve,
+    now: () => 2_000,
+    fetchImpl: async (url, init) => {
+      assert.equal(url, "https://api.linear.app/oauth/token");
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers["content-type"], "application/x-www-form-urlencoded");
+      assert.deepEqual(Object.fromEntries(new URLSearchParams(init.body)), {
+        grant_type: "refresh_token",
+        refresh_token: "old-refresh",
+        client_id: "linear-id",
+        client_secret: "linear-secret",
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          access_token: "renewed",
+          refresh_token: "rotated",
+          expires_in: 86399,
+          scope: "read write",
+        }),
+      };
+    },
+  });
+  const token = await refresh("api.linear.app", { accessToken: "expired", refreshToken: "old-refresh", expiresAt: 0 });
+  assert.equal(token.accessToken, "renewed");
+  assert.equal(token.refreshToken, "rotated");
+  assert.equal(token.expiresAt, 2_000 + 86399_000);
+  assert.deepEqual(token.grantedScopes, ["read", "write"]);
 });
