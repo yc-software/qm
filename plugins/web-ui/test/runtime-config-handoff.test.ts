@@ -30,9 +30,9 @@ test("the first mount in the seeded scope renders from it — no blanking, no se
   assert.match(fn, /seededRuntime\?\.scopeId === scopeKey \? seededRuntime\.config : null/);
   assert.match(fn, /const scopeKey = runtimeScopeKey\(scopeId\);/);
   assert.match(fn, /seededRuntime = null;/, "later refreshes must read current server metadata");
-  const change = composer.slice(composer.indexOf("async function changeScopeRuntime"));
+  const change = composer.slice(composer.indexOf("const unsubscribeRuntime = onRuntimeConfigChanged"));
   assert.match(
-    change.slice(0, change.indexOf("\n  }")),
+    change.slice(0, change.indexOf("\n  });")),
     /seededRuntime = null;/,
     "scope updates also retire any remaining boot seed",
   );

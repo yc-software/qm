@@ -27,6 +27,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_FILES_PER_MESSAGE,
   mintSendKey,
+  onRuntimeConfigChanged,
   oversizeAttachmentNote,
   PENDING_APPROVAL_REASON,
   queueTurn,
@@ -368,15 +369,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const request = ++runtimeRequest;
     const scopeId = ctx.chat.state.scopeId;
     try {
-      const config = await updateRuntimeConfig(scopeId, change);
-      if (request !== runtimeRequest || scopeId !== ctx.chat.state.scopeId) return;
-      seededRuntime = null;
-      applySelectedRuntime(config, agent);
+      await updateRuntimeConfig(scopeId, change);
     } catch (e) {
       if (request !== runtimeRequest || scopeId !== ctx.chat.state.scopeId) return;
       composerState.error = errMessage(e, "Could not update the scope default.");
+      ctx.chat.drawActiveChat(agent);
     }
-    ctx.chat.drawActiveChat(agent);
   }
 
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
@@ -1899,7 +1897,16 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return changed;
   }
 
+  const unsubscribeRuntime = onRuntimeConfigChanged((config) => {
+    if (config.scopeId !== scopeKey()) return;
+    ++runtimeRequest;
+    seededRuntime = null;
+    applySelectedRuntime(config, ctx.chat.state.agent ?? undefined);
+  });
+
   function dispose(): void {
+    unsubscribeRuntime();
+    ++runtimeRequest;
     autosizeObserver?.disconnect();
     autosizeObserver = null;
     autosizedTa = null;
