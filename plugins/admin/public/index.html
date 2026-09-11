@@ -1166,6 +1166,48 @@
         gap: 6px;
         flex-wrap: wrap;
       }
+      .model-catalog-sync {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+      #model-catalog-rows tr.retired td:not(:last-child) {
+        opacity: 0.55;
+      }
+      #model-catalog-rows .row-badges {
+        display: inline-flex;
+        gap: 6px;
+        margin-left: 8px;
+        vertical-align: middle;
+      }
+      #model-catalog-rows tr.catalog-group td {
+        font-weight: 600;
+        padding-top: 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      #model-catalog-rows tr.catalog-group .muted {
+        font-weight: 400;
+        margin-left: 8px;
+      }
+      #model-catalog-rows .picker-cell {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #model-catalog-rows .catalog-reorder {
+        display: inline-flex;
+        gap: 2px;
+      }
+      #model-catalog-rows .catalog-reorder button {
+        padding: 0 6px;
+        line-height: 1.5;
+      }
+      #model-catalog-rows tr.catalog-search input {
+        width: 100%;
+        box-sizing: border-box;
+      }
       .history-empty-scopes {
         display: flex;
         flex-wrap: wrap;
@@ -5185,6 +5227,42 @@
                 <button type="button" id="onboarding-add-custom-provider">+ Add provider</button>
               </div>
             </section>
+            <section class="card">
+              <div class="head">
+                <h2>Model catalog</h2>
+                <p>
+                  Every model in the picker, with its lifecycle status. Sync a provider to see which models it has added
+                  or retired, add a newly shipped model to the catalog, and mark models legacy, deprecated, or hidden.
+                  Deprecated and hidden models drop out of the web UI and base-model pickers; legacy stays selectable.
+                </p>
+              </div>
+              <div class="body">
+                <div class="model-catalog-sync">
+                  <span class="muted">Sync from provider:</span>
+                  <button type="button" data-discover="anthropic">Anthropic</button
+                  ><button type="button" data-discover="openai">OpenAI</button
+                  ><button type="button" data-discover="openrouter">OpenRouter</button>
+                  <span class="status" id="st-model-catalog"></span>
+                </div>
+                <table class="table" id="model-catalog-table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Id</th>
+                      <th>Provider</th>
+                      <th>Source</th>
+                      <th>In picker</th>
+                      <th>Classification</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="model-catalog-rows"></tbody>
+                </table>
+                <p class="muted" id="model-catalog-empty" hidden>
+                  No models in the catalog yet — add a provider key above.
+                </p>
+              </div>
+            </section>
           </div>
 
           <div id="view-governance">
@@ -7201,7 +7279,12 @@
           "hidden",
           view === "onboarding" || isGovLike(view) || view === "connectors" || view === "design",
         );
-        if (view === "onboarding") return void loadOnboarding();
+        if (view === "onboarding")
+          return void (async () => {
+            await loadOnboarding();
+            await loadCustomProviders();
+            await loadModelCatalog();
+          })();
         if (isGovLike(view)) {
           return void loadScope();
         }
@@ -7697,7 +7780,11 @@
         if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
         if (view === "history" && urlToState().session) return;
         if (view === "onboarding") {
-          loadOnboarding();
+          void (async () => {
+            await loadOnboarding();
+            await loadCustomProviders();
+            await loadModelCatalog();
+          })();
           return;
         }
         if (view === "slack") {
@@ -9184,6 +9271,7 @@
         $("onboarding-model-key").value = "";
         await loadOnboarding();
         await loadCustomProviders();
+        await loadModelCatalog();
         setStatus(
           "st-onboarding-model",
           selected.ok ? "Key and base model saved." : "Key saved, but the base model could not be changed.",
@@ -9206,6 +9294,7 @@
         }
         await loadOnboarding();
         await loadCustomProviders();
+        await loadModelCatalog();
         setStatus("st-onboarding-model", "Provider disabled.", "ok");
       };
       let modelRegistryTemplates = [];
@@ -9518,7 +9607,10 @@
           return;
         }
         if (view === "models") await loadScope();
-        else await loadCustomProviders();
+        else {
+          await loadCustomProviders();
+          await loadModelCatalog();
+        }
         setStatus("st-custom-provider", "Provider removed.", "ok");
       }
       function customProviderRemoveButton(provider) {
@@ -9632,9 +9724,376 @@
         }
         $("custom-provider-key").value = "";
         if (view === "models") await loadScope();
-        else await loadCustomProviders();
+        else {
+          await loadCustomProviders();
+          await loadModelCatalog();
+        }
         closeCustomProviderEditor();
       };
+      const MODEL_STATUSES = ["active", "legacy", "deprecated", "hidden"];
+      const MODEL_STATUS_LABELS = {
+        active: "Active",
+        legacy: "Legacy",
+        deprecated: "Deprecated",
+        hidden: "Hidden",
+      };
+      const BUILTIN_MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"];
+      const PROVIDER_ENDPOINTS = {
+        anthropic: "https://api.anthropic.com",
+        openai: "https://api.openai.com/v1",
+        openrouter: "https://openrouter.ai/api/v1",
+      };
+      let modelCatalogEntries = [];
+      let modelClassifications = {};
+      let webuiConfiguredIds = [];
+      let webuiDefaultIds = [];
+      const modelDiscovery = {};
+      const catalogSearch = {};
+      let activeCatalogSearch = null;
+      const modelStatusOf = (id) => modelClassifications[id] || "active";
+      const providerLabelFor = (provider) => MODEL_PROVIDER_LABELS[provider] || connectorName(provider);
+      async function loadModelCatalog() {
+        const [providers, config] = await Promise.all([
+          api("GET", "/api/model-providers"),
+          api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
+        ]);
+        if (!providers.ok || !config.ok) {
+          setStatus("st-model-catalog", "The model catalog could not be loaded.", "err", true);
+          return;
+        }
+        modelCatalogEntries = (providers.data.models || []).filter((model) => model && model.id);
+        modelClassifications =
+          config.data.modelClassifications && typeof config.data.modelClassifications === "object"
+            ? config.data.modelClassifications
+            : {};
+        webuiConfiguredIds = Array.isArray(config.data.webuiModels) ? config.data.webuiModels.filter(Boolean) : [];
+        webuiDefaultIds = Array.isArray(config.data.webuiModelDefaults)
+          ? config.data.webuiModelDefaults.filter(Boolean)
+          : [];
+        renderModelCatalog();
+      }
+      function pickerBaseIds() {
+        return webuiConfiguredIds.length ? [...webuiConfiguredIds] : [...webuiDefaultIds];
+      }
+      async function toggleWebuiModel(id, include) {
+        const base = pickerBaseIds();
+        const next = include ? (base.includes(id) ? base : [...base, id]) : base.filter((v) => v !== id);
+        setStatus("st-model-catalog", "Saving picker…", "saving", true);
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(orgScope()) + "/webui-models", {
+          ids: next,
+        });
+        if (!r.ok) {
+          setStatus("st-model-catalog", r.data?.message || "Could not update the picker.", "err", true);
+          await loadModelCatalog();
+          return;
+        }
+        await loadModelCatalog();
+        setStatus("st-model-catalog", include ? "Added to the picker." : "Removed from the picker.", "ok");
+      }
+      async function saveModelClassification(id, status) {
+        setStatus("st-model-catalog", "Saving classification…", "saving", true);
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(orgScope()) + "/model-classifications", {
+          modelId: id,
+          status,
+        });
+        if (!r.ok) {
+          setStatus("st-model-catalog", r.data?.message || "Could not set the classification.", "err", true);
+          await loadModelCatalog();
+          return;
+        }
+        if (status === "active") delete modelClassifications[id];
+        else modelClassifications[id] = status;
+        await loadModelCatalog();
+        setStatus("st-model-catalog", "Classification saved.", "ok");
+      }
+      function prefillCustomProvider(provider, model) {
+        $("custom-provider-title").textContent = "Add custom provider";
+        $("custom-provider-id").value = provider + "-direct";
+        $("custom-provider-id").disabled = false;
+        $("custom-provider-name").value = providerLabelFor(provider).split(" —")[0];
+        $("custom-provider-protocol").value = provider === "anthropic" ? "anthropic" : "openai";
+        $("custom-provider-url").value = PROVIDER_ENDPOINTS[provider] || "";
+        $("custom-provider-key").value = "";
+        $("custom-provider-validate").checked = false;
+        $("custom-provider-models").value = [model.id, model.displayName || model.id].join(" | ");
+        setStatus(
+          "st-custom-provider",
+          "Review the endpoint and key, then save to add " + model.id + " to the catalog.",
+          "saving",
+          true,
+        );
+        $("custom-provider-dialog").showModal();
+      }
+      function catalogProviderOf(id) {
+        const found = modelCatalogEntries.find((model) => model.id === id);
+        return found ? found.provider : undefined;
+      }
+      async function reorderWebuiModel(id, direction) {
+        const base = pickerBaseIds();
+        const provider = catalogProviderOf(id);
+        const sameProvider = base.filter((other) => catalogProviderOf(other) === provider);
+        const pos = sameProvider.indexOf(id);
+        const neighbor = direction === "up" ? sameProvider[pos - 1] : sameProvider[pos + 1];
+        if (!neighbor) return;
+        const next = [...base];
+        const from = next.indexOf(id);
+        const to = next.indexOf(neighbor);
+        [next[from], next[to]] = [next[to], next[from]];
+        setStatus("st-model-catalog", "Reordering…", "saving", true);
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(orgScope()) + "/webui-models", { ids: next });
+        if (!r.ok) {
+          setStatus("st-model-catalog", r.data?.message || "Could not reorder the picker.", "err", true);
+          await loadModelCatalog();
+          return;
+        }
+        await loadModelCatalog();
+        setStatus("st-model-catalog", "Order saved.", "ok");
+      }
+      function renderModelCatalog() {
+        const rows = $("model-catalog-rows");
+        rows.textContent = "";
+        const missingIds = new Set();
+        const newModels = new Map();
+        const knownIds = new Set(modelCatalogEntries.map((model) => model.id));
+        Object.values(modelDiscovery).forEach((result) => {
+          (result.missing || []).forEach((model) => model && model.id && missingIds.add(model.id));
+          (result.new || []).forEach((model) => {
+            if (model && model.id && !knownIds.has(model.id) && !newModels.has(model.id))
+              newModels.set(model.id, { ...model, provider: result.provider });
+          });
+        });
+        const base = pickerBaseIds();
+        const pickerRank = new Map(base.map((id, index) => [id, index]));
+        const pickerIds = new Set(base);
+        $("model-catalog-empty").hidden = modelCatalogEntries.length + newModels.size > 0;
+        const rowFor = (model, reorder) => {
+          const status = modelStatusOf(model.id);
+          const tr = document.createElement("tr");
+          if (status === "hidden" || status === "deprecated") tr.className = "retired";
+          const nameTd = document.createElement("td");
+          nameTd.textContent = model.name || model.id;
+          if (missingIds.has(model.id)) {
+            const badges = document.createElement("span");
+            badges.className = "row-badges";
+            badges.appendChild(badge("missing from provider", "warn"));
+            nameTd.appendChild(badges);
+          }
+          tr.appendChild(nameTd);
+          const idTd = document.createElement("td");
+          idTd.className = "mono";
+          idTd.textContent = model.id;
+          tr.appendChild(idTd);
+          const provTd = document.createElement("td");
+          provTd.textContent = providerLabelFor(model.provider).split(" —")[0];
+          tr.appendChild(provTd);
+          const srcTd = document.createElement("td");
+          srcTd.textContent = BUILTIN_MODEL_PROVIDERS.includes(model.provider) ? "Built-in" : "Custom";
+          tr.appendChild(srcTd);
+          const pickerTd = document.createElement("td");
+          const pickerCell = document.createElement("span");
+          pickerCell.className = "picker-cell";
+          const check = document.createElement("input");
+          check.type = "checkbox";
+          check.checked = pickerIds.has(model.id);
+          check.onchange = () => void toggleWebuiModel(model.id, check.checked);
+          pickerCell.appendChild(check);
+          if (reorder && (reorder.up || reorder.down)) {
+            const controls = document.createElement("span");
+            controls.className = "catalog-reorder";
+            const up = document.createElement("button");
+            up.type = "button";
+            up.textContent = "↑";
+            up.title = "Move up";
+            up.disabled = !reorder.up;
+            up.onclick = () => void reorderWebuiModel(model.id, "up");
+            const down = document.createElement("button");
+            down.type = "button";
+            down.textContent = "↓";
+            down.title = "Move down";
+            down.disabled = !reorder.down;
+            down.onclick = () => void reorderWebuiModel(model.id, "down");
+            controls.appendChild(up);
+            controls.appendChild(down);
+            pickerCell.appendChild(controls);
+          }
+          pickerTd.appendChild(pickerCell);
+          tr.appendChild(pickerTd);
+          const classTd = document.createElement("td");
+          const select = document.createElement("select");
+          MODEL_STATUSES.forEach((value) => {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = MODEL_STATUS_LABELS[value];
+            select.appendChild(option);
+          });
+          select.value = status;
+          select.onchange = () => void saveModelClassification(model.id, select.value);
+          classTd.appendChild(select);
+          tr.appendChild(classTd);
+          const actionTd = document.createElement("td");
+          if (!BUILTIN_MODEL_PROVIDERS.includes(model.provider)) {
+            const edit = document.createElement("button");
+            edit.textContent = "Edit provider";
+            edit.onclick = () => {
+              const provider = customProvidersLoaded.find((p) => p.id === model.provider);
+              if (provider) openCustomProviderEditor(provider);
+            };
+            actionTd.appendChild(edit);
+          }
+          tr.appendChild(actionTd);
+          return tr;
+        };
+        const groupHeader = (provider, pickedCount, availableCount, collapsed) => {
+          const tr = document.createElement("tr");
+          tr.className = "catalog-group";
+          const td = document.createElement("td");
+          td.colSpan = 7;
+          td.textContent = providerLabelFor(provider).split(" —")[0];
+          const note = document.createElement("span");
+          note.className = "muted";
+          note.textContent = pickedCount + " in picker" + (collapsed ? " · " + availableCount + " more available" : "");
+          td.appendChild(note);
+          tr.appendChild(td);
+          return tr;
+        };
+        const providers = [];
+        const seenProviders = new Set();
+        modelCatalogEntries.forEach((model) => {
+          if (!seenProviders.has(model.provider)) {
+            seenProviders.add(model.provider);
+            providers.push(model.provider);
+          }
+        });
+        const providerRank = (provider) =>
+          BUILTIN_MODEL_PROVIDERS.includes(provider)
+            ? BUILTIN_MODEL_PROVIDERS.indexOf(provider)
+            : BUILTIN_MODEL_PROVIDERS.length;
+        providers.sort((a, b) => providerRank(a) - providerRank(b) || String(a).localeCompare(String(b)));
+        providers.forEach((provider) => {
+          const groupModels = modelCatalogEntries.filter((model) => model.provider === provider);
+          const picked = groupModels
+            .filter((model) => pickerIds.has(model.id))
+            .sort((a, b) => pickerRank.get(a.id) - pickerRank.get(b.id));
+          const unpicked = groupModels.filter((model) => !pickerIds.has(model.id));
+          const collapsed = provider === "openrouter";
+          rows.appendChild(groupHeader(provider, picked.length, unpicked.length, collapsed));
+          picked.forEach((model, index) =>
+            rows.appendChild(rowFor(model, { up: index > 0, down: index < picked.length - 1 })),
+          );
+          if (collapsed) {
+            const searchTr = document.createElement("tr");
+            searchTr.className = "catalog-search";
+            const searchTd = document.createElement("td");
+            searchTd.colSpan = 7;
+            const input = document.createElement("input");
+            input.type = "search";
+            input.placeholder =
+              "Search " + unpicked.length + " more " + providerLabelFor(provider).split(" —")[0] + " models to add…";
+            input.value = catalogSearch[provider] || "";
+            input.dataset.searchProvider = provider;
+            input.oninput = () => {
+              catalogSearch[provider] = input.value;
+              activeCatalogSearch = provider;
+              renderModelCatalog();
+            };
+            searchTd.appendChild(input);
+            searchTr.appendChild(searchTd);
+            rows.appendChild(searchTr);
+            const query = (catalogSearch[provider] || "").trim().toLowerCase();
+            if (query) {
+              unpicked
+                .filter(
+                  (model) => model.id.toLowerCase().includes(query) || (model.name || "").toLowerCase().includes(query),
+                )
+                .slice(0, 25)
+                .forEach((model) => rows.appendChild(rowFor(model, null)));
+            }
+          } else {
+            unpicked.forEach((model) => rows.appendChild(rowFor(model, null)));
+          }
+        });
+        newModels.forEach((model) => {
+          const tr = document.createElement("tr");
+          const nameTd = document.createElement("td");
+          nameTd.textContent = model.displayName || model.id;
+          const badges = document.createElement("span");
+          badges.className = "row-badges";
+          badges.appendChild(badge("new", "info"));
+          nameTd.appendChild(badges);
+          tr.appendChild(nameTd);
+          const idTd = document.createElement("td");
+          idTd.className = "mono";
+          idTd.textContent = model.id;
+          tr.appendChild(idTd);
+          const provTd = document.createElement("td");
+          provTd.textContent = providerLabelFor(model.provider).split(" —")[0];
+          tr.appendChild(provTd);
+          const srcTd = document.createElement("td");
+          srcTd.textContent = "Not in catalog";
+          srcTd.className = "muted";
+          tr.appendChild(srcTd);
+          tr.appendChild(document.createElement("td"));
+          tr.appendChild(document.createElement("td"));
+          const actionTd = document.createElement("td");
+          const add = document.createElement("button");
+          add.className = "primary";
+          add.textContent = "Add to catalog";
+          add.onclick = () => prefillCustomProvider(model.provider, model);
+          actionTd.appendChild(add);
+          tr.appendChild(actionTd);
+          rows.appendChild(tr);
+        });
+        if (activeCatalogSearch) {
+          const focused = rows.querySelector('input[data-search-provider="' + activeCatalogSearch + '"]');
+          activeCatalogSearch = null;
+          if (focused) {
+            focused.focus();
+            focused.setSelectionRange(focused.value.length, focused.value.length);
+          }
+        }
+      }
+      async function discoverProviderModels(provider) {
+        const button = document.querySelector('[data-discover="' + provider + '"]');
+        if (button) button.disabled = true;
+        setStatus("st-model-catalog", "Syncing " + providerLabelFor(provider).split(" —")[0] + "…", "saving", true);
+        const r = await api("GET", "/api/model-providers/" + encodeURIComponent(provider) + "/models");
+        if (button) button.disabled = false;
+        if (!r.ok || !r.data) {
+          setStatus("st-model-catalog", "Provider unreachable.", "err", true);
+          return;
+        }
+        if (r.data.error) {
+          const message =
+            r.data.error === "no_key"
+              ? "No key configured for this provider."
+              : r.data.error === "unreachable"
+                ? "Provider unreachable."
+                : "Provider returned " + String(r.data.error).replace("status_", "HTTP ") + ".";
+          setStatus("st-model-catalog", message, "err", true);
+          return;
+        }
+        modelDiscovery[provider] = {
+          provider,
+          new: Array.isArray(r.data.new) ? r.data.new : [],
+          missing: Array.isArray(r.data.missing) ? r.data.missing : [],
+        };
+        renderModelCatalog();
+        const label = providerLabelFor(provider).split(" —")[0];
+        setStatus(
+          "st-model-catalog",
+          label +
+            ": " +
+            modelDiscovery[provider].new.length +
+            " new, " +
+            modelDiscovery[provider].missing.length +
+            " missing.",
+          "ok",
+          true,
+        );
+      }
+      document.querySelectorAll("[data-discover]").forEach((button) => {
+        button.onclick = () => void discoverProviderModels(button.dataset.discover);
+      });
       function openOnboardingTarget(target) {
         setView("connectors");
         setTimeout(

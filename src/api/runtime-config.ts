@@ -17,6 +17,7 @@ import {
   type HarnessId,
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
+import { dropHidden } from "../model/model-classification.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 
 export type RuntimeDeps = Pick<
@@ -89,7 +90,10 @@ export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: Scope
   }
   const effective = scopeOverride ?? orgDefault;
   const selected = [orgDefault, scopeOverride, effective].filter((choice) => choice !== null);
+  const selectedIds = selected.map((choice) => choice.modelId);
   const allowlist = await config.getWebuiModelsDurable(org);
+  const classifications = await config.getModelClassificationsDurable(org);
+  const keepIds = allowlist != null ? [...selectedIds, ...allowlist] : selectedIds;
   const modelsByHarness = Object.fromEntries(
     approvedHarnesses.map((harnessId) => {
       const ids =
@@ -107,7 +111,7 @@ export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: Scope
         )
           ids.push(choice.modelId);
       }
-      return [harnessId, serviceableModelIds(ids, providersFor(harnessId))];
+      return [harnessId, serviceableModelIds(dropHidden(ids, classifications, keepIds), providersFor(harnessId))];
     }),
   );
   const advertisedModelIds = new Set(Object.values(modelsByHarness).flat());

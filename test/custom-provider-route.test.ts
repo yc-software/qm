@@ -119,6 +119,39 @@ test("a rejected key blocks registration unless validate:false", async () => {
   }
 });
 
+test("a discovered model added as a custom provider resolves and becomes selectable in the picker", async () => {
+  const srv = start();
+  try {
+    const added = await fetch(`${srv.base}/v1/admin/custom-providers/anthropic-direct`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({
+        name: "Anthropic Direct",
+        protocol: "anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        models: [{ id: "claude-discovered-1", name: "Claude Discovered 1" }],
+        validate: false,
+      }),
+    });
+    assert.equal(added.status, 200);
+    assert.equal(String(resolveModel("claude-discovered-1")?.provider), "anthropic-direct");
+
+    const enabled = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/webui-models`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ ids: ["claude-discovered-1"] }),
+    });
+    assert.equal(enabled.status, 200);
+
+    const runtime = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    assert.equal(runtime.status, 200);
+    const models = ((await runtime.json()) as { modelsByHarness: Record<string, string[]> }).modelsByHarness.pi!;
+    assert.ok(models.includes("claude-discovered-1"));
+  } finally {
+    await srv.close();
+  }
+});
+
 test("bad specs are refused with a reason", async () => {
   const srv = start();
   try {
