@@ -13,6 +13,8 @@ type SecretCondition =
   | { kind: "service-absent"; service: DeclaredServiceName }
   | { kind: "all"; conditions: SecretCondition[] }
   | { kind: "any"; conditions: SecretCondition[] }
+  | { kind: "not"; condition: SecretCondition }
+  | { kind: "secret-mapped"; service: DeclaredServiceName; name: string }
   | { kind: "target"; target: QmConfig["target"] }
   | { kind: "model-provider"; provider: ModelProvider };
 
@@ -58,17 +60,44 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "OPENAI_API_KEY",
     service: "core",
+    // Mirrors the runtime gate (src/deployment/secret-schema.ts): the key is
+    // needed for the Codex harness or an OpenAI base model, UNLESS the Codex
+    // harness authenticates by ChatGPT subscription instead — a CODEX_AUTH_FILE
+    // or CODEX_AUTH_CREDENTIAL delivered by env or by a secretEnv mapping.
+    // Without this exemption `qm up` demands a key the runtime never reads.
     required: {
       when: {
-        kind: "any",
+        kind: "all",
         conditions: [
-          { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
-          { kind: "model-provider", provider: "openai" },
+          {
+            kind: "any",
+            conditions: [
+              { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
+              { kind: "model-provider", provider: "openai" },
+            ],
+          },
+          {
+            kind: "not",
+            condition: {
+              kind: "all",
+              conditions: [
+                { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
+                {
+                  kind: "any",
+                  conditions: [
+                    { kind: "env-present", service: "core", name: "CODEX_AUTH_FILE" },
+                    { kind: "env-present", service: "core", name: "CODEX_AUTH_CREDENTIAL" },
+                    { kind: "secret-mapped", service: "core", name: "CODEX_AUTH_CREDENTIAL" },
+                  ],
+                },
+              ],
+            },
+          },
         ],
       },
     },
     description:
-      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
+      'OpenAI API key: the Codex harness needs it unless a ChatGPT-subscription login is configured (CODEX_AUTH_FILE or CODEX_AUTH_CREDENTIAL), and it bills the base model when modelProvider is "openai".',
   },
   {
     name: "PUBLIC_API_URL",
@@ -490,6 +519,8 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
   if (condition.kind === "all") return condition.conditions.every((nested) => conditionMatches(config, nested));
   if (condition.kind === "any") return condition.conditions.some((nested) => conditionMatches(config, nested));
+  if (condition.kind === "not") return !conditionMatches(config, condition.condition);
+  if (condition.kind === "secret-mapped") return Boolean(config.secretEnv?.[condition.service]?.[condition.name]);
   if (condition.kind === "target") return config.target === condition.target;
   if (condition.kind === "model-provider") return effectiveModelProvider(config) === condition.provider;
   if (condition.kind === "env-all-absent") {
@@ -714,6 +745,8 @@ function conditionClause(condition: SecretCondition): string {
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;
   if (condition.kind === "all") return condition.conditions.map(conditionClause).join(" and ");
   if (condition.kind === "any") return condition.conditions.map(conditionClause).join(" or ");
+  if (condition.kind === "not") return `it is not the case that ${conditionClause(condition.condition)}`;
+  if (condition.kind === "secret-mapped") return `config secretEnv.${condition.service} maps ${condition.name}`;
   if (condition.kind === "target") return `the target is ${condition.target}`;
   if (condition.kind === "env-all-absent")
     return `none of env.${condition.service}.{${condition.names.join(", ")}} are set`;

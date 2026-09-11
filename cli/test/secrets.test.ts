@@ -224,6 +224,41 @@ test("an OpenAI base model and the Codex harness agree on one required key", () 
   assert.equal(matches[0]!.required, true);
 });
 
+test("a ChatGPT-subscription Codex login lifts the OPENAI_API_KEY requirement, matching the runtime gate", () => {
+  // The runtime (src/deployment/secret-schema.ts) exempts the key when
+  // HARNESS=codex and CODEX_AUTH_FILE or CODEX_AUTH_CREDENTIAL is configured;
+  // without the same exemption here, `qm up` refuses a deployment the runtime
+  // boots happily.
+  // Exempted configs drop the key from the catalog entirely, the same
+  // "absent rather than optional" shape the Codex rule already has when
+  // another provider is selected.
+  const hasOpenAIKey = (config: QmConfig) => computedSecrets(config).some((secret) => secret.name === "OPENAI_API_KEY");
+  const mapped = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "codex" } },
+    secretEnv: { core: { CODEX_AUTH_CREDENTIAL: "CODEX_AUTH_CREDENTIAL" } },
+  });
+  assert.equal(hasOpenAIKey(mapped), false);
+
+  const envDelivered = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "codex", CODEX_AUTH_CREDENTIAL: "cred-id" } },
+  });
+  assert.equal(hasOpenAIKey(envDelivered), false);
+
+  const authFile = makeConfig({ env: { core: { HARNESS: "codex", CODEX_AUTH_FILE: "~/.codex/auth.json" } } });
+  assert.equal(hasOpenAIKey(authFile), false);
+
+  // The exemption is Codex-scoped: an OpenAI base model on another harness
+  // still bills by API key regardless of a mapped credential.
+  const piOnOpenAI = makeConfig({
+    modelProvider: "openai",
+    env: { core: { HARNESS: "pi" } },
+    secretEnv: { core: { CODEX_AUTH_CREDENTIAL: "CODEX_AUTH_CREDENTIAL" } },
+  });
+  assert.equal(secretByName(piOnOpenAI, "OPENAI_API_KEY").required, true);
+});
+
 test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavior", () => {
   const deferred = makeConfig();
   assert.equal(secretByName(deferred, "ANTHROPIC_API_KEY").required, false);
