@@ -97,7 +97,7 @@ import { deepLinkPath, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
-import { splitLinks } from "./linkify";
+import { linkifiedText } from "./linkified-text";
 import { escapeLoneDollars } from "./markdown-dollars";
 import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
 import { splitStreamingMarkdown } from "./streaming-markdown";
@@ -1077,16 +1077,6 @@ export function createChatSurface(
     else readonlyRedraw?.();
   }
 
-  function linkifiedText(text: string): TemplateResult {
-    return html`${splitLinks(text).map((seg) =>
-      seg.kind === "link"
-        ? html`<a href=${seg.href} target="_blank" rel="noreferrer noopener" @click=${(e: Event) => e.stopPropagation()}
-            >${seg.href}</a
-          >`
-        : seg.text,
-    )}`;
-  }
-
   function pinnedStrip(): TemplateResult | typeof nothing {
     const pins = chatState.pins;
     if (!pins.length) return nothing;
@@ -1282,7 +1272,7 @@ export function createChatSurface(
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
               ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
-              ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
+              ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${linkifiedText(agent.state.errorMessage ?? "")}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
@@ -1540,7 +1530,7 @@ export function createChatSurface(
           <div class="assistant-body">
             ${showWork ? workBlock(work, isStreaming) : nothing} ${assistantContent(msg, isStreaming, showWork)}
             ${assistantFileList(deliveredFiles)}
-            ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
+            ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${linkifiedText(msg.errorMessage)}</div>` : nothing}
             ${msg.stopReason === "aborted" ? html`<div class="stopped-note">${icon(Ban, 13)}<span>Stopped</span></div>` : nothing}
             ${isStreaming ? nothing : messageMeta(msg, index)}
           </div>

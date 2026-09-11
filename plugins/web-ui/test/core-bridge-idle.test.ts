@@ -396,13 +396,18 @@ test("a refused run still shows its authored, user-facing reason", async () => {
   assert.equal(final.errorMessage, "you're not a member of that context");
 });
 
-test("a stored quarantine refusal renders the canned copy on the web, never the internal verdict", async () => {
+test("a stored quarantine refusal renders its admin history link on the web, never the internal verdict", async () => {
   setClock(() => 1_000_000);
   instantSleep();
   stubRuns([
     {
       status: "done",
-      result: { status: "refused", refusalKind: "security_quarantine", reason: "internal screening details" },
+      result: {
+        status: "refused",
+        refusalKind: "security_quarantine",
+        reason: "internal screening details",
+        adminUrl: "https://portal.example.com/admin/history/s/s-1",
+      },
       partial: "",
     },
   ]);
@@ -414,4 +419,5 @@ test("a stored quarantine refusal renders the canned copy on the web, never the 
   assert.equal(final.stopReason, "error");
   assert.doesNotMatch(final.errorMessage ?? "", /internal screening details/);
   assert.match(final.errorMessage ?? "", /security screen flagged/);
+  assert.match(final.errorMessage ?? "", /admin\/history\/s\/s-1/);
 });

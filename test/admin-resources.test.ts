@@ -125,6 +125,19 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.ok((byId.get("base-model")?.enumValues?.length ?? 0) > 0);
     assert.deepEqual(byId.get("security-posture")?.enumValues, ["dangerous", "auto", "strict"]);
     assert.deepEqual(byId.get("sharing-posture")?.enumValues, ["isolated", "open"]);
+    const postureLabel = (byId.get("security-posture") as { label?: string } | undefined)?.label ?? "";
+    assert.match(
+      postureLabel,
+      /Strict pauses every harness tool call for human approval except the two no-effect turn enders/,
+    );
+    assert.match(
+      postureLabel,
+      /Auto screens provenance-labelled external data and tool results before they reach the model/,
+    );
+    assert.match(postureLabel, /Dangerous has no content screening or posture-level pauses/);
+    assert.match(postureLabel, /predeclared command policy's approval rules and hard denials apply in every posture/);
+    assert.match(postureLabel, /Moving Auto to Strict replaces content screening with per-tool approvals/);
+    assert.doesNotMatch(postureLabel, /cannot weaken it|effectful harness tool/i);
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
     assert.equal(byId.has("import"), false);

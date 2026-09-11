@@ -122,3 +122,53 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   assert.doesNotMatch(note, /ch:C_UUID_FIXTURE/, "the link must not contain the threadRef");
   assert.doesNotMatch(note, /fully-internal/, "a turn failure is not a boundary refusal");
 });
+
+test("a quarantine refusal links the authorized viewer to the session holding the captured screen request", async () => {
+  const sessions = createMemorySessionStore();
+  const { runs } = createMemoryRunStore();
+  const threadRef = "dm:U1:quarantine";
+  const session = await sessions.getOrCreateByThread(threadRef, "dm", "personal:U1");
+  await sessions.recordLlmRequest(session.id, {
+    turnSeq: 0,
+    step: -1,
+    model: "mock-security",
+    scopeLabel: session.scopeId,
+    promptEnvelope: { messages: [{ role: "user", content: "screened payload" }] },
+  });
+  const { run } = await runs.enqueue({
+    sessionId: threadRef,
+    request: {
+      surface: "slack",
+      actor,
+      conversation: { kind: "dm", threadRef, audience: [actor] },
+      origin: { kind: "direct" },
+      text: "review this",
+      addressed: true,
+    },
+  });
+  const claimed = await runs.claimById(run.id, "w1", 60_000);
+  assert.ok(claimed?.leaseToken);
+  assert.equal(
+    await runs.complete(run.id, claimed.leaseToken, {
+      status: "refused",
+      refusalKind: "security_quarantine",
+      reason: "internal screening details",
+      sessionId: session.id,
+    }),
+    true,
+  );
+
+  const app = createApp({ sessions, runs, publicWebUrl: ADMIN } as unknown as AppDeps);
+  const visible = await app.getRun(run.id, "U1");
+  assert.equal(visible?.result?.adminUrl, `${ADMIN}/admin/history/s/${session.id}`);
+  assert.equal(await app.getRun(run.id, "U2"), null, "another DM participant cannot read the result or its link");
+  const linkedId = new URL(visible!.result!.adminUrl!).pathname.split("/").at(-1);
+  assert.equal(linkedId, session.id);
+  const captured = await sessions.listLlmRequests(linkedId!, { turnSeqs: [0] });
+  assert.equal(captured[0]?.step, -1);
+  assert.match(JSON.stringify(captured[0]?.promptEnvelope), /screened payload/);
+
+  const note = refusalNote(visible!.result!, "dm");
+  assert.match(note, new RegExp(`${ADMIN}/admin/history/s/${session.id}`));
+  assert.doesNotMatch(note, /internal screening details/);
+});

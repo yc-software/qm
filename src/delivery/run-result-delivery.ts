@@ -72,7 +72,13 @@ export function runResultDelivery(
     run.result.refusalKind === "security_quarantine" &&
     run.request.addressed
   ) {
-    return { destination, text: standaloneFailureText(run.result)!, provenance, idempotencyKey };
+    const adminUrl = run.result.sessionId ? adminUrlFor?.(run.result.sessionId) : undefined;
+    return {
+      destination,
+      text: standaloneFailureText({ ...run.result, ...(adminUrl ? { adminUrl } : {}) })!,
+      provenance,
+      idempotencyKey,
+    };
   }
   if (run.request.surfaceTools && run.result?.status !== "failed" && !run.result?.attachments?.length) return null;
   if (failed) {
@@ -95,7 +101,7 @@ export function runResultDelivery(
 }
 
 export type TurnFailureSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries">;
+  Pick<SessionStore, "get" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries">;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
@@ -145,7 +151,15 @@ export function wireRunResultDeliveries(
     }
     void (async () => {
       const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
-      const delivery = runResultDelivery(run, taskList, adminUrlFor);
+      let deliveryRun = run;
+      if (sessions && run.result?.sessionId) {
+        const session =
+          (await sessions.getByThread(run.result.sessionId)) ?? (await sessions.get(run.result.sessionId));
+        if (session && session.id !== run.result.sessionId) {
+          deliveryRun = { ...run, result: { ...run.result, sessionId: session.id } };
+        }
+      }
+      const delivery = runResultDelivery(deliveryRun, taskList, adminUrlFor);
       if (!delivery) return;
       await deliveries.enqueue(delivery);
     })().catch((err) =>

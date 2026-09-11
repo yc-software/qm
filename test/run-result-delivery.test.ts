@@ -101,7 +101,8 @@ test("runResultDelivery still posts a surface-spine turn's FAILURE note", () => 
   assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
 });
 
-test("runResultDelivery recovers a security quarantine without exposing its internal reason", () => {
+test("runResultDelivery recovers a security quarantine with its admin history link", () => {
+  const sessionId = "b6f3f9e2-0000-4000-8000-000000000001";
   const d = runResultDelivery(
     run({
       request: { ...turn("hi", "C9:171.001"), addressed: true },
@@ -109,11 +110,36 @@ test("runResultDelivery recovers a security quarantine without exposing its inte
         status: "refused",
         refusalKind: "security_quarantine",
         reason: "internal screening details",
+        sessionId,
       },
     }),
+    [],
+    (id) => `https://portal.example.com/admin/history/s/${id}`,
+  );
+  assert.equal(
+    d?.text,
+    `I couldn't act because my security screen flagged part of this message or its conversation context. Please retry without the flagged context, or ask an admin to review this quarantine in session history: https://portal.example.com/admin/history/s/${sessionId}`,
+  );
+  assert.doesNotMatch(d?.text ?? "", /internal screening details/);
+  assert.equal(d?.text.match(/https:\/\//g)?.length, 1);
+});
+
+test("runResultDelivery does not promise unreachable quarantine review without an admin history link", () => {
+  const d = runResultDelivery(
+    run({
+      request: { ...turn("hi", "C9:171.001"), addressed: true },
+      result: {
+        status: "refused",
+        refusalKind: "security_quarantine",
+        reason: "internal screening details",
+        sessionId: "legacy-thread-ref",
+      },
+    }),
+    [],
+    () => undefined,
   );
   assert.equal(d?.text, SECURITY_QUARANTINE_REFUSAL_TEXT);
-  assert.doesNotMatch(d?.text ?? "", /internal screening details/);
+  assert.doesNotMatch(d?.text ?? "", /admin|review|internal screening details/i);
 });
 
 test("runResultDelivery keeps an unprompted quarantine silent — a replay has no live handler to suppress it", () => {
@@ -258,6 +284,41 @@ const failureSessions = async () => {
   const session = await sessions.getOrCreateByThread("slack:D1", "dm", scope, undefined, "slack");
   return { sessions, session };
 };
+
+test("wired quarantine recovery resolves a stored thread ref to the canonical session history URL", async () => {
+  const { sessions, session } = await failureSessions();
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  wireRunResultDeliveries(
+    runs,
+    deliveries,
+    undefined,
+    (sessionId) => `https://portal.example.com/admin/history/s/${sessionId}`,
+    sessions,
+  );
+  const queued = (
+    await runs.enqueue({
+      sessionId: "slack:D1",
+      request: { ...turn("review", "D1:171.001"), addressed: true },
+    })
+  ).run;
+  const claimed = await runs.claimById(queued.id, "w1", 5_000);
+  await runs.complete(queued.id, claimed?.leaseToken ?? "", {
+    status: "refused",
+    refusalKind: "security_quarantine",
+    reason: "internal screening details",
+    sessionId: "slack:D1",
+  });
+
+  let pending = await deliveries.pending("slack");
+  for (let i = 0; i < 50 && pending.length === 0; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    pending = await deliveries.pending("slack");
+  }
+  assert.equal(pending.length, 1);
+  assert.match(pending[0]!.text, new RegExp(`/admin/history/s/${session.id}$`));
+  assert.doesNotMatch(pending[0]!.text, /slack:D1|internal screening details/);
+});
 
 const failedRun = (over: Partial<Run> = {}): Run =>
   run({

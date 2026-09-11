@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { refusalNote, refusalDelivery, postThenAckRunDelivery, isBoundaryRefusal } from "../src/slack/lib.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
+import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
 
@@ -59,9 +60,24 @@ test("refusalNote: a security quarantine is human-safe and hides the internal re
 
   assert.equal(
     note,
-    "I couldn't act because my security screen flagged part of this message or its conversation context. Please retry without the flagged context, or ask an admin to review the quarantine.",
+    "I couldn't act because my security screen flagged part of this message or its conversation context. Please retry without the flagged context, or ask an admin to review this quarantine in session history: https://portal.example.com/admin/?view=history&session=s-1",
   );
   assert.doesNotMatch(note, /Auto quarantined|unscreenable|Full error/);
+  assert.equal(note.match(/https:\/\//g)?.length, 1);
+});
+
+test("refusalNote: a quarantine without an admin URL gives retry guidance without promising review", () => {
+  const note = refusalNote(
+    {
+      refusalKind: "security_quarantine",
+      reason: "internal screening details",
+    },
+    "dm",
+  );
+
+  assert.equal(note, SECURITY_QUARANTINE_REFUSAL_TEXT);
+  assert.match(note, /Please retry without the flagged context/);
+  assert.doesNotMatch(note, /admin|review|internal screening details/i);
 });
 
 test("refusalDelivery: quarantine posts in-thread only when addressed; every unprompted refusal stays silent", () => {
