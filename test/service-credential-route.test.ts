@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp, serverDeps, type BuiltApp } from "../src/wiring.ts";
 import { type TurnRequest } from "../src/types.ts";
 import {
   mintCapabilityToken,
@@ -1008,20 +1008,19 @@ const dm = (text: string): TurnRequest => ({
 });
 
 function buildWithCapture() {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "svc-cred-stamp-")),
-      signingSecret: SECRET,
-      apiBaseUrl: "http://core.internal",
-    }),
-  );
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "svc-cred-stamp-")),
+    signingSecret: SECRET,
+    apiBaseUrl: "http://core.internal",
+  });
+  const built = buildApp(config);
   let captured: Record<string, string> | undefined;
   const realProvision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = async (layers, opts) => {
     captured = opts?.env;
     return realProvision(layers, opts);
   };
-  return { built, env: () => captured };
+  return { built, config, env: () => captured };
 }
 
 test("orchestrator stamps AGENT_CREDENTIAL_TOKEN with an org-wide credential's slug", async () => {
@@ -1137,8 +1136,47 @@ test("a channel grantee stamps the credential in that channel's conversations an
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "a member's DM must not get a channel-granted credential");
 });
 
+test("workgroup broker tracer", async () => {
+  const { built, env } = buildWithCapture();
+  await built.serviceCreds.setServiceCredential("org:default-org", {
+    slug: "project-a",
+    name: "Project A",
+    secret: "dummy-project-a-secret",
+    host: "h.example",
+  });
+  await built.acl.grant({
+    ownerScopeId: "org:default-org",
+    ref: "service-cred:project-a",
+    granteeScopeId: "group:A",
+    permission: "read",
+    grantedBy: "admin",
+  });
+  const request: TurnRequest = {
+    ...dm("!run echo hi"),
+    origin: { kind: "direct" },
+    conversation: {
+      kind: "group",
+      channelRef: "A",
+      threadRef: "grp:A:tracer",
+      audience: [internalActor],
+    },
+  };
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "ok", result.reason);
+  const token = env()?.AGENT_CREDENTIAL_TOKEN;
+  assert.ok(token, "an admitted workgroup turn must receive its granted broker credential");
+  const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+  assert.equal(claims?.scopeId, "group:A");
+  assert.deepEqual(claims?.credentials, ["project-a"]);
+  const prompt = await built.app.turn({ ...request, text: "!sysprompt" });
+  assert.match(prompt.reply ?? "", /project-a/);
+  assert.match(prompt.reply ?? "", /AGENT_CREDENTIAL_TOKEN/);
+});
+
 test("group project credentials follow the current turn across projects and a DM", async () => {
   const { built, env } = buildWithCapture();
+  await built.directory.upsertGroup("A", ["U1", "U2"]);
+  await built.directory.upsertGroup("B", ["U1", "U2"]);
   for (const project of ["A", "B"]) {
     await built.serviceCreds.setServiceCredential("org:default-org", {
       slug: `project-${project.toLowerCase()}`,
@@ -1154,15 +1192,24 @@ test("group project credentials follow the current turn across projects and a DM
       grantedBy: "admin",
     });
   }
-  for (const project of ["A", "B", "A"]) {
+  for (const [project, actorId] of [
+    ["A", "U1"],
+    ["B", "U1"],
+    ["A", "U2"],
+    ["A", "U3"],
+  ] as const) {
+    if (actorId === "U3") await built.directory.upsertGroup("A", ["U1", "U2", "U3"]);
+    const actor = { externalId: actorId };
     const request: TurnRequest = {
       ...dm("!run echo hi"),
+      surface: "web",
+      origin: { kind: "direct" },
+      actor,
       conversation: {
         kind: "group",
         channelRef: project,
-        threadRef: `grp:${project}:t1`,
-        audience: [internalActor],
-        publishMembers: [internalActor],
+        threadRef: `grp:${project}:${actorId}`,
+        audience: [actor],
       },
     };
     const result = await built.app.turn(request);
@@ -1171,6 +1218,7 @@ test("group project credentials follow the current turn across projects and a DM
     assert.ok(token);
     const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
     assert.equal(claims?.scopeId, `group:${project}`);
+    assert.equal(claims?.actorId, actorId);
     assert.deepEqual(claims?.credentials, [`project-${project.toLowerCase()}`]);
     const prompt = await built.app.turn({ ...request, text: "!sysprompt" });
     assert.match(prompt.reply ?? "", new RegExp(`project-${project.toLowerCase()}`));
@@ -1181,9 +1229,139 @@ test("group project credentials follow the current turn across projects and a DM
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
   const prompt = await built.app.turn(dm("!sysprompt"));
   assert.doesNotMatch(prompt.reply ?? "", /Shared org credentials available to you|project-a|project-b/);
+  assert.deepEqual(
+    (await built.acl.list())
+      .filter((grant) => grant.ref.startsWith("service-cred:"))
+      .map((grant) => grant.granteeScopeId)
+      .sort(),
+    ["group:A", "group:B"],
+  );
 });
 
-test("broker credentials and their prompt require a human turn with only internal participants", async () => {
+test("workgroup broker HTTP calls recheck current membership and credential availability", async () => {
+  const { built, config, env } = buildWithCapture();
+  await built.app.upsertDirectory([
+    { principalId: "U1", displayName: "Member One", type: "internal" },
+    { principalId: "U2", displayName: "Member Two", type: "internal" },
+  ]);
+  await built.directory.upsertGroup("A", ["U1", "U2"]);
+  await built.directory.upsertGroup("B", ["U2"]);
+  for (const project of ["A", "B"]) {
+    const slug = `project-${project.toLowerCase()}`;
+    await built.serviceCreds.setServiceCredential("org:default-org", {
+      slug,
+      name: project,
+      secret: `dummy-${slug}-secret`,
+      host: "upstream.example",
+    });
+    await built.acl.grant({
+      ownerScopeId: "org:default-org",
+      ref: `service-cred:${slug}`,
+      granteeScopeId: `group:${project}`,
+      permission: "read",
+      grantedBy: "admin",
+    });
+  }
+  const mintedAfter = Date.now();
+  const request: TurnRequest = {
+    ...dm("!run echo hi"),
+    surface: "web",
+    origin: { kind: "direct" },
+    conversation: {
+      kind: "group",
+      channelRef: "A",
+      threadRef: "grp:A:http",
+      audience: [internalActor, { externalId: "U2" }],
+    },
+  };
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "ok", result.reason);
+  const mintedBefore = Date.now();
+  const token = env()?.AGENT_CREDENTIAL_TOKEN;
+  const controlToken = env()?.AGENT_API_TOKEN;
+  assert.ok(token);
+  assert.ok(controlToken);
+  const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+  assert.ok(claims);
+  assert.equal(claims.actorId, "U1");
+  assert.equal(claims.scopeId, "group:A");
+  assert.equal(claims.aud, CREDENTIAL_BROKER_AUD);
+  assert.equal(claims.liveActor, undefined);
+  assert.deepEqual(claims.credentials, ["project-a"]);
+  assert.ok(claims.exp >= mintedAfter + CAPABILITY_TTL_MS);
+  assert.ok(claims.exp <= mintedBefore + CAPABILITY_TTL_MS);
+  assert.equal(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, claims.exp), null);
+  const upstreamCalls: Array<{ url: string; headers: Record<string, string> }> = [];
+  const server = createServer(built.app, {
+    ...serverDeps(config, built),
+    brokerFetch: async (url, init) => {
+      upstreamCalls.push({ url, headers: init.headers });
+      return { status: 200, contentType: "application/json", text: async () => '{"course":"A"}' };
+    },
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const call = (body: object = {}, capability = token) =>
+    fetch(`${base}/v1/credentials/broker`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-agent-capability": capability },
+      body: JSON.stringify({ credential: "project-a", url: "https://upstream.example/course", ...body }),
+    });
+  try {
+    const allowed = await call();
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(await allowed.json(), {
+      status: 200,
+      contentType: "application/json",
+      body: '{"course":"A"}',
+    });
+    assert.deepEqual(upstreamCalls, [
+      {
+        url: "https://upstream.example/course",
+        headers: { Authorization: "Bearer dummy-project-a-secret" },
+      },
+    ]);
+    const expanded = await call({ credential: "project-b", scopeId: "group:B", credentials: ["project-b"] });
+    assert.equal(expanded.status, 403);
+    assert.equal(((await expanded.json()) as { error: string }).error, "not_entitled");
+    const bodyScope = await call({ scopeId: "group:B" });
+    assert.equal(bodyScope.status, 200);
+    assert.equal(((await bodyScope.json()) as { body: string }).body, '{"course":"A"}');
+    assert.equal((await call({}, controlToken)).status, 403);
+    const expired = await mintCapabilityToken({ ...claims, exp: Date.now() - 1 }, TEST_CAPABILITY_SECRET);
+    assert.equal((await call({}, expired)).status, 401);
+    assert.equal(upstreamCalls.length, 2);
+
+    await built.directory.upsertGroup("A", ["U2"]);
+    const removed = await call({ scopeId: "group:B" });
+    assert.equal(removed.status, 403);
+    assert.match(await removed.text(), /scope membership has been revoked/);
+    const removedTurn = await built.app.turn(request);
+    assert.equal(removedTurn.status, "refused");
+
+    await built.directory.upsertGroup("A", ["U1", "U2"]);
+    await built.serviceCreds.setServiceCredential("org:default-org", {
+      slug: "project-a",
+      name: "A",
+      host: "upstream.example",
+      enabled: false,
+    });
+    const disabled = await call();
+    assert.equal(disabled.status, 404);
+    assert.equal(((await disabled.json()) as { error: string }).error, "credential_unavailable");
+
+    await built.app.upsertDirectory([{ principalId: "U2", displayName: "Member Two", type: "internal" }]);
+    const inactive = await call();
+    assert.equal(inactive.status, 401);
+    assert.match(await inactive.text(), /principal is no longer active/);
+    assert.equal((await built.app.turn(request)).status, "refused");
+    assert.equal(upstreamCalls.length, 2);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("granted broker credentials work across turn origins while env delivery retains its audience gate", async () => {
   const { built, env } = buildWithCapture();
   await built.serviceCreds.setServiceCredential("org:default-org", {
     slug: "shared",
@@ -1210,11 +1388,20 @@ test("broker credentials and their prompt require a human turn with only interna
   }
   const guest = { externalId: "guest", isExternalGuest: true };
   const requests: TurnRequest[] = [
-    ...(["direct", "automation", "ambient"] as const).map((kind) => ({
+    ...(["human", "direct", "automation", "ambient"] as const).map((kind) => ({
       ...dm("!run echo hi"),
       origin: { kind },
-      ...(kind !== "direct" ? { liveActor: true } : {}),
+      ...(["automation", "ambient"].includes(kind) ? { liveActor: true } : {}),
     })),
+    {
+      ...dm("!run echo hi"),
+      conversation: {
+        kind: "group" as const,
+        threadRef: "grp:A:no-publish-members",
+        channelRef: "A",
+        audience: [internalActor],
+      },
+    },
     {
       ...dm("!run echo hi"),
       conversation: {
@@ -1229,10 +1416,14 @@ test("broker credentials and their prompt require a human turn with only interna
   for (const request of requests) {
     const result = await built.app.turn(request);
     assert.equal(result.status, "ok", result.reason);
-    assert.ok(!env()?.AGENT_CREDENTIAL_TOKEN, JSON.stringify(request.origin));
+    const token = env()?.AGENT_CREDENTIAL_TOKEN;
+    assert.ok(token, JSON.stringify(request.origin));
+    const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+    assert.deepEqual(claims?.credentials, ["shared"]);
     assert.equal(env()?.SHARED_ENV, request.conversation.kind === "dm" ? "env-value" : undefined);
     const prompt = await built.app.turn({ ...request, text: "!sysprompt" });
-    assert.doesNotMatch(prompt.reply ?? "", /Shared org credentials available to you|AGENT_CREDENTIAL_TOKEN/);
+    assert.match(prompt.reply ?? "", /Shared org credentials available to you/);
+    assert.match(prompt.reply ?? "", /AGENT_CREDENTIAL_TOKEN/);
   }
   const beforeRefusal = env();
   const refused = await built.app.turn({
@@ -1248,6 +1439,10 @@ test("broker credentials and their prompt require a human turn with only interna
   assert.equal(refused.status, "refused");
   assert.equal(env(), beforeRefusal);
   assert.doesNotMatch(refused.reply ?? "", /Shared org credentials available to you|AGENT_CREDENTIAL_TOKEN/);
+  const guestRefused = await built.app.turn({ ...dm("!run echo hi"), actor: guest });
+  assert.equal(guestRefused.status, "refused");
+  assert.match(guestRefused.reason ?? "", /non-internal principals/);
+  assert.equal(env(), beforeRefusal);
 });
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {

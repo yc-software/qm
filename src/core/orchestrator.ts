@@ -1393,7 +1393,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           deps.capabilitySecret ?? deps.signingSecret,
         );
-        if (deps.serviceCreds && liveTurn) {
+        if (deps.serviceCreds) {
           const records = serviceCredRecords;
           const enabled = new Set(
             records.filter((r) => r.enabled && r.hasSecret && r.delivery !== "env").map((r) => r.slug),
