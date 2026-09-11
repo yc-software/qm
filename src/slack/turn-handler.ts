@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { createRateLimiter } from "../ratelimit/rate-limiter.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import {
@@ -168,13 +167,9 @@ export function createTurnHandler(deps: {
   const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
-  const botIdMentionLog = createRateLimiter({ maxPerWindow: 1, windowMs: 60_000 });
 
-  async function acceptBotIdFallback(inc: Incoming): Promise<void> {
-    if (!inc.botIdFallback) return;
-    if (inc.kind === "channel") threads.mark(inc.channel, inc.threadTs ?? inc.ts, true);
-    if ((await botIdMentionLog.check("accepted")).allowed)
-      console.error(`[slack-plugin] bot-id mention accepted ch=${inc.channel} ts=${inc.ts}`);
+  function acceptBotIdFallback(inc: Incoming): void {
+    if (inc.botIdFallback && inc.kind === "channel") threads.mark(inc.channel, inc.threadTs ?? inc.ts, true);
   }
 
   async function botHasStakeInThread(client: any, channel: string, threadTs: string): Promise<boolean> {
@@ -516,14 +511,14 @@ export function createTurnHandler(deps: {
             queuedRunId = runId;
             inFlightRunByThread.set(threadRef, runId);
             accepted = true;
-            void acceptBotIdFallback(inc);
+            acceptBotIdFallback(inc);
             inc.ackGate?.persisted();
           },
           // Folded into a live run: the envelope is durably accepted just the same, but the run
           // stays pinned to its own handler — claiming it here would unpin it on the way out.
           onSteered: () => {
             accepted = true;
-            void acceptBotIdFallback(inc);
+            acceptBotIdFallback(inc);
             inc.ackGate?.persisted();
           },
           ...(ack
@@ -551,7 +546,7 @@ export function createTurnHandler(deps: {
             : {}),
         },
       );
-      if (!accepted && (result.status === "ok" || result.status === "react")) await acceptBotIdFallback(inc);
+      if (!accepted && (result.status === "ok" || result.status === "react")) acceptBotIdFallback(inc);
       await taskList?.settle();
       await goalNotice?.settle();
     } catch (err) {

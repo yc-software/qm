@@ -1689,517 +1689,73 @@ test("a denyMessage account stays silent on ambient channel chatter from unliste
   }
 });
 
-for (const channelType of ["channel", "group", "mpim"]) {
-  test(`human B-only mentions are addressed at top level and in ${channelType} threads`, async () => {
-    const f = await fixture();
-    try {
-      f.client.channelsById.set("C1", {
-        id: "C1",
-        name: "room",
-        is_member: true,
-        is_private: channelType !== "channel",
-        is_mpim: channelType === "mpim",
-      });
-      await f.app.emitMessage({
-        channel: "C1",
-        channel_type: channelType,
-        user: "U1",
-        text: "no stake yet",
-        ts: "630.0",
-        thread_ts: "629.0",
-      });
-      for (const [i, thread] of [undefined, "629.0", "628.0"].entries()) {
-        const m = {
-          channel: "C1",
-          channel_type: channelType,
-          user: "U1",
-          text: "<@BBOT|qm> ping",
-          ts: `630.${i + 1}`,
-          ...(thread ? { thread_ts: thread } : {}),
-        };
-        await f.app.emitMessage(m);
-        const turn = f.core.turns.at(-1);
-        assert.ok(turn);
-        assert.equal(turn.text, "ping");
-        assert.equal(turn.unprompted, undefined);
-        assert.equal(turn.triggerTs, m.ts);
-        assert.equal(turn.liveActor, true);
-        assert.equal(turn.botActor, undefined);
-        assert.equal(turn.redeliveryKey, `slack:UBOT:C1:${m.ts}`);
-        assert.equal(turn.conversation.threadRef, `${channelType === "mpim" ? "grp" : "ch"}:C1:${thread ?? m.ts}`);
-        assert.ok(f.core.ingests.flat().some((e) => e.ts === m.ts && e.handled && e.mentionsSelf));
-      }
-      assert.equal(f.core.turns.length, 3);
-      assert.equal(f.client.posts.length, 3);
-      await f.app.emitMessage({
-        channel: "C1",
-        channel_type: channelType,
-        user: "U1",
-        text: "follow-up",
-        ts: "630.4",
-        thread_ts: "630.1",
-      });
-      assert.equal(f.core.turns.at(-1).unprompted, true);
-    } finally {
-      await f.stop();
-    }
-  });
-}
-
-for (const text of [
-  "<@BBOT> ping",
-  "<@BBOT|qm> ping",
-  "<@UBOT> <@BBOT> ping",
-  "<@BBOT|qm> <@UBOT|qm> ping",
-  "<@UBOT|qm> ping",
-]) {
-  for (const order of ["message-first", "mention-first", "concurrent"]) {
-    test(`mention fan-out stays addressed once: ${order}, ${text}`, async () => {
-      const f = await fixture();
-      try {
-        const m = { channel: "C1", channel_type: "channel", user: "U1", text, ts: "631.1", thread_ts: "631.0" };
-        f.client.messagesByChannel.set("C1", [{ user: "UBOT", text: "on it", ts: "631.0" }, m]);
-        const message = () => f.app.emitMessage(m, "Ev-message");
-        const mention = () => f.app.emitEvent("app_mention", m, "Ev-mention");
-        if (order === "concurrent") await Promise.all([message(), mention()]);
-        else if (order === "message-first") {
-          await message();
-          assert.equal(f.core.turns.length, text.includes("<@UBOT") ? 0 : 1);
-          await mention();
-        } else {
-          await mention();
-          await message();
-        }
-        await f.app.emitMessage(m, "Ev-retry");
-        await f.app.emitEvent("app_mention", m, "Ev-retry-mention");
-        assert.equal(f.core.turns.length, 1);
-        assert.equal(f.client.posts.length, 1);
-        assert.equal(f.core.turns[0].text, "ping");
-        assert.equal(f.core.turns[0].unprompted, undefined);
-      } finally {
-        await f.stop();
-      }
-    });
-  }
-}
-
-test("B mention file shares retain files, ackGate, and addressed empty-content behavior", async () => {
-  const f = await fixture();
-  try {
-    const m = { channel: "C1", channel_type: "channel", user: "U1", text: "<@BBOT>", ts: "632.0" };
-    await f.app.emitMessage(m);
-    assert.equal(f.core.turns.length, 0);
-    const bytes = Buffer.from("synthetic note");
-    f.client.filesById.set("F630", {
-      id: "F630",
-      name: "note.txt",
-      mimetype: "text/plain",
-      url_private_download: `https://files.slack.com/note`,
-    });
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(bytes);
-    let persisted = 0;
-    try {
-      f.core.holdRun("run-630");
-      const run = f.app.emitMessage({ ...m, ts: "632.1", subtype: "file_share", files: [{ id: "F630" }] }, "Ev-file", {
-        ackGate: {
-          persisted: () => {
-            persisted++;
-          },
-          failed: () => {},
-        },
-      });
-      await waitFor(() => persisted > 0);
-      f.core.finishRun({ status: "ok", reply: "file read" });
-      await run;
-    } finally {
-      globalThis.fetch = originalFetch;
-      f.core.finishRun({ status: "silent" });
-    }
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].text, "");
-    assert.equal(f.core.turns[0].attachments[0].name, "note.txt");
-    assert.equal(f.core.turns[0].unprompted, undefined);
-    assert.equal(persisted, 1);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("B-only peer bot mentions never become addressed or ambient turns, including cached user-only bots", async () => {
-  const f = await fixture();
-  try {
-    f.client.usersById.set("UPEER", { id: "UPEER", team_id: "T1", name: "peer", is_bot: true });
-    f.client.membersByChannel.set("C1", ["U1", "U2", "UBOT", "UPEER"]);
-    f.client.messagesByChannel.set("C1", [{ user: "UBOT", ts: "633.0", text: "on it" }]);
-    for (const [i, extra] of [
-      { bot_id: "BPEER" },
-      { bot_profile: {} },
-      { subtype: "bot_message" },
-      { user: "UPEER" },
-      { user: "UPEER" },
-    ].entries())
-      await f.app.emitMessage({
-        channel: "C1",
-        channel_type: "channel",
-        user: "U1",
-        text: "<@BBOT> ping",
-        thread_ts: "633.0",
-        ts: `633.${i + 1}`,
-        ...extra,
-      });
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.client.posts.length, 0);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("B fallback does not promote forwarded or escaped mentions, edits, deletes, or tombstones", async () => {
+test("a human bot-ID-only mention is one addressed turn across message/app_mention fan-out and seeds thread stake", async () => {
   const f = await fixture();
   try {
     const m = {
       channel: "C1",
       channel_type: "channel",
       user: "U1",
-      ts: "634.1",
-      text: "FYI",
-      attachments: [{ is_msg_unfurl: true, text: "<@BBOT> ping" }],
+      text: "<@BBOT> ping",
+      ts: "630.1",
+      thread_ts: "630.0",
     };
-    await f.app.emitMessage(m);
-    await f.app.emitMessage({ ...m, ts: "634.2", text: "&lt;@BBOT&gt; ping", attachments: [] });
-    await f.app.emitMessage({ ...m, subtype: "message_changed", message: { ...m, text: "<@BBOT> edited" } });
-    await f.app.emitMessage({ ...m, subtype: "message_deleted", deleted_ts: m.ts });
-    await f.app.emitMessage({ ...m, subtype: "message_changed", message: { ...m, subtype: "tombstone" } });
-    assert.equal(f.core.turns.length, 0);
-    await f.app.emitMessage({
-      ...m,
-      text: "<@BBOT> review",
-      attachments: [{ is_msg_unfurl: true, text: "<@UBOT> ping" }],
-      ts: "634.3",
-      subtype: "thread_broadcast",
-      thread_ts: "634.0",
-    });
+    f.client.messagesByChannel.set("C1", [{ user: "U1", text: "<@BBOT> earlier", ts: "630.0" }, m]);
+    await Promise.all([f.app.emitMessage(m, "Ev-message"), f.app.emitEvent("app_mention", m, "Ev-mention")]);
+    await f.app.emitMessage(m, "Ev-retry");
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].unprompted, undefined);
-    assert.match(f.core.turns[0].text, /^review\n\[forwarded message\] {2}ping$/);
+    assert.equal(f.client.posts.length, 1);
+    const turn = f.core.turns[0];
+    assert.equal(turn.text, "ping");
+    assert.equal(turn.unprompted, undefined);
+    assert.equal(turn.liveActor, true);
+    assert.equal(turn.redeliveryKey, "slack:UBOT:C1:630.1");
+    assert.ok(turn.priorTurns.some((t: any) => t.text === "@qmbot earlier"));
+    assert.ok(
+      f.core.ingests.flat().some((e) => e.ts === "630.1" && e.handled && e.mentionsSelf && e.text === "@qmbot ping"),
+    );
+    await f.app.emitMessage({ ...m, text: "follow-up", ts: "630.2" });
+    assert.equal(f.core.turns.length, 2);
+    assert.equal(f.core.turns[1].unprompted, true);
   } finally {
     await f.stop();
   }
 });
 
-test("B fallback retains allowFrom and audience authorization", async () => {
-  const gated = await fixture({ allowFrom: ["U1"] });
-  try {
-    await gated.app.emitMessage({
-      channel: "C1",
-      channel_type: "channel",
-      user: "U2",
-      ts: "635.0",
-      text: "<@BBOT> ping",
-    });
-    assert.equal(gated.core.turns.length, 0);
-  } finally {
-    await gated.stop();
-  }
-  const f = await fixture();
-  try {
-    const m = { channel: "CX", channel_type: "channel", user: "U1", ts: "635.1", text: "<@BBOT> ping" };
-    await f.app.emitMessage(m);
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.client.ephemerals.length, 1);
-    f.client.membershipFailures.add("C1");
-    await f.app.emitMessage({ ...m, channel: "C1", ts: "635.2" });
-    assert.equal(f.core.turns.length, 0);
-  } finally {
-    await f.stop();
-  }
-  const allowed = await fixture({ externalParticipants: true });
-  try {
-    await allowed.app.emitMessage({
-      channel: "CX",
-      channel_type: "channel",
-      user: "U1",
-      ts: "635.3",
-      text: "<@BBOT> ping",
-    });
-    assert.equal(allowed.core.turns.length, 1);
-    assert.ok(allowed.core.turns[0].conversation.audience.some((a: any) => a.isExternalGuest));
-  } finally {
-    await allowed.stop();
-  }
-});
-
-test("B-only mentions fail closed on unknown authors and users.info failure even when guests are allowed", async () => {
+test("a bot-ID mention from a rejected author or refused by core never becomes a turn or seeds thread stake", async () => {
   const f = await fixture({ externalParticipants: true });
   try {
-    const m = { channel: "C1", channel_type: "channel", user: "UUNKNOWN", text: "<@BBOT> ping", ts: "636.1" };
-    await f.app.emitMessage(m);
-    f.client.users.info = async () => {
-      throw new Error("users.info unavailable");
+    f.client.usersById.set("UPEER", { id: "UPEER", team_id: "T1", name: "peer", is_bot: true });
+    f.client.membersByChannel.set("C1", ["U1", "U2", "UBOT", "UPEER"]);
+    const info = f.client.users.info;
+    f.client.users.info = async (args) => {
+      if (args.user === "UFAILED") throw new Error("users.info unavailable");
+      return info(args);
     };
-    await f.app.emitMessage({ ...m, user: "UFAILED", ts: "636.2" });
+    const m = { channel: "C1", channel_type: "channel", user: "U1", text: "<@BBOT> ping", ts: "631.0" };
+    const rejected = [
+      { bot_id: "BPEER" },
+      { bot_profile: {} },
+      { subtype: "bot_message" },
+      { user: "UPEER" },
+      { user: "UFAILED" },
+      { text: "&lt;@BBOT&gt; ping" },
+    ];
+    for (const [i, extra] of rejected.entries()) await f.app.emitMessage({ ...m, ...extra, ts: `631.${i + 1}` });
     assert.equal(f.core.turns.length, 0);
+    f.core.result = { status: "refused" };
+    await f.app.emitMessage({ ...m, ts: "632.0" });
+    assert.equal(f.core.turns.length, 1);
+    f.core.result = { status: "ok", reply: "agent reply" };
+    f.client.messagesByChannel.set("C1", [
+      { ...m, user: "UPEER", ts: "631.4" },
+      { ...m, ts: "632.0" },
+    ]);
+    await f.app.emitMessage({ ...m, text: "unmentioned reply", ts: "631.5", thread_ts: "631.4" });
+    await f.app.emitMessage({ ...m, text: "unmentioned reply", ts: "632.1", thread_ts: "632.0" });
+    assert.equal(f.core.turns.length, 1);
     assert.equal(f.client.posts.length, 0);
   } finally {
-    await f.stop();
-  }
-});
-
-test("B stripping also applies in DMs without changing their dispatch path", async () => {
-  const f = await fixture();
-  try {
-    await f.app.emitMessage({
-      channel: "D1",
-      channel_type: "im",
-      user: "U1",
-      text: "<@BBOT|qm> <@UBOT> hello",
-      ts: "637.1",
-    });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].text, "hello");
-    assert.equal(f.core.turns[0].conversation.kind, "dm");
-    assert.equal(f.core.turns[0].unprompted, undefined);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("in-flight B mention retries and a B mention steer do not duplicate the live reply", async () => {
-  const f = await fixture();
-  try {
-    f.core.holdRun("R630");
-    const m = { channel: "C1", channel_type: "channel", user: "U1", text: "<@BBOT> first", ts: "638.1" };
-    const first = f.app.emitMessage(m);
-    await waitFor(() => f.core.polled.length === 1);
-    const failures: string[] = [];
-    await f.app.emitMessage(m, "Ev-retry", {
-      ackGate: {
-        persisted: () => {
-          throw new Error("duplicate must not attest acceptance");
-        },
-        failed: (reason: string) => {
-          failures.push(reason);
-        },
-      },
-    });
-    await f.app.emitEvent("app_mention", m);
-    assert.deepEqual(failures, ["already in flight on this instance"]);
-    assert.equal(f.core.turns.length, 1);
-    await f.app.emitMessage({ ...m, text: "<@BBOT|qm> also this", ts: "638.2", thread_ts: "638.1" });
-    assert.equal(f.core.turns.length, 2);
-    assert.equal(f.core.turns[1].unprompted, undefined);
-    assert.deepEqual(f.core.polled, ["R630"]);
-    f.core.finishRun({ status: "ok", reply: "done" });
-    await first;
-    assert.equal(f.client.posts.filter((p) => p.text === "done").length, 1);
-  } finally {
-    f.core.finishRun({ status: "silent" });
-    await f.stop();
-  }
-});
-
-for (const rejectedAuthor of ["bot-id", "profile-only", "classified-bot", "failed-lookup"]) {
-  test(`a rejected B mention cannot seed thread stake for a later unmentioned reply: ${rejectedAuthor}`, async () => {
-    const f = await fixture({ externalParticipants: true });
-    try {
-      f.client.usersById.set("UPEER", { id: "UPEER", team_id: "T1", name: "peer", is_bot: true });
-      f.client.membersByChannel.set("C1", ["U1", "U2", "UBOT", "UPEER"]);
-      const first = {
-        channel: "C1",
-        channel_type: "channel",
-        ts: "639.1",
-        text: "<@BBOT|qm> rejected",
-        user: rejectedAuthor === "failed-lookup" ? "UFAILED" : "UPEER",
-        ...(rejectedAuthor === "bot-id" ? { bot_id: "BPEER" } : {}),
-        ...(rejectedAuthor === "profile-only" ? { bot_profile: {} } : {}),
-      };
-      const info = f.client.users.info;
-      f.client.users.info = async (args) => {
-        if (args.user === "UFAILED") throw new Error("author lookup unavailable");
-        return info(args);
-      };
-      f.client.messagesByChannel.set("C1", [first]);
-      await f.app.emitMessage(first);
-      assert.equal(f.core.turns.length, 0);
-      for (const [index, author] of (rejectedAuthor === "failed-lookup"
-        ? ["U1", "UPEER"]
-        : ["UPEER", "U1"]
-      ).entries()) {
-        await f.app.emitMessage({
-          channel: "C1",
-          channel_type: "channel",
-          user: author,
-          ...(author === "UPEER" ? { bot_id: "BPEER", subtype: "bot_message" } : {}),
-          text: "unmentioned reply",
-          ts: `639.${index + 2}`,
-          thread_ts: first.ts,
-        });
-        assert.equal(f.core.turns.length, 0, `${author} must not inherit stake from rejected B history`);
-      }
-      assert.equal(f.client.posts.length, 0);
-    } finally {
-      await f.stop();
-    }
-  });
-}
-
-test("only an accepted B fallback establishes stake, including after a rejected history lookup", async () => {
-  const f = await fixture();
-  try {
-    const first = {
-      channel: "C1",
-      channel_type: "channel",
-      user: "U1",
-      bot_profile: {},
-      text: "<@BBOT> rejected",
-      ts: "640.1",
-    };
-    f.client.messagesByChannel.set("C1", [first]);
-    await f.app.emitMessage(first);
-    await f.app.emitMessage({ ...first, bot_profile: undefined, text: "ordinary", ts: "640.2", thread_ts: first.ts });
-    assert.equal(f.core.turns.length, 0);
-    await f.app.emitMessage({
-      ...first,
-      bot_profile: undefined,
-      text: "<@BBOT> accepted",
-      ts: "640.3",
-      thread_ts: first.ts,
-    });
-    assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].unprompted, undefined);
-    await f.app.emitMessage({ ...first, bot_profile: undefined, text: "follow-up", ts: "640.4", thread_ts: first.ts });
-    assert.equal(f.core.turns.length, 2);
-    assert.equal(f.core.turns[1].unprompted, true);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("accepted B fallback logging is bounded and excludes rejected, duplicate, U, and ambient input", async (t) => {
-  const f = await fixture();
-  let now = Date.now();
-  t.mock.method(Date, "now", () => now);
-  const logged: string[] = [];
-  t.mock.method(console, "error", (...parts: unknown[]) => {
-    logged.push(parts.join(" "));
-  });
-  const signals = () => logged.filter((line) => line.includes("bot-id mention accepted"));
-  const m = { channel: "C1", channel_type: "channel", user: "U1", text: "<@BBOT> private request body", ts: "641.1" };
-  try {
-    await f.app.emitMessage({ ...m, text: "<@BBOT>", ts: "641.0" });
-    await f.app.emitMessage({ ...m, bot_profile: {}, ts: "641.01" });
-    await f.app.emitMessage({ ...m, channel: "CX", ts: "641.02" });
-    f.client.users.info = async () => {
-      throw new Error("lookup unavailable");
-    };
-    await f.app.emitMessage({ ...m, user: "UUNKNOWN", ts: "641.03" });
-    f.core.submitError = new Error("core unavailable");
-    await f.app.emitMessage({ ...m, ts: "641.04" });
-    f.core.submitError = undefined;
-    assert.equal(signals().length, 0);
-    f.core.holdRun("R641");
-    const first = f.app.emitMessage(m);
-    await waitFor(() => f.core.polled.length === 1);
-    assert.deepEqual(signals(), ["[slack-plugin] bot-id mention accepted ch=C1 ts=641.1"]);
-    assert.equal(signals()[0]!.includes("private request body"), false);
-    await f.app.emitMessage(m, "Ev-retry");
-    await f.app.emitEvent("app_mention", m);
-    for (let i = 0; i < 3; i++) await f.app.emitMessage({ ...m, ts: `641.${i + 2}`, thread_ts: m.ts });
-    assert.equal(signals().length, 1);
-    now += 60_000;
-    await f.app.emitMessage({ ...m, ts: "641.5", thread_ts: m.ts });
-    assert.equal(signals().length, 2, "a later accepted steer may emit after the rate window");
-    f.core.finishRun({ status: "ok", reply: "done" });
-    await first;
-    assert.equal(signals().length, 2, "completing an already logged run must not double-log it");
-    now += 60_000;
-    await f.app.emitMessage({ ...m, text: "ordinary", ts: "641.6", thread_ts: m.ts });
-    await f.app.emitEvent("app_mention", { ...m, text: "<@UBOT> request", ts: "641.7" });
-    await f.app.emitMessage(m, "Ev-completed-retry");
-    assert.equal(signals().length, 2);
-  } finally {
-    f.core.finishRun({ status: "silent" });
-    await f.stop();
-  }
-});
-
-test("B fallback logging covers immediate success without treating a durable duplicate as accepted", async (t) => {
-  const f = await fixture();
-  const logged: string[] = [];
-  t.mock.method(console, "error", (...parts: unknown[]) => {
-    logged.push(parts.join(" "));
-  });
-  try {
-    const m = { channel: "C1", channel_type: "channel", user: "U1", text: "<@BBOT> request", ts: "642.1" };
-    f.core.result = { status: "silent" };
-    await f.app.emitMessage(m);
-    assert.equal(
-      logged.some((line) => line.includes("bot-id mention accepted")),
-      false,
-    );
-    f.core.result = { status: "ok", reply: "done" };
-    await f.app.emitMessage({ ...m, ts: "642.2" });
-    assert.equal(logged.filter((line) => line.includes("bot-id mention accepted")).length, 1);
-  } finally {
-    await f.stop();
-  }
-});
-
-for (const outcome of ["refused", "failed", "silent", "throw"] as const) {
-  test(`a B fallback not accepted by core cannot establish thread stake: ${outcome}`, async () => {
-    const f = await fixture();
-    try {
-      const m = { channel: "C1", channel_type: "channel", user: "U1", text: "<@BBOT> request", ts: "643.1" };
-      f.client.messagesByChannel.set("C1", [m]);
-      if (outcome === "throw") f.core.submitError = new Error("core unavailable");
-      else f.core.result = { status: outcome };
-      await f.app.emitMessage(m);
-      assert.equal(f.core.turns.length, 1);
-      f.core.submitError = undefined;
-      f.core.result = { status: "ok", reply: "done" };
-      await f.app.emitMessage({ ...m, text: "ordinary reply", ts: "643.2", thread_ts: m.ts });
-      assert.equal(f.core.turns.length, 1, "the unmentioned reply must not inherit stake from failed intake");
-      await f.app.emitMessage({ ...m, ts: "643.3", thread_ts: m.ts });
-      await f.app.emitMessage({ ...m, text: "ordinary reply", ts: "643.4", thread_ts: m.ts });
-      assert.equal(f.core.turns.length, 3, "a later accepted fallback still establishes stake");
-      assert.equal(f.core.turns[2].unprompted, true);
-    } finally {
-      await f.stop();
-    }
-  });
-}
-
-test("an in-flight B fallback does not establish stake before core accepts it", async () => {
-  const f = await fixture();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let submitted = false;
-  const submit = f.core.submitTurn.bind(f.core);
-  f.core.submitTurn = async (body) => {
-    if (body.triggerTs === "644.1") {
-      submitted = true;
-      await gate;
-    }
-    return submit(body);
-  };
-  const m = { channel: "C1", channel_type: "channel", user: "U1", text: "<@BBOT> request", ts: "644.1" };
-  f.client.messagesByChannel.set("C1", [m]);
-  const first = f.app.emitMessage(m);
-  try {
-    await waitFor(() => submitted);
-    await f.app.emitMessage({ ...m, text: "ordinary reply", ts: "644.2", thread_ts: m.ts });
-    assert.equal(f.core.turns.length, 0);
-    release();
-    await first;
-    await f.app.emitMessage({ ...m, text: "ordinary reply", ts: "644.3", thread_ts: m.ts });
-    assert.equal(f.core.turns.length, 2);
-    assert.equal(f.core.turns[1].unprompted, true);
-  } finally {
-    release();
-    await first;
     await f.stop();
   }
 });

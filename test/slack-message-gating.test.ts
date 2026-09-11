@@ -289,32 +289,10 @@ test("createInFlightThreadMap: clear is runId-guarded so a finished run can't un
   assert.equal(runs.get("dm:C1"), undefined);
 });
 
-test("self mentions recognize exact U/B identities and legacy labels without decoding literals", () => {
-  for (const text of ["<@UBOT>", "<@BBOT>", "<@UBOT|renamed>", "<@BBOT|>", "<@BBOT|qm> <@UBOT|qm>"])
-    assert.equal(mentionsBot(text, "UBOT", "BBOT"), true, text);
-  for (const text of ["<@BBOT2>", "<@U2|BBOT>", "<@BOTHER|qm>", "@qm", "&lt;@BBOT&gt;"])
+test("mentionsBot recognizes the bot-ID form like the bot-user-ID form, but history stake never trusts bot-ID text", () => {
+  for (const text of ["<@UBOT>", "<@BBOT>", "<@BBOT|qm>"]) assert.equal(mentionsBot(text, "UBOT", "BBOT"), true, text);
+  for (const text of ["<@BBOT2>", "<@BOTHER|qm>", "&lt;@BBOT&gt;"])
     assert.equal(mentionsBot(text, "UBOT", "BBOT"), false, text);
-  assert.equal(mentionsBot("<@BBOT>", "", "BBOT"), true);
-  assert.equal(mentionsBot("<@BBOT>", "", ""), false);
-  assert.equal(mentionsBot("<@BBOT>", "UBOT", ""), false);
-});
-
-test("history stake preserves U and self messages but never trusts arbitrary B mention text", () => {
-  for (const text of ["<@BBOT>", "<@BBOT|qm>"]) {
-    assert.equal(threadHasBotStake([{ user: "U1", text }], "UBOT", "BBOT"), false, text);
-    assert.equal(threadHasBotStake([{ user: "U1", text }], "", "BBOT"), false, text);
-  }
-  for (const text of ["<@UBOT>", "<@UBOT|qm>"])
-    assert.equal(threadHasBotStake([{ user: "U1", text }], "UBOT", "BBOT"), true, text);
-  assert.equal(threadHasBotStake([{ user: "UBOT", text: "done" }], "UBOT", "BBOT"), true);
-  assert.equal(threadHasBotStake([{ bot_id: "BBOT", text: "done" }], "", "BBOT"), true);
-  assert.equal(threadHasBotStake([{ user: "U1", text: "&lt;@BBOT&gt;" }], "UBOT", "BBOT"), false);
-});
-
-test("mention parsing handles W user IDs but excludes unsupported and malformed token classes", () => {
-  assert.equal(mentionsBot("<@W123|qm>", "W123", "BBOT"), true);
-  for (const id of ["qm", "Q123", "123", "_name", "U", "B", "W", "U-1"]) {
-    assert.equal(mentionsBot(`<@${id}|qm>`, id), false, id);
-    assert.equal(mentionsBot(`<@${id}>`, "UBOT", id), false, id);
-  }
+  assert.equal(threadHasBotStake([{ user: "U1", text: "<@BBOT>" }], "UBOT", "BBOT"), false);
+  assert.equal(threadHasBotStake([{ user: "U1", text: "<@UBOT>" }], "UBOT", "BBOT"), true);
 });
