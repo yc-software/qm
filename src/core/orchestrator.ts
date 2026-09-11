@@ -796,12 +796,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         for (const grant of await approvalGrants.all()) {
           if (!samePerson(grant.actorId, actor.id)) continue;
           if (!resolution.approvalGrantModes[grant.scope]) continue;
-          if (
-            grant.scope === "session" &&
-            grant.sessionId !== existing?.id &&
-            grant.sessionId !== swarmBinding?.rootSessionId
-          )
-            continue;
+          if (grant.scope === "session" && grant.sessionId !== existing?.id) continue;
           if ((grant.approvalKey ?? grant.command) !== flagGrantKey && grant.command !== "security-screen") continue;
           deps.auditLog.record({
             at: Date.now(),
@@ -1211,12 +1206,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const commandUses = new Map<string, number>();
       for (const grant of await approvalGrants.all()) {
         if (!samePerson(grant.actorId, actor.id)) continue;
-        if (
-          grant.scope === "session" &&
-          grant.sessionId !== session.id &&
-          grant.sessionId !== swarmBinding?.rootSessionId
-        )
-          continue;
+        if (grant.scope === "session" && grant.sessionId !== session.id) continue;
         if (!resolution.approvalGrantModes[grant.scope]) continue;
         commandUses.set(grant.approvalKey ?? grant.command, Infinity);
       }

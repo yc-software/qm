@@ -9,6 +9,304 @@ import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
+test("every agent swarm operation requires a running persisted run with a live lease", async () => {
+  for (const status of ["pending", "done", "failed", "expired"] as const) {
+    const { service, caller, runs } = await swarmFixture();
+    if (caller.kind !== "agent") throw new Error("wrong caller");
+    await service.spawn(caller, { requestId: "initial", text: "Work" });
+    const run = (await runs.get(caller.claims.runId!))!;
+    if (status === "pending") await runs.releaseLease(run.id, run.leaseToken!);
+    if (status === "done") await runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" });
+    if (status === "failed") await runs.fail(run.id, run.leaseToken!, "Failed", { retry: false });
+    if (status === "expired") await runs.heartbeat(run.id, run.leaseToken!, -1);
+    for (const operation of [
+      () => service.inspect(caller),
+      () => service.context(caller, {}),
+      () => service.spawn(caller, { requestId: "later", text: "Work" }),
+      () => service.send(caller, { requestId: "later", audience: ".[]", text: "Work" }),
+      () => service.read(caller, {}),
+    ])
+      await assert.rejects(operation, /active capability run required/, status);
+  }
+});
+
+test("ordinary root and worker turns bypass frozen rosters but swarm notifications still fail closed", async () => {
+  const { service, caller, root, sessions, runs, template } = await swarmFixture();
+  await service.spawn(caller, { requestId: "initial", text: "Work" });
+  await service.sweep();
+  await service.send(caller, {
+    requestId: "notify-root",
+    audience: `.[] | select(.id == "${root.id}")`,
+    text: "Reply",
+  });
+  await service.sweep();
+  const workerRun = (await runs.list()).find((run) => run.request.swarm)!;
+  const manual = { ...workerRun.request, swarm: undefined, origin: { kind: "human" as const } };
+  const binding = (await service.binding(manual))!;
+  await sessions.addParticipant(root.id, "bob");
+  assert.equal(await service.binding({ ...template, text: "Human follow-up" }), null);
+  assert.equal((await service.binding(manual))!.sandboxId, binding.sandboxId);
+  await sessions.addParticipant(binding.member.sessionId!, "bob");
+  assert.equal((await service.binding(manual))!.sandboxId, binding.sandboxId);
+  await assert.rejects(
+    service.binding({ ...manual, actor: { id: "stranger", type: "internal" } }),
+    /session access denied/,
+  );
+  for (const run of (await runs.list()).filter((run) => run.request.swarm))
+    await assert.rejects(service.binding({ ...run.request, runId: run.id }), /swarm authorization changed/);
+});
+
+test("sweeps use bounded pages and advance past pending cleanup to later swarms", async () => {
+  const first = await swarmFixture();
+  const fixtures = [first];
+  const batchSize = SWARM_LIMITS.sweepBatch ?? 16;
+  for (let index = 0; index < batchSize; index++)
+    fixtures.push(
+      await swarmFixture({
+        store: first.store,
+        sessions: first.sessions,
+        runs: first.runs,
+        lock: first.serviceOptions.lock,
+      }),
+    );
+  for (const fixture of fixtures) await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
+  const page = await first.store.pending();
+  assert.equal(page.length, batchSize);
+  const later = (await first.store.pending(page.at(-1)!.id))[0]!;
+  await first.store.update(page[0]!.id, (swarm) => {
+    Object.assign(swarm.members[1]!, { state: "failed", cleanupPending: true });
+  });
+  first.sandboxes.list = async () => {
+    throw new Error("cleanup unavailable");
+  };
+  await first.service.sweep();
+  assert.equal((await first.store.get(later.id))!.members[1]!.state, "reserved");
+  await first.service.sweep();
+  assert.equal((await first.store.get(later.id))!.members[1]!.state, "ready");
+  assert.equal((await first.store.get(page[0]!.id))!.members[1]!.cleanupPending, true);
+});
+
+test("provisioning deadlines isolate healthy swarms and retire late private resources without delivering", async (context) => {
+  const first = await swarmFixture();
+  const second = await swarmFixture({
+    store: first.store,
+    sessions: first.sessions,
+    runs: first.runs,
+    lock: first.serviceOptions.lock,
+  });
+  const forum = await first.sandboxes.create("alice", first.root.scopeId, "modal", "Forum");
+  const [slow] = await first.service.spawn(first.caller, { requestId: "slow", text: "Work", forumSandboxId: forum.id });
+  await second.service.spawn(second.caller, { requestId: "healthy", text: "Work" });
+  const pending = first.store.pending.bind(first.store);
+  first.store.pending = async (afterId) =>
+    (await pending(afterId)).sort((left, right) => {
+      if (left.id === first.root.id) return -1;
+      return right.id === first.root.id ? 1 : 0;
+    });
+  let release!: () => void;
+  let reached!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const create = first.sandboxes.create.bind(first.sandboxes);
+  const list = first.sandboxes.list.bind(first.sandboxes);
+  let inventoryReads = 0;
+  first.sandboxes.list = (...args) => {
+    inventoryReads++;
+    return list(...args);
+  };
+  let late!: ReturnType<typeof create>;
+  first.sandboxes.create = (...args) => {
+    if (args[4] !== slow!.id) return create(...args);
+    late = gate.then(() => create(...args));
+    reached();
+    return late;
+  };
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  try {
+    const sweep = first.service.sweep();
+    await entered;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal((await first.store.get(second.root.id))!.members[1]!.state, "ready");
+    context.mock.timers.tick((SWARM_LIMITS.provisionMs ?? 10_000) + 1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    context.mock.timers.tick(SWARM_LIMITS.reconcileMs);
+    await sweep;
+    assert.equal(inventoryReads, 0);
+    const failed = (await first.store.get(first.root.id))!.members[1]!;
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.cleanupPending, true);
+    await first.service.sweep();
+    assert.equal((await first.store.get(first.root.id))!.members[1]!.attempts, 1);
+    release();
+    await late;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await createSwarmService(first.serviceOptions).sweep();
+    assert.equal((await first.records.get(slow!.id))!.state, "retired");
+    assert.equal((await first.records.get(forum.id))!.state, "ready");
+    assert.equal((await first.store.get(first.root.id))!.members[1]!.cleanupPending, false);
+    assert.equal((await first.store.get(first.root.id))!.messages[0]!.notifications[slow!.id]!.state, "failed");
+    assert.equal(await first.sessions.getByThread(slow!.threadRef), null);
+  } finally {
+    release();
+    context.mock.timers.reset();
+  }
+});
+
+test("timed-out provider calls retain bounded execution slots across repeated sweeps", async (context) => {
+  const first = await swarmFixture();
+  const fixtures = [first];
+  for (let index = 0; index < SWARM_LIMITS.sweepConcurrency + 1; index++)
+    fixtures.push(
+      await swarmFixture({
+        store: first.store,
+        sessions: first.sessions,
+        runs: first.runs,
+        lock: first.serviceOptions.lock,
+      }),
+    );
+  for (const fixture of fixtures)
+    await fixture.service.spawn(fixture.caller, { requestId: "pool", count: 3, text: "Work" });
+  const releases: Array<() => void> = [];
+  const entered: string[] = [];
+  let active = 0;
+  let maximum = 0;
+  const provision = first.backend.provision;
+  first.backend.provision = async (layers, options) => {
+    entered.push(layers.find((layer) => layer.mode === "rw")!.scopeId);
+    maximum = Math.max(maximum, ++active);
+    try {
+      if (entered.length <= SWARM_LIMITS.sweepConcurrency) await new Promise<void>((resolve) => releases.push(resolve));
+      return await provision(layers, options);
+    } finally {
+      active--;
+    }
+  };
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  try {
+    const sweep = first.service.sweep();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(entered.length, SWARM_LIMITS.sweepConcurrency);
+    context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
+    await sweep;
+    await first.service.sweep();
+    assert.equal(entered.length, SWARM_LIMITS.sweepConcurrency);
+    for (const release of releases.slice(1)) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await first.service.sweep();
+    assert.equal(entered.length, fixtures.length * 3 - 2);
+    assert.equal(maximum, SWARM_LIMITS.sweepConcurrency);
+    assert.equal(active, 1);
+  } finally {
+    for (const release of releases) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    context.mock.timers.reset();
+  }
+});
+
+test("a fresh reconciler retires stale provisioning after the creating process is gone", async () => {
+  const { service, serviceOptions, caller, root, store, records, sandboxes, disks } = await swarmFixture();
+  const [member] = await service.spawn(caller, { requestId: "pool", text: "Work" });
+  const resource = await sandboxes.create("alice", root.scopeId, "modal", "Worker", member!.id);
+  await records.merge(resource.id, { state: "provisioning" });
+  await store.update(root.id, (swarm) => {
+    Object.assign(swarm.members[1]!, { state: "failed", cleanupPending: true });
+  });
+  await createSwarmService(serviceOptions).sweep();
+  assert.equal((await records.get(resource.id))!.state, "retired");
+  assert.equal(disks.has(resource.backingScopeId), false);
+  assert.equal((await store.get(root.id))!.pending, false);
+});
+
+test("late session creation remains fenced from cleanup until its side effect settles", async (context) => {
+  const fixture = await swarmFixture();
+  const [member] = await fixture.service.spawn(fixture.caller, { requestId: "pool", text: "Work" });
+  await fixture.store.update(fixture.root.id, (swarm) => {
+    swarm.members[1]!.attempts = 2;
+  });
+  let release!: () => void;
+  let reached!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const createSession = fixture.sessions.getOrCreateByThread.bind(fixture.sessions);
+  fixture.sessions.getOrCreateByThread = async (...args) => {
+    if (args[0] === member!.threadRef) {
+      reached();
+      await gate;
+    }
+    return createSession(...args);
+  };
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  try {
+    const sweep = fixture.service.sweep();
+    await entered;
+    context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
+    await sweep;
+    await createSwarmService(fixture.serviceOptions).sweep();
+    assert.equal((await fixture.store.get(fixture.root.id))!.members[1]!.cleanupPending, true);
+    assert.equal((await fixture.records.get(member!.id))!.state, "ready");
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await createSwarmService(fixture.serviceOptions).sweep();
+    assert.equal(await fixture.sessions.getByThread(member!.threadRef), null);
+    assert.equal((await fixture.records.get(member!.id))!.state, "retired");
+    assert.equal((await fixture.store.get(fixture.root.id))!.pending, false);
+  } finally {
+    release();
+    context.mock.timers.reset();
+  }
+});
+
+test("failed participant writes retain every sibling write before session cleanup", async () => {
+  const fixture = await swarmFixture();
+  await fixture.sessions.addParticipant(fixture.root.id, "bob");
+  const [member] = await fixture.service.spawn(fixture.caller, { requestId: "pool", text: "Work" });
+  await fixture.store.update(fixture.root.id, (swarm) => {
+    swarm.members[1]!.attempts = 2;
+  });
+  const addParticipant = fixture.sessions.addParticipant.bind(fixture.sessions);
+  let release!: () => void;
+  let reached!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  fixture.sessions.addParticipant = async (sessionId, principalId) => {
+    if (principalId === "alice") throw new Error("participant write failed");
+    reached();
+    await gate;
+    return addParticipant(sessionId, principalId);
+  };
+  const sweep = fixture.service.sweep();
+  try {
+    await entered;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await createSwarmService(fixture.serviceOptions).sweep();
+    const session = (await fixture.sessions.getByThread(member!.threadRef))!;
+    assert.ok(session);
+    assert.equal((await fixture.store.get(fixture.root.id))!.members[1]!.cleanupPending, true);
+    release();
+    await sweep;
+    await createSwarmService(fixture.serviceOptions).sweep();
+    assert.equal(await fixture.sessions.getByThread(member!.threadRef), null);
+    assert.deepEqual(await fixture.sessions.participantsOf(session.id), []);
+    assert.equal((await fixture.records.get(member!.id))!.state, "retired");
+    assert.equal((await fixture.store.get(fixture.root.id))!.pending, false);
+  } finally {
+    release();
+    await sweep;
+  }
+});
+
 test("initial pool creates durable ordinary sessions with distinct blank Modal disks", async () => {
   const fixture = await swarmFixture();
   const { service, caller, sandbox, root, sessions, store, runs } = fixture;

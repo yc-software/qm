@@ -11,6 +11,45 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
 
+test(
+  "Postgres completed runs cannot authorize agent operations but remain valid human initialization history",
+  { skip },
+  async () => {
+    const factory = createPostgresMapFactory(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const backing = factory.map<SwarmStorage>("swarms");
+    const store = createSwarmStore(backing);
+    let rootId: string | undefined;
+    try {
+      const fixture = await swarmFixture({
+        store,
+        sessions,
+        runs: runtime.runs,
+        lock: createPostgresAdvisoryLock(factory.pool),
+      });
+      rootId = fixture.root.id;
+      if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
+      const run = (await runtime.runs.get(fixture.caller.claims.runId!))!;
+      assert.equal(run.status, "running");
+      assert.equal(await runtime.runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" }), true);
+      assert.equal((await runtime.runs.get(run.id))!.status, "done");
+      await assert.rejects(
+        fixture.service.spawn(fixture.caller, { requestId: "completed", text: "Work" }),
+        /active capability run required/,
+      );
+      assert.equal(await store.get(rootId), null);
+      const human = { kind: "human" as const, actorId: "alice", sessionId: rootId, runId: run.id };
+      await fixture.service.spawn(human, { requestId: "human", text: "Work" });
+      await assert.rejects(fixture.service.inspect(fixture.caller), /active capability run required/);
+    } finally {
+      if (rootId) await backing.delete(rootId);
+      await runtime.close();
+      await factory.pool.close();
+    }
+  },
+);
+
 test("Postgres swarms atomically bound concurrent pools across independent clients", { skip }, async () => {
   const first = createPostgresMapFactory(databaseUrl!);
   const second = createPostgresMapFactory(databaseUrl!);

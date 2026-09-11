@@ -6,7 +6,7 @@ import type { RunStore } from "../runs/run-store.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { sleep } from "../util/async.ts";
+import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { selectAudience } from "./audience.ts";
@@ -126,8 +126,16 @@ export function createSwarmService(deps: {
       if (caller.claims.scopeId !== session.scopeId || !caller.claims.runId)
         throw new Error("session-bound capability required");
       const run = await runs.get(caller.claims.runId);
-      if (!run || run.request.conversation.threadRef !== session.threadRef || run.request.actor.id !== actorId)
+      if (
+        !run ||
+        run.sessionId !== session.threadRef ||
+        run.request.conversation.threadRef !== session.threadRef ||
+        run.request.actor.id !== actorId ||
+        conversationScope(run.request.conversation, actorId) !== session.scopeId
+      )
         throw new Error("capability run mismatch");
+      if (run.status !== "running" || !run.leaseToken || !run.leaseExpiresAt || run.leaseExpiresAt <= Date.now())
+        throw new Error("active capability run required");
     }
     const identity = threadIdentity(session.threadRef, session.id);
     const swarm = await store.get(identity.rootId);
@@ -266,16 +274,18 @@ export function createSwarmService(deps: {
     return updated.messages.find((message) => message.id === updated.messageRequests[key]!.messageId)!;
   }
 
-  async function deliver(swarm: Swarm): Promise<void> {
+  async function deliver(swarm: Swarm, step: <Result>(start: () => Promise<Result>) => Promise<Result>): Promise<void> {
     for (const message of swarm.messages) {
       for (const [recipientId, notification] of Object.entries(message.notifications)) {
         if (notification.state !== "pending") continue;
         const recipient = swarm.members.find((member) => member.id === recipientId);
         if (!recipient || recipient.state === "reserved") continue;
         if (recipient.state === "failed" || Date.now() >= swarm.expiresAt) {
-          await store.update(swarm.id, (current) => {
-            current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = { state: "failed" };
-          });
+          await step(() =>
+            store.update(swarm.id, (current) => {
+              current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = { state: "failed" };
+            }),
+          );
           continue;
         }
         const request: OrchestratorInput = {
@@ -286,88 +296,158 @@ export function createSwarmService(deps: {
           swarm: { swarmId: swarm.id, messageId: message.id, recipientId },
           sessionParticipantIds: swarm.participants,
         };
-        const { run } = await runs.enqueue({
-          sessionId: recipient.threadRef,
-          request,
-          dedupKey: `swarm:${message.id}:${recipientId}`,
-          maxAttempts: 2,
-        });
-        await store.update(swarm.id, (current) => {
-          current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = {
-            state: "queued",
-            runId: run.id,
-          };
-        });
+        const { run } = await step(() =>
+          runs.enqueue({
+            sessionId: recipient.threadRef,
+            request,
+            dedupKey: `swarm:${message.id}:${recipientId}`,
+            maxAttempts: 2,
+          }),
+        );
+        await step(() =>
+          store.update(swarm.id, (current) => {
+            current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = {
+              state: "queued",
+              runId: run.id,
+            };
+          }),
+        );
       }
     }
   }
 
   async function reconcile(rootId: string): Promise<void> {
+    const deadline = Date.now() + SWARM_LIMITS.reconcileMs;
     const claim = deps.lock.tryWithLock?.bind(deps.lock) ?? deps.lock.withLock.bind(deps.lock);
     await claim(`swarm-reconcile:${rootId}`, async () => {
-      let swarm = await store.get(rootId);
-      if (!swarm) return;
-      for (const member of swarm.members.filter((peer) => peer.state === "reserved")) {
-        try {
-          assertOpen(swarm);
-          await store.update(rootId, (current) => {
-            current.members.find((peer) => peer.id === member.id)!.attempts++;
-          });
-          if (!member.sandboxId) throw new Error("missing sandbox reservation");
-          if (member.forumSandboxId) {
-            const forum = await deps.sandboxes.access(swarm.ownerId, member.forumSandboxId);
-            if (forum.ownerScopeId !== swarm.scopeId) throw new Error("forum scope mismatch");
-          }
-          await deps.sandboxes.create(swarm.ownerId, swarm.scopeId, "modal", "Swarm worker", member.id);
-          const session = await sessions.getOrCreateByThread(
-            member.threadRef,
-            swarm.template.conversation.kind,
-            swarm.scopeId,
-            undefined,
-            "swarm",
-          );
-          await Promise.all(swarm.participants.map((principalId) => sessions.addParticipant(session.id, principalId)));
-          await sessions.updateTitle(session.id, `Swarm worker ${member.id.slice(0, 8)}`);
-          await store.update(rootId, (current) => {
-            Object.assign(
-              current.members.find((peer) => peer.id === member.id)!,
-              { state: "ready", sessionId: session.id },
+      const pending = new Set<Promise<unknown>>();
+      const step = <Result>(
+        start: () => Promise<Result>,
+        maxMs: number = SWARM_LIMITS.reconcileMs,
+      ): Promise<Result> => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return Promise.reject(new Error("swarm reconciliation deadline exceeded"));
+        const operation = start();
+        pending.add(operation);
+        void operation.then(
+          () => pending.delete(operation),
+          () => pending.delete(operation),
+        );
+        return withTimeout(() => operation, Math.min(remaining, maxMs), "swarm reconciliation");
+      };
+      try {
+        let swarm = await step(() => store.get(rootId));
+        if (!swarm) return;
+        for (const member of swarm.members.filter((peer) => peer.state === "reserved")) {
+          let provisioningTimedOut = false;
+          try {
+            assertOpen(swarm);
+            await step(() =>
+              store.update(rootId, (current) => {
+                current.members.find((peer) => peer.id === member.id)!.attempts++;
+              }),
             );
-          });
-        } catch (error) {
-          await store.update(rootId, (current) => {
-            const failed = current.members.find((peer) => peer.id === member.id)!;
-            failed.error = errMessage(error).slice(0, 500);
-            if (failed.attempts >= 3 || Date.now() >= current.expiresAt) {
-              failed.state = "failed";
-              failed.cleanupPending = true;
+            if (!member.sandboxId) throw new Error("missing sandbox reservation");
+            if (member.forumSandboxId) {
+              const forum = await step(() => deps.sandboxes.access(swarm!.ownerId, member.forumSandboxId!));
+              if (forum.ownerScopeId !== swarm.scopeId) throw new Error("forum scope mismatch");
             }
-          });
+            const provisionDeadline = Math.min(deadline, Date.now() + SWARM_LIMITS.provisionMs);
+            await step(
+              () => deps.sandboxes.create(swarm!.ownerId, swarm!.scopeId, "modal", "Swarm worker", member.id),
+              SWARM_LIMITS.provisionMs,
+            ).catch((error: unknown) => {
+              provisioningTimedOut = Date.now() >= provisionDeadline;
+              throw error;
+            });
+            const session = await step(() =>
+              sessions.getOrCreateByThread(
+                member.threadRef,
+                swarm!.template.conversation.kind,
+                swarm!.scopeId,
+                undefined,
+                "swarm",
+              ),
+            );
+            await Promise.all(
+              swarm.participants.map((principalId) => step(() => sessions.addParticipant(session.id, principalId))),
+            );
+            await step(() => sessions.updateTitle(session.id, `Swarm worker ${member.id.slice(0, 8)}`));
+            await step(() =>
+              store.update(rootId, (current) => {
+                if (Date.now() >= deadline) throw new Error("swarm reconciliation deadline exceeded");
+                assertOpen(current);
+                Object.assign(
+                  current.members.find((peer) => peer.id === member.id)!,
+                  { state: "ready", sessionId: session.id },
+                );
+              }),
+            );
+          } catch (error) {
+            await store.update(rootId, (current) => {
+              const failed = current.members.find((peer) => peer.id === member.id)!;
+              failed.error = errMessage(error).slice(0, 500);
+              if (
+                provisioningTimedOut ||
+                Date.now() >= deadline ||
+                failed.attempts >= 3 ||
+                Date.now() >= current.expiresAt
+              ) {
+                failed.state = "failed";
+                failed.cleanupPending = true;
+              }
+            });
+            if (pending.size || Date.now() >= deadline) return;
+          }
         }
-      }
-      swarm = await store.get(rootId);
-      for (const member of swarm?.members.filter((peer) => peer.cleanupPending) ?? []) {
-        const session = await sessions.getByThread(member.threadRef);
-        if (session && !(await sessions.deleteSessionIfEmpty(session.id))) continue;
-        if (member.sandboxId === member.id) {
-          const inventory = await deps.sandboxes.list(swarm!.ownerId, swarm!.scopeId);
-          if (inventory.sandboxes.some((resource) => resource.id === member.id))
-            await deps.sandboxes.retire(swarm!.ownerId, member.id);
+        if (pending.size) return;
+        swarm = await step(() => store.get(rootId));
+        for (const member of swarm?.members.filter((peer) => peer.cleanupPending) ?? []) {
+          const session = await step(() => sessions.getByThread(member.threadRef));
+          if (session && !(await step(() => sessions.deleteSessionIfEmpty(session.id)))) continue;
+          if (member.sandboxId === member.id) {
+            const inventory = await step(() => deps.sandboxes.list(swarm!.ownerId, swarm!.scopeId));
+            const resource = inventory.sandboxes.find((resource) => resource.id === member.id);
+            if (resource) await step(() => deps.sandboxes.retire(swarm!.ownerId, member.id));
+          }
+          await step(() =>
+            store.update(rootId, (current) => {
+              current.members.find((peer) => peer.id === member.id)!.cleanupPending = false;
+            }),
+          );
         }
-        await store.update(rootId, (current) => {
-          current.members.find((peer) => peer.id === member.id)!.cleanupPending = false;
-        });
+        if (swarm) await deliver(swarm, step);
+      } finally {
+        await Promise.allSettled(pending);
       }
-      if (swarm) await deliver(swarm);
     });
   }
 
   let sweeping: Promise<void> | undefined;
+  let afterId: string | undefined;
+  const reconciling = new Map<string, Promise<void>>();
   const sweep = (): Promise<void> => {
     sweeping ??= (async () => {
-      for (const swarm of await store.pending()) {
-        await reconcile(swarm.id).catch((error) => swallow("swarm outbox reconciliation", error));
-      }
+      const batch = await withTimeout(() => store.pending(afterId), SWARM_LIMITS.reconcileMs, "swarm pending batch");
+      afterId = batch.length === SWARM_LIMITS.sweepBatch ? batch.at(-1)!.id : undefined;
+      const remaining = batch.values();
+      await Promise.all(
+        Array.from({ length: Math.min(batch.length, SWARM_LIMITS.sweepConcurrency - reconciling.size) }, async () => {
+          for (const swarm of remaining) {
+            if (reconciling.has(swarm.id)) continue;
+            if (reconciling.size >= SWARM_LIMITS.sweepConcurrency) return;
+            const operation = reconcile(swarm.id)
+              .catch((error) => swallow("swarm outbox reconciliation", error))
+              .finally(() => {
+                reconciling.delete(swarm.id);
+              });
+            reconciling.set(swarm.id, operation);
+            await withTimeout(() => operation, SWARM_LIMITS.reconcileMs, "swarm reconciliation").catch((error) =>
+              swallow("swarm outbox reconciliation", error),
+            );
+          }
+        }),
+      );
     })().finally(() => {
       sweeping = undefined;
     });
@@ -522,6 +602,7 @@ export function createSwarmService(deps: {
         return null;
       }
       const identity = threadIdentity(session.threadRef, session.id);
+      if (!input.swarm && identity.rootId === session.id) return null;
       const swarm = await store.get(identity.rootId);
       if (!swarm) {
         if (input.swarm || session.threadRef.startsWith("swarm:")) throw new Error("unknown swarm");
@@ -530,6 +611,20 @@ export function createSwarmService(deps: {
       const member = swarm.members.find((peer) => peer.id === identity.memberId);
       if (!member || member.state !== "ready" || member.sessionId !== session.id || session.scopeId !== swarm.scopeId)
         throw new Error("invalid swarm membership");
+      if (!input.swarm) {
+        if (
+          !(await sessions.participantsOf(session.id)).includes(input.actor.id) ||
+          conversationScope(input.conversation, input.actor.id) !== session.scopeId ||
+          !(await deps.authorize({
+            actorId: input.actor.id,
+            scopeId: session.scopeId,
+            scopeVersion: input.scopeVersion,
+            members: input.conversation.audience,
+          }))
+        )
+          throw new Error("swarm session access denied");
+        return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
+      }
       if (input.swarm) {
         assertOpen(swarm);
         const message = swarm.messages.find((item) => item.id === input.swarm!.messageId);
