@@ -265,7 +265,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const doProvision = async (emit: typeof emitGapWork): Promise<SandboxHandle> => {
     const provisionStart = Date.now();
+    const swarmBinding = await deps.swarms?.binding(input);
     const handle = await deps.sandbox.provision(resolution.layers, {
+      ...(swarmBinding?.sandboxId ? { sandboxId: swarmBinding.sandboxId } : {}),
       env: connectorEnv,
       egress: resolution.egress,
       ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
@@ -378,7 +380,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const provisioned = (async () => {
       const resource = await deps.sandboxResources?.get(id);
       const ownerScope = resolution.layers.find((layer) => layer.mode === "rw")?.scopeId;
-      if (!resource || resource.ownerScopeId !== ownerScope)
+      if (!resource || (resource.ownerScopeId !== ownerScope && resource.ownerScopeId !== scopeId))
         throw new Error("sandbox does not belong to this conversation's writable scope");
       const handle = await deps.sandbox.provision(resolution.layers, {
         sandboxId: id,

@@ -63,6 +63,7 @@ import type { BrokeredLayerTool, LayerCredentialTool, DeploymentLayerRuntime } f
 import type { FileArtifactStore } from "../../files/file-artifact-store.ts";
 import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
+import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 
@@ -97,9 +98,11 @@ export interface OrchestratorInput extends Omit<
   queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
+  swarm?: SwarmTurn;
 }
 
 export interface OrchestratorDeps {
+  swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
   resolution: ResolutionService;

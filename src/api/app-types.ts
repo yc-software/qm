@@ -1,4 +1,5 @@
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
 import type {
   DeliveryProvenance,
   Grant,
@@ -258,6 +259,7 @@ export interface SessionSearchHit {
 }
 
 export interface App {
+  swarms?: SwarmService;
   turn(req: TurnRequest): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
@@ -556,6 +558,7 @@ export interface App {
 }
 
 export interface AppDeps {
+  swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
   sessions: SessionStore;
