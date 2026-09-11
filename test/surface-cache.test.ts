@@ -169,7 +169,11 @@ test("channel policy store: bot ledger round-trips and an omitted `bots` leaves 
 test("channel policy store: ambientEnabled is tri-state — unset by default, round-trips, omitted leaves it, null clears it", async () => {
   const store = createMemoryChannelPolicyStore();
   await store.set("C1", "watch the launch", { setBy: "U-admin" });
-  assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "unset by default — the size rule decides");
+  assert.equal(
+    (await store.get("C1"))?.ambientEnabled,
+    undefined,
+    "unset by default — a standing order or action-bot trigger decides",
+  );
   await store.set("C1", "watch the launch", { setBy: "U-admin", ambientEnabled: false });
   assert.equal((await store.get("C1"))?.ambientEnabled, false, "off persists");
   await store.set("C1", "watch the launch harder", { setBy: "U-admin" });
