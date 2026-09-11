@@ -1,3 +1,4 @@
+import { startDockerContainer, validateDockerEnv, dockerClientDefaults, type DockerContainer } from "./docker-api.ts";
 import { httpDeploymentLayerTransport, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
 import { randomBytes } from "node:crypto";
@@ -45,11 +46,11 @@ export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDepl
 
 const safe = (s: string): string => s.replace(/[^A-Za-z0-9_.-]/g, "-");
 const ORG_LABEL_KEY = "qm.org";
-const orgLabelArgs = (ctx: DockerCtx): string[] => ["--label", `${ORG_LABEL_KEY}=${ctx.config.orgId}`];
 const baseHostPort = (ctx: DockerCtx): number => dockerBasePort(ctx.config);
 
 interface DockerCtx {
   config: QmConfig;
+  dockerDefaults?: ReturnType<typeof dockerClientDefaults>;
   configDir: string;
   sandboxDir: string;
   network: string;
@@ -280,37 +281,24 @@ function ensurePostgres(ctx: DockerCtx, dryRun: boolean): string {
       password = state?.pgPassword ?? randomBytes(16).toString("hex");
     }
 
+    validateDockerEnv({ POSTGRES_PASSWORD: password });
     const stateOut: DeploymentState = { orgId: ctx.config.orgId, network: ctx.network, pgPassword: password };
     writeDeploymentState(stateOut);
 
     if (!containerRunning(pgName)) {
       step(`Postgres: starting ${pgName}`);
       docker(["rm", "-f", pgName], /No such container|is not running/);
-      const secretFile = writeSecretEnvFile({ POSTGRES_PASSWORD: password });
-      try {
-        docker([
-          "run",
-          "-d",
-          "--name",
-          pgName,
-          ...orgLabelArgs(ctx),
-          "--network",
-          ctx.network,
-          "--network-alias",
-          "pg",
-          "--restart",
-          "no",
-          "--env-file",
-          secretFile.path,
-          "-e",
-          "POSTGRES_DB=qm",
-          "-v",
-          `${pgVolume(ctx)}:/var/lib/postgresql/data`,
-          "postgres:16",
-        ]);
-      } finally {
-        secretFile.cleanup();
-      }
+      if (!inspectExists(["image", "inspect", "postgres:16"], /No such image/i)) dockerInherit(["pull", "postgres:16"]);
+      startDockerContainer({
+        name: pgName,
+        image: "postgres:16",
+        labels: { [ORG_LABEL_KEY]: ctx.config.orgId },
+        network: ctx.network,
+        aliases: ["pg"],
+        env: { ...ctx.dockerDefaults?.env, POSTGRES_PASSWORD: password, POSTGRES_DB: "qm" },
+        headers: ctx.dockerDefaults?.headers,
+        binds: [`${pgVolume(ctx)}:/var/lib/postgresql/data`],
+      });
     }
     return url(password);
   });
@@ -406,6 +394,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   }
   const virtualEnv = service === "core" ? virtualServiceEnv(config.services, config.env) : {};
   const env = {
+    ...ctx.dockerDefaults?.env,
     ...out,
     ...virtualEnv,
     ...hostedServiceEnv(config.services, config.env, service),
@@ -424,83 +413,47 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   return env;
 }
 
-function secretEnvKeys(ctx: DockerCtx, service: string): Set<string> {
-  const keys = new Set(Object.keys(secretValues(ctx, service)));
-  const plugin = ctx.config.plugins.find((entry) => entry.name === service);
-  if (ctx.signingSecret && plugin?.coreAccess !== false) keys.add("CORE_SIGNING_SECRET");
-  if (service === "core") {
-    keys.add("DATABASE_URL");
-    for (const key of ctx.sandboxSecretKeys) keys.add(key);
-  }
-  return keys;
-}
-
-function writeSecretEnvFile(entries: Record<string, string>): { path: string; cleanup: () => void } {
-  for (const [key, value] of Object.entries(entries)) {
-    if (/[\r\n]/.test(value)) {
-      throw new CliError(
-        `secret ${key} contains a newline — docker --env-file is line-based and cannot carry it. ` +
-          `Provide a single-line value (e.g. base64-encode PEM keys and decode in the consumer).`,
-      );
-    }
-  }
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  const path = join(dir, "secrets.env");
-  writeFileSync(
-    path,
-    `${Object.entries(entries)
-      .map(([k, v]) => `${k}=${v}`)
-      .join("\n")}\n`,
-    { mode: 0o600 },
-  );
-  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
-
-function pushEnvArgs(args: string[], env: Record<string, string>, secretKeys: Set<string>): () => void {
-  const secrets: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) {
-    if (secretKeys.has(k)) secrets[k] = v;
-    else args.push("-e", `${k}=${v}`);
-  }
-  if (!Object.keys(secrets).length) return () => {};
-  const file = writeSecretEnvFile(secrets);
-  args.push("--env-file", file.path);
-  return file.cleanup;
-}
-
-function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: string[]; cleanup: () => void } {
+function serviceContainer(ctx: DockerCtx, service: ServiceName, image: string): DockerContainer {
   const def = serviceDef(service);
-  const args = [
-    "run",
-    "-d",
-    "--name",
-    cname(ctx, service),
-    ...orgLabelArgs(ctx),
-    "--network",
-    ctx.network,
-    "--network-alias",
-    service,
-    "--network-alias",
-    `${cname(ctx, service)}.internal`,
-    "--restart",
-    "no",
-  ];
-  const cleanup = pushEnvArgs(args, serviceEnv(ctx, service), secretEnvKeys(ctx, service));
+  const container: DockerContainer = {
+    name: cname(ctx, service),
+    image,
+    network: ctx.network,
+    aliases: [service, `${cname(ctx, service)}.internal`],
+    labels: { [ORG_LABEL_KEY]: ctx.config.orgId },
+    env: serviceEnv(ctx, service),
+    headers: ctx.dockerDefaults?.headers,
+  };
   if (service === "core") {
-    args.push("-v", `${ctx.prefix}-coredata:/data`);
-    for (const m of layerMounts(ctx)) args.push("-v", m);
-    for (const m of skillMounts(ctx)) args.push("-v", m);
+    container.binds = [`${ctx.prefix}-coredata:/data`, ...layerMounts(ctx), ...skillMounts(ctx)];
     if (localSandboxActive(ctx.config)) {
       const socket = hostDockerSocket();
-      args.push("-v", `${socket.path}:/var/run/docker.sock`);
-      if (socket.gid) args.push("--group-add", socket.gid);
+      container.binds.push(`${socket.path}:/var/run/docker.sock`);
+      if (socket.gid) container.groups = [socket.gid];
     }
   }
   if (def.docker.hostPortOffset !== undefined) {
-    args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
+    container.port = { host: baseHostPort(ctx) + def.docker.hostPortOffset, container: def.docker.internalPort };
   }
-  args.push(image);
-  return { args, cleanup };
+  return container;
+}
+
+function pluginEnv(ctx: DockerCtx, plugin: ResolvedPlugin): Record<string, string> {
+  return {
+    ...ctx.dockerDefaults?.env,
+    ...(plugin.coreAccess === false ? {} : { CORE_API_URL: "http://core:8080" }),
+    ...orgEnv(
+      plugin.name,
+      ctx.config.orgId,
+      ctx.config.publicUrl,
+      ctx.config.services.includes("portal"),
+      brandEnvOf(ctx.config),
+    ),
+    PORT: "8080",
+    ...plugin.env,
+    ...(ctx.signingSecret && plugin.coreAccess !== false ? { CORE_SIGNING_SECRET: ctx.signingSecret } : {}),
+    ...secretValues(ctx, plugin.name),
+  };
 }
 
 function skillMounts(ctx: DockerCtx): string[] {
@@ -675,6 +628,11 @@ export async function dockerUp(
     );
   }
 
+  ctx.dockerDefaults = dockerClientDefaults();
+  validateDockerEnv(ctx.dockerDefaults.env);
+  ctx.databaseUrl = externalDatabaseUrl(ctx) ?? "";
+  for (const def of ordered(runnableServices(config.services))) validateDockerEnv(serviceEnv(ctx, def.name));
+  for (const plugin of plugins) validateDockerEnv(pluginEnv(ctx, plugin));
   if (localSandboxActive(config)) ensureLocalSandboxImage(config);
   ensureNetwork(ctx);
   ctx.databaseUrl = ensurePostgres(ctx, false);
@@ -684,12 +642,7 @@ export async function dockerUp(
     const image = resolveImage(ctx, def.name);
     docker(["rm", "-f", cname(ctx, def.name)], /No such container|is not running/);
     step(`starting ${def.name}`);
-    const run = runArgs(ctx, def.name, image);
-    try {
-      docker(run.args);
-    } finally {
-      run.cleanup();
-    }
+    startDockerContainer(serviceContainer(ctx, def.name, image));
     await waitReady(ctx, def.name);
     ok(`${def.name} ready`);
   }
@@ -698,37 +651,15 @@ export async function dockerUp(
     const image = resolvePluginImage(ctx, p);
     docker(["rm", "-f", cname(ctx, p.name)], /No such container|is not running/);
     step(`starting plugin ${p.name} (${image})`);
-    const args = [
-      "run",
-      "-d",
-      "--name",
-      cname(ctx, p.name),
-      ...orgLabelArgs(ctx),
-      "--network",
-      ctx.network,
-      "--network-alias",
-      p.name,
-      "--restart",
-      "no",
-    ];
-    const wiring = {
-      ...(p.coreAccess === false ? {} : { CORE_API_URL: "http://core:8080" }),
-      ...orgEnv(p.name, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
-      PORT: "8080",
-    };
-    const env = {
-      ...wiring,
-      ...p.env,
-      ...(ctx.signingSecret && p.coreAccess !== false ? { CORE_SIGNING_SECRET: ctx.signingSecret } : {}),
-      ...secretValues(ctx, p.name),
-    };
-    const cleanup = pushEnvArgs(args, env, secretEnvKeys(ctx, p.name));
-    args.push(image);
-    try {
-      docker(args);
-    } finally {
-      cleanup();
-    }
+    startDockerContainer({
+      name: cname(ctx, p.name),
+      image,
+      labels: { [ORG_LABEL_KEY]: ctx.config.orgId },
+      network: ctx.network,
+      aliases: [p.name],
+      env: pluginEnv(ctx, p),
+      headers: ctx.dockerDefaults?.headers,
+    });
     await waitPluginUp(cname(ctx, p.name));
     ok(`plugin ${p.name} running`);
   }
