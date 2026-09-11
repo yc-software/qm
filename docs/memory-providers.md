@@ -2,6 +2,87 @@
 
 QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture.
 
+## Built-in semantic recall (prototype)
+
+Configure an OpenAI-compatible embeddings endpoint to rank the built-in notebook's
+facts by cosine similarity across all notebooks authorized for the turn:
+
+```bash
+MEMORY_EMBEDDING_URL=https://your-provider.example/v1/embeddings
+MEMORY_EMBEDDING_MODEL=your-embedding-model
+MEMORY_EMBEDDING_API_KEY=your-provider-key
+```
+
+All three settings are required together. They configure the core, not the agent
+computer. The configured provider receives memory text and the retrieval query;
+choose an endpoint approved to handle that data. No provider is selected implicitly.
+Without these settings, notebook recall remains text-based. External providers
+retain their existing routes and credentials.
+
+- Text remains authoritative. The index stores normalized vectors keyed by fact
+  content hash and notebook scope in the existing `memory_vectors` durable map
+  (Postgres JSONB when `DATABASE_URL` is configured; in-process otherwise).
+  This prototype uses exact scans of the **authorized notebooks**, not a separate
+  vector database or approximate-nearest-neighbor index.
+- Indexing is lazy: the next recall embeds missing/changed facts in batches of 64,
+  reuses unchanged vectors, and prunes removed ones. Completed batches are saved
+  so a timeout doesn't restart a large backfill from zero. Changing the configured
+  endpoint or model rebuilds the index. Do not silently change a model behind a
+  fixed ID.
+- Each turn embeds the current message and up to 2,000 characters of recent,
+  audience-visible, non-quarantined user/assistant dialogue. Tool outputs are not
+  included. Existing external-provider `query` values remain unchanged.
+- Recall combines candidates from every authorized notebook under **one total
+  6,000-character budget**, including source labels. The current conversation's
+  candidates receive a modest `+0.04` cosine-ranking bonus; a substantially better
+  match from another scope still wins. Identical fact text is included once, with
+  its selected source. The relevance cutoff is applied **before** the bonus.
+  The prototype cutoff is cosine 0.2; both values need evaluation for the chosen
+  model. Neither is a calibrated probability of relevance. No always-loaded
+  summary is introduced. The query is embedded once for the combined recall.
+- Sharing posture remains the authority for the scope list. In Open mode, eligible
+  shared notebooks participate in automatic recall in DMs as well as rooms. Existing
+  membership checks, isolated-scope vetoes, attended-human restrictions, discovery
+  limits, and recall-off/writable-only settings still apply. Retrieval does not
+  discover additional scopes or expand write permissions.
+- Text search (`memory` action `search`, or `POST /v1/memory/search` with
+  `{"query":"distinctive terms","limit":20}`) remains independent of embeddings.
+  It searches full authorized notebooks with case-insensitive, all-term substring
+  matching, interleaving results so an early notebook does not fill the whole page.
+  Add `scope` (an exact ID from a result) to search just that notebook.
+- `memory` action `read` accepts the same optional `scope` to load an authorized
+  notebook, even with capture disabled. Without it, it reads the current notebook.
+  Remember/rewrite reject a `scope` parameter and still write only here.
+  `GET /v1/memory/self?scope=<id>` supports authorized scope reads too; the `org`
+  alias remains supported. The sandbox API intentionally retains its narrower
+  capability scope list: temporary Open-sharing access is available through the
+  attended turn's memory tools, **not exported to reusable bearer tokens**.
+- External providers retain their recall routes and failure policies. If they do
+  not expose scored candidates, their recalled text is budgeted as unscored fallback
+  (score 0.2); it is not sent to the built-in embedding provider. Scratch-log recall
+  is likewise retained as fallback. Without embedding configuration, authorized
+  notebook recall uses this bounded fallback rather than semantic ranking.
+- Embedding requests share an eight-second recall deadline. Provider failures fall
+  back to bounded recent **whole** bullets, with a generic warning; chat, writes,
+  and grep remain available. A text recheck prevents deleted facts from being
+  returned after a concurrent edit during embedding.
+
+Verification:
+
+```bash
+node --test test/cross-scope-memory.test.ts test/semantic-memory.test.ts test/semantic-memory-http.test.ts
+DATABASE_URL=postgres://... node --test test/semantic-memory-pg.test.ts
+# Optional live embedding smoke test; uses synthetic facts and a mock reply model
+# to inspect the actual context built by the running QM HTTP server:
+MEMORY_RECALL_LIVE=1 OPENROUTER_API_KEY=... node --test test/semantic-memory-http.test.ts
+```
+
+The initial implementation targets ordinary-sized personal/team notebooks. Large
+notebook backfills, index size, concurrent fleet traffic, and retrieval quality on
+representative real conversations still need broader evaluation before rollout.
+
+## External routing
+
 ```json
 {
   "providers": [

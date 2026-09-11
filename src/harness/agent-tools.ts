@@ -1128,12 +1128,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
       "It is NOT a file: never write it with `write` or shell commands (those land on your computer " +
       "and are silently lost). It persists across every conversation and surface (continuity — " +
-      "you're a colleague who remembers, not a fresh chat each time); this conversation can only " +
-      "ever touch its OWN memory, no one else's, by design. " +
+      "you're a colleague who remembers, not a fresh chat each time). Reads may span authorized " +
+      "notebooks; writes only change this conversation's own notebook. " +
       'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
       "across every notebook this conversation may read — check what you already know before asking. " +
-      "Every line is loaded into your context on every future turn, so memory is your most " +
-      "expensive storage: it is an index, not a datastore. Save pointers to data, never the data " +
+      "Only a bounded selection of memories is loaded into context; search the full notebooks " +
+      "for facts missing from that selection. Keep memory concise. Save pointers to data, never the data " +
       "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
       "belongs in a file on your computer, with at most one memory line naming that file and what " +
       "it holds. If a fact is a list that grows, it's a file. Two caveats: files are this " +
@@ -1143,7 +1143,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       'action="remember" appends durable `facts` now — short, self-contained bullets (a preference, ' +
       "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
       "one-off trivia, or anything already recorded somewhere you can look up. " +
-      'action="read" returns the whole notebook. ' +
+      'action="read" returns the whole notebook; pass `scope` from a search result to read another authorized notebook. ' +
       'action="rewrite" REPLACES the whole notebook with `content` — for curation (merge ' +
       "duplicates, update or delete stale and wrong lines): read first, then write back the full " +
       "corrected notebook, never a fragment.",
@@ -1158,6 +1158,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.String({ description: "search only: words to look for among your remembered facts (all must match)." }),
       ),
       limit: Type.Optional(Type.Integer({ description: "search only: max facts to return (default 20)." })),
+      scope: Type.Optional(
+        Type.String({
+          description:
+            "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
+        }),
+      ),
       facts: Type.Optional(
         Type.Array(Type.String(), {
           description:
@@ -1175,6 +1181,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, {
         tool: "memory",
         action,
+        ...(params.scope !== undefined ? { scope: params.scope } : {}),
         ...(params.query !== undefined ? { query: params.query } : {}),
         ...(params.limit !== undefined ? { limit: params.limit } : {}),
         ...(params.facts !== undefined ? { facts: params.facts } : {}),
@@ -1187,6 +1194,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           text("[memory isn't available in this conversation]"),
           true,
         );
+      if (params.scope !== undefined && action !== "search" && action !== "read") {
+        return recordResult(
+          callId,
+          { tool: "memory", action, error: "scope is read-only" },
+          text("[error] scope is only allowed for memory search/read; writes stay in this conversation."),
+          true,
+        );
+      }
       if (opts?.readOnly && (action === "remember" || action === "rewrite")) {
         return recordResult(
           callId,
@@ -1205,7 +1220,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               text("[error] memory search requires `query`."),
               true,
             );
-          const hits = await tc.memorySearch(query, params.limit);
+          const hits = await tc.memorySearch(query, params.limit, params.scope);
           if (hits === null) return unavailable();
           return recordResult(
             callId,
@@ -1214,7 +1229,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
         }
         case "read": {
-          const body = await tc.memoryRead();
+          const body = await tc.memoryRead(params.scope);
           if (body === null) return unavailable();
           return recordResult(
             callId,

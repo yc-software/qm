@@ -1,4 +1,6 @@
 import { createRuntimeService } from "./harness/runtime-control.ts";
+import { createMemoryEmbedder } from "./memory/embeddings.ts";
+import { createSemanticMemoryService, type MemoryVectorIndex } from "./memory/semantic-recall.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
@@ -725,9 +727,19 @@ export function buildApp(
           files,
         })
       : undefined;
-  const defaultMemory: MemoryService = config.databaseUrl
+  const notebookMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
+  const defaultMemory = config.memoryEmbedding
+    ? createSemanticMemoryService(
+        notebookMemory,
+        createMemoryEmbedder(config.memoryEmbedding),
+        artifactMap<MemoryVectorIndex>("memory_vectors"),
+        {
+          onError: () => console.warn("[memory] semantic recall unavailable; using bounded recent facts"),
+        },
+      )
+    : notebookMemory;
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = createConfiguredMemoryService({

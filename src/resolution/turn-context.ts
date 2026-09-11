@@ -1,3 +1,4 @@
+import { recallAcrossScopes, searchAcrossScopes } from "../memory/cross-scope.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
@@ -6,7 +7,7 @@ import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { MemoryService } from "../memory/memory-service.ts";
+import type { MemoryService, MemoryRecallContext } from "../memory/memory-service.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import type { Resolution, ScopeId, Principal } from "../types.ts";
@@ -34,24 +35,23 @@ interface MemoryReaderInput {
 
 export function contextMemory({ memory, scopes, actorId, onRead }: MemoryReaderInput) {
   return {
-    async recall(): Promise<string> {
-      const sections: string[] = [];
-      for (const scope of scopes) {
-        const body = (await memory.read(scope)).trim();
-        onRead?.(scope);
-        if (body) sections.push(`### ${scope}\n${body}`);
-      }
-      return sections.join("\n\n");
+    async recall(context: MemoryRecallContext = {}): Promise<string> {
+      const body = await recallAcrossScopes(memory, scopes, { ...context, actorId });
+      for (const scope of scopes) onRead?.(scope);
+      return body;
     },
-    async search(query: string, limit = 20): Promise<string[] | null> {
-      if (!scopes.length) return null;
-      const hits: string[] = [];
-      for (const scope of scopes) {
-        const facts = await memory.query(scope, query, limit, { actorId });
-        onRead?.(scope);
-        hits.push(...facts.map((fact) => (scopes.length > 1 ? `[${scope}] ${fact}` : fact)));
-      }
-      return hits.slice(0, limit);
+    async search(query: string, limit = 20, scope?: ScopeId): Promise<string[] | null> {
+      if (!scopes.length || (scope !== undefined && !scopes.includes(scope))) return null;
+      const selected = scope === undefined ? scopes : [scope];
+      const hits = await searchAcrossScopes(memory, selected, query, limit, { actorId });
+      for (const source of selected) onRead?.(source);
+      return hits.map((hit) => (scopes.length > 1 || scope !== undefined ? `[${hit.scopeId}] ${hit.fact}` : hit.fact));
+    },
+    async read(scope: ScopeId): Promise<string | null> {
+      if (!scopes.includes(scope)) return null;
+      const body = await memory.read(scope);
+      onRead?.(scope);
+      return body;
     },
   };
 }
@@ -118,6 +118,7 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     recall: memories.recall,
     searchMemory: memories.search,
+    readMemory: memories.read,
     listFiles: () => handles,
     listSkills: async () => (await input.skills?.visibleFor(skillScopes, grantedSkills)) ?? [],
     readFile: (path: string) =>

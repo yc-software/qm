@@ -9,7 +9,7 @@ Everything here goes through the typed `memory` tool. Memory is NOT a file: writ
 `memory/MEMORY.md` with `write` or shell commands lands on your computer's disk and is
 silently lost — the tool is the one real path.
 
-Every turn already auto-recalls your notebooks into "## What you remember" and
+Every turn already auto-recalls a bounded selection from your notebooks into "## What you remember" and
 auto-extracts facts after you reply. This skill is for what the automatic path misses:
 
 - **Search** (`action: "search"`) — what you remember is bigger than what auto-recall
@@ -17,7 +17,12 @@ auto-extracts facts after you reply. This skill is for what the automatic path m
   org); when more than one is in reach, each hit is tagged with the notebook it came
   from. Matching is substring-based (all terms must match), so prefer distinctive terms
   (a name, a project) over sentences.
-  An empty result is a real answer: you have nothing recorded, so don't assert a memory.
+  An empty result means those terms found no match, not that nothing is recorded. Try fewer terms or alternate wording before concluding a fact is absent.
+- **Read another notebook** (`action: "read", scope: "channel:…"`) — use the exact
+  scope ID from a search result to load that authorized notebook. `search` accepts
+  `scope` too, to narrow a query. Omit it to search all authorized notebooks or read
+  the current notebook. Access comes from this turn's sharing policy; naming a
+  scope never grants access. Other notebooks are read-only.
 - **Write now** (`action: "remember"`) — when the user corrects you or tells you
   something they'll expect you to know later, persist it immediately instead of hoping
   post-turn extraction catches it. Write self-contained facts (who/what, with enough
@@ -30,31 +35,17 @@ auto-extracts facts after you reply. This skill is for what the automatic path m
   deleting things the user asked you to remember.
 
 The notebook you write is this conversation's own (your personal one in a DM, the
-channel's in a channel). There is no way to reach anyone else's, by design.
+channel's in a channel). Other authorized notebooks can be searched/read, not rewritten here.
 
-Two targeted writes the tool doesn't carry go through the self-API instead, called with
+The org-admin write path uses the self-API instead, called with
 `$AGENT_API_URL` and `$AGENT_API_TOKEN` (both already in your environment on every turn —
 if they are unset, this instance has no self-API; say so rather than pretending):
 
-## Save context into another room the user belongs to
+## Cross-conversation writes
 
-When someone asks you (say, in a DM) to remember something _for_ a channel or group DM — the
-way Bob, in a DM, might want the background on a project saved into that project's channel
-so you know it when paged there — add a target to a `facts` call:
-
-```bash
-curl -fsS -X POST "$AGENT_API_URL/v1/memory/facts" \
-  -H "x-agent-capability: $AGENT_API_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"channel":"project-atlas","facts":["This channel coordinates ..."]}'
-```
-
-Name a `channel` (core resolves the name — an ambiguous one comes back `409` with
-candidates), or a group DM by its `participants` (the other members' ids). Core checks the
-person you're helping may post there before writing: any internal teammate may write to a
-public channel; a private channel or group DM requires they're a member (`403` otherwise).
-This appends only — you can't read or wholesale-rewrite another room's notebook this way. The
-reply echoes the resolved `channel`/`group` and the `scopeId` written to.
+Cross-conversation writes are not supported. Do not pass `scope` on remember/rewrite
+or a channel/recipient on the facts API. To change a room's memory, work in that room.
+The explicit org-admin path below remains separate from ordinary memory tools.
 
 ## Org-wide notebook (admins)
 

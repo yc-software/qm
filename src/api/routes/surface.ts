@@ -1,4 +1,5 @@
 import { runtimeFallback, runtimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, ScopeId } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
@@ -659,24 +660,21 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
   }
 
   if (method === "POST" && pathname === "/v1/memory/search") {
-    const b = body as { query?: unknown; limit?: unknown };
+    const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
     if (typeof b.query !== "string" || !b.query.trim()) {
       return sendJson(res, 400, { error: "bad_request", message: "query (string) required" });
     }
-    const scopes = capability.memory?.read ?? [];
+    const allowed = capability.memory?.read ?? [];
+    if (b.scope !== undefined && typeof b.scope !== "string")
+      return sendJson(res, 400, { error: "bad_request", message: "scope must be a string" });
+    if (typeof b.scope === "string" && !allowed.includes(b.scope))
+      return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
+    const scopes = typeof b.scope === "string" ? [b.scope] : allowed;
     if (scopes.length === 0) {
       return sendJson(res, 403, { error: "forbidden", message: "memory recall is not enabled for this conversation" });
     }
     const limit = Math.max(1, Math.min(typeof b.limit === "number" ? Math.floor(b.limit) : 20, 50));
-    const results: Array<{ scopeId: string; fact: string }> = [];
-    for (const scope of scopes) {
-      if (results.length >= limit) break;
-      for (const fact of await deps.memory.query(scope, b.query, limit - results.length, {
-        actorId: capability.actorId,
-      })) {
-        results.push({ scopeId: scope, fact });
-      }
-    }
+    const results = await searchAcrossScopes(deps.memory, scopes, b.query, limit, { actorId: capability.actorId });
     audit(deps, {
       principalId: capability.actorId,
       action: "memory.agent.search",
@@ -684,6 +682,28 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       scopeLabel: scopes.join(","),
     });
     return sendJson(res, 200, { results });
+  }
+
+  if (method === "GET" && pathname === "/v1/memory/self") {
+    const requested = ctx.url.searchParams.get("scope");
+    const read = capability.memory?.read ?? [];
+    const target =
+      requested === "org"
+        ? (capability.memory?.orgWrite ?? read.find((scope) => scope.startsWith("org:")))
+        : (requested ?? capability.memory?.write ?? capability.scopeId);
+    if (
+      !target ||
+      !(read.includes(target) || target === capability.memory?.write || target === capability.memory?.orgWrite)
+    ) {
+      return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
+    }
+    audit(deps, {
+      principalId: capability.actorId,
+      action: "memory.agent.read",
+      resource: "memory",
+      scopeLabel: target,
+    });
+    return sendJson(res, 200, { scopeId: target, content: await deps.memory.read(target) });
   }
 
   const requestedScope =
@@ -718,15 +738,6 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
       scopeLabel: write,
     });
     return sendJson(res, 200, { ok: true, added, scopeId: write });
-  }
-  if (method === "GET" && pathname === "/v1/memory/self") {
-    audit(deps, {
-      principalId: capability.actorId,
-      action: "memory.agent.read",
-      resource: "memory",
-      scopeLabel: write,
-    });
-    return sendJson(res, 200, { scopeId: write, content: await deps.memory.read(write) });
   }
   if (method === "PUT" && pathname === "/v1/memory/self") {
     const b = body as { content?: unknown };

@@ -1,3 +1,4 @@
+import { recallCandidates } from "./cross-scope.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryRevision, MemoryService } from "./memory-service.ts";
 
@@ -40,6 +41,23 @@ export function createRoutedMemoryService(opts: {
   };
 
   return {
+    async recallCandidates(scopeId, context) {
+      const routes = routesFor(scopeId).filter((route) => route.recall !== false);
+      const batches = await Promise.all(
+        routes.map(async (route) => {
+          try {
+            const rows = await recallCandidates(providerFor(route), scopeId, context);
+            const label = route.label ?? (routes.length > 1 ? route.provider : undefined);
+            return rows.map((row) => ({ ...row, text: label ? `### ${label}\n${row.text}` : row.text }));
+          } catch (error) {
+            if (!route.failOpen) throw error;
+            opts.onError?.(error, route.provider, "recall");
+            return [];
+          }
+        }),
+      );
+      return batches.flat();
+    },
     async recall(scopeId, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
       const recalled = await Promise.all(
