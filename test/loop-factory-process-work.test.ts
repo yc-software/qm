@@ -226,6 +226,7 @@ test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or
     IO_REPO_DIR: REPO_DIR,
     IO_FACTORY_SOURCE_DIR: SOURCE_DIR,
     IO_FACTORY_SESSION_ID: "4242",
+    IS_SANDBOX: "1",
     IO_REPO_CLONE_URL: "https://github.com/acme/widgets.git",
     IO_REPO_SETUP_CMD: "npm ci",
     IO_PROOF_START_CMD: "npm run dev",
