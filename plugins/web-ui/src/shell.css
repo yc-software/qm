@@ -2545,6 +2545,7 @@ a.chat-row-open {
   background: none;
   color: inherit;
   font: inherit;
+  font-size: var(--composer-font-size, inherit);
   text-align: left;
   cursor: pointer;
 }
@@ -2676,7 +2677,7 @@ a.chat-row-open {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 15px;
+  font-size: var(--composer-font-size, 15px);
   line-height: 1.4;
   cursor: pointer;
   border-radius: 6px;
@@ -2847,6 +2848,7 @@ a.chat-row-open {
 }
 
 .composer-wrap {
+  --composer-font-size: 15px;
   --composer-pad-block: 12px;
   --composer-pad-inline: 12px;
   --composer-pad-end: var(--composer-pad-inline);
@@ -2875,7 +2877,7 @@ a.chat-row-open {
   background: transparent;
   color: var(--foreground);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--composer-font-size);
   line-height: 1.5;
   padding: 3px 4px 8px;
   box-sizing: border-box;
@@ -9563,6 +9565,7 @@ h3.ambient-field-label {
   }
 
   .composer-wrap {
+    --composer-font-size: 16px;
     width: calc(100% - 16px);
     margin: 0 auto calc(8px + env(safe-area-inset-bottom));
     --composer-pad-block: 8px;
@@ -9572,7 +9575,6 @@ h3.ambient-field-label {
     border-radius: 22px;
   }
   .composer-input {
-    font-size: 16px;
     line-height: 1.4;
     min-height: 40px;
     max-height: 32vh;
@@ -9739,7 +9741,7 @@ h3.ambient-field-label {
     min-height: 36px;
     padding: 4px 6px;
     border-radius: 10px;
-    font-size: 13px;
+    font-size: var(--composer-font-size, 13px);
   }
   :root {
     --meta-lane: 34px;
