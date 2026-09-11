@@ -67,7 +67,6 @@ export class CoreClient {
 
   manageSandbox(scopeId: string, body: Record<string, unknown>): Promise<{ id: string; backend: string }> {
     return this.admin("POST", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`, body);
-
   }
 
   listSessions(): Promise<{ sessions: SessionSummary[] }> {

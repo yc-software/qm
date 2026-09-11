@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { buildApp } from "../../src/wiring.ts";
+import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
 async function main(): Promise<void> {
@@ -34,6 +35,11 @@ async function main(): Promise<void> {
     await built.identity.hydrate();
     await built.deploymentLayerReady;
     await built.sandboxResources.initialize();
+    await built.memory.replace(
+      scopeId,
+      setOnboardingStatus("", "completed", new Date().toISOString().slice(0, 10)),
+      actorId,
+    );
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
     assert.equal(sandbox.backend, "local");
     await built.sandboxResources.setDefault(actorId, scopeId, sandbox.id);
@@ -47,7 +53,13 @@ async function main(): Promise<void> {
     });
     assert.equal(result.status, "ok", result.reason ?? result.reply);
     assert.ok(result.sessionId);
-    assertSandboxExecution(await built.sessions.getEntries(result.sessionId), sandbox.id, `${left}${right}\n`);
+    const entries = await built.sessions.getEntries(result.sessionId);
+    try {
+      assertSandboxExecution(entries, sandbox.id, `${left}${right}\n`);
+    } catch (error) {
+      console.error(JSON.stringify({ reply: result.reply, entries }));
+      throw error;
+    }
   } catch (error) {
     failures.push(error);
   }
