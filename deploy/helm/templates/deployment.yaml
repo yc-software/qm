@@ -108,7 +108,6 @@ spec:
           {{- end }}
           {{- end }}
           {{- end }}
-          {{- /* One entry per name: values override the wired defaults, and a duplicate name breaks helm upgrade. */}}
           {{- $env := mergeOverwrite (deepCopy $wired) (deepCopy ($root.Values.env | default dict)) $componentEnv }}
           {{- if $env }}
           env:
