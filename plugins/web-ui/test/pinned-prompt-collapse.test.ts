@@ -5,27 +5,26 @@ import { createTranscriptViewport } from "../src/transcript-viewport.ts";
 
 function fixture() {
   const dom = new JSDOM(
-    `<section class="chat-scroll"><div class="message-stack"><article class="user-row" data-index="1"><div class="user-bubble"><div class="pin-content">Example prompt</div></div><button class="pin-toggle" hidden>Show more</button></article></div></section>`,
+    `<section class="chat-scroll"><div class="message-stack"><article class="user-row" data-index="1"><div class="user-bubble"><div class="pin-content">Example prompt</div><button class="pin-toggle" hidden>Show more</button></div></article></div></section>`,
   );
   const scroller = dom.window.document.querySelector<HTMLElement>("section")!;
   const row = scroller.querySelector<HTMLElement>("article")!;
-  const bubble = row.querySelector<HTMLElement>(".user-bubble")!;
   const content = row.querySelector<HTMLElement>(".pin-content")!;
   const toggle = row.querySelector<HTMLButtonElement>("button")!;
   let height = 300;
   let fullHeight = 600;
   Object.defineProperties(scroller, { clientHeight: { get: () => height }, scrollHeight: { value: 2000 } });
-  Object.defineProperties(bubble, {
+  Object.defineProperties(content, {
     scrollHeight: { get: () => fullHeight },
     clientHeight: {
       get: () =>
-        row.classList.contains("pin-expanded")
+        row.classList.contains("pin-expanded") || row.classList.contains("pin-fits")
           ? fullHeight
           : Math.min(fullHeight, parseFloat(row.style.getPropertyValue("--pin-clamp")) || 320),
     },
   });
   scroller.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
-  row.getBoundingClientRect = () => ({ top: 0, height: bubble.clientHeight + 24 }) as DOMRect;
+  row.getBoundingClientRect = () => ({ top: 0, height: content.clientHeight + 24 }) as DOMRect;
   const observed = new Set<Element>();
   let resize = () => {};
   const restore = ["ResizeObserver", "getComputedStyle"].map(
@@ -53,7 +52,6 @@ function fixture() {
   return {
     scroller,
     row,
-    bubble,
     content,
     toggle,
     observed,
@@ -87,7 +85,7 @@ test("long prompts clamp to the pane and expand or collapse through their button
     assert.equal(f.toggle.getAttribute("aria-expanded"), "true");
     assert.equal(f.toggle.textContent, "Show less");
     f.toggle.click();
-    assert.ok(f.bubble.scrollHeight > f.bubble.clientHeight);
+    assert.ok(f.content.scrollHeight > f.content.clientHeight);
     assert.equal(f.toggle.getAttribute("aria-expanded"), "false");
   } finally {
     f.close();
@@ -114,7 +112,7 @@ test("late content growth reveals the control without a scroll or redraw", () =>
     assert.equal(f.toggle.hidden, true);
     f.grow(800);
     assert.equal(f.toggle.hidden, false);
-    assert.ok(f.bubble.scrollHeight > f.bubble.clientHeight);
+    assert.ok(f.content.scrollHeight > f.content.clientHeight);
   } finally {
     f.close();
   }
