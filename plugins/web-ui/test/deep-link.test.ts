@@ -106,6 +106,14 @@ test("a cron is addressed by /crons/<id>", () => {
   });
 });
 
+test("board permalinks preserve message identity through canonicalization and reload", () => {
+  const old = parseDeepLink("/web-ui", "/web-ui/board", "?message=abc%201");
+  assert.deepEqual(old, { view: "board", session: null, item: "abc 1" });
+  const path = deepLinkPath("/web-ui", old.view!, old.session, null, old.item);
+  assert.equal(path, "/web-ui/board/abc%201");
+  assert.deepEqual(parseDeepLink("/web-ui", path, ""), old);
+});
+
 test("an item id is rejected for views that are not addressed that way", () => {
   assert.throws(() => deepLinkPath("", "chats", "s1", null, "x"));
   assert.throws(() => deepLinkPath("", "contexts", null, "channel:C1", "x"));

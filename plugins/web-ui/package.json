@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "demo:board": "vite --config test/support/board-demo.config.ts",
     "build": "vite build",
     "serve": "node --env-file-if-exists=.env server/index.ts",
     "start": "npm run build && npm run serve",

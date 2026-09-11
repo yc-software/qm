@@ -19,6 +19,7 @@ const VIEW_TITLES: Record<View, string> = {
   contexts: "Projects",
   crons: "Crons",
   loops: "Loops",
+  board: "Agent board",
   webhooks: "Webhooks",
   files: "Files",
   keychain: "Keychain",

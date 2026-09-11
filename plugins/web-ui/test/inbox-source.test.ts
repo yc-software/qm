@@ -76,7 +76,7 @@ test("the address keeps naming the open item, even after switchView writes the b
   );
   assert.match(
     shell,
-    /const next = deepLinkPath\(UI_BASE, appState\.currentView, sessionId, contextsState\.selected\);/,
+    /const next = deepLinkPath\(UI_BASE, appState\.currentView, sessionId, contextsState\.selected, boardMessage\);/,
     "syncUrlFromState carries no item id, which is what the inbox has to heal after",
   );
   const draw = inbox.match(/function drawFull\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";

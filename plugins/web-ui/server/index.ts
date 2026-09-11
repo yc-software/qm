@@ -1082,6 +1082,62 @@ const apiRoutes: readonly WebRoute[] = [
   { method: "GET", path: "/api/playgrounds/:id", handle: (c) => serveFileContent(c, true) },
   {
     method: "GET",
+    path: "/api/peer-messages",
+    handle: async (c) => {
+      const query = new URLSearchParams(c.url.searchParams);
+      query.set("principalId", c.user);
+      return relayCore(c.res, "GET", `/v1/peer-messages?${query}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/peer-messages/:id",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/peer-messages/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/peer-messages/preview",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "POST",
+        `/v1/peer-messages/preview?principalId=${encodeURIComponent(c.user)}`,
+        await readBody(c.req),
+      ),
+  },
+  {
+    method: "GET",
+    path: "/api/peers",
+    handle: async (c) => relayCore(c.res, "GET", `/v1/peers?principalId=${encodeURIComponent(c.user)}`),
+  },
+  {
+    method: "GET",
+    path: "/api/peers/:id/subtree",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/peers/${encodeURIComponent(c.params.id!)}/subtree?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/peers/:id/lifecycle",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "POST",
+        `/v1/peers/${encodeURIComponent(c.params.id!)}/lifecycle?principalId=${encodeURIComponent(c.user)}`,
+        await readBody(c.req),
+      ),
+  },
+  {
+    method: "GET",
     path: "/api/user-model-auth/status",
     handle: async (c) =>
       relayCore(c.res, "GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(c.user)}`),
@@ -2310,6 +2366,7 @@ const apiRoutes: readonly WebRoute[] = [
       let acc = "";
       let activityLen = 0;
       let lastStale: boolean | null = null;
+      let lastStatus: string | undefined;
       let staleSince: number | null = null;
       let lastProgressAt = Date.now();
       let lastBeat = lastProgressAt;
@@ -2364,6 +2421,11 @@ const apiRoutes: readonly WebRoute[] = [
           lastBeat = now;
         }
         if (parsed) {
+          if ((run.status === "pending" || run.status === "running") && run.status !== lastStatus) {
+            lastStatus = run.status;
+            sseEvent(res, "status", { status: run.status, startedAt: run.startedAt ?? null });
+            lastBeat = now;
+          }
           if (run.stale === true) staleSince ??= now;
           else staleSince = null;
           if ((run.stale === true) !== lastStale) {
@@ -2373,12 +2435,19 @@ const apiRoutes: readonly WebRoute[] = [
           }
         }
         if (now - lastBeat > SSE_HEARTBEAT_MS) {
-          if (run.alive === true) sseEvent(res, "alive", { at: now });
+          if (run.status === "pending")
+            sseEvent(res, "status", { status: "pending", startedAt: run.startedAt ?? null });
+          else if (run.alive === true) sseEvent(res, "alive", { at: now });
           else if (lastStale === true) sseEvent(res, "stale", { stale: true });
           else res.write(": ping\n\n");
           lastBeat = now;
         }
-        if (run.alive === true || (staleSince !== null && now - staleSince < SSE_STALE_GRACE_MS)) lastProgressAt = now;
+        if (
+          run.status === "pending" ||
+          run.alive === true ||
+          (staleSince !== null && now - staleSince < SSE_STALE_GRACE_MS)
+        )
+          lastProgressAt = now;
         const terminal = run.status === "done" || run.status === "failed" || run.result != null;
         if (terminal || run.replyComplete) {
           forgetRun(id);

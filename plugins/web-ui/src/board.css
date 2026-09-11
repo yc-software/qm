@@ -1,0 +1,99 @@
+.agent-board {
+  overflow: auto;
+}
+.board-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin: 20px 0;
+}
+.board-filters label,
+.agent-board aside label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+.board-filters input,
+.agent-board textarea {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+}
+.board-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 1fr);
+  gap: 24px;
+}
+.board-columns > * {
+  min-width: 0;
+}
+.board-message,
+.board-delivery {
+  border: 1px solid var(--border);
+  padding: 14px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.board-message.selected {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+.board-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.board-tree,
+.board-tree ul {
+  list-style: none;
+  padding-left: 18px;
+}
+.board-tree-node {
+  border-left: 1px solid var(--border);
+  padding: 10px 14px;
+  overflow-wrap: anywhere;
+}
+.board-tree-node small {
+  display: block;
+  margin: 6px 0;
+}
+.board-tree-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.agent-board pre {
+  overflow: auto;
+  max-height: 360px;
+  padding: 12px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-board aside {
+  border-left: 1px solid var(--border);
+  padding-left: 24px;
+  overflow-wrap: anywhere;
+}
+.agent-board h2 {
+  font-size: 18px;
+  margin: 20px 0 12px;
+}
+.agent-board h3 {
+  font-size: 14px;
+  margin: 16px 0 8px;
+}
+@media (max-width: 850px) {
+  .board-columns {
+    grid-template-columns: 1fr;
+  }
+  .agent-board aside {
+    border-left: 0;
+    padding-left: 0;
+  }
+}

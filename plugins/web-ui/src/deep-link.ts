@@ -60,6 +60,7 @@ export function parseDeepLink(
   else if (view === "apps") view = "deploys";
   const itemFor = (): string | null => {
     if (sessionRoute) return null;
+    if (view === "board") return decodeSegment(segments[1] ?? "") ?? params.get("message");
     if (pathView === "projects" && projectKind && projectItem) return `${projectKind}:${projectItem}`;
     return projectItem ?? decodeSegment(segments[1] ?? "");
   };

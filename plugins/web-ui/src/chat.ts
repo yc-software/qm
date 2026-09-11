@@ -1477,12 +1477,14 @@ export function createChatSurface(
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
       const steered = Boolean((message as { steered?: boolean }).steered);
+      const peer = (message as { peerOrigin?: { messageId: string; senderName: string } }).peerOrigin;
       const speaker = speakerLabelFor(message);
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
       return html`
         <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
-          ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
+          ${peer ? html`<div class="steer-label">Agent message from ${peer.senderName} · <a href=${withBase(`/board?message=${encodeURIComponent(peer.messageId)}`)}>Inspect on board</a></div>` : nothing}
+          ${!peer && steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
           <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
             <div class="pin-content">
@@ -1862,7 +1864,10 @@ export function createChatSurface(
     error: "",
     detail: null as SessionBackgroundView | null,
     openJob: null as string | null,
-    output: new Map<string, { text: string; cursor: number; state: "running" | "exited"; exitCode?: number }>(),
+    output: new Map<
+      string,
+      { text: string; cursor: number; state: SessionBackgroundOutput["state"]; exitCode?: number }
+    >(),
     timer: null as ReturnType<typeof setInterval> | null,
     fetchSeq: 0,
     epoch: 0,
@@ -1982,7 +1987,7 @@ export function createChatSurface(
     const prev = bgPanel.output.get(processId);
     let text = prev?.text ?? "";
     let cursor = prev?.cursor ?? 0;
-    let state: "running" | "exited" = prev?.state ?? "running";
+    let state: SessionBackgroundOutput["state"] = prev?.state ?? "running";
     let exitCode = prev?.exitCode;
     try {
       for (let i = 0; i < 8; i++) {
@@ -2052,10 +2057,11 @@ export function createChatSurface(
   function backgroundJobRow(j: SessionBackgroundView["jobs"][number]): TemplateResult {
     const open = bgPanel.openJob === j.processId;
     const out = bgPanel.output.get(j.processId);
-    const status =
+    let status =
       out?.state === "exited"
         ? `exited${out.exitCode !== undefined ? ` (${out.exitCode})` : ""}`
         : timeLeft(j.expiresAt);
+    if (j.launchUnconfirmed) status = "launch unconfirmed";
     return html`
       <div class="bg-row ${open ? "open" : ""}">
         <button
@@ -2167,6 +2173,7 @@ export function createChatSurface(
   }
 
   function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; detail: string } | null {
+    if (work.queued) return { icon: Clock3, label: "Queued — waiting for execution", detail: "" };
     if (work.stale) {
       const active = activeToolRow(work);
       const call = (active?.call?.payload ?? {}) as ToolPayload;
@@ -2223,6 +2230,7 @@ export function createChatSurface(
   }
 
   function workLabel(work: WorkBlock): string {
+    if (work.queued) return "Queued — waiting for execution";
     if (work.stale && (work.status === "thinking" || work.status === "working")) return "Interrupted, resuming…";
     if (work.status === "thinking") return "Thinking";
     const secs = workSeconds(work);
