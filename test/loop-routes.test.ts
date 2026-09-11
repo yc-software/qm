@@ -847,36 +847,6 @@ test("a second org admin reads and lists the org-scoped factory loop", async () 
   assert.deepEqual(denied.body, FORBIDDEN);
 });
 
-test("listing org loops asks the grant store once for the whole request", async () => {
-  const deps = services();
-  for (let i = 0; i < 25; i += 1) {
-    await deps.store.create({
-      owner: "admin-alice",
-      createdBy: "admin-alice",
-      ownerScopeId: ORG_SCOPE,
-      name: `Org loop ${i}`,
-      playbook: "p",
-      successCondition: "c",
-    });
-  }
-  const service = createAdminService();
-  let grantReads = 0;
-  const admin = {
-    ...service,
-    listGrants: () => {
-      grantReads += 1;
-      return service.listGrants();
-    },
-  };
-  const listed = await call(deps, "GET", "/v1/loops", undefined, {
-    actor: "admin-bob",
-    mode: "source",
-    deps: { admin, identity: identityStub() },
-  });
-  assert.equal((listed.body as { loops: Loop[] }).loops.length, 25);
-  assert.ok(grantReads <= 2, `listGrants ran ${grantReads} times`);
-});
-
 test("a second org admin drives every org loop mutation as themselves", async () => {
   const deps = services();
   const shipped: string[] = [];

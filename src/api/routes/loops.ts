@@ -13,7 +13,6 @@ import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } fro
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { consentRequiredRecipient } from "../../triggers/trigger-store.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
-import type { ServerDeps } from "../deps.ts";
 import { sendJson } from "../http.ts";
 import { isObj, isOrgAdmin, resolveCapabilityDestination } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -37,35 +36,20 @@ interface ActingPrincipal {
   scopeId?: ScopeId;
   capability?: CapabilityClaims;
   liveHuman: boolean;
-  orgAdmin: (scope: ScopeId) => Promise<boolean>;
-}
-
-function withOrgAdmin(deps: ServerDeps, base: Omit<ActingPrincipal, "orgAdmin">): ActingPrincipal {
-  const cache = new Map<ScopeId, Promise<boolean>>();
-  return {
-    ...base,
-    orgAdmin(scope) {
-      const hit = cache.get(scope);
-      if (hit) return hit;
-      const pending = isOrgAdmin(deps, base.actorId, scope);
-      cache.set(scope, pending);
-      return pending;
-    },
-  };
 }
 
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
-    return withOrgAdmin(ctx.deps, {
+    return {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
       liveHuman: ctx.actor?.p !== undefined || ctx.capability.liveActor === true,
-    });
+    };
   }
-  if (ctx.actor?.p) return withOrgAdmin(ctx.deps, { actorId: ctx.actor.p, liveHuman: true });
+  if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: true };
   const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
-  if (principalId) return withOrgAdmin(ctx.deps, { actorId: principalId, liveHuman: false });
+  if (principalId) return { actorId: principalId, liveHuman: false };
   sendJson(ctx.res, 403, { error: "forbidden", message: "loops need an agent capability or a principalId" });
   return null;
 }
@@ -78,7 +62,8 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
 
 async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
   const { app } = ctx;
-  if (parseScopeId(loop.ownerScopeId).kind === "org" && (await acting.orgAdmin(loop.ownerScopeId))) return true;
+  if (parseScopeId(loop.ownerScopeId).kind === "org" && (await isOrgAdmin(ctx.deps, acting.actorId, loop.ownerScopeId)))
+    return true;
   if (await app.membershipControlsScope(loop.ownerScopeId)) {
     return app.managesScope(acting.actorId, loop.ownerScopeId);
   }
