@@ -19,11 +19,13 @@ before(async () => {
 test(
   "pg credential-usage sink: persists broker calls, filters by scope/slug/since, newest-first",
   { skip },
-  async () => {
+  async (t) => {
     const sink = createPostgresCredentialUsageSink(URL!);
     const s1 = scopeId("personal", "U1");
     const s2 = scopeId("personal", "U2");
 
+    const now = Date.now();
+    const clock = t.mock.method(Date, "now", () => now);
     sink.record({
       slug: "x-firehose",
       host: "api.x.com",
@@ -32,11 +34,15 @@ test(
       scopeLabel: s1,
       principalId: "U1",
     });
+    clock.mock.mockImplementation(() => now + 1);
     sink.record({ slug: "serp", host: "serpapi.com", status: "denied", scopeLabel: s2, principalId: "U2" });
+    clock.mock.restore();
     await settle(async () => (await sink.list({ limit: 100 })).length === 2);
 
     const all = await sink.list({ limit: 100 });
     assert.equal(all.length, 2, "both brokered calls persisted");
+    assert.equal(all[0]!.ts, now + 1);
+    assert.equal(all[1]!.ts, now);
     assert.equal(all[0]!.scopeLabel, s2, "newest first");
     assert.equal(all[0]!.status, "denied");
     assert.equal(all[0]!.upstreamStatus, undefined, "an absent upstream status stays absent (not 0)");

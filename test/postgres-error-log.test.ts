@@ -15,11 +15,13 @@ before(async () => {
   await p.end();
 });
 
-test("pg error log: persists events, filters by scope, newest-first, shape-only", { skip }, async () => {
+test("pg error log: persists events, filters by scope, newest-first, shape-only", { skip }, async (t) => {
   const log = createPostgresErrorLog(URL!);
   const s1 = scopeId("channel", "C1");
   const s2 = scopeId("channel", "C2");
 
+  const now = Date.now();
+  const clock = t.mock.method(Date, "now", () => now);
   log.record({
     category: "command_policy",
     code: "denied",
@@ -27,10 +29,14 @@ test("pg error log: persists events, filters by scope, newest-first, shape-only"
     scopeLabel: s1,
     sessionId: "sess-1",
   });
+  clock.mock.mockImplementation(() => now + 1);
   log.record({ category: "turn", code: "error", message: "boom (shape-only)", scopeLabel: s2 });
 
+  clock.mock.restore();
   const all = await log.list({ limit: 100 });
   assert.equal(all.length, 2, "both events persisted");
+  assert.equal(all[0]!.ts, now + 1);
+  assert.equal(all[1]!.ts, now);
   assert.equal(all[0]!.scopeLabel, s2);
   assert.equal(all[0]!.category, "turn");
   assert.equal(all[0]!.code, "error");
