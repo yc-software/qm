@@ -18,7 +18,7 @@ import {
   posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import { createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "./aws-microvm-api.ts";
+import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "./aws-microvm-api.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -58,6 +58,7 @@ export interface StoredMicrovm {
   lastSnapshotMs?: number;
   lastActivityMs?: number;
   homeDirty?: boolean;
+  provisioning?: boolean;
   orgId?: string;
 }
 
@@ -110,6 +111,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   const store = opts.store ?? createMemoryMap<StoredMicrovm>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
   const provisionQueue = createKeyedQueue<string>();
+  const withScopeLock = <T>(scope: string, run: () => Promise<T>): Promise<T> =>
+    provisionQueue(scope, () => advisoryLock.withLock(`aws-provision:${scope}`, run));
   const onError = opts.onError;
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
@@ -218,63 +221,82 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       maximumDurationInSeconds,
       clientToken: `${scope ?? "scratch"}-${Date.now()}`,
     });
-    const ready = await api.waitForState(run.microvmId, "RUNNING");
-    const endpoint = run.endpoint ?? ready.endpoint;
-    if (!endpoint) throw new Error(`microVM ${run.microvmId} has no endpoint`);
-    endpointById.set(run.microvmId, endpoint);
-    await client.waitDaemon(run.microvmId, endpoint);
-    return { id: run.microvmId, endpoint };
+    try {
+      if (scope)
+        await store.put(scope, {
+          microvmId: run.microvmId,
+          endpoint: run.endpoint ?? "",
+          createdAtMs: Date.now(),
+          orgId: configOrgId(),
+          provisioning: true,
+        });
+      const ready = await api.waitForState(run.microvmId, "RUNNING");
+      const endpoint = run.endpoint ?? ready.endpoint;
+      if (!endpoint) throw new Error(`microVM ${run.microvmId} has no endpoint`);
+      endpointById.set(run.microvmId, endpoint);
+      await client.waitDaemon(run.microvmId, endpoint);
+      return { id: run.microvmId, endpoint };
+    } catch (error) {
+      try {
+        await api.terminate(run.microvmId);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], `AWS launch ${run.microvmId} failed and termination failed`, {
+          cause: cleanupError,
+        });
+      }
+      throw error;
+    }
   }
 
   async function ensureBody(scope: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
-    return provisionQueue(scope, () =>
-      advisoryLock.withLock(`aws-provision:${scope}`, async () => {
-        const stored = await store.get(scope);
-        if (stored) {
-          const desc = await api.tryGetMicrovm(stored.microvmId);
-          const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-          const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
-          if (alive && !stale) {
-            endpointById.set(stored.microvmId, stored.endpoint);
-            scopeByMicrovm.set(stored.microvmId, scope);
-            await ensureRunning(stored.microvmId);
-            return { id: stored.microvmId, endpoint: stored.endpoint, coldStart: false };
-          }
-          if (alive && stale) {
-            endpointById.set(stored.microvmId, stored.endpoint);
-            await ensureRunning(stored.microvmId).catch(() => {});
-            await snapshotHome(scope, stored.microvmId).catch((e) =>
-              reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope),
-            );
-            await api.terminate(stored.microvmId).catch(() => {});
-          }
+    return withScopeLock(scope, async () => {
+      const stored = await store.get(scope);
+      if (stored) {
+        const desc = await api.tryGetMicrovm(stored.microvmId);
+        const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
+        const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
+        if (alive && stored.provisioning)
+          throw new Error(`AWS sandbox ${stored.microvmId} has incomplete provisioning; retire it before retrying`);
+        if (alive && !stale) {
+          endpointById.set(stored.microvmId, stored.endpoint);
+          scopeByMicrovm.set(stored.microvmId, scope);
+          await ensureRunning(stored.microvmId);
+          return { id: stored.microvmId, endpoint: stored.endpoint, coldStart: false };
         }
-        const body = await launchBody(scope);
-        scopeByMicrovm.set(body.id, scope);
-        let hydrated: boolean;
-        try {
-          hydrated = await hydrateHome(scope, body.id);
-        } catch (e) {
-          reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
-          scopeByMicrovm.delete(body.id);
-          endpointById.delete(body.id);
-          client.evict(body.id);
-          await api.terminate(body.id).catch(swallowAs("aws-sandbox: terminate after failed hydrate", undefined));
-          throw new Error(`aws provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
-            cause: e,
-          });
+        if (alive && stale) {
+          endpointById.set(stored.microvmId, stored.endpoint);
+          await ensureRunning(stored.microvmId).catch(() => {});
+          await snapshotHome(scope, stored.microvmId).catch((e) =>
+            reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope),
+          );
+          await api.terminate(stored.microvmId).catch(() => {});
         }
-        await store.put(scope, {
-          microvmId: body.id,
-          endpoint: body.endpoint,
-          ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
-          createdAtMs: Date.now(),
-          ...(hydrated ? { lastSnapshotMs: Date.now(), homeDirty: false } : {}),
-          orgId: configOrgId(),
+      }
+      const body = await launchBody(scope);
+      scopeByMicrovm.set(body.id, scope);
+      let hydrated: boolean;
+      try {
+        hydrated = await hydrateHome(scope, body.id);
+      } catch (e) {
+        reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
+        scopeByMicrovm.delete(body.id);
+        endpointById.delete(body.id);
+        client.evict(body.id);
+        await api.terminate(body.id).catch(swallowAs("aws-sandbox: terminate after failed hydrate", undefined));
+        throw new Error(`aws provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
+          cause: e,
         });
-        return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
-      }),
-    );
+      }
+      await store.put(scope, {
+        microvmId: body.id,
+        endpoint: body.endpoint,
+        ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
+        createdAtMs: Date.now(),
+        ...(hydrated ? { lastSnapshotMs: Date.now(), homeDirty: false } : {}),
+        orgId: configOrgId(),
+      });
+      return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
+    });
   }
 
   async function ensureScratch(key: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
@@ -352,7 +374,37 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
   const blobStaging = createBackendBlobStaging("aws", (id, script, t) => execRaw(id, script, t), opts);
 
+  async function terminateBody(id: string): Promise<void> {
+    const body = await api.tryGetMicrovm(id);
+    if (!body || body.state === "TERMINATED") return;
+    try {
+      if (body.state !== "TERMINATING") await api.terminate(id);
+      await api.waitForState(id, "TERMINATED", { timeoutMs: 60_000 });
+    } catch (error) {
+      if (!(error instanceof AwsApiError && error.status === 404)) throw error;
+    }
+  }
+
+  function destroyStoredScope(scopeId: string, expectedId?: string): Promise<void> {
+    return withScopeLock(scopeId, async () => {
+      const stored = await store.get(scopeId);
+      const id = expectedId ?? stored?.microvmId;
+      if (id) await terminateBody(id);
+      if (!expectedId || !stored || stored.microvmId === expectedId) {
+        await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key: s3KeyFor(scopeId) }));
+        await store.delete(scopeId);
+      }
+      if (id) {
+        client.evict(id);
+        endpointById.delete(id);
+        scopeByMicrovm.delete(id);
+        activeByMicrovm.delete(id);
+      }
+    });
+  }
+
   const sandbox: Sandbox = {
+    destroyScope: (scopeId) => destroyStoredScope(scopeId),
     profile,
     startProcess: procSessions.startProcess,
     readProcess: procSessions.readProcess,
@@ -455,59 +507,66 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
       const scope = scopeByMicrovm.get(handle.id) ?? (await scopeOf(handle.id));
       if (tdOpts?.destroy) {
-        await api.terminate(handle.id).catch(swallowAs("aws-sandbox: destroy terminate", undefined));
-        if (scope) {
-          await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key: s3KeyFor(scope) })).catch(() => {});
-          await store.delete(scope).catch(() => {});
+        if (scope) await destroyStoredScope(scope, handle.id);
+        else {
+          await terminateBody(handle.id);
+          client.evict(handle.id);
+          endpointById.delete(handle.id);
         }
-        client.evict(handle.id);
-        endpointById.delete(handle.id);
         return;
       }
 
       if (scope) {
-        const stored = await store.get(scope);
-        if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-        if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
-          try {
-            await snapshotHome(scope, handle.id);
-            await store.merge(scope, { lastSnapshotMs: Date.now(), lastActivityMs: Date.now(), homeDirty: false });
-          } catch (e) {
-            reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
+        await withScopeLock(scope, async () => {
+          const stored = await store.get(scope);
+          if (stored?.microvmId !== handle.id) return;
+          if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
+          if (snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
+            try {
+              await snapshotHome(scope, handle.id);
+              await store.merge(scope, { lastSnapshotMs: Date.now(), lastActivityMs: Date.now(), homeDirty: false });
+            } catch (e) {
+              reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
+              await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
+            }
+          } else {
             await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
           }
-        } else {
-          await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
-        }
+          await api.suspend(handle.id).catch(swallowAs("aws-sandbox: suspend on teardown", undefined));
+        });
       }
-      await api.suspend(handle.id).catch(swallowAs("aws-sandbox: suspend on teardown", undefined));
     },
 
     async reapDeepIdle(idleMs): Promise<{ reaped: number }> {
       if (!(idleMs > 0)) return { reaped: 0 };
       const cutoff = Date.now() - idleMs;
       let reaped = 0;
-      for (const [scope, rec] of await store.entries()) {
-        if (rec.orgId && rec.orgId !== configOrgId()) continue;
-        if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) continue;
-        const desc = await api.tryGetMicrovm(rec.microvmId);
-        if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
-          await store.delete(scope).catch(() => {});
-          continue;
-        }
-        try {
-          endpointById.set(rec.microvmId, rec.endpoint);
-          const due = !rec.lastSnapshotMs || (rec.lastActivityMs ?? 0) > rec.lastSnapshotMs;
-          if (due) {
-            await ensureRunning(rec.microvmId);
-            await snapshotHome(scope, rec.microvmId);
+      for (const [scope, candidate] of await store.entries()) {
+        await withScopeLock(scope, async () => {
+          const rec = await store.get(scope);
+          if (!rec || rec.microvmId !== candidate.microvmId) return;
+          if (rec.orgId && rec.orgId !== configOrgId()) return;
+          if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) return;
+          if (activeByMicrovm.has(rec.microvmId)) return;
+          const desc = await api.tryGetMicrovm(rec.microvmId);
+          if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
+            await store.delete(scope).catch(() => {});
+            return;
           }
-          await api.terminate(rec.microvmId);
-          await store.delete(scope);
-          reaped++;
-        } catch (e) {
-          reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
-        }
+          try {
+            endpointById.set(rec.microvmId, rec.endpoint);
+            const due = !rec.lastSnapshotMs || (rec.lastActivityMs ?? 0) > rec.lastSnapshotMs;
+            if (due) {
+              await ensureRunning(rec.microvmId);
+              await snapshotHome(scope, rec.microvmId);
+            }
+            await api.terminate(rec.microvmId);
+            await store.delete(scope);
+            reaped++;
+          } catch (e) {
+            reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
+          }
+        });
       }
       return { reaped };
     },
