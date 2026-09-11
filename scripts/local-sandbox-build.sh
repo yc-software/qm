@@ -4,7 +4,9 @@ cd "$(dirname "$0")/.."
 
 BASE_TAG="qm-sandbox-base:dev"
 LOCAL_TAG="${LOCAL_SANDBOX_IMAGE:-qm-sandbox-local:latest}"
-PLATFORM="linux/amd64"
+# Default to the docker host's own architecture: an emulated amd64 image on an arm64 host runs
+# node without its JIT, which makes the sandbox test suite crawl and hang on process tests.
+PLATFORM="${LOCAL_SANDBOX_PLATFORM:-linux/$(docker version --format '{{.Server.Arch}}')}"
 
 FINGERPRINT="$(node --input-type=module -e '
 const { computeSandboxImageFingerprint } = await import("./src/sandbox/local-sandbox.ts");
@@ -15,6 +17,7 @@ console.log(fp);
 
 if [[ -n "${FLY_SANDBOX_APP_NAME:-}" ]] && command -v flyctl >/dev/null 2>&1; then
   BASE_REF="registry.fly.io/${FLY_SANDBOX_APP_NAME}:dev"
+  PLATFORM="linux/amd64"
   echo "==> building ${BASE_REF} from fly/Dockerfile on Fly's remote amd64 builder"
   flyctl deploy --build-only --push --remote-only --image-label dev \
     --app "${FLY_SANDBOX_APP_NAME}" -c fly/fly.toml --dockerfile fly/Dockerfile . --yes
