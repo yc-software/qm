@@ -1,7 +1,6 @@
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
 import { randomUUID } from "node:crypto";
 import { errMessage } from "../../util/errors.ts";
-import { emailHtml, emailPlainText } from "../../../plugins/chassis/src/email-markdown.ts";
 import {
   addressList,
   clip,
@@ -92,22 +91,12 @@ export interface MimeAttachment {
 export const MAX_EMAIL_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_FILENAME_CHARS = 150;
 
-function textPart(type: string, text: string): string[] {
+function textPart(text: string): string[] {
   return [
-    `Content-Type: ${type}; charset="UTF-8"`,
+    'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: base64",
     "",
     wrap76(b64(new TextEncoder().encode(text))),
-  ];
-}
-
-function alternativePart(body: string, boundary: string): string[] {
-  return [
-    `--${boundary}`,
-    ...textPart("text/plain", emailPlainText(body)),
-    `--${boundary}`,
-    ...textPart("text/html", emailHtml(body)),
-    `--${boundary}--`,
   ];
 }
 
@@ -134,7 +123,6 @@ export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft, files: Mi
   if (to.length === 0) return null;
   const cc = draft.cc ?? meta?.cc ?? [];
   const rfcId = meta?.rfcMessageId;
-  const alt = `alt-${randomUUID()}`;
   const mixed = `mixed-${randomUUID()}`;
   const headers = [
     `To: ${to.join(", ")}`,
@@ -148,13 +136,11 @@ export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft, files: Mi
         `Content-Type: multipart/mixed; boundary="${mixed}"`,
         "",
         `--${mixed}`,
-        `Content-Type: multipart/alternative; boundary="${alt}"`,
-        "",
-        ...alternativePart(draft.body, alt),
+        ...textPart(draft.body),
         ...files.flatMap((file) => [`--${mixed}`, ...attachmentPart(file)]),
         `--${mixed}--`,
       ]
-    : [`Content-Type: multipart/alternative; boundary="${alt}"`, "", ...alternativePart(draft.body, alt)];
+    : textPart(draft.body);
   return [...headers, ...body].join("\r\n");
 }
 

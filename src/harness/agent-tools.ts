@@ -3090,14 +3090,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "send_email",
     label: "send_email",
     description:
-      "Hand a finished email to the user to review and send from their own Gmail. This call sends nothing: the draft appears in the conversation with Send, Edit and Discard controls, and only the user can send it. Use it whenever they ask you to email someone, after writing the complete email yourself in their voice. To attach files, write them to the workspace first and name their paths. Afterwards tell them in one line that the draft is ready to review; do not repeat the email text.",
+      "Hand a finished email to the user to review and send from their own Gmail. This call sends nothing: the draft appears in the conversation with Send and Discard buttons, and only the user can send it. Use it whenever they ask you to email someone, after writing the complete email yourself in their voice. If they want changes, they ask you and you call it again. To attach files, write them to the workspace first and name their paths. Afterwards tell them in one line that the draft is ready to review; do not repeat the email text.",
     parameters: Type.Object({
       to: Type.Array(Type.String(), { description: "Recipient email addresses." }),
       cc: Type.Optional(Type.Array(Type.String(), { description: "Cc addresses." })),
       subject: Type.String(),
       body: Type.String({
-        description:
-          "The email body. Paragraphs separated by blank lines. Light markdown is rendered for the recipient: **bold**, *italic*, `code`, [links](https://...), and - or 1. lists. No headings, tables, or HTML.",
+        description: "The plain-text email body, paragraphs separated by blank lines. No markdown.",
       }),
       attachments: Type.Optional(
         Type.Array(Type.String(), { description: 'Workspace-relative paths of files to attach, e.g. ["report.pdf"].' }),
@@ -3159,12 +3158,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           callId,
           { ...summary, ok: true, itemId: held.itemId },
           text(
-            `Draft ${held.itemId} is held for the user's review. The conversation now shows it with Send, Edit and Discard controls, and only the user can send it; a send from an agent is refused. Nothing more is needed from you beyond a one-line note that the draft is ready.`,
+            `Draft ${held.itemId} is held for the user's review. The conversation now shows it with Send and Discard buttons, and only the user can send it; a send from an agent is refused. Nothing more is needed from you beyond a one-line note that the draft is ready.`,
           ),
           false,
           undefined,
           true,
-          { emailDraft: { ...held, to, ...(cc.length ? { cc } : {}), subject } },
+          { emailDraft: held },
         );
       } catch (e) {
         return fail(errMessage(e));

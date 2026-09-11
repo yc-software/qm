@@ -7,12 +7,6 @@ import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/lo
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
 import { adapterForItem } from "../src/loops/sources/index.ts";
 
-function plainPart(mime: string): string {
-  const boundary = mime.match(/multipart\/alternative; boundary="([^"]+)"/)![1]!;
-  const part = mime.split(`--${boundary}`).find((p) => p.includes("text/plain"))!;
-  return Buffer.from(part.split("\r\n\r\n")[1]!.replaceAll("\r\n", ""), "base64").toString("utf8");
-}
-
 function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): LoopItem {
   return {
     id: "i1",
@@ -72,8 +66,8 @@ test("gmail reply MIME threads correctly and survives a UTF-8 body", () => {
   assert.match(mime, /Subject: Re: Quarterly numbers\r\n/);
   assert.match(mime, /In-Reply-To: <msg-1@mail>\r\n/);
   assert.match(mime, /References: <msg-1@mail>\r\n/);
-  assert.equal(plainPart(mime), "Confirmed — see attached. ✅");
-  assert.match(mime, /Content-Type: text\/html; charset="UTF-8"/);
+  const body = mime.split("\r\n\r\n")[1]!;
+  assert.equal(Buffer.from(body.replaceAll("\r\n", ""), "base64").toString("utf8"), "Confirmed — see attached. ✅");
 });
 
 test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", () => {
@@ -139,7 +133,8 @@ test("the held proposal is what goes out when the action carries no draft", asyn
     {},
   );
   assert.equal(result.ok, true);
-  assert.equal(plainPart(sent), "the held draft");
+  const encoded = sent.split("\r\n\r\n")[1]!;
+  assert.equal(Buffer.from(encoded, "base64").toString("utf8"), "the held draft");
 });
 
 test("a missing connector reads as not_connected, not an exception", async () => {

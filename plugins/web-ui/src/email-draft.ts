@@ -3,8 +3,6 @@ import type { ToolActivity } from "./core-bridge";
 export interface EmailDraftRef {
   loopId: string;
   itemId: string;
-  to?: string[];
-  subject?: string;
 }
 
 export type EmailDraftActivity = Pick<ToolActivity, "type" | "payload">;
@@ -13,19 +11,12 @@ function emailDraftFromPayload(payload: unknown): EmailDraftRef | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
   if (value.tool !== "send_email" || value.isError === true) return null;
-  const display = value.display;
-  if (!display || typeof display !== "object") return null;
-  const draft = (display as Record<string, unknown>).emailDraft;
+  const draft = (value.display as Record<string, unknown> | undefined)?.emailDraft as
+    Record<string, unknown> | undefined;
   if (!draft || typeof draft !== "object") return null;
-  const { loopId, itemId, to, subject } = draft as Record<string, unknown>;
+  const { loopId, itemId } = draft;
   if (typeof loopId !== "string" || !loopId || typeof itemId !== "string" || !itemId) return null;
-  const addresses = Array.isArray(to) ? to.filter((a): a is string => typeof a === "string") : [];
-  return {
-    loopId,
-    itemId,
-    ...(addresses.length ? { to: addresses } : {}),
-    ...(typeof subject === "string" && subject ? { subject } : {}),
-  };
+  return { loopId, itemId };
 }
 
 export function emailDraftsIn(activity: readonly EmailDraftActivity[] | undefined): EmailDraftRef[] {

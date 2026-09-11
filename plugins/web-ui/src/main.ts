@@ -5,8 +5,7 @@ import "./draft-review";
 import { registerChatSearchHotkey } from "./search";
 import { registerSessionJumpHotkeys } from "./session-jump";
 import { closeFormMenus } from "./ui";
-import { allConversations, onInboxItemEvent } from "./conversations";
-import { refreshEmailDraft } from "./email-draft-card";
+import { allConversations } from "./conversations";
 import {
   clearSessionSelection,
   closeOpenSessionMenu,
@@ -26,8 +25,6 @@ function closeComposerMenus(keepOpenWithin: Element | null): boolean {
   }
   return changed;
 }
-
-onInboxItemEvent((event) => refreshEmailDraft(event.itemId));
 
 document.addEventListener("click", (e) => {
   const target = e.target as Element | null;

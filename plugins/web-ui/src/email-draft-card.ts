@@ -1,387 +1,108 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { CheckCheck, Eye, Paperclip, PenLine, Send, Undo2, X } from "lucide";
+import { html, nothing, render, type TemplateResult } from "lit";
+import { CheckCheck, Paperclip } from "lucide";
 import { api, ApiError, fileContentUrl } from "./core-bridge";
 import type { EmailDraftRef } from "./email-draft";
-import { toInboxItem, type InboxAttachment, type InboxDraft, type InboxItem, type LedgerItem } from "./inbox";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { emailHtml } from "../../chassis/src/email-markdown";
-import { formatBytes, icon, initials, relTime } from "./ui";
+import { toInboxItem, type InboxItem, type LedgerItem } from "./inbox";
+import { formatBytes, icon, relTime } from "./ui";
 
-interface DraftState {
-  ref: EmailDraftRef;
-  item: InboxItem | null;
-  gone: boolean;
-  hidden: boolean;
-  loading: boolean;
-  mode: "preview" | "edit";
-  edit: (InboxDraft & { basedOnAt?: number }) | null;
-  busy: boolean;
-  notice: string | null;
-  chain: Promise<void>;
-}
+export class EmailDraftCard extends HTMLElement {
+  ref!: EmailDraftRef;
+  private item: InboxItem | null = null;
+  private status: "loading" | "ready" | "gone" | "hidden" = "loading";
+  private busy = false;
+  private notice: string | null = null;
 
-const states = new Map<string, DraftState>();
-const changeHooks = new Set<() => void>();
-let version = 0;
-
-export function onEmailDraftChange(hook: () => void): () => void {
-  changeHooks.add(hook);
-  return () => changeHooks.delete(hook);
-}
-
-export function emailDraftsVersion(): number {
-  return version;
-}
-
-function itemPath(ref: EmailDraftRef): string {
-  return `/api/loops/${encodeURIComponent(ref.loopId)}/items/${encodeURIComponent(ref.itemId)}`;
-}
-
-export function refreshEmailDraft(itemId: string): void {
-  const state = states.get(itemId);
-  if (state && !state.busy) void load(state);
-}
-
-export function emailDraftCard(ref: EmailDraftRef): TemplateResult {
-  let state = states.get(ref.itemId);
-  if (!state) {
-    state = {
-      ref,
-      item: null,
-      gone: false,
-      hidden: false,
-      loading: false,
-      mode: "preview",
-      edit: null,
-      busy: false,
-      notice: null,
-      chain: Promise.resolve(),
-    };
-    states.set(ref.itemId, state);
-    void load(state);
+  connectedCallback(): void {
+    this.classList.add("email-draft");
+    void this.load();
   }
-  return html`<section class="email-draft">${cardTpl(state)}</section>`;
-}
 
-async function load(state: DraftState): Promise<void> {
-  if (state.loading) return;
-  state.loading = true;
-  draw(state);
-  try {
-    const { item } = await api<{ item: LedgerItem }>(itemPath(state.ref));
-    state.item = toInboxItem(item);
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) state.gone = true;
-    else if (e instanceof ApiError && e.status === 403) state.hidden = true;
-    else state.notice = `Couldn't load the draft: ${e instanceof Error ? e.message : e}`;
-  } finally {
-    state.loading = false;
-    draw(state);
+  private path(): string {
+    return `/api/loops/${encodeURIComponent(this.ref.loopId)}/items/${encodeURIComponent(this.ref.itemId)}`;
   }
-}
 
-function draft(state: DraftState): InboxDraft {
-  if (state.edit) {
-    const { basedOnAt: _basedOnAt, ...edited } = state.edit;
-    return edited;
-  }
-  return state.item?.draft ?? { body: "" };
-}
-
-function attachmentIds(draft: InboxDraft): string {
-  return (draft.attachments ?? []).map((a) => a.artifactId).join(",");
-}
-
-function sameDraft(a: InboxDraft | undefined, b: InboxDraft): boolean {
-  return (
-    a !== undefined &&
-    a.body === b.body &&
-    (a.subject ?? "") === (b.subject ?? "") &&
-    (a.to ?? []).join(",") === (b.to ?? []).join(",") &&
-    (a.cc ?? []).join(",") === (b.cc ?? []).join(",") &&
-    attachmentIds(a) === attachmentIds(b)
-  );
-}
-
-function splitAddresses(raw: string): string[] {
-  return raw
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function patchDraft(state: DraftState, patch: Partial<InboxDraft>): void {
-  const basedOnAt = state.edit?.basedOnAt ?? state.item?.draftAt;
-  const next = { ...draft(state), ...patch, ...(basedOnAt !== undefined ? { basedOnAt } : {}) };
-  if (!next.attachments?.length) delete next.attachments;
-  state.edit = next;
-  state.notice = null;
-  draw(state);
-}
-
-async function postAction(state: DraftState, kind: string, args?: Record<string, unknown>): Promise<void> {
-  const { item } = await api<{ item: LedgerItem }>(`${itemPath(state.ref)}/action`, {
-    method: "POST",
-    body: JSON.stringify({ kind, ...(args ? { args } : {}) }),
-  });
-  state.item = toInboxItem(item);
-}
-
-function proposalArgs(state: DraftState): Record<string, unknown> {
-  const basedOnAt = state.edit?.basedOnAt ?? state.item?.draftAt;
-  return { proposal: draft(state), ...(basedOnAt !== undefined ? { expectedProposalAt: basedOnAt } : {}) };
-}
-
-function enqueue(state: DraftState, task: () => Promise<void>): Promise<void> {
-  const next = state.chain.then(task, task);
-  state.chain = next.catch(() => undefined);
-  return next;
-}
-
-async function explainFailure(state: DraftState, e: unknown, failure: string): Promise<void> {
-  if (!(e instanceof ApiError && e.status === 409 && /draft changed/i.test(e.message))) {
-    state.notice = `${failure}: ${e instanceof Error ? e.message : e}`;
-    return;
-  }
-  await load(state);
-  if (state.edit && state.item?.draftAt !== undefined) {
-    state.edit.basedOnAt = state.item.draftAt;
-    const preview = (state.item.draft?.body ?? "").trim().slice(0, 140);
-    state.notice = `The agent redrafted this email while you were editing. Your text is kept in the box. New draft: "${preview}". Send again to use yours.`;
-  } else {
-    state.notice = "The agent changed this draft while you were looking. Review the new version, then try again.";
-  }
-}
-
-function persist(state: DraftState): Promise<void> {
-  if (!state.edit || !state.item) return Promise.resolve();
-  if (sameDraft(state.item.draft, draft(state))) {
-    state.edit = null;
-    return Promise.resolve();
-  }
-  return enqueue(state, async () => {
-    const sent = state.edit;
-    if (!sent || !state.item || sameDraft(state.item.draft, draft(state))) return;
+  private async load(): Promise<void> {
     try {
-      await postAction(state, "edit", proposalArgs(state));
-      if (state.edit === sent) state.edit = null;
-      else if (state.edit && state.item?.draftAt !== undefined) state.edit.basedOnAt = state.item.draftAt;
+      const { item } = await api<{ item: LedgerItem }>(this.path());
+      this.item = toInboxItem(item);
+      this.status = "ready";
     } catch (e) {
-      await explainFailure(state, e, "Couldn't save the draft");
+      const code = e instanceof ApiError ? e.status : 0;
+      if (code === 404) this.status = "gone";
+      else if (code === 403) this.status = "hidden";
+      else {
+        this.status = "ready";
+        this.notice = `Couldn't load the draft: ${e instanceof Error ? e.message : e}`;
+      }
     }
-    draw(state);
-  });
-}
+    this.draw();
+  }
 
-function withBusy(state: DraftState, work: () => Promise<void>, failure: string): Promise<void> {
-  if (state.busy) return Promise.resolve();
-  state.busy = true;
-  state.notice = null;
-  draw(state);
-  return enqueue(state, async () => {
+  private async act(kind: "send" | "dismiss"): Promise<void> {
+    this.busy = true;
+    this.notice = null;
+    this.draw();
     try {
-      await work();
+      const init = { method: "POST", body: JSON.stringify({ kind }) };
+      const { item } = await api<{ item: LedgerItem }>(`${this.path()}/action`, init);
+      this.item = toInboxItem(item);
     } catch (e) {
-      await explainFailure(state, e, failure);
-    } finally {
-      state.busy = false;
-      draw(state);
+      this.notice = `${kind === "send" ? "Send failed" : "Couldn't discard"}: ${e instanceof Error ? e.message : e}`;
+      if (e instanceof ApiError && e.status === 409) await this.load();
     }
-  });
-}
-
-function setMode(state: DraftState, mode: DraftState["mode"]): void {
-  if (state.mode === mode) return;
-  state.mode = mode;
-  if (mode === "preview") void persist(state);
-  draw(state);
-}
-
-function send(state: DraftState): Promise<void> {
-  const current = draft(state);
-  if (!current.body.trim()) {
-    state.notice = "Nothing to send. The draft is empty.";
-    draw(state);
-    return Promise.resolve();
+    this.busy = false;
+    this.draw();
   }
-  if (!current.to?.length) {
-    state.notice = "Add at least one recipient before sending.";
-    draw(state);
-    return Promise.resolve();
+
+  private draw(): void {
+    render(this.tpl(), this);
   }
-  return withBusy(
-    state,
-    async () => {
-      await postAction(state, "send", proposalArgs(state));
-      state.edit = null;
-      state.mode = "preview";
-    },
-    "Send failed",
-  );
-}
 
-function draw(_state: DraftState): void {
-  version++;
-  for (const hook of changeHooks) hook();
-}
-
-function attachmentsTpl(state: DraftState, current: InboxDraft, editable: boolean): TemplateResult | typeof nothing {
-  const files = current.attachments ?? [];
-  if (!files.length) return nothing;
-  const chip = (file: InboxAttachment): TemplateResult =>
-    html`<span class="email-draft-attachment">
-      <a class="file-chip" href=${fileContentUrl(file.artifactId, file.name)} target="_blank" rel="noreferrer">
-        ${icon(Paperclip, 13)}<span>${file.name}</span><small>${formatBytes(file.sizeBytes)}</small>
-      </a>
+  private tpl(): TemplateResult | typeof nothing {
+    if (this.status === "hidden") return nothing;
+    if (this.status === "loading") return html`<div class="email-draft-meta">Loading the email draft…</div>`;
+    const item = this.item;
+    if (!item)
+      return html`<div class="email-draft-meta">${this.notice ?? "This email draft is no longer available."}</div>`;
+    const draft = item.draft ?? { body: "" };
+    const to = (draft.to ?? []).join(", ");
+    if (item.status === "sent") {
+      return html`<div class="email-draft-meta">
+        ${icon(CheckCheck, 14)}<span>Sent to ${to}${item.sentAt ? ` · ${relTime(item.sentAt)}` : ""}</span>
+      </div>`;
+    }
+    if (item.status !== "open") return html`<div class="email-draft-meta">Email draft discarded</div>`;
+    const files = draft.attachments ?? [];
+    return html`
+      <div class="email-draft-head">
+        <span>To</span><span>${to}</span>
+        ${draft.cc?.length ? html`<span>Cc</span><span>${draft.cc.join(", ")}</span>` : nothing}
+        <span>Subject</span><span>${draft.subject?.trim() || "(no subject)"}</span>
+      </div>
+      <div class="email-draft-body">${draft.body}</div>
       ${
-        editable
-          ? html`<button
-              type="button"
-              class="email-draft-attachment-remove"
-              aria-label=${`Remove ${file.name}`}
-              @click=${() => {
-                patchDraft(state, { attachments: files.filter((f) => f.artifactId !== file.artifactId) });
-                void persist(state);
-              }}
-            >
-              ${icon(X, 12)}
-            </button>`
+        files.length
+          ? html`<div class="email-draft-attachments">
+              ${files.map(
+              (f) =>
+                html`<a class="file-chip" href=${fileContentUrl(f.artifactId, f.name)} target="_blank" rel="noreferrer">
+                  ${icon(Paperclip, 13)}<span>${f.name}</span><small>${formatBytes(f.sizeBytes)}</small>
+                </a>`,
+            )}
+            </div>`
           : nothing
       }
-    </span>`;
-  return html`<div class="email-draft-attachments">${files.map(chip)}</div>`;
-}
-
-function recipientsLine(current: InboxDraft): string {
-  const to = current.to?.length ? `to ${current.to.join(", ")}` : "no recipient yet";
-  return current.cc?.length ? `${to} · cc ${current.cc.join(", ")}` : to;
-}
-
-function cardTpl(state: DraftState): TemplateResult {
-  const item = state.item;
-  if (state.hidden) return html`${nothing}`;
-  if (state.gone) {
-    const { to, subject } = state.ref;
-    return html`<div class="email-draft-receipt">
-      <span class="meta"
-        >Email draft${subject ? html` <b>${subject}</b>` : nothing}${to?.length ? ` to ${to.join(", ")}` : ""} is no
-        longer on the ledger.</span
-      >
-    </div>`;
-  }
-  if (!item) {
-    return html`<div class="email-draft-meta">
-      ${state.notice ?? (state.loading ? "Loading the email draft…" : "The email draft is not available.")}
-    </div>`;
-  }
-  if (item.status === "sent") return receiptTpl(state, item);
-  if (item.status !== "open") return dismissedTpl(state, item);
-  const current = draft(state);
-  const edited = state.edit !== null || item.draftEdited === true;
-  return html`
-    <div class="email-draft-meta">
-      <span class="email-draft-pill ${edited ? "edited" : ""}">
-        ${edited ? "Edited" : html`${icon(CheckCheck, 12)}Ready to send`}
-      </span>
-      <span class="email-draft-recipients">${recipientsLine(current)}</span>
-      <span class="email-draft-seg" role="tablist" aria-label="Draft view">
-        <button type="button" class=${state.mode === "preview" ? "on" : ""} @click=${() => setMode(state, "preview")}>
-          ${icon(Eye, 12)}Preview
+      <div class="approval-actions">
+        <button type="button" class="approval-btn primary" ?disabled=${this.busy} @click=${() => void this.act("send")}>
+          Send
         </button>
-        <button type="button" class=${state.mode === "edit" ? "on" : ""} @click=${() => setMode(state, "edit")}>
-          ${icon(PenLine, 12)}Edit
+        <button type="button" class="approval-btn" ?disabled=${this.busy} @click=${() => void this.act("dismiss")}>
+          Discard
         </button>
-      </span>
-    </div>
-    <div class="email-draft-paper">
-      ${state.mode === "edit" ? editTpl(state, item, current) : previewTpl(state, item, current)}
-    </div>
-    <div class="email-draft-foot">
-      <button
-        type="button"
-        class="approval-btn"
-        ?disabled=${state.busy}
-        @click=${() => void withBusy(state, () => postAction(state, "dismiss"), "Couldn't discard the draft")}
-      >
-        Discard
-      </button>
-      <button
-        type="button"
-        class="approval-btn primary email-draft-send"
-        ?disabled=${state.busy}
-        @click=${() => void send(state)}
-      >
-        ${icon(Send, 13)}${state.busy ? "Working…" : "Send"}
-      </button>
-    </div>
-    ${state.notice ? html`<div class="email-draft-notice">${state.notice}</div>` : nothing}
-  `;
+      </div>
+      ${this.notice ? html`<div class="email-draft-notice">${this.notice}</div>` : nothing}
+    `;
+  }
 }
 
-function previewTpl(state: DraftState, item: InboxItem, current: InboxDraft): TemplateResult {
-  const from = item.from;
-  return html`
-    <div class="email-draft-from">
-      <span class="email-draft-avatar">${initials(from)}</span>
-      <span class="email-draft-who"><b>${from}</b><span>${recipientsLine(current)}</span></span>
-    </div>
-    <h3 class="email-draft-subject">${current.subject?.trim() || "(no subject)"}</h3>
-    <div class="email-draft-rule"></div>
-    <div class="email-draft-body">${unsafeHTML(emailHtml(current.body))}</div>
-    ${attachmentsTpl(state, current, false)}
-  `;
-}
-
-function editTpl(state: DraftState, item: InboxItem, current: InboxDraft): TemplateResult {
-  const field = (label: string, value: string, apply: (raw: string) => Partial<InboxDraft>): TemplateResult =>
-    html`<label class="email-draft-field">
-      <span>${label}</span>
-      <input
-        type="text"
-        .value=${value}
-        @input=${(e: Event) => patchDraft(state, apply((e.currentTarget as HTMLInputElement).value))}
-        @blur=${() => void persist(state)}
-      />
-    </label>`;
-  return html`
-    <div class="email-draft-fields">
-      <div class="email-draft-field"><span>From</span><span class="email-draft-static">${item.from}</span></div>
-      ${field("To", (current.to ?? []).join(", "), (raw) => ({ to: splitAddresses(raw) }))}
-      ${field("Cc", (current.cc ?? []).join(", "), (raw) => ({ cc: splitAddresses(raw) }))}
-      ${field("Subject", current.subject ?? "", (raw) => ({ subject: raw }))}
-    </div>
-    <textarea
-      class="email-draft-textarea"
-      .value=${current.body}
-      @input=${(e: Event) => patchDraft(state, { body: (e.currentTarget as HTMLTextAreaElement).value })}
-      @blur=${() => void persist(state)}
-    ></textarea>
-    ${attachmentsTpl(state, current, true)}
-  `;
-}
-
-function receiptTpl(state: DraftState, item: InboxItem): TemplateResult {
-  const sent = item.draft ?? draft(state);
-  return html`<div class="email-draft-receipt">
-    <span class="ok">${icon(CheckCheck, 15)}</span>
-    <span>Sent <b>${sent.subject?.trim() || "(no subject)"}</b> to ${(sent.to ?? []).join(", ")}</span>
-    <span class="meta"
-      >${sent.cc?.length ? `cc ${sent.cc.join(", ")} · ` : ""}${item.sentAt ? relTime(item.sentAt) : ""}</span
-    >
-  </div>`;
-}
-
-function dismissedTpl(state: DraftState, item: InboxItem): TemplateResult {
-  return html`<div class="email-draft-receipt">
-    <span class="meta">Email draft discarded${item.dismissedAt ? ` ${relTime(item.dismissedAt)}` : ""}</span>
-    <button
-      type="button"
-      class="approval-btn"
-      ?disabled=${state.busy}
-      @click=${() => void withBusy(state, () => postAction(state, "reopen"), "Couldn't reopen the draft")}
-    >
-      ${icon(Undo2, 13)}Reopen
-    </button>
-    ${state.notice ? html`<span class="email-draft-notice">${state.notice}</span>` : nothing}
-  </div>`;
-}
+customElements.define("email-draft-card", EmailDraftCard);

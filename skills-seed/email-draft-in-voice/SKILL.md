@@ -30,8 +30,8 @@ memory or from this conversation's tone. The profile's **Hard rules** and
    could appear in anyone's email, rewrite it or cut it.
 4. Hand it over. If the `send_email` tool is available, call it with the finished
    to/cc/subject/body and stop: the draft appears in the conversation for the user to
-   edit and send themselves, so do not paste the text again. Otherwise show the user the
-   exact text, ask for approval, and use Gmail Drafts below.
+   review and send themselves, so do not paste the text again. Otherwise show the user
+   the exact text, ask for approval, and use Gmail Drafts below.
 
 ## Gmail
 
