@@ -1,4 +1,4 @@
-import type { OverheardMessage } from "../types.ts";
+import type { OverheardMessage, TurnOrigin } from "../types.ts";
 
 export const SECURITY_POSTURES = ["dangerous", "auto", "strict"] as const;
 export type SecurityPosture = (typeof SECURITY_POSTURES)[number];
@@ -166,6 +166,7 @@ export function parseSecurityScreenVerdict(output: string | undefined): Security
 }
 
 interface SecurityScreenInput {
+  origin?: Pick<TurnOrigin, "kind">;
   surface?: string;
   text: string;
   triggered?: boolean;
@@ -191,7 +192,8 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
     (input.securityScreenData !== undefined || DATA_BEARING_SURFACES.has(input.surface))
   ) {
     const content = input.securityScreenData ?? input.text;
-    if (content.trim()) payloads.push({ source: input.surface, content });
+    if (content.trim())
+      payloads.push({ source: input.origin?.kind === "peer" ? "peer-message" : input.surface, content });
   }
   for (const message of input.overheard ?? []) {
     if (message.role === "user" && message.text.trim()) {

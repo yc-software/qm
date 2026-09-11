@@ -364,12 +364,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     });
   }
 
+  async function bindRunSession(input: OrchestratorInput, sessionId: string): Promise<void> {
+    if (input.runId && deps.runs && input.runLeaseToken)
+      if (!(await deps.runs.bindSession(input.runId, input.runLeaseToken, sessionId)))
+        throw new Error("run lease or session incarnation changed before execution");
+  }
+
   async function acquireTurnLeaseOrRefuse(args: {
     sessionId: string;
     site: "turn" | "flagged_input";
     scopeId: ScopeId;
     automated: boolean;
     runId?: string;
+    runLeaseToken?: string;
     surface?: string;
   }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
     const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
@@ -378,7 +385,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       args.sessionId,
       "turn",
       args.automated ? Math.min(AUTOMATED_TURN_LEASE_WAIT_MS, budget) : budget,
-      { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
+      {
+        waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn",
+      },
     );
     const waitedMs = attempt.waitedMs ?? 0;
     if (attempt.lease) return { lease: attempt.lease, waitedMs };
@@ -418,7 +427,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   return {
-    async screenSecuritySteer({ payload, actor, conversation, sessionId }) {
+    async screenSecuritySteer({ payload, actor, conversation, sessionId, origin = "ambient" }) {
       const resolution = await deps.resolution.resolve(conversation, actor);
       if (resolution.securityPolicy.inboundScreening === "off") return "allow";
       const scopeLabel = deps.resolution.scopeFor(conversation, actor);
@@ -440,6 +449,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
       const bounded = securityScreenPayload({
         surface: "external",
+        origin: { kind: origin },
         text: "",
         triggered: true,
         securityScreenData: payload,
@@ -455,7 +465,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel }, signal);
             }
           : undefined,
-        { hook: "user_input", surface: "steer", origin: "ambient" },
+        { hook: "user_input", surface: "steer", origin },
       ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
       if (verdict?.decision === "auto") {
         if (!verdict.unscreened) return "allow";
@@ -500,9 +510,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
+      if (deps.sessionCanRun && !(await deps.sessionCanRun(input.conversation.threadRef)))
+        return { status: "refused", reason: "agent is inactive or its computer is not ready" };
+      if (input.origin.kind === "peer" && !(await deps.authorizePeerTurn?.(input)))
+        return { status: "refused", reason: "peer execution authority is no longer valid" };
       await deps.refreshModels?.();
       const { actor, conversation } = input;
-      const automatedTurn = input.origin.kind === "automation";
+      const automatedTurn = input.origin.kind === "automation" || input.origin.kind === "peer";
       const ambientTurn = input.origin.kind === "ambient";
       const humanTurn = input.origin.kind === "human";
       const allInternal =
@@ -726,6 +740,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ? securityScreenPayload({
             ...input,
             ...turnOriginRequestFields(input.origin),
+            ...(input.origin.kind === "peer"
+              ? { securityScreenData: deps.peerScreenData ? await deps.peerScreenData(input) : input.text }
+              : {}),
             overheard: [],
             externalPromptData,
           })
@@ -809,11 +826,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input.surface,
         );
         screenSession.id = session.id;
+        await bindRunSession(input, session.id);
         if (!input.sessionParticipantIds?.length && !automatedTurn)
           await deps.sessions.addParticipant(session.id, actor.id);
         const acquired = await acquireTurnLeaseOrRefuse({
           sessionId: session.id,
           site: "flagged_input",
+          runLeaseToken: input.runLeaseToken,
           scopeId,
           automated: automatedTurn,
           ...(input.runId ? { runId: input.runId } : {}),
@@ -853,6 +872,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
             const taintedPayload: Record<string, unknown> = {
               text: input.text,
+              ...(input.origin.kind === "peer" ? { peerOrigin: input.origin } : {}),
               securityTainted: true,
               hidden: true,
               ...((input.attachments ?? []).some((attachment) => attachment.sourceId)
@@ -1001,7 +1021,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
       const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
       let defaultDestination: Destination | undefined;
-      if (defaultCandidate) {
+      if (defaultCandidate && input.origin.kind !== "peer") {
         defaultDestination = {
           type: defaultCandidate.type,
           target: defaultCandidate.target,
@@ -1144,6 +1164,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.surface,
       );
       screenSession.id = session.id;
+      await bindRunSession(input, session.id);
+      if (actor.type === "internal" && deps.peerIdentity) {
+        await deps.peerIdentity.ensure({
+          id: session.id,
+          scopeId: session.scopeId,
+          authority: { actor, conversation, surface: input.surface ?? "web", scopeVersion: input.scopeVersion },
+        });
+      }
       leaseMs += Date.now() - sessionStart;
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
@@ -1405,6 +1433,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
           : undefined;
         controlClaims = {
+          sessionId: session.id,
           ...scopeAttestation,
           aud: CONTROL_PLANE_AUD,
           exp: Date.now() + CAPABILITY_TTL_MS,
@@ -1425,7 +1454,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(liveAuthorTurn ? { liveAuthor: true } : {}),
           ...(automatedTurn ? { triggered: true } : {}),
           ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
-          ...(input.runId ? { runId: input.runId } : {}),
+          ...(input.runId ? { runId: input.runId, ...(input.attempt ? { runAttempt: input.attempt } : {}) } : {}),
+          ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
           threadRef: conversation.threadRef,
         };
         connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
@@ -1612,6 +1642,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const acquired = await acquireTurnLeaseOrRefuse({
         sessionId: session.id,
         site: "turn",
+        runLeaseToken: input.runLeaseToken,
         scopeId,
         automated: automatedTurn,
         ...(input.runId ? { runId: input.runId } : {}),
@@ -2630,11 +2661,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let lastChunkAt: number | undefined;
         const emittedEntries: SessionEntry[] = [];
         const syntheticPrompt =
-          (input.proactiveOpener && !input.text.trim()) || automatedTurn || partial || approvalReplay;
+          (input.proactiveOpener && !input.text.trim()) ||
+          input.origin.kind === "automation" ||
+          partial ||
+          approvalReplay;
         failureUserPayload =
           !syntheticPrompt && input.text.trim()
             ? {
                 text: input.text,
+                ...(input.origin.kind === "peer" ? { peerOrigin: input.origin } : {}),
                 ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
                 ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
@@ -2966,12 +3001,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
               const meta = {
                 ...rec.meta,
+                ...(input.origin.kind === "peer" && rec.meta.bareText === input.text && !rec.meta.peerOrigin
+                  ? { peerOrigin: input.origin }
+                  : {}),
                 ...(actor.displayName?.trim() ? { author: actor.displayName.trim() } : {}),
                 ...(syntheticPrompt || continuation ? { hidden: true } : {}),
                 ...(input.displayText?.trim() && rec.meta.bareText === input.text
                   ? { display: input.displayText }
                   : {}),
               };
+              if (meta.peerOrigin) {
+                meta.author = meta.peerOrigin.senderName;
+                meta.hidden = false;
+              }
               return withManagedRosterVersion(() => deps.sessions.appendTape(lease, { ...rec, meta }));
             },
             emit: async (entry) => {
@@ -2989,11 +3031,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }
                   if (tainted.type !== "user") return tainted;
                   const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
+                  if (
+                    input.origin.kind === "peer" &&
+                    payload.text === input.text &&
+                    !payload.steered &&
+                    !payload.peerOrigin
+                  )
+                    payload.peerOrigin = input.origin;
                   if (actor.displayName?.trim() && typeof payload.name !== "string")
                     payload.name = actor.displayName.trim();
                   if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
                     payload.display = input.displayText;
                   if (syntheticPrompt || continuation) payload.hidden = true;
+                  if (isObj(payload.peerOrigin) && typeof payload.peerOrigin.senderName === "string") {
+                    payload.name = payload.peerOrigin.senderName;
+                    payload.hidden = false;
+                  }
                   return { ...tainted, payload };
                 })();
                 const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));

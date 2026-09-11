@@ -23,6 +23,7 @@ function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
 }
 
 function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: string } {
+  if (body.origin?.kind === "peer") return { error: "peer origin is reserved for authenticated board delivery" };
   const typed = publicOrigin(body.origin);
   if (
     typed?.kind === "automation" &&

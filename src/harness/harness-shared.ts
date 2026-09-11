@@ -14,6 +14,7 @@ import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/sessio
 import { swallow } from "../util/errors.ts";
 
 export interface HarnessToolPlumbing {
+  nativeSubagents?: boolean;
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;

@@ -202,7 +202,15 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const claimed = await deps.runs.claimById(runId, "inline", deps.leaseTtlMs);
     if (claimed) {
       return withAdminLink(
-        await processRun({ runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs }, claimed),
+        await processRun(
+          {
+            runs: deps.runs,
+            orchestrator: deps.orchestrator,
+            leaseTtlMs: deps.leaseTtlMs,
+            coordinationPaused: deps.coordinationPaused,
+          },
+          claimed,
+        ),
       );
     }
     const finished = await deps.runs.waitFor(runId, deps.runWaitMs);
