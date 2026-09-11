@@ -1,3 +1,5 @@
+import type { RuntimeService } from "../../harness/runtime-types.ts";
+import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
   CommandApprovalGrant,
@@ -14,7 +16,7 @@ import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
-import type { ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
+import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
 import type { SessionStore } from "../../sessions/session-store.ts";
@@ -104,6 +106,7 @@ export interface OrchestratorDeps {
   config?: ScopedConfigStore;
   /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
   defaultHarness?: string;
+  defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
@@ -113,6 +116,7 @@ export interface OrchestratorDeps {
   files: FileArtifactStore;
   sandbox: Sandbox;
   sandboxMigration?: SandboxMigrationRunner;
+  sandboxResources?: SandboxResources;
   modelGateway: ModelGateway;
   auditLog: AuditLog;
   rateLimiter: RateLimiter;
@@ -160,6 +164,7 @@ export interface OrchestratorDeps {
   crons?: CronStore;
   webhooks?: WebhookStore;
   control?: ControlService;
+  runtime?: RuntimeService;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
@@ -173,6 +178,7 @@ export interface OrchestratorDeps {
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
+  isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   reachExec?: boolean;
   eagerProvision?: boolean;

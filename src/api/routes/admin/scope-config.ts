@@ -270,6 +270,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   for (const r of ADMIN_RESOURCES) {
     if (r.readKey && r.get) values[r.readKey] = await r.get(deps, targetScope);
   }
+  values.sharingPostureOverride = await deps.config.getSharingPostureOwnDurable(targetScope);
   const scopeProfile = (await deps.sandbox?.profileFor?.(targetScope)) ?? deps.sandbox?.profile;
   const declaredEgress =
     scopeProfile?.egressEnforcement ?? deps.egressDeclaredEnforcement ?? deps.egressEnforcement ?? "none";

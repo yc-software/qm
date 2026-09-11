@@ -1,7 +1,8 @@
 import { signedRequestHeaders } from "../../src/auth/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
 
-const ADMIN_PRINCIPAL = "admin-alice";
+const ADMIN_PRINCIPAL = process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice";
 
 export interface SessionSummary {
   id: string;
@@ -14,11 +15,17 @@ export class CoreClient {
   private readonly baseUrl: string;
   private readonly signingSecret: string;
   readonly orgScope: string;
+  private readonly requestSignal?: AbortSignal;
 
-  constructor(baseUrl: string, signingSecret: string, orgScope = "org:acme") {
+  constructor(baseUrl: string, signingSecret: string, orgScope = "org:acme", requestSignal?: AbortSignal) {
     this.baseUrl = baseUrl;
     this.signingSecret = signingSecret;
     this.orgScope = orgScope;
+    this.requestSignal = requestSignal;
+  }
+
+  withSignal(signal: AbortSignal): CoreClient {
+    return new CoreClient(this.baseUrl, this.signingSecret, this.orgScope, signal);
   }
 
   private async request(
@@ -33,15 +40,33 @@ export class CoreClient {
       "content-type": "application/json",
       ...extra,
     });
-    const res = await fetch(`${this.baseUrl}${salted}`, { method, headers, ...(raw ? { body: raw } : {}) });
+    const deadline = AbortSignal.timeout(120_000);
+    const signal = this.requestSignal ? AbortSignal.any([deadline, this.requestSignal]) : deadline;
+    const res = await fetch(`${this.baseUrl}${salted}`, { method, headers, signal, ...(raw ? { body: raw } : {}) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`core ${method} ${pathWithQuery}: ${res.status} ${JSON.stringify(data)}`);
     return data;
   }
 
-  private admin(method: string, pathWithQuery: string): Promise<any> {
+  private async admin(method: string, pathWithQuery: string, body?: unknown): Promise<any> {
     const orgId = this.orgScope.split(":")[1] ?? "acme";
-    return this.request(method, pathWithQuery, undefined, { "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}` });
+    const portalSecret = process.env.PORTAL_IDENTITY_SECRET || this.signingSecret;
+    const identity = await mintPortalIdentity({ p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 }, portalSecret);
+    return this.request(method, pathWithQuery, body, {
+      "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}`,
+      [PORTAL_IDENTITY_HEADER]: identity,
+    });
+  }
+
+  listSandboxes(scopeId: string): Promise<{
+    providers: Array<{ name: string; actions: string[] }>;
+    sandboxes: Array<{ id: string; name: string; backend: string; state: string }>;
+  }> {
+    return this.admin("GET", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`);
+  }
+
+  manageSandbox(scopeId: string, body: Record<string, unknown>): Promise<{ id: string; backend: string }> {
+    return this.admin("POST", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`, body);
   }
 
   listSessions(): Promise<{ sessions: SessionSummary[] }> {

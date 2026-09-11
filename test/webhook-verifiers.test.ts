@@ -127,6 +127,64 @@ test("hmac-sha256 dedup key is the signed body, ignoring the unsigned x-delivery
   );
 });
 
+test("linear verifier accepts a valid linear-signature and rejects a forged one", () => {
+  const v = getVerifier("linear")!;
+  const rawBody = JSON.stringify({ action: "create", type: "Issue", webhookTimestamp: Date.now() });
+  const good = { secret: SECRET, headers: { "linear-signature": hmac(rawBody) }, rawBody };
+  assert.equal(v.verify(good), true);
+  assert.equal(v.verify({ ...good, rawBody: rawBody + "x" }), false);
+  assert.equal(v.verify({ ...good, headers: { "linear-signature": hmac(rawBody + "x") } }), false);
+  assert.equal(v.verify({ ...good, secret: undefined }), false);
+  assert.equal(v.verify({ ...good, headers: {} }), false);
+});
+
+test("linear verifier rejects signed payloads without a finite numeric timestamp", () => {
+  const v = getVerifier("linear")!;
+  for (const rawBody of [
+    "not json",
+    "null",
+    "[]",
+    "42",
+    '"text"',
+    JSON.stringify({ action: "create" }),
+    JSON.stringify({ webhookTimestamp: String(Date.now()) }),
+    JSON.stringify({ webhookTimestamp: null }),
+    JSON.stringify({ webhookTimestamp: true }),
+    JSON.stringify({ webhookTimestamp: {} }),
+    JSON.stringify({ webhookTimestamp: [] }),
+    '{"webhookTimestamp":1e400}',
+  ]) {
+    assert.equal(v.verify({ secret: SECRET, headers: { "linear-signature": hmac(rawBody) }, rawBody }), false, rawBody);
+  }
+});
+
+test("linear verifier enforces the one-minute window in both directions", (t) => {
+  const now = 1_800_000_000_000;
+  t.mock.method(Date, "now", () => now);
+  const v = getVerifier("linear")!;
+  for (const offset of [0, -60_000, 60_000, -60_001, 60_001]) {
+    const rawBody = JSON.stringify({ webhookTimestamp: now + offset });
+    assert.equal(
+      v.verify({ secret: SECRET, headers: { "linear-signature": hmac(rawBody) }, rawBody }),
+      Math.abs(offset) <= 60_000,
+      `offset ${offset}`,
+    );
+  }
+});
+
+test("linear dedup key is the signed body, ignoring the unsigned linear-delivery header", () => {
+  const v = getVerifier("linear")!;
+  const rawBody = JSON.stringify({ action: "create", webhookTimestamp: 1 });
+  assert.equal(
+    v.deliveryId({ headers: { "linear-delivery": "a" }, rawBody }),
+    v.deliveryId({ headers: { "linear-delivery": "b" }, rawBody }),
+  );
+  assert.notEqual(
+    v.deliveryId({ headers: {}, rawBody }),
+    v.deliveryId({ headers: {}, rawBody: JSON.stringify({ action: "update", webhookTimestamp: 1 }) }),
+  );
+});
+
 test("an unknown scheme has no verifier", () => {
   assert.equal(getVerifier("paypal"), null);
   assert.equal(getVerifier("none"), null);

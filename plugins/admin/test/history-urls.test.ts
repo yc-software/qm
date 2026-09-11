@@ -26,8 +26,21 @@ function routerAt(pathname: string, search = "", base = "/admin") {
   );
   return factory(
     base,
-    new Set(["history", "files", "memory", "live", "audit", "skills", "crons", "deployments"]),
-    ["history", "files", "memory", "live", "audit", "skills", "crons", "deployments", "slack", "judgments", "user"],
+    new Set(["history", "files", "memory", "live", "audit", "errors", "skills", "crons", "deployments"]),
+    [
+      "history",
+      "files",
+      "memory",
+      "live",
+      "audit",
+      "errors",
+      "skills",
+      "crons",
+      "deployments",
+      "slack",
+      "judgments",
+      "user",
+    ],
     "history",
     (scopeId: string) => String(scopeId || "").split(":")[0] || "scope",
     { pathname, search },
@@ -150,4 +163,21 @@ test("a bare history URL is the org scope, not whatever scope was viewed last", 
   assert.equal(st.scope, "org:acme");
   const files = routerAt("/admin/files").urlToState();
   assert.equal(files.scope, "channel:LAST-VIEWED");
+});
+
+test("Errors opens org-wide and preserves explicit scope deep links", () => {
+  const router = routerAt("/admin/errors");
+  assert.equal(router.urlToState().view, "errors");
+  assert.equal(router.urlToState().scope, "org:acme");
+  assert.equal(router.stateToUrl({ view: "errors", scope: SCOPE }), `/admin/errors?scope=${SCOPE_ENC}`);
+  assert.equal(routerAt("/admin/errors", `?scope=${SCOPE_ENC}`).urlToState().scope, SCOPE);
+});
+
+test("Errors pagination round-trips arbitrary pages without losing scope", () => {
+  const router = routerAt("/admin/errors", `?scope=${SCOPE_ENC}&page=37`);
+  assert.equal(router.urlToState().page, 37);
+  assert.equal(
+    router.stateToUrl({ view: "errors", scope: SCOPE, page: 37 }),
+    `/admin/errors?scope=${SCOPE_ENC}&page=37`,
+  );
 });

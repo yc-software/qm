@@ -253,3 +253,15 @@ test("an entry QM quarantined from the model never leaves the process", () => {
   assert.equal(capture.workflows[1]!.workflow_id, "s1-4");
   assert.equal(capture.workflows[1]!.tool_calls.length, 2);
 });
+
+test("captureSession preserves unified exec exit codes without treating management as execution", () => {
+  const capture = captureSession("sandbox", [
+    entry("tool_call", { tool: "sandbox", action: "exec", callId: "exec", command: "false" }, 1),
+    entry("tool_result", { tool: "sandbox", action: "exec", callId: "exec", code: 1 }, 2),
+    entry("tool_call", { tool: "sandbox", action: "status", callId: "status" }, 3),
+    entry("tool_result", { tool: "sandbox", action: "status", callId: "status", code: 5 }, 4),
+  ]);
+  const calls = capture.workflows[0]!.tool_calls;
+  assert.deepEqual(calls[0]?.result, { ok: true, exit_code: 1 });
+  assert.deepEqual(calls[1]?.result, { ok: true });
+});

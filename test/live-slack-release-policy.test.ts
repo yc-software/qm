@@ -19,6 +19,7 @@ test("the deployed release tier covers critical Slack and file paths", () => {
     "dm-reply",
     "file-upload",
     "mention-reply",
+    "runtime-model-handoff",
     "teammate-dm-reach",
     "thread-context",
   ]);

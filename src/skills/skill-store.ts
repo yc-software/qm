@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from "node:crypto";
+import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
@@ -68,6 +69,7 @@ export interface GrantedSkillRef {
 }
 
 export interface SkillResolution {
+  screenedBundles?: SkillBundle[];
   skill: Skill | null;
   shadowed: Skill[];
 }

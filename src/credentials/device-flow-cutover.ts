@@ -26,8 +26,8 @@ export interface DeviceFlowCutoverStore {
   get(scope: ScopeId, service: string): Promise<DeviceFlowCutoverPolicy | null>;
   resolvePolicy(scope: ScopeId, service: string): Promise<DeviceFlowCutoverPolicy | null>;
   resolve(scope: ScopeId, service: string): Promise<DeviceFlowCutoverMode>;
-  residentResetGeneration(scope: ScopeId, service: string): Promise<string | null>;
-  markResidentReset(scope: ScopeId, service: string, generation: string): Promise<void>;
+  residentResetGeneration(scope: ScopeId, service: string, computerId?: string): Promise<string | null>;
+  markResidentReset(scope: ScopeId, service: string, generation: string, computerId?: string): Promise<void>;
   set(
     scope: ScopeId,
     service: string,
@@ -64,6 +64,8 @@ export function createDeviceFlowCutoverStore(
   const volatileResets = new Map<string, DeviceFlowCutoverReset>();
   const resetKey = (kind: "request" | "complete", scope: ScopeId, service: string): string =>
     `${kind}:${policyKey(scope, service)}`;
+  const completionKey = (scope: ScopeId, service: string, computerId?: string): string =>
+    `${resetKey("complete", scope, service)}${computerId ? `:${encodeURIComponent(computerId)}` : ""}`;
   const getReset = (key: string): Promise<DeviceFlowCutoverReset | null> =>
     resets ? resets.get(key) : Promise.resolve(volatileResets.get(key) ?? null);
   const putReset = async (key: string, value: DeviceFlowCutoverReset): Promise<void> => {
@@ -104,7 +106,7 @@ export function createDeviceFlowCutoverStore(
     get,
     resolvePolicy,
     resolve,
-    async residentResetGeneration(scope, service) {
+    async residentResetGeneration(scope, service, computerId) {
       if ((await resolve(scope, service)) !== "legacy") return null;
       const policy = await resolvePolicy(scope, service);
       const requested = await getReset(resetKey("request", scope, service));
@@ -117,11 +119,11 @@ export function createDeviceFlowCutoverStore(
         .filter(Boolean)
         .join("|");
       if (!generation) return null;
-      const complete = await getReset(resetKey("complete", scope, service));
+      const complete = await getReset(completionKey(scope, service, computerId));
       return complete?.generation === generation ? null : generation;
     },
-    async markResidentReset(scope, service, generation) {
-      if (generation) await putReset(resetKey("complete", scope, service), { generation });
+    async markResidentReset(scope, service, generation, computerId) {
+      if (generation) await putReset(completionKey(scope, service, computerId), { generation });
     },
     async set(scope, service, mode, updatedBy) {
       assertMode(mode);

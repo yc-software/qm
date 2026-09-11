@@ -213,9 +213,7 @@ export const awsScaffold: ProviderScaffold = {
       [
         ["core", 2048, 4096],
         ["web-ui", 512, 1024],
-        ["admin", 512, 1024],
         ["portal", 512, 1024],
-        ["auth", 256, 512],
       ].map(([name, cpu, memory]) => [
         name,
         {

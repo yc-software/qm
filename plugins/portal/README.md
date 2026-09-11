@@ -25,8 +25,8 @@ surfaces, and it does **not** import the core.
    signature and payload (`nonce`/`aud`/`iss`/`sub`/timestamps and, for Slack, the `team_id`
    workspace pin) against the configured HTTPS JWKS, then reads
    the subject from userinfo. The verified `sub` **is** the core principal id. It mints a
-   signed `portal_session` cookie (`{sub, org, auth, exp}`, HMAC, 8h sliding lifetime with a
-   24h absolute maximum by default).
+   signed `portal_session` cookie (`{sub, org, auth, exp}`, HMAC, 7-day sliding lifetime with a
+   30-day absolute maximum by default).
 3. **Proxy** — every other path requires a valid session. The portal picks the upstream by the
    **exact first path segment**, strips the prefix, and proxies to the private upstream,
    synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
@@ -161,7 +161,7 @@ Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CO
 `CORE_ORG_ID`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
-`PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of one day and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.
+`PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.
 There is no `PORTAL_ADMIN_PRINCIPALS` — admin
 access is derived from the core (see the security model above).
 For local development only, `PORTAL_LOCAL_AUTH_BYPASS=1` mints a local session as

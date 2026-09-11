@@ -2922,7 +2922,23 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   json(res, 404, { error: "not found" });
 };
 
+let adminModule: Promise<typeof import("../../admin/src/index.ts")> | undefined;
+
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
+  const originalUrl = req.url ?? "/";
+  const path = originalUrl.split("?")[0]!;
+  if (process.env.ADMIN_ENABLED !== "0" && (path === "/admin" || path.startsWith("/admin/"))) {
+    req.url = originalUrl.slice("/admin".length) || "/";
+    if (req.url.startsWith("?")) req.url = `/${req.url}`;
+    try {
+      process.env.ADMIN_BASE_PATH ??= "/admin";
+      adminModule ??= import("../../admin/src/index.ts");
+      await (await adminModule).handler(req, res);
+    } finally {
+      req.url = originalUrl;
+    }
+    return;
+  }
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");

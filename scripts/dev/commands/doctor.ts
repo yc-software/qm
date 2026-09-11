@@ -99,9 +99,11 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
           detail:
             conns === null
               ? "num_connections unknown (introspection tap degraded)"
-              : `num_connections=${conns}${slack?.helloHost ? ` (hello host ${slack.helloHost})` : ""}`,
+              : `num_connections=${conns} at last hello${slack?.helloHost ? ` (Slack server ${slack.helloHost})` : ""}`,
           remedy:
-            conns !== null && conns > 1 ? "another live connection is stealing events: dev up --rotate" : undefined,
+            conns !== null && conns > 1
+              ? "check for other instances; reconnect and verify with dev up --rotate"
+              : undefined,
         });
         const canary = (await supervisorRequest(sock, "POST", "/canary", {}, 40_000)).body as {
           ok: boolean;

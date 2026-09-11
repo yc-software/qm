@@ -83,6 +83,21 @@ plaintext credentials while a process is using them. An approval means a human
 accepted the displayed action under the information available at that time, not that
 the resulting behavior is safe.
 
+Sharing posture defaults to Isolated. Open is a deliberate disclosure tradeoff for live,
+authenticated internal human turns: core may expose the speaker's opted-in personal files,
+artifacts, skills, and memory to an opted-in shared conversation, and may expose files and
+skills from up to 25 recent shared contexts in that speaker's DM after rechecking current
+membership. Included memories are loaded in full with source-scope labels and searchable through the active
+turn's memory tool; they are not added to reusable sandbox API tokens. Candidate discovery
+is limited to 100 recent sessions and 200 files, and binary files require explicit sharing
+before being copied into a different conversation's computer. Organization, personal, room, and source-room policy compose fail-closed, with
+Isolated winning. These reads are labelled and audited, but model output is not a disclosure
+control. Open does not change transcript audience filtering, writes or memory capture,
+credential materialization, automation or ambient turns, tenant boundaries, another
+person's entitlement, command approvals, content screening, or egress. In Auto, carried
+skills and their bundled files must pass screening before prompt inclusion or materialization;
+flagged, oversized, or unavailable screening leaves the carried skill inaccessible.
+
 ### Deliberately portal-only actions
 
 Three actions are intentionally excluded from the agent self-API, even though the
@@ -112,6 +127,11 @@ these, not through them.
   common dangerous forms, but obfuscation, encoding, or writing and then executing a
   script can evade it. It is a speed bump against mistakes and injection, not a
   sandbox boundary.
+- **Open sharing relies on model discretion after authorization.** Server-side policy,
+  identity, membership, source bounds, and read-only capability checks determine which
+  resources can enter a turn, but they cannot ensure the model keeps relevant private data
+  out of a shared reply. Audit supports investigation after access; it does not prevent
+  disclosure.
 - **Browser actions sit outside some core gates.** Actions inside the browser runner
   do not re-enter command policy or human-in-the-loop approval. They rely on
   task-level consent and the runner's spend checks. Browser traffic exits through the

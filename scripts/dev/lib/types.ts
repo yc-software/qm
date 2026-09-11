@@ -13,7 +13,7 @@ export const EXIT = {
 } as const;
 
 export type ChildName = "core" | "web" | "admin" | "portal";
-export const CHILD_ORDER: ChildName[] = ["core", "web", "admin", "portal"];
+export const CHILD_ORDER: ChildName[] = ["core", "web", "portal"];
 
 export interface SlotPorts {
   core: number;

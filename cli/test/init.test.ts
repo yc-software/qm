@@ -248,7 +248,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
       cpu: 2048,
       memory: 4096,
     });
-    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "admin", "portal", "auth"]);
+    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "portal"]);
     for (const name of ["main.tf", "outputs.tf", "variables.tf", "versions.tf", "terraform.tfvars"]) {
       assert.ok(existsSync(join(dir, "infra", name)), `infra/${name} is scaffolded`);
     }

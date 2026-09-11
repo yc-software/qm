@@ -1,3 +1,14 @@
+import { createRuntimeService } from "./harness/runtime-control.ts";
+import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
+import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
+import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxDefault,
+  type SandboxResources,
+  type SandboxResourceRollout,
+} from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./harness/pi-harness.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
@@ -31,6 +42,7 @@ import {
   type PersistedSoulRevision,
   type PersistedCommandPolicy,
   type PersistedSecurityPosture,
+  type PersistedSharingPosture,
   type PersistedApprovalGrantModes,
   type PersistedEgressPolicy,
   type PersistedScopedFlag,
@@ -60,7 +72,7 @@ import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -133,6 +145,7 @@ import {
   createCanManageScope,
   createCanWriteScope,
   createCurrentScopeMembers,
+  createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
   type CanReadScope,
   type CanManageScope,
@@ -442,12 +455,15 @@ export interface BuiltApp {
   sandbox: Sandbox;
   advisoryLock: AdvisoryLock;
   sandboxMigration: SandboxMigrationRunner;
+  sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
   files: FileArtifactStore;
+  fileUploads?: DirectFileUploads;
   livenessCache: LivenessCache;
   deviceFlowCutover: DeviceFlowCutoverStore;
   featureFlags: FeatureFlagStore;
   replayDedupe?: ReplayDedupe;
+  brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
   projects: ProjectStore;
   environments: EnvironmentStore;
@@ -479,6 +495,13 @@ export function buildApp(
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
+  configurePgPooling({
+    ...(config.databaseUrl ? { databaseUrl: config.databaseUrl } : {}),
+    ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
+    ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
+    ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
+    ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
+  });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
@@ -496,6 +519,7 @@ export function buildApp(
   const membership: {
     canReadScope?: CanReadScope;
     canManageScope?: CanManageScope;
+    canUseSandboxScope?: CanManageScope;
     managesArtifactHome?: ManagesArtifactHome;
   } = {};
   const acl = createAclStore(config.databaseUrl ? createPostgresGrantStore(config.databaseUrl) : undefined, {
@@ -549,6 +573,7 @@ export function buildApp(
     soulHistory: artifactMap<PersistedSoulRevision>("soul_history"),
     commandPolicies: artifactMap<PersistedCommandPolicy>("command_policies"),
     securityPostures: artifactMap<PersistedSecurityPosture>("security_postures"),
+    sharingPostures: artifactMap<PersistedSharingPosture>("sharing_postures"),
     approvalGrantModes: artifactMap<PersistedApprovalGrantModes>("approval_grant_modes"),
     egressPolicies: artifactMap<PersistedEgressPolicy>("egress_policies"),
     unfulfilledInsights: artifactMap<PersistedScopedFlag>("unfulfilled_insights_flag"),
@@ -572,6 +597,7 @@ export function buildApp(
     turnWallClocks: artifactMap<PersistedTurnWallClock>("turn_wall_clock_configs"),
     deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
     defaultSecurityPosture: config.securityPosture,
+    defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
   void configStore.hydrate?.();
@@ -691,6 +717,16 @@ export function buildApp(
   const files: FileArtifactStore = config.databaseUrl
     ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
     : createMemoryFileArtifactStore(fileBytes);
+  const fileUploads =
+    config.databaseUrl && config.snapshotStore === "s3" && config.s3Bucket
+      ? createDirectFileUploads({
+          bucket: config.s3Bucket,
+          ...(config.s3Region ? { region: config.s3Region } : {}),
+          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+          store: createPostgresFileUploadStore(config.databaseUrl),
+          files,
+        })
+      : undefined;
   const defaultMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
@@ -744,6 +780,9 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
+  const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
+  const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
+  const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
   const buildE2b = (): Sandbox => {
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey) throw new Error("SANDBOX_BACKEND=e2b requires E2B_API_KEY");
@@ -765,7 +804,7 @@ export function buildApp(
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies"),
+      store: e2bBodies,
       ...(e2b.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
         : {}),
@@ -795,10 +834,15 @@ export function buildApp(
         ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
         ...(modal.regions?.length ? { regions: modal.regions } : {}),
         ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
+        ...(modal.snapshotRetentionSec !== undefined ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 } : {}),
       }),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
       ...(modal.snapshotIntervalSec !== undefined ? { snapshotIntervalMs: modal.snapshotIntervalSec * 1000 } : {}),
+      nativeSnapshotsEnabled: modal.nativeSnapshotsEnabled ?? false,
+      ...(modal.nativeSnapshotIntervalSec !== undefined
+        ? { nativeSnapshotIntervalMs: modal.nativeSnapshotIntervalSec * 1000 }
+        : {}),
       ...(modal.rotateAfterSec ? { rotateAfterMs: modal.rotateAfterSec * 1000 } : {}),
       ...(modal.reapIdleSec ? { reapIdleMs: modal.reapIdleSec * 1000 } : {}),
       ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
@@ -809,7 +853,7 @@ export function buildApp(
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: artifactMap<StoredModalSandbox>("modal_sandbox_bodies"),
+      store: modalBodies,
       ...(modal.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
         : {}),
@@ -840,7 +884,7 @@ export function buildApp(
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: artifactMap<StoredMicrovm>("aws_sandbox_bodies"),
+      store: awsBodies,
       onError: sandboxOnError,
     });
   };
@@ -874,7 +918,57 @@ export function buildApp(
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
   const sandboxRoutes = artifactMap<SandboxRoute>("sandbox_routing");
+  const sandboxResources = createSandboxResources({
+    enabled: config.sandboxResourcesEnabled,
+    rollout: artifactMap<SandboxResourceRollout>("sandbox_resource_rollout"),
+    legacyScopes: async () => (await sessions.distinctScopes()).map((scope) => scope.scopeId),
+    legacySandboxes: async () => {
+      const [e2b, modal, aws] = await Promise.all([e2bBodies.entries(), modalBodies.entries(), awsBodies.entries()]);
+      return [
+        ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
+        ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
+        ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
+      ];
+    },
+    records: artifactMap<SandboxResource>("sandbox_resources"),
+    defaults: artifactMap<SandboxDefault>("sandbox_defaults"),
+    routes: sandboxRoutes,
+    backends: sandboxBackends,
+    defaultBackend: config.sandboxBackend,
+    lock: advisoryLock,
+    beforeRetire: async (record) => {
+      if (
+        (await processes?.liveByScope(record.ownerScopeId))?.some(
+          (process) => !process.sandboxId || process.sandboxId === record.id,
+        )
+      )
+        throw new Error("stop this sandbox's background jobs before retiring it");
+    },
+    beforeDefaultChange: async (scopeId) => {
+      if ((await processes?.liveByScope(scopeId))?.some((process) => !process.sandboxId))
+        throw new Error(
+          "legacy background work has no saved sandbox target; finish or stop it before changing the default",
+        );
+    },
+    provisionOptions: async (scopeId) => {
+      const secret = config.capabilitySecret ?? config.signingSecret;
+      if (!secret) return {};
+      const egressToken = await mintCapabilityToken(
+        {
+          actorId: "system:sandbox-create",
+          scopeId,
+          aud: EGRESS_PROXY_AUD,
+          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? "", true),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        secret,
+      );
+      return { egressToken };
+    },
+    canUseScope: (actorId, scopeId) => membership.canUseSandboxScope!(actorId, scopeId),
+  });
   const sandbox: Sandbox = createSandboxRouter({
+    resources: sandboxResources,
     backends: sandboxBackends,
     routes: sandboxRoutes,
     defaultBackend: config.sandboxBackend,
@@ -901,6 +995,7 @@ export function buildApp(
       );
       return { egressToken };
     },
+    withLegacyMutation: (scope, action) => sandboxResources.withLegacyMutation(scope, action),
     hasLiveWork: async (scope) => !!processes && (await processes.liveByScope(scope)).length > 0,
   });
   const secretSource =
@@ -1166,6 +1261,7 @@ export function buildApp(
     processes = config.databaseUrl ? createPostgresProcessRegistry(config.databaseUrl) : createMemoryProcessRegistry();
   }
 
+  const brokerSessions = config.databaseUrl ? createPostgresBrokerSessions(config.databaseUrl) : undefined;
   const replayDedupe = config.databaseUrl ? createPostgresReplayDedupe(config.databaseUrl) : createMemoryReplayDedupe();
   const metrics = config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink();
   const credentialUsage = config.databaseUrl
@@ -1253,8 +1349,12 @@ export function buildApp(
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
   const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory }, canManageScope);
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
+  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
+  membership.canUseSandboxScope = async (actorId, scopeId) =>
+    identity.isInternal(identity.classify(actorId)) &&
+    ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
@@ -1388,6 +1488,7 @@ export function buildApp(
     resolution,
     config: configStore,
     defaultHarness: fallbackHarness,
+    defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessionTapeMode: config.sessionTapeMode,
@@ -1396,6 +1497,7 @@ export function buildApp(
     files,
     sandbox,
     sandboxMigration,
+    sandboxResources,
     connectorTokens,
     modelGateway,
     auditLog,
@@ -1454,6 +1556,7 @@ export function buildApp(
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     ...(config.sharedOwnerAuthIsolation ? { ownerAuthExec: true, sharedOwnerAuthIsolation: true } : {}),
     directory,
+    isCurrentSharedScopeMember,
     managedGroups: projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
@@ -1811,6 +1914,18 @@ export function buildApp(
   });
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
+  orchestratorDeps.runtime = createRuntimeService(
+    {
+      config: configStore,
+      harnessId: fallbackHarness,
+      baseModelDefault: fallback.modelId,
+      providerKeys: providerKeysPresent(config),
+      modelCredentials,
+      modelCredentialFetch: overrides.modelCredentialFetch,
+      refreshModels,
+    },
+    app,
+  );
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
@@ -1925,6 +2040,7 @@ export function buildApp(
       monitorRetentionSweeper.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
+      fileUploads?.start();
       idleSweeper?.start();
       keepWarmSweeper.start();
       deepIdleSweeper?.start();
@@ -1945,6 +2061,7 @@ export function buildApp(
       keepWarmSweeper.stop();
       deepIdleSweeper?.stop();
       blobSweeper.stop();
+      fileUploads?.stop();
       wakeSweep.stop();
       orphanedSignalSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
@@ -2021,13 +2138,16 @@ export function buildApp(
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
     sandboxMigration,
+    sandboxResources,
     advisoryLock,
     blobTransfer,
     files,
+    ...(fileUploads ? { fileUploads } : {}),
     livenessCache,
     deviceFlowCutover,
     featureFlags,
     ...(replayDedupe ? { replayDedupe } : {}),
+    ...(brokerSessions ? { brokerSessions } : {}),
     directory,
     projects,
     environments,
@@ -2069,6 +2189,7 @@ export function serverDeps(
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
     ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
+    ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(configuredModel ? { baseModelDefault: configuredModel } : {}),
@@ -2135,6 +2256,8 @@ export function serverDeps(
     signals: built.signals,
     workspace: built.workspace,
     files: built.files,
+    ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
+    filesDirectUploadsEnabled: config.filesDirectUploadsEnabled,
     memory: built.memory,
     blobTransfer: built.blobTransfer,
     sandboxBackend: built.sandbox.profile.backend,
@@ -2159,5 +2282,6 @@ export function serverDeps(
     sessionShareBytes: built.sessionShareBytes,
     environments: built.environments,
     sandboxMigration: built.sandboxMigration,
+    sandboxResources: built.sandboxResources,
   };
 }

@@ -387,6 +387,22 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     readFile: base.readFile,
     exportFiles: execExport.exportFiles,
 
+    async destroyScope(scopeId: string): Promise<void> {
+      return base.provisionQueue(scopeId, async () => {
+        const name = sandboxScopeName(prefix, scopeId);
+        const res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}`, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${opts.token ?? ""}` },
+          signal: AbortSignal.timeout(RESTART_TIMEOUT_MS),
+        });
+        if (!res.ok && res.status !== 404)
+          throw new Error(`sprites delete ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+        ensured.delete(name);
+        pressureEpisodes.delete(name);
+        egressPolicyByName.delete(name);
+      });
+    },
+
     async computerStatus(scopeId: string) {
       const name = sandboxScopeName(prefix, scopeId);
       const spriteJson = async (path: string): Promise<{ status?: string } | null> => {

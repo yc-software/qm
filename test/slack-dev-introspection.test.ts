@@ -167,13 +167,13 @@ test("canary deletes its posted message after the round trip (and after a timeou
   });
 });
 
-test("lastActivityAt tracks real inbound frames but never canary traffic", async () => {
+test("lastActivityAt tracks dispatched turns and interactions but never canary traffic", async () => {
   const app = makeApp(async ({ text }) => {
     setTimeout(() => emitFrame(app, { type: "events_api", payload: { event: { type: "message", text } } }), 10);
     return { ok: true, ts: "1.2" };
   });
   await withIntrospection(app, async (dev) => {
-    emitFrame(app, { type: "events_api", payload: { event: { type: "reaction_added" } } });
+    dev.markEvent();
     const afterReaction = dev.state.lastActivityAt;
     assert.ok(afterReaction);
     emitFrame(app, { type: "interactive", payload: { actions: [{ action_id: "agent_request_approve" }] } });
@@ -184,4 +184,66 @@ test("lastActivityAt tracks real inbound frames but never canary traffic", async
     assert.equal(res.ok, true);
     assert.equal(dev.state.lastActivityAt, before, "canary round trip must not count as activity");
   });
+});
+
+test("canary deletion and connection maintenance do not keep an idle slot alive", async () => {
+  const app = makeApp();
+  let clock = 1000;
+  const dev = installDevIntrospection(app, { enabled: true, now: () => clock });
+  assert.ok(dev);
+  try {
+    dev.markEvent();
+    assert.equal(dev.state.lastActivityAt, 1000);
+    clock = 2000;
+    emitFrame(app, {
+      type: "events_api",
+      payload: {
+        event: { type: "message", subtype: "message_deleted", previous_message: { text: "qm-canary:probe" } },
+      },
+    });
+    emitFrame(app, { type: "disconnect", reason: "refresh_requested" });
+    emitFrame(app, { type: "hello", num_connections: 1 });
+    assert.equal(dev.state.lastActivityAt, 1000);
+    assert.equal(dev.state.lastEventAtRaw, 2000);
+    clock = 3000;
+    emitFrame(app, {
+      type: "events_api",
+      payload: { event: { type: "message", subtype: "message_deleted", previous_message: { text: "hello" } } },
+    });
+    assert.equal(dev.state.lastActivityAt, 1000);
+    clock = 4000;
+    emitFrame(app, { type: "slash_commands", payload: { command: "/qm" } });
+    assert.equal(dev.state.lastActivityAt, 4000);
+  } finally {
+    await dev.close();
+  }
+});
+
+test("ambient workspace traffic cannot extend the idle lease", async () => {
+  const app = makeApp();
+  let clock = 1000;
+  const dev = installDevIntrospection(app, { enabled: true, now: () => clock });
+  assert.ok(dev);
+  try {
+    dev.ready({ connectedAs: "qa", botUserId: "BQA", teamId: "TQA" });
+    dev.markEvent();
+    clock += 25 * 60 * 60 * 1000;
+    for (const event of [
+      { type: "message", user: "UHUMAN", text: "unrelated channel chatter" },
+      { type: "message", bot_id: "OTHER", text: "background bot update" },
+      { type: "reaction_added", user: "UHUMAN", item_user: "OTHER" },
+      { type: "user_change", user: { id: "UHUMAN" } },
+      { type: "member_joined_channel", user: "UHUMAN" },
+    ])
+      emitFrame(app, { type: "events_api", payload: { event } });
+    assert.equal(dev.state.lastActivityAt, 1000);
+    assert.equal(dev.state.lastEventAtRaw, clock);
+    emitFrame(app, { type: "events_api", payload: { event: { type: "reaction_added", item_user: "BQA" } } });
+    assert.equal(dev.state.lastActivityAt, 1000);
+    clock += 1000;
+    dev.markEvent();
+    assert.equal(dev.state.lastActivityAt, clock);
+  } finally {
+    await dev.close();
+  }
 });

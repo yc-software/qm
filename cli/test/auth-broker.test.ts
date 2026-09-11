@@ -58,10 +58,10 @@ test("fly derives the portal's whole OIDC block from the broker, over the privat
   const portal = derivedTomlFor(brokerConfig(), "portal", repoRoot);
   assert.match(portal, /OIDC_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
   assert.match(portal, /OIDC_AUTH_ENDPOINT = "https:\/\/agent\.example\.com\/idp\/authorize"/);
-  assert.match(portal, /OIDC_TOKEN_ENDPOINT = "http:\/\/qm-auth\.flycast\/token"/);
-  assert.match(portal, /OIDC_USERINFO_ENDPOINT = "http:\/\/qm-auth\.flycast\/userinfo"/);
-  assert.match(portal, /OIDC_JWKS_URI = "http:\/\/qm-auth\.flycast\/\.well-known\/jwks\.json"/);
-  assert.match(portal, /AUTH_BROKER_UPSTREAM = "http:\/\/qm-auth\.flycast"/);
+  assert.match(portal, /OIDC_TOKEN_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/token"/);
+  assert.match(portal, /OIDC_USERINFO_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/userinfo"/);
+  assert.match(portal, /OIDC_JWKS_URI = "http:\/\/127\.0\.0\.1:8099\/\.well-known\/jwks\.json"/);
+  assert.match(portal, /AUTH_BROKER_UPSTREAM = "http:\/\/127\.0\.0\.1:8099"/);
   assert.match(portal, /AUTH_BROKER_PREFIX = "\/idp"/);
   assert.match(portal, /OIDC_PRINCIPAL_CLAIM = "email"/);
   assert.match(portal, /OIDC_ALLOWED_EMAIL_DOMAIN = "example\.com"/);
@@ -100,8 +100,8 @@ test("a configured botName brands the docker service env for core and auth", () 
 test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerPortal = dockerServiceEnv(docker, "portal");
-  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://qm-acme-auth.internal:8080");
-  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://qm-acme-auth.internal:8080/token");
+  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
   assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
   assert.equal(dockerServiceEnv(docker, "auth").AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
   assert.equal(dockerServiceEnv(docker, "web-ui").AUTH_BROKER_UPSTREAM, undefined);
@@ -125,8 +125,8 @@ test("docker and AWS wire the broker with parity", () => {
     }
   }`);
   const awsPortal = serviceEnvironment(aws, "portal");
-  assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://auth.acme.internal:8080");
-  assert.equal(awsPortal.OIDC_JWKS_URI, "http://auth.acme.internal:8080/.well-known/jwks.json");
+  assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+  assert.equal(awsPortal.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
   assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
   assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
   assert.equal(
@@ -154,13 +154,13 @@ test("the broker's generated secrets reach both sides under the right names", ()
   const config = brokerConfig();
   const secrets = computedSecrets(config);
   const clientSecret = secrets.find((secret) => secret.name === "AUTH_CLIENT_SECRET")!;
-  assert.deepEqual(runtimeSecretNames("auth", clientSecret), ["AUTH_CLIENT_SECRET"]);
-  assert.deepEqual(runtimeSecretNames("portal", clientSecret), ["OIDC_CLIENT_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("auth", clientSecret), ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("portal", clientSecret), ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"]);
   assert.ok(clientSecret.generate, "the CLI mints it rather than asking the operator");
 
   const jwk = secrets.find((secret) => secret.name === "AUTH_SIGNING_JWK")!;
   assert.deepEqual(runtimeSecretNames("auth", jwk), ["AUTH_SIGNING_JWK"]);
-  assert.deepEqual(runtimeSecretNames("portal", jwk), []);
+  assert.deepEqual(runtimeSecretNames("portal", jwk), ["AUTH_SIGNING_JWK"]);
   assert.match(jwk.generate ?? "", /P-256/);
 
   const names = new Set(secrets.map((secret) => secret.name));
@@ -183,8 +183,8 @@ test("without a configured domain the allowlist becomes a required secret on bot
   const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
   const allowed = computedSecrets(config).find((secret) => secret.name === "AUTH_ALLOWED_EMAILS")!;
   assert.ok(allowed.required);
-  assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("portal", allowed), ["OIDC_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("portal", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
   assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS"]);
   const names = new Set(computedSecrets(config).map((secret) => secret.name));
   for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) assert.ok(names.has(name), name);
@@ -267,6 +267,6 @@ const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.a
   const calls = readFileSync(log, "utf8");
   const prefix = "acme";
   assert.match(calls, new RegExp(`-a ${prefix}-core AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
-  assert.match(calls, new RegExp(`-a ${prefix}-auth AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  assert.match(calls, new RegExp(`-a ${prefix}-portal AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
   assert.match(calls, new RegExp(`-a ${prefix}-portal OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
 });

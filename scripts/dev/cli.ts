@@ -311,8 +311,8 @@ function printSuccess(result: BootResult, branch: string): void {
   );
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
-  out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.admin})`);
-  out(`   logs   : ${lock}/{core,web,admin,portal,supervisor}.log`);
+  out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
+  out(`   logs   : ${lock}/{core,web,portal,supervisor}.log`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
 }
@@ -358,7 +358,8 @@ async function cmdUp(): Promise<number> {
   const excluded = new Set<string>();
   const waitMax = Number(process.env.DEV_INSTANCE_WAIT || 120);
   const claim = (): string | null => (withSlack ? claimNext(excluded) : claimPortSlot(excluded));
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  const maxAttempts = withSlack ? Math.max(1, listSlots(store).length) : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let slot = claim();
     if (!slot && (await reclaimReclaimable())) slot = claim();
     if (!slot && waitMax > 0 && attempt === 1) {
@@ -402,12 +403,12 @@ async function cmdUp(): Promise<number> {
         {
           reason: "stolen",
           at: nowEpoch(),
-          detail: `num_connections=${result.numConnections} host=${result.helloHost ?? "?"}`,
+          detail: `num_connections=${result.numConnections} slack_server=${result.helloHost ?? "?"}`,
         },
         store,
       );
       out(
-        `[!] slot ${slot} is STOLEN: ${result.numConnections} connections open to its Slack app (another machine/worktree holds one; hello host: ${result.helloHost ?? "?"}).`,
+        `[!] slot ${slot}: Slack reported ${result.numConnections} connections at the last hello; exclusivity is unverified (Slack server: ${result.helloHost ?? "?"}, not a client host).`,
       );
       out(`    flagged ${slot} for 30min and rotating to the next slot...`);
       excluded.add(slot);

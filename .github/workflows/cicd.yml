@@ -98,7 +98,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Reject GitHub noreply addresses in Co-Authored-By trailers
+      - name: Reject AI coauthors and GitHub noreply coauthor addresses
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -108,12 +108,14 @@ jobs:
           offenders=""
           for sha in $(git rev-list "$base..$HEAD_SHA"); do
             if git log -1 --format='%(trailers:key=Co-authored-by,valueonly)' "$sha" \
-              | grep -qi '@users\.noreply\.github\.com'; then
+              | grep -Ei '(@users\.noreply\.github\.com|noreply@(openai|anthropic|cursor)\.com|^(Codex|Claude Code|Claude (Opus|Sonnet|Haiku)|Copilot|Cursor)([[:space:]<]|$))' > /dev/null; then
               offenders="$offenders $sha"
             fi
           done
           [ -n "$offenders" ] || exit 0
           echo "$offenders" | xargs git show -s --format='%h %s' >&2
+          echo "Co-Authored-By trailers must credit human contributors, not AI tools." >&2
+          echo "Remove Codex, Claude, and other AI coauthor trailers from the listed PR commits." >&2
           echo "Co-Authored-By trailers must not use @users.noreply.github.com addresses:" >&2
           echo "GitHub credits them to whichever account owns that username, which may be a stranger." >&2
           echo "This repo bans all such addresses, including your own privacy address;" >&2
@@ -259,6 +261,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: plugins/portal/package-lock.json
+      - name: Install embedded auth dependencies
+        run: npm ci --prefix plugins/auth
       - name: Install, typecheck, test
         working-directory: plugins/portal
         run: |

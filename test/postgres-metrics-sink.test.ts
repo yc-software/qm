@@ -16,11 +16,13 @@ before(async () => {
   await p.end();
 });
 
-test("pg metrics sink: persists samples, filters by scope + since, newest-first", { skip }, async () => {
+test("pg metrics sink: persists samples, filters by scope + since, newest-first", { skip }, async (t) => {
   const sink = createPostgresMetricsSink(URL!);
   const s1 = scopeId("channel", "C1");
   const s2 = scopeId("channel", "C2");
 
+  const now = Date.now();
+  const clock = t.mock.method(Date, "now", () => now);
   sink.record({
     totalMs: 100,
     ttftMs: 40,
@@ -46,11 +48,15 @@ test("pg metrics sink: persists samples, filters by scope + since, newest-first"
     cacheWrite: 0,
     uncachedInput: 1000,
   });
+  clock.mock.mockImplementation(() => now + 1);
   sink.record({ totalMs: 200, status: "paused", scopeLabel: s2, sessionId: "sess-B" });
+  clock.mock.restore();
   await settle(async () => (await sink.list({ limit: 100 })).length === 2);
 
   const all = await sink.list({ limit: 100 });
   assert.equal(all.length, 2, "both samples persisted");
+  assert.equal(all[0]!.ts, now + 1);
+  assert.equal(all[1]!.ts, now);
   assert.equal(all[0]!.scopeLabel, s2);
   assert.equal(all[0]!.status, "paused");
   assert.equal(all[0]!.ttftMs, undefined, "an absent TTFT stays absent (not 0)");

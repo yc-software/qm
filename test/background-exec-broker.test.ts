@@ -451,3 +451,30 @@ test("start stamps the conversation's sessionRef on the registry row", async () 
   const { processId: p2 } = await bare.start(handle, "sleep 61");
   assert.equal((await registry.get(p2))?.sessionRef, undefined);
 });
+
+test("background jobs retain sandbox identity across default changes and reattach only on that sandbox", async () => {
+  const { sandbox } = fakeSandbox();
+  const registry = createMemoryProcessRegistry();
+  const a = { ...handle, id: "a", resourceId: "resource-a" };
+  const b = { ...handle, id: "b", resourceId: "resource-b" };
+  const selected: string[] = [];
+  const broker = createBackgroundBroker({
+    sandbox,
+    registry,
+    scopeId: SCOPE,
+    pollMs: 0,
+    provisionSandbox: async (id) => {
+      selected.push(id);
+      return id === a.resourceId ? a : b;
+    },
+  });
+  const first = await broker.start(a, "work");
+  const second = await broker.start(b, "work");
+  assert.notEqual(first.processId, second.processId);
+  assert.equal((await registry.get(first.processId))?.sandboxId, a.resourceId);
+  assert.equal((await broker.handleFor!(first.processId))?.id, a.id);
+  await broker.poll(b, first.processId);
+  await broker.write(b, first.processId, "hello");
+  await broker.stop(b, first.processId);
+  assert.deepEqual(selected, [a.resourceId, a.resourceId, a.resourceId, a.resourceId]);
+});

@@ -704,6 +704,17 @@ for (const [name, make] of backends) {
     );
   });
 
+  test(`${name}: bounded participant listing returns recent rows and keeps the unbounded API`, async () => {
+    const store = make();
+    for (let i = 0; i < 5; i++) {
+      const session = await store.getOrCreateByThread(`bounded:${i}`, "dm", scopeId("personal", "bounded-user"));
+      await store.addParticipant(session.id, "bounded-user");
+    }
+    assert.equal((await store.listByParticipant("bounded-user")).length, 5);
+    assert.equal((await store.listByParticipant("bounded-user", { limit: 2 })).length, 2);
+    assert.equal((await store.listByParticipant("bounded-user", { limit: 0 })).length, 0);
+  });
+
   test(`${name}: listByParticipant powers unified history`, async () => {
     const store = make();
     const s1 = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));

@@ -141,7 +141,7 @@ test("a session TTL above the default max ceiling still boots, but a contradicto
     OIDC_CLIENT_ID: "client-id",
     OIDC_CLIENT_SECRET: "client-secret",
     OIDC_ALLOWED_EMAILS: "admin@example.com",
-    PORTAL_SESSION_TTL_S: "604800",
+    PORTAL_SESSION_TTL_S: "5184000",
   };
   delete baseEnv.PORTAL_SESSION_MAX_TTL_S;
 

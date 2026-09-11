@@ -19,6 +19,7 @@ import type { OrgBranding } from "./resolution/config-store.ts";
 import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import { parseSecurityPosture, type SecurityPosture } from "./security/security-posture.ts";
+import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-posture.ts";
 import { slackPluginConfigFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "./harness/codex-auth-file.ts";
 import {
@@ -40,8 +41,14 @@ export interface Config {
   databaseUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
+  databasePoolUrl?: string;
+  databasePoolCaCert?: string;
+  databasePoolMax?: number;
+  databaseDirectPoolMax?: number;
   harness: "mock" | "pi" | "opencode" | "codex" | "claude";
   securityPosture: SecurityPosture;
+  sandboxResourcesEnabled: boolean;
+  sharingPosture: SharingPosture;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
   deployProvider: "docker" | "aws" | "fly" | "porter";
@@ -117,6 +124,7 @@ export interface Config {
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
+  filesDirectUploadsEnabled: boolean;
   snapshotStore: "local" | "s3";
   transferStore: "local" | "s3";
   s3Bucket?: string;
@@ -366,6 +374,9 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
 }
 
 interface ModalSandboxEnv {
+  nativeSnapshotsEnabled?: boolean;
+  nativeSnapshotIntervalSec?: number;
+  snapshotRetentionSec?: number;
   tokenId?: string;
   tokenSecret?: string;
   appName?: string;
@@ -387,6 +398,14 @@ interface ModalSandboxEnv {
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
   const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
   return {
+    nativeSnapshotsEnabled:
+      boolEnvStrict("MODAL_NATIVE_SNAPSHOTS_ENABLED", env.MODAL_NATIVE_SNAPSHOTS_ENABLED) ?? false,
+    ...(num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") !== undefined
+      ? { nativeSnapshotIntervalSec: num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") }
+      : {}),
+    ...(num("MODAL_SNAPSHOT_RETENTION_SEC") !== undefined
+      ? { snapshotRetentionSec: num("MODAL_SNAPSHOT_RETENTION_SEC") }
+      : {}),
     ...(env.MODAL_TOKEN_ID ? { tokenId: env.MODAL_TOKEN_ID } : {}),
     ...(env.MODAL_TOKEN_SECRET ? { tokenSecret: env.MODAL_TOKEN_SECRET } : {}),
     ...(env.MODAL_APP_NAME ? { appName: env.MODAL_APP_NAME } : {}),
@@ -880,6 +899,15 @@ function securityPostureEnvStrict(value: string | undefined): SecurityPosture {
   );
 }
 
+function sharingPostureEnvStrict(value: string | undefined): SharingPosture {
+  if (value === undefined || value.trim() === "") return "isolated";
+  const posture = parseSharingPosture(value);
+  if (posture) return posture;
+  throw new Error(
+    `HARNESS_SHARING_POSTURE=${JSON.stringify(value)} is not recognized — use isolated or open, or unset it.`,
+  );
+}
+
 function securityScreenBackendEnvStrict(value: string | undefined): Config["securityScreenBackend"] {
   if (value === undefined || value.trim() === "") return "model";
   const backend = value.trim().toLowerCase();
@@ -993,12 +1021,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — home snapshots are held in memory only, so a core restart plus an expired pause LOSES scope files; set E2B_SNAPSHOT_S3_BUCKET for durable snapshots.",
+      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but portable recovery snapshots are memory-only; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
     );
   }
   if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — home snapshots are held in memory only, and modal has no pause: a core restart, an idle reap, or the 24h lifetime wall LOSES scope files; set MODAL_SNAPSHOT_S3_BUCKET for durable snapshots.",
+      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — native home checkpoints have limited retention; portable recovery snapshots are memory-only. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and configure DATABASE_URL for durable checkpoint references.",
     );
   }
   if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {
@@ -1179,10 +1207,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
+    ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
+    ...(env.DATABASE_POOL_MAX ? { databasePoolMax: numEnvStrict("DATABASE_POOL_MAX", env.DATABASE_POOL_MAX) } : {}),
+    ...(env.DATABASE_DIRECT_POOL_MAX
+      ? { databaseDirectPoolMax: numEnvStrict("DATABASE_DIRECT_POOL_MAX", env.DATABASE_DIRECT_POOL_MAX) }
+      : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
     harness,
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
+    sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
     securityScreenBackend,
     ...(securityScreenBackend === "proxy"
       ? {
@@ -1195,6 +1230,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     sandboxBackend,
+    sandboxResourcesEnabled: boolEnvStrict("SANDBOX_RESOURCES_ENABLED", env.SANDBOX_RESOURCES_ENABLED) ?? false,
     deployProvider,
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
@@ -1317,6 +1353,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) !== undefined
       ? { memoryCaptureMaxTurns: numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) }
       : {}),
+    filesDirectUploadsEnabled: boolEnvStrict("FILES_DIRECT_UPLOADS_ENABLED", env.FILES_DIRECT_UPLOADS_ENABLED) ?? false,
     snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
     transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),

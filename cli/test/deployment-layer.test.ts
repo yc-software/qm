@@ -246,10 +246,24 @@ test("the docker sync PUTs the bundle to the base port with verifiable v0 HMAC s
 test("conformance passes against a live core: base-port override, signed request, canonical hash + descriptors", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-conf-"));
   const captured: CapturedRequest[] = [];
+  const descriptor = {
+    id: "t",
+    advertise: "runs t",
+    install: {
+      binary: "t",
+      files: [
+        { from: "t", to: "/usr/local/bin/t", mode: "0755" },
+        { from: "release.json", to: "/usr/local/lib/t/release.json", mode: "0644" },
+      ],
+    },
+  };
   const bundle = (() => {
     writeLayer(dir);
+    writeFileSync(join(dir, "sandbox", "tools", "t", "tool.json"), JSON.stringify(descriptor));
+    writeFileSync(join(dir, "sandbox", "tools", "t", "release.json"), JSON.stringify({ version: "1.0.0" }));
     return deploymentLayerBundle(join(dir, "sandbox"));
   })();
+  assert.equal(bundle.tools.length, 3);
   const contentHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
   const { server, port } = await startCoreStub(
     () => ({
@@ -257,7 +271,7 @@ test("conformance passes against a live core: base-port override, signed request
         contentHash,
         status: "applied",
         runtimeContentHash: contentHash,
-        resolved: { tools: [{ install: { binary: "t" }, advertise: "runs t", id: "t" }] },
+        resolved: { tools: [descriptor] },
       }),
     }),
     captured,

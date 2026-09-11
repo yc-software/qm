@@ -22,15 +22,22 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { manifestRef } from "../manifest.ts";
-import { computedSecrets, runtimeSecretNames, secretsForService, type ComputedSecret } from "../secrets.ts";
+import {
+  computedSecrets,
+  validatedSecrets,
+  runtimeSecretNames,
+  secretsForService,
+  type ComputedSecret,
+} from "../secrets.ts";
 import {
   brokerWiring,
   brandEnvOf,
   orgEnv,
   runnableServices,
+  hostedServiceEnv,
+  serviceHost,
   serviceDef,
   isServiceName,
-  isVirtualService,
   virtualServiceEnv,
   type LogOpts,
   type ServiceName,
@@ -47,6 +54,8 @@ import {
   readEnvFile,
   resolveBuildRepoRoot,
   runInherit,
+  runInheritAsync,
+  settleAll,
   sleep,
   streamLabeled,
 } from "../util.ts";
@@ -77,6 +86,11 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
   request: async (config, url, init) => {
     const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
     if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
+    if (awsPublicOrigin(config).protocol === "http:") {
+      assertCloudFrontLayerTarget(config, url, target);
+      const response = await fetch(url, init);
+      return { status: response.status, body: await response.text() };
+    }
     return new Promise((resolve, reject) => {
       const request = https.request(
         url,
@@ -125,9 +139,11 @@ export interface AwsUpOpts {
   buildFromPath?: string;
   imageLabel?: string;
   only?: string[];
+  restart?: string[];
   sandboxDir?: string;
   envFile?: string;
   buildOnly?: boolean;
+  buildConcurrency?: number;
   candidate?: string;
   candidateOut?: string;
   inactive?: boolean;
@@ -167,6 +183,10 @@ function rdsInstanceIdentifier(aws: AwsConfig): string {
   return aws.rdsInstance ?? `${aws.cluster}-core`;
 }
 
+function deployedAwsServices(aws: AwsConfig): string[] {
+  return Object.keys(aws.services).filter((name) => serviceHost(name) === name);
+}
+
 function awsTopology(
   config: QmConfig,
   configDir: string,
@@ -178,7 +198,7 @@ function awsTopology(
   const workloads = [...runnableServices(config.services), ...discovered.plugins.map((plugin) => plugin.name)];
   const enabled = new Set(workloads);
   const stale = Object.keys(aws.services)
-    .filter((workload) => !enabled.has(workload))
+    .filter((workload) => !enabled.has(workload) && !enabled.has(serviceHost(workload)))
     .sort();
   const missing = workloads.filter((workload) => !aws.services[workload]);
   if (stale.length || missing.length) {
@@ -302,7 +322,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
     ...(service === "core" ? {} : { CORE_API_URL: coreUrl }),
     ...coreEnv,
-    ...config.env[service],
+    ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? securityScreenEnv(config) : {}),
   };
   if (service === "core") {
@@ -337,7 +357,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   }
   if (service === "portal") {
     env.WEB_UI_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080`;
-    env.ADMIN_UPSTREAM = `http://admin.${aws.networking.cloudMapNamespace}:8080`;
+    env.ADMIN_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080/admin`;
     env.PORTAL_XFF_TRUSTED_HOPS = "1";
   }
   if (config.services.includes("auth")) {
@@ -578,13 +598,14 @@ export function imageTransferArgs(source: string, tagged: string): string[] {
   return ["buildx", "imagetools", "create", "--prefer-index=false", "--tag", tagged, source];
 }
 
-function publishWorkloadImage(
+async function publishWorkloadImage(
   config: QmConfig,
   workload: string,
   plugin: ResolvedPlugin | undefined,
   label: string,
   opts: AwsUpOpts,
-): string {
+  signal?: AbortSignal,
+): Promise<string> {
   const aws = requireAws(config);
   const spec = aws.services[workload]!;
   const tagged = `${ecrHost(aws)}/${spec.ecrRepository}:${label}`;
@@ -605,7 +626,8 @@ function publishWorkloadImage(
     for (const [name, value] of Object.entries(workloadBuildArgs(config, workload)))
       args.push("--build-arg", `${name}=${value}`);
     args.push(plugin.sourceDir!);
-    runInherit("docker", args);
+    if (signal) await runInheritAsync("docker", args, { signal });
+    else runInherit("docker", args);
   } else if (opts.buildFrom && isServiceName(workload)) {
     const root = resolveBuildRepoRoot(opts.buildFromPath, [workload]);
     const dockerfile = join(root, spec.dockerfile ?? join("deploy", workload, "Dockerfile"));
@@ -629,11 +651,13 @@ function publishWorkloadImage(
     for (const [name, value] of Object.entries(workloadBuildArgs(config, workload)))
       args.push("--build-arg", `${name}=${value}`);
     args.push(root);
-    runInherit("docker", args);
+    if (signal) await runInheritAsync("docker", args, { signal });
+    else runInherit("docker", args);
   } else {
     const source = workloadSourceImage(config, workload, plugin);
     if (!source) throw new CliError(`AWS workload ${workload} has no source image`);
-    runInherit("docker", imageTransferArgs(source, tagged));
+    if (signal) await runInheritAsync("docker", imageTransferArgs(source, tagged), { signal });
+    else runInherit("docker", imageTransferArgs(source, tagged));
   }
   const response = awsJson<{ imageDetails?: Array<{ imageDigest?: string }> }>(aws, [
     "ecr",
@@ -1239,11 +1263,16 @@ interface RolloutTarget {
   taskDefinition: string;
   desiredCount: number;
   deploymentId?: string;
+  waitForDrain?: boolean;
 }
 
-async function awaitServiceTargets(config: QmConfig, expected: Record<string, RolloutTarget>): Promise<void> {
+async function awaitServiceTargets(
+  config: QmConfig,
+  expected: Record<string, RolloutTarget>,
+  timeoutMs?: number,
+): Promise<void> {
   const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 15_000);
-  const deadline = Date.now() + envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 20 * 60_000);
+  const deadline = Date.now() + (timeoutMs ?? envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 20 * 60_000));
   let healthyStreak = 0;
   let failurePolls = new Map<string, number>();
   let describeFailures = 0;
@@ -1328,6 +1357,12 @@ async function awaitServiceTargets(config: QmConfig, expected: Record<string, Ro
         }
       } else if (running < want.desiredCount) {
         waiting.push(`${workload} (${running}/${want.desiredCount})`);
+      } else if (
+        want.waitForDrain &&
+        (deployment.rolloutState !== "COMPLETED" || state.deployments?.length !== 1) &&
+        state.deploymentConfiguration?.strategy !== "BLUE_GREEN"
+      ) {
+        waiting.push(`${workload} (prior tasks are still draining)`);
       } else if (state.deploymentConfiguration?.strategy === "BLUE_GREEN") {
         const nativeStatus = nativeStatuses.get(workload);
         if (nativeStatus === "SUCCESSFUL") continue;
@@ -1675,6 +1710,12 @@ async function applyServiceTargets(
   config: QmConfig,
   targets: Record<string, string>,
   desiredCounts?: Record<string, number>,
+  options: {
+    waitForDrain?: boolean;
+    waitForCompensationDrain?: boolean;
+    timeoutMs?: number;
+    webBeforePortal?: boolean;
+  } = {},
 ): Promise<void> {
   const aws = requireAws(config);
   const workloads = Object.keys(targets);
@@ -1686,7 +1727,22 @@ async function applyServiceTargets(
   );
   const changed: string[] = [];
   try {
-    for (const workload of workloads) {
+    for (const workload of options.webBeforePortal
+      ? [...workloads].sort((a, b) => Number(b === "web-ui") - Number(a === "web-ui"))
+      : workloads) {
+      if (options.webBeforePortal && workload === "portal" && targets["web-ui"]) {
+        await awaitServiceTargets(
+          config,
+          {
+            "web-ui": {
+              taskDefinition: targets["web-ui"]!,
+              desiredCount: expectedCounts["web-ui"]!,
+              waitForDrain: true,
+            },
+          },
+          options.timeoutMs,
+        );
+      }
       const args = [
         "ecs",
         "update-service",
@@ -1707,9 +1763,14 @@ async function applyServiceTargets(
       Object.fromEntries(
         workloads.map((workload) => [
           workload,
-          { taskDefinition: targets[workload]!, desiredCount: expectedCounts[workload]! },
+          {
+            taskDefinition: targets[workload]!,
+            desiredCount: expectedCounts[workload]!,
+            waitForDrain: options.waitForDrain,
+          },
         ]),
       ),
+      options.timeoutMs,
     );
   } catch (error) {
     const restoreFailures: string[] = [];
@@ -1738,9 +1799,14 @@ async function applyServiceTargets(
           Object.fromEntries(
             changed.map((workload) => [
               workload,
-              { taskDefinition: before.tasks[workload]!, desiredCount: before.counts[workload]! },
+              {
+                taskDefinition: before.tasks[workload]!,
+                desiredCount: before.counts[workload]!,
+                waitForDrain: options.waitForCompensationDrain,
+              },
             ]),
           ),
+          options.timeoutMs,
         );
       } catch (restoreError) {
         restoreFailures.push(errMessage(restoreError));
@@ -1758,6 +1824,7 @@ function reportTaskChanges(
   services: string[],
   images: Record<string, string>,
   arns: Record<string, string>,
+  restart: ReadonlySet<string> = new Set(),
 ): Array<{ service: string; task: EcsTaskDefinition; changed: boolean }> {
   const desired = services.map((service) => ({
     service,
@@ -1770,7 +1837,8 @@ function reportTaskChanges(
       `${item.service}: ${changes.length ? `${changes.length} task-definition change${changes.length === 1 ? "" : "s"}` : "no task-definition change"}`,
     );
     if (changes.length) note(JSON.stringify({ service: item.service, changes }, null, 2));
-    return { service: item.service, task: item.task, changed: changes.length > 0 };
+    if (restart.has(item.service)) step(`${item.service}: restart requested with the deployment`);
+    return { service: item.service, task: item.task, changed: changes.length > 0 || restart.has(item.service) };
   });
 }
 
@@ -1896,7 +1964,22 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     );
   }
   const plugins = new Map(topology.plugins.map((plugin) => [plugin.name, plugin]));
-  const services = opts.only ?? topology.workloads;
+  const services = opts.only ? [...new Set(opts.only.map(serviceHost))] : topology.workloads;
+  const buildConcurrency = opts.buildConcurrency ?? 1;
+  if (!Number.isSafeInteger(buildConcurrency) || buildConcurrency < 1)
+    throw new CliError("--build-concurrency requires a positive integer");
+  if (opts.buildConcurrency !== undefined && !opts.buildOnly)
+    throw new CliError("--build-concurrency requires --build-only");
+  if (
+    buildConcurrency > 1 &&
+    new Set(services.map((service) => aws.services[service]?.ecrRepository)).size !== services.length
+  )
+    throw new CliError("--build-concurrency requires distinct ECR repositories for selected workloads");
+  const restart = new Set((opts.restart ?? []).map(serviceHost));
+  if (restart.size && opts.buildOnly) throw new CliError("--restart cannot be used with --build-only");
+  for (const service of restart) {
+    if (!services.includes(service)) throw new CliError(`--restart workload ${service} is not selected for deployment`);
+  }
   for (const service of services) workloadArchitecture(config, service);
   if (opts.buildOnly && opts.candidate) throw new CliError("--build-only and --candidate are mutually exclusive");
   if (opts.candidate && opts.buildFrom) throw new CliError("--candidate and --build-from are mutually exclusive");
@@ -1922,7 +2005,29 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     const imageProvenance: Record<string, DeploymentImageProvenance> = {};
     for (const service of services) {
       imageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
-      images[service] = publishWorkloadImage(config, service, plugins.get(service), opts.imageLabel!, opts);
+    }
+    const controller = new AbortController();
+    const cancelBuilds = () => controller.abort();
+    process.on("SIGINT", cancelBuilds);
+    process.on("SIGTERM", cancelBuilds);
+    try {
+      for (let offset = 0; offset < services.length; offset += buildConcurrency) {
+        await settleAll(
+          services.slice(offset, offset + buildConcurrency).map(async (service) => {
+            images[service] = await publishWorkloadImage(
+              config,
+              service,
+              plugins.get(service),
+              opts.imageLabel!,
+              opts,
+              controller.signal,
+            );
+          }),
+        );
+      }
+    } finally {
+      process.off("SIGINT", cancelBuilds);
+      process.off("SIGTERM", cancelBuilds);
     }
     const release: AwsReleaseCandidate = {
       contract: 1,
@@ -1956,7 +2061,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
   header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
-  const allServices = Object.keys(aws.services);
+  const allServices = topology.workloads;
   assertOwnedServices(config, describedServices(config, allServices), allServices);
   const arns = secretArns(config);
   if (opts.dryRun) {
@@ -1991,7 +2096,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       }
       images[service] = plannedWorkloadImage(config, service, plugins.get(service));
     }
-    reportTaskChanges(config, services, images, arns);
+    reportTaskChanges(config, services, images, arns, restart);
     for (const service of services) {
       step(`${service}: desired count ${before.counts[service] ?? 0} → ${workloadDesiredCount(config, service)}`);
     }
@@ -2006,7 +2111,9 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     } else {
       step("deployment layer: preserved (no sandbox directory selected for core)");
     }
-    note(`Plan only. Re-run \`qm up${opts.candidate ? ` --candidate ${opts.candidate}` : ""} --yes\` to deploy.`);
+    note(
+      `Plan only. Re-run \`qm up${opts.candidate ? ` --candidate ${opts.candidate}` : ""}${restart.size ? ` --restart ${[...restart].join(",")}` : ""} --yes\` to deploy.`,
+    );
     return;
   }
   const lease = acquireLease(aws);
@@ -2102,10 +2209,10 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       } else {
         staged.add(service);
         selectedImageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
-        images[service] = publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
+        images[service] = await publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
       }
     }
-    const desired = reportTaskChanges(config, services, images, arns);
+    const desired = reportTaskChanges(config, services, images, arns, restart);
     const targets: Record<string, string> = {};
     for (const item of desired) {
       if (!item.changed) {
@@ -2133,6 +2240,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         Object.fromEntries(
           Object.keys(rolloutTargets).map((service) => [service, workloadDesiredCount(config, service)]),
         ),
+        { webBeforePortal: true },
       );
       applied = true;
     }
@@ -2283,8 +2391,8 @@ export function awsLogs(
     ]);
   };
   if (service) {
-    const resolved = isVirtualService(service) ? "core" : service;
-    if (isVirtualService(service)) note(`${service} is a virtual service; showing core logs`);
+    const resolved = serviceHost(service);
+    if (resolved !== service) note(`${service} runs in ${resolved}; showing ${resolved} logs`);
     runInherit(process.env.AWS_BIN ?? "aws", logArgs(resolved));
     return;
   }
@@ -2461,6 +2569,157 @@ export async function awsRollback(
   ok(`rolled back ${config.orgId}`);
 }
 
+export function taskDefinitionForBackgroundWork(
+  task: Record<string, unknown>,
+  enabled: boolean,
+): Record<string, unknown> {
+  const containers = structuredClone(task.containerDefinitions) as Array<Record<string, unknown>> | undefined;
+  const core = containers?.find((container) => container.name === "core");
+  if (!core) throw new CliError("core task definition has no core container");
+  const secrets = core.secrets as Array<{ name: string }> | undefined;
+  if (secrets?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED")) {
+    throw new CliError("BACKGROUND_WORK_ENABLED cannot be changed while supplied as a secret");
+  }
+  const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
+  core.environment = [
+    ...environment.filter((entry) => entry.name !== "BACKGROUND_WORK_ENABLED"),
+    { name: "BACKGROUND_WORK_ENABLED", value: enabled ? "1" : "0" },
+  ];
+  const fields = [
+    "family",
+    "taskRoleArn",
+    "executionRoleArn",
+    "networkMode",
+    "volumes",
+    "placementConstraints",
+    "requiresCompatibilities",
+    "cpu",
+    "memory",
+    "pidMode",
+    "ipcMode",
+    "proxyConfiguration",
+    "inferenceAccelerators",
+    "ephemeralStorage",
+    "runtimePlatform",
+    "enableFaultInjection",
+  ];
+  return {
+    ...Object.fromEntries(fields.flatMap((field) => (task[field] == null ? [] : [[field, task[field]]]))),
+    containerDefinitions: containers,
+  };
+}
+
+export async function awsSetBackgroundWork(
+  config: QmConfig,
+  configDir: string,
+  enabled: boolean,
+  candidatePath?: string,
+): Promise<void> {
+  const { aws, workloads } = awsTopology(config, configDir);
+  if (!workloads.includes("core")) throw new CliError("background work requires the core workload");
+  const candidate = candidatePath ? releaseCandidate(config, candidatePath) : undefined;
+  assertAwsCallerAccount(aws);
+  await withAwsLease(aws, async () => {
+    const current = currentDeploymentManifest(aws);
+    if (!current) throw new CliError("background work requires a recorded deployment");
+    const states = describedServices(config, workloads);
+    assertOwnedServices(config, states, workloads);
+    const before = serviceSnapshotFromStates(states, workloads);
+    for (const workload of workloads) {
+      if (
+        current.tasks[workload] !== before.tasks[workload] ||
+        current.counts?.[workload] !== before.counts[workload]
+      ) {
+        throw new CliError(`cannot change background work while ${workload} differs from the deployment manifest`);
+      }
+    }
+    if (!before.counts.core) throw new CliError("cannot change background work while core is scaled down");
+    let coreTask: Record<string, unknown> | undefined;
+    for (const workload of candidate ? workloads : ["core"]) {
+      const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
+        "ecs",
+        "describe-task-definition",
+        "--task-definition",
+        before.tasks[workload]!,
+      ]).taskDefinition;
+      const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
+        (item) => item.name === workload,
+      );
+      if (!task || typeof container?.image !== "string" || !isPinnedWorkloadImage(config, workload, container.image)) {
+        throw new CliError(`${workload} does not have a trusted digest-pinned image`);
+      }
+      if (
+        candidate &&
+        (container.image !== candidate.images[workload] ||
+          !candidate.imageProvenance[workload] ||
+          canonicalJson(candidate.imageProvenance[workload]) !== canonicalJson(current.imageProvenance?.[workload]))
+      ) {
+        throw new CliError(`${workload} does not match the expected release candidate`);
+      }
+      if (workload === "core") coreTask = task;
+    }
+    const desired = taskDefinitionForBackgroundWork(coreTask!, enabled);
+    const core = (coreTask!.containerDefinitions as Array<Record<string, unknown>>).find(
+      (item) => item.name === "core",
+    )!;
+    const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
+    const currentFlag = environment.find((entry) => entry.name === "BACKGROUND_WORK_ENABLED")?.value;
+    const timeoutMs = envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
+    if (currentFlag === (enabled ? "1" : "0")) {
+      await awaitServiceTargets(
+        config,
+        {
+          core: { taskDefinition: before.tasks.core!, desiredCount: before.counts.core, waitForDrain: !enabled },
+        },
+        timeoutMs,
+      );
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "qm-background-work-"));
+    try {
+      const file = join(dir, "core.json");
+      writeFileSync(file, JSON.stringify(desired));
+      const target = registerTaskDefinition(config, file);
+      await applyServiceTargets(
+        config,
+        { core: target },
+        { core: before.counts.core },
+        { waitForDrain: !enabled, waitForCompensationDrain: true, timeoutMs },
+      );
+      try {
+        recordDeploymentManifest(
+          aws,
+          { ...before.tasks, core: target },
+          {
+            counts: current.counts,
+            imageLabel: current.imageLabel,
+            dbRestorePoint: current.dbRestorePoint,
+            layer: current.layer,
+            imageProvenance: current.imageProvenance,
+          },
+        );
+      } catch (error) {
+        const failures: string[] = [];
+        try {
+          await applyServiceTargets(
+            config,
+            { core: before.tasks.core! },
+            { core: before.counts.core },
+            { waitForDrain: true, waitForCompensationDrain: true, timeoutMs },
+          );
+          manifestTransaction(aws, current, current.id);
+        } catch (restoreError) {
+          failures.push(`restoring background work: ${errMessage(restoreError)}`);
+        }
+        throwAfterCompensation(error, failures);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  ok(`background work ${enabled ? "enabled" : "disabled"}`);
+}
+
 function envValues(configDir: string, path: string | undefined): Map<string, string> {
   const file = resolve(path ?? join(configDir, ".env"));
   if (!existsSync(file)) {
@@ -2471,6 +2730,7 @@ function envValues(configDir: string, path: string | undefined): Map<string, str
 }
 
 export async function awsSecretsPush(config: QmConfig, configDir: string, envFile?: string): Promise<void> {
+  validatedSecrets(config);
   const { aws, workloads } = awsTopology(config, configDir);
   assertAwsCallerAccount(aws);
   const values = envValues(configDir, envFile);
@@ -2544,6 +2804,27 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       if (!baseline || !before) {
         if (affected.length) step("secret activation deferred to the first complete AWS deployment");
         return;
+      }
+      for (const [component, host, marker, expected] of [
+        ["admin", "web-ui", "ADMIN_ENABLED", "1"],
+        ["auth", "portal", "AUTH_EMBEDDED", "1"],
+        ["admin", "portal", "ADMIN_UPSTREAM", serviceEnvironment(config, "portal").ADMIN_UPSTREAM],
+      ] as const) {
+        if (!config.services.includes(component) || !workloads.includes(host)) continue;
+        const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
+          "ecs",
+          "describe-task-definition",
+          "--task-definition",
+          before.tasks[host]!,
+        ]).taskDefinition;
+        const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
+          (item) => item.name === host,
+        );
+        const environment = (container?.environment ?? []) as Array<{ name: string; value: string }>;
+        if (!environment.some((entry) => entry.name === marker && entry.value === expected)) {
+          step("secret activation deferred until combined web-ui and portal images are deployed with qm up");
+          return;
+        }
       }
       const arns = secretArns(config);
       const targets = { ...before.tasks };
@@ -2840,7 +3121,7 @@ function awsServiceConnectConfiguration(
 
 function awsEcsRoutingServices(config: QmConfig): ReadonlyMap<string, AwsEcsRoutingService> {
   const aws = requireAws(config);
-  const entries = Object.entries(aws.services);
+  const entries = deployedAwsServices(aws).map((name) => [name, aws.services[name]!] as const);
   const services: AwsEcsRoutingService[] = [];
   const failures: Array<{ arn?: string; reason?: string }> = [];
   for (const batch of chunks(
@@ -2912,6 +3193,57 @@ const validAlbHostname = (value: string): boolean =>
   value
     .split(".")
     .every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
+
+function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string): void {
+  interface Distribution {
+    DomainName?: string;
+    Status?: string;
+    Enabled?: boolean;
+    ContinuousDeploymentPolicyId?: string;
+    CacheBehaviors?: { Quantity?: number };
+    DefaultCacheBehavior?: {
+      TargetOriginId?: string;
+      MaxTTL?: number;
+      CachePolicyId?: string;
+      FunctionAssociations?: { Quantity?: number };
+      LambdaFunctionAssociations?: { Quantity?: number };
+    };
+    Origins?: {
+      Items?: Array<{
+        Id?: string;
+        DomainName?: string;
+        OriginPath?: string;
+        CustomOriginConfig?: { OriginProtocolPolicy?: string; HTTPPort?: number };
+      }>;
+    };
+  }
+  const distributions =
+    awsJson<{ DistributionList?: { Items?: Distribution[] } }>(requireAws(config), ["cloudfront", "list-distributions"])
+      .DistributionList?.Items ?? [];
+  const matches = distributions.filter((distribution) => distribution.DomainName === url.hostname);
+  const distribution = matches.length === 1 ? matches[0] : undefined;
+  const behavior = distribution?.DefaultCacheBehavior;
+  const origin = distribution?.Origins?.Items?.find((item) => item.Id === behavior?.TargetOriginId);
+  if (
+    !distribution?.Enabled ||
+    distribution.Status !== "Deployed" ||
+    distribution.ContinuousDeploymentPolicyId ||
+    behavior?.MaxTTL !== 0 ||
+    behavior.CachePolicyId ||
+    distribution.CacheBehaviors?.Quantity !== 0 ||
+    (behavior?.FunctionAssociations?.Quantity ?? 0) !== 0 ||
+    (behavior?.LambdaFunctionAssociations?.Quantity ?? 0) !== 0 ||
+    origin?.DomainName?.toLowerCase().replace(/\.$/, "") !== target ||
+    origin.OriginPath ||
+    origin.CustomOriginConfig?.OriginProtocolPolicy !== "http-only" ||
+    origin.CustomOriginConfig.HTTPPort !== 80 ||
+    (url.port && url.port !== "443")
+  ) {
+    throw new CliError(
+      "AWS deployment-layer HTTPS proxy must be a deployed CloudFront distribution routing directly to the selected ALB without alternate behaviors, origin paths, or edge functions",
+    );
+  }
+}
 
 function awsCoreHostnames(config: QmConfig): string[] {
   const hosts: string[] = [];
@@ -3000,7 +3332,7 @@ export function assertAwsPublicRouting(
       expectedTargetArns.add(alternate);
     }
   }
-  for (const name of Object.keys(aws.services)) {
+  for (const name of deployedAwsServices(aws)) {
     if (!ingress.includes(name) && (routingServices.get(name)?.loadBalancers ?? []).length) {
       throw new Error(`private ECS service ${name} is attached to a load balancer`);
     }
@@ -3442,7 +3774,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
       throw new Error("DATABASE_URL does not point at the configured RDS endpoint");
   });
   const ecsServices = new Map<string, AwsEcsRoutingService>();
-  for (const service of Object.keys(aws.services)) {
+  for (const service of deployedAwsServices(aws)) {
     const spec = aws.services[service]!;
     check(`ECS service ${spec.ecsService}`, () => {
       const found = awsJson<{ services?: AwsEcsRoutingService[] }>(aws, [
@@ -3500,7 +3832,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         "--filters",
         `Name=NAMESPACE_ID,Values=${namespace.Id},Condition=EQ`,
       ]).Services ?? [];
-    for (const name of Object.keys(aws.services)) {
+    for (const name of deployedAwsServices(aws)) {
       const discovery = services.find((service) => service.Name === name);
       if (!discovery?.Arn) throw new Error(`service ${name} is missing from ${aws.networking.cloudMapNamespace}`);
       const ecsService = ecsServices.get(name);

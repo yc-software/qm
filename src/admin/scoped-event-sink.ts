@@ -9,6 +9,7 @@ export interface ScopedEvent {
 interface ScopedEventQuery<E> {
   scopeId?: string;
   limit?: number;
+  offset?: number;
   filter?: (e: E) => boolean;
 }
 
@@ -38,14 +39,14 @@ export function createScopedEventSink<E extends ScopedEvent, In>(
       return events
         .filter((e) => (query.scopeId ? e.scopeLabel === query.scopeId : true))
         .filter((e) => (query.filter ? query.filter(e) : true))
-        .slice(-limit)
-        .reverse();
+        .reverse()
+        .slice(query.offset ?? 0, (query.offset ?? 0) + limit);
     },
     all: () => events,
   };
 }
 
-type TimestampedQuery = { scopeId?: string; since?: number; limit?: number; [k: string]: unknown };
+type TimestampedQuery = { scopeId?: string; since?: number; limit?: number; offset?: number; [k: string]: unknown };
 
 export interface TimestampedEventSink<E extends ScopedEvent & { ts: number }> {
   record(input: Omit<E, "ts">): void;
@@ -70,6 +71,7 @@ export function createTimestampedEventSink<E extends ScopedEvent & { ts: number 
         sink.list({
           ...(opts.scopeId !== undefined ? { scopeId: opts.scopeId } : {}),
           ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+          ...(opts.offset !== undefined ? { offset: opts.offset } : {}),
           filter: (e) =>
             (opts.since === undefined || e.ts >= opts.since) &&
             (cfg.equalityFields ?? []).every((f) => opts[f] === undefined || e[f] === opts[f]),
@@ -203,8 +205,9 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
       const opts = input as Record<string, unknown>;
       const { where, params } = buildWhere(opts);
       params.push(opts.limit ?? cfg.defaultLimit);
+      params.push(opts.offset ?? 0);
       const rows = await q(
-        `SELECT ${dbCols} FROM ${cfg.table} ${where} ORDER BY ts DESC, id DESC LIMIT $${params.length}`,
+        `SELECT ${dbCols} FROM ${cfg.table} ${where} ORDER BY ts DESC, id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params,
       );
       return rows.map(toEvent);

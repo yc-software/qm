@@ -4,7 +4,6 @@ import type {
   Destination,
   EgressPolicy,
   Principal,
-  Resolution,
   ScopeId,
   SessionEntry,
   TurnRequest,
@@ -15,7 +14,6 @@ import { turnOriginRequestFields } from "../turn-origin.ts";
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
-import { writableMemoryScope } from "../../memory/policy.ts";
 import { collectBytes } from "../../util/bytes.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -90,14 +88,6 @@ export async function loadTapeImage(
   const bytes = await collectBytes(opened.stream, { maxBytes: Math.min(MAX_VISION_IMAGE_BYTES, remainingBytes) });
   if (bytes.sizeBytes !== artifact.sizeBytes || bytes.sha256 !== artifact.sha256) return null;
   return { data: bytes.data.toString("base64"), mimeType: artifact.mimetype, sizeBytes: bytes.sizeBytes };
-}
-
-export function visibleSkillScopes(resolution: Resolution, scopeId: ScopeId): ScopeId[] {
-  const memoryScopeId = writableMemoryScope(resolution.layers, scopeId);
-  const teamScopes = resolution.layers
-    .filter((l) => l.mode === "ro" && l.scopeId !== resolution.orgScopeId)
-    .map((l) => l.scopeId);
-  return [memoryScopeId, ...teamScopes, resolution.orgScopeId];
 }
 
 const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {

@@ -581,6 +581,9 @@ function validate(raw: unknown, path: string): QmConfig {
     );
   }
 
+  if (services.includes("admin") && !services.includes("portal") && target === "aws") {
+    throw new CliError(`${path}: admin requires the authenticated portal`);
+  }
   const plugins = validatePlugins(o["plugins"], path);
   const skills = validateStringArray(o["skills"], path, "skills");
   const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));

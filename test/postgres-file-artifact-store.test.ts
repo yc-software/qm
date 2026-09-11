@@ -19,6 +19,7 @@ beforeEach(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS file_artifacts CASCADE");
+  await p.query("DROP TABLE IF EXISTS file_artifact_deletions CASCADE");
   await p.end();
 });
 
@@ -210,3 +211,46 @@ test(
     }
   },
 );
+test("pg deletion fences recovery publication across fresh store instances", { skip }, async () => {
+  const bytes = createMemoryDurableByteStore();
+  const first = createPostgresFileArtifactStore(URL!, bytes);
+  const second = createPostgresFileArtifactStore(URL!, bytes);
+  const { artifact } = await first.put(put());
+  await second.delete(artifact.id);
+  await assert.rejects(
+    first.publish({ ...put(), blobKey: artifact.blobKey!, sizeBytes: artifact.sizeBytes, sha256: artifact.sha256 }),
+    /deleted/,
+  );
+  assert.equal(await first.get(artifact.id, { includeDisabled: true }), null);
+  assert.deepEqual((await first.listOwnedByScopes([owner])).files, []);
+});
+
+test("pg concurrent deletion and recovery publication always leave the file deleted", { skip }, async () => {
+  const bytes = createMemoryDurableByteStore();
+  const first = createPostgresFileArtifactStore(URL!, bytes);
+  const second = createPostgresFileArtifactStore(URL!, bytes);
+  const { artifact } = await first.put(put());
+  await Promise.allSettled([
+    first.publish({ ...put(), blobKey: artifact.blobKey!, sizeBytes: artifact.sizeBytes, sha256: artifact.sha256 }),
+    second.delete(artifact.id),
+  ]);
+  assert.equal(await first.get(artifact.id, { includeDisabled: true }), null);
+});
+
+test("pg concurrent first shares reuse one path generation and republish after deletion", { skip }, async () => {
+  const bytes = createMemoryDurableByteStore();
+  const first = createPostgresFileArtifactStore(URL!, bytes);
+  const second = createPostgresFileArtifactStore(URL!, bytes);
+  const input = { ...put(), reuseExistingPath: true };
+  const initial = await Promise.all([
+    first.put({ ...input, id: "share-one" }),
+    second.put({ ...input, id: "share-two" }),
+  ]);
+  assert.equal(initial[0].artifact.id, initial[1].artifact.id);
+  assert.equal(initial.filter((result) => result.created).length, 1);
+  await first.delete(initial[0].artifact.id);
+  const current = await second.put({ ...input, id: "share-three", data: Buffer.from("new content") });
+  assert.equal(current.created, true);
+  assert.equal(current.artifact.id, "share-three");
+  assert.equal((await first.resolveByOwnerPaths([{ ownerScopeId: owner, path: input.path }])).length, 1);
+});

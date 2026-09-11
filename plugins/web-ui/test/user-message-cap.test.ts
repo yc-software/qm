@@ -6,21 +6,16 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const shared = readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8");
 
-const pinned = String.raw`\.message-stack \.user-row:not\(:has\(~ \.user-row\)\) \.user-bubble`;
+const pinned = String.raw`\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble`;
 
-test("only the pinned prompt is capped, at 40% of its own scroller, and its text and chips shrink", () => {
-  const bubble = css.match(new RegExp(String.raw`\n${pinned} \{[^}]*\}`))?.[0] ?? "";
-  assert.match(bubble, /max-height: 40cqh;/);
-  assert.match(bubble, /flex-direction: column;/);
-  const text =
-    css.match(new RegExp(String.raw`\n${pinned} > markdown-block,\n${pinned} > \.slack-wire-text \{[^}]*\}`))?.[0] ??
-    "";
-  assert.match(text, /flex-shrink: 1000;/);
-  assert.match(text, /overflow: hidden;/);
-  const files = css.match(new RegExp(String.raw`\n${pinned} > \.message-files \{[^}]*\}`))?.[0] ?? "";
-  assert.match(files, /min-height: 0;/);
-  assert.match(files, /max-height: 20cqh;/);
-  assert.match(files, /overflow-y: auto;/);
+test("only the collapsed pinned prompt is capped and overflow clips instead of nesting scrollbars", () => {
+  const bubble =
+    css.match(
+      /\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble \{[^}]*\}/,
+    )?.[0] ?? "";
+  assert.match(bubble, /max-height: var\(--pin-clamp, 320px\);/);
+  assert.match(bubble, /overflow: hidden;/);
+  assert.doesNotMatch(css, /\.user-bubble > (?:markdown-block|\.slack-wire-text)\s*\{/);
   const base = css.match(/\n\.user-bubble \{[^}]*\}/)?.[0] ?? "";
   assert.doesNotMatch(base, /max-height|flex/);
 });
@@ -54,4 +49,13 @@ test("images a user attached render as chips that open inline on the share page"
     files,
     /return chipBadge\(\s*inlineImage \? FileImage : File,\s*file\.name,\s*file\.sizeBytes,\s*inlineImage \? `\$\{href\}\?inline=1` : href,\s*!inlineImage,?\s*\);/,
   );
+});
+
+test("both transcript renderers provide an accessible control and an observable inner body", () => {
+  for (const source of [chat, shared]) {
+    assert.match(source, /pin-content/);
+    assert.match(source, /class="pin-toggle" type="button" hidden aria-expanded="false"/);
+  }
+  assert.match(shared, /viewport\.sync\(document\.querySelector<HTMLElement>\("\.chat-scroll"\)\)/);
+  assert.match(css, /\.deleted-bubble > \.pin-content > :not\(\.revision-badge\) \{\s*text-decoration: line-through;/);
 });

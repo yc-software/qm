@@ -19,7 +19,7 @@ export interface HarnessToolPlumbing {
   reachExec?: boolean;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
-  migrateTargets?: readonly string[];
+  sandboxResources?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
@@ -70,6 +70,8 @@ export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
   return {
     current: turn.tools,
+    runtimeRunId: turn.runId,
+    runtimeActorId: turn.runtimeActorId,
     pendingApprovals: [],
     pausedOnApproval: false,
     silentRequested: false,
@@ -89,7 +91,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
     reachExec: opts.reachExec,
     ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
     controlTools: opts.controlTools,
-    ...(opts.migrateTargets?.length ? { migrateTargets: opts.migrateTargets } : {}),
+    sandboxResources: opts.sandboxResources,
     execTimeoutMs: opts.execTimeoutMs,
     execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
     backgroundJobTtlMs: opts.backgroundJobTtlMs,

@@ -1,6 +1,9 @@
+import { createGrindMeter, grindState } from "./grind.ts";
+import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { CONFIG_DEFAULTS, enabledSandboxBackends, type Config } from "../config.ts";
+import { Type, type TSchema } from "typebox";
+import { Check, Clone } from "typebox/value";
+import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
@@ -42,6 +45,11 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
 }
 
 export interface ToolContextRef {
+  runtimeHandoff?: RuntimeHandoff;
+  runtimeRunId?: string;
+  runtimeActorId?: string;
+  runtimeMutationPending?: boolean;
+  runtimeInFlight?: Set<Promise<unknown>>;
   current: ToolContext | null;
   pendingApprovals?: Array<{
     command: string;
@@ -310,7 +318,7 @@ export interface AgentToolsOptions {
   backgroundJobTtlMaxMs?: number;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
-  migrateTargets?: readonly string[];
+  sandboxResources?: boolean;
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
@@ -319,9 +327,8 @@ export interface AgentToolsOptions {
 export type CoreToolOptions = Omit<AgentToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
-  const sandboxBackends = enabledSandboxBackends(config);
   return {
-    ...(sandboxBackends.length > 1 ? { migrateTargets: sandboxBackends } : {}),
+    sandboxResources: config.sandboxResourcesEnabled,
     scratchExec: config.scratchExecEnabled,
     ownerAuthExec: config.sharedOwnerAuthIsolation,
     reachExec: config.reachExecEnabled,
@@ -333,10 +340,10 @@ export function coreToolOptions(config: Config): CoreToolOptions {
   };
 }
 
-const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently"]);
+const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime"]);
 
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested">,
+  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -344,12 +351,32 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested) return { ...upstream, terminate: true };
+    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
     return upstream;
   };
 }
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
+  const processActions = {
+    start_process: "start",
+    read_process: "poll",
+    write_stdin: "write",
+    signal_process: "stop",
+    list_processes: "list",
+    watch_process: "watch",
+    unwatch_process: "unwatch",
+  } as const;
+  const sandboxLog = (payload: Record<string, unknown>): Record<string, unknown> => {
+    if (!opts?.sandboxResources) return payload;
+    if (payload.tool === "execute") return { ...payload, tool: "sandbox", action: "exec" };
+    if (payload.tool === "background")
+      return {
+        ...payload,
+        tool: "sandbox",
+        action: Object.entries(processActions).find(([, action]) => action === payload.action)?.[0],
+      };
+    return payload;
+  };
   const scratchExec = !!opts?.scratchExec;
   const ownerAuthExec = !!opts?.ownerAuthExec;
   const reachExec = !!opts?.reachExec;
@@ -380,7 +407,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   };
 
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> =>
-    log("tool_call", { ...payload, callId });
+    log("tool_call", { ...sandboxLog(payload), callId });
 
   const recordResult = async <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
     callId: string,
@@ -392,6 +419,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     display?: Record<string, unknown>,
     screenAs?: { provenance: ToolResultProvenance; source?: string },
   ): Promise<T> => {
+    const originalTool = String(summary.tool ?? "");
+    summary = sandboxLog(summary);
     const t = ret.content
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")
@@ -406,7 +435,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }
     let persistedSummary = summary;
     const tool = String(summary.tool ?? "");
-    const provenance = screenAs?.provenance ?? toolResultProvenance(tool);
+    const provenance = screenAs?.provenance ?? toolResultProvenance(originalTool);
     const screenExempt =
       isPolicyNotice(summary) ||
       coreAuthored ||
@@ -437,6 +466,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         (ret as { details?: unknown }).details = {};
         persistedSummary = {
           tool: summary.tool,
+          ...(summary.action ? { action: summary.action } : {}),
           quarantined: true,
           quarantineReason: "screen_verdict",
           ...(screen.reason ? { securityReason: screen.reason } : {}),
@@ -460,7 +490,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...ret.content.filter((c) => c.type !== "text"),
           ];
         }
-        persistedSummary = { tool: summary.tool, unscreened: true };
+        persistedSummary = {
+          tool: summary.tool,
+          ...(summary.action ? { action: summary.action } : {}),
+          ...(originalTool === "execute" ? { code: summary.code, timedOut: summary.timedOut } : {}),
+          unscreened: true,
+        };
       }
     }
     await log(
@@ -501,35 +536,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     `legitimately exceeds the ${execCeilingSec}s ceiling (long builds, installs, test suites, servers), use ` +
     "the `background` tool to run it detached and poll for the result across turns. " +
     "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
-    'wedged — use `computer:"status"` to check it out-of-band and `computer:"restart"` to reboot it.';
+    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it.";
 
   const executeBaseParams = {
-    command: Type.String({
-      description: 'The shell command to run. With `computer`, pass "" — no command runs.',
-    }),
-    computer: Type.Optional(
+    command: Type.String({ description: "The shell command to run." }),
+    sandbox_id: Type.Optional(
       Type.String({
-        enum: ["status", "restart", ...(opts?.migrateTargets?.length ? ["migrate"] : [])],
+        minLength: 1,
         description:
-          "Manage the scoped computer itself instead of running a command. " +
-          '"status" and "restart" act out-of-band, so they work even when the computer is unresponsive: "status" reports the machine\'s health and whether its shell answers; "restart" reboots it (files survive; running processes don\'t, and an interrupted command may or may not have taken effect). ' +
-          "Reach for these when commands hang or fail with transport errors that nothing you ran explains: check status first, restart only if the machine is up but its shell is not answering." +
-          (opts?.migrateTargets?.length
-            ? ' "migrate" moves this computer to the sandbox provider named in `to`, files included — only when the person explicitly asks, and it requires their approval. ' +
-              "It needs a responsive machine, refuses while background jobs are running, can take several minutes, and must be the last action of the turn: changes written here after the move starts do not come along."
-            : ""),
+          "Exact sandbox ID. Omit only when this scope has a stored default; otherwise select a target with sandbox list/create.",
       }),
     ),
-    ...(opts?.migrateTargets?.length
-      ? {
-          to: Type.Optional(
-            Type.String({
-              enum: [...opts.migrateTargets],
-              description: 'The destination provider for computer:"migrate".',
-            }),
-          ),
-        }
-      : {}),
     purpose: Type.String({
       description:
         "One short sentence on what this command accomplishes and why you're running it now — " +
@@ -558,7 +575,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       : {}),
   };
 
-  const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string) => {
+  const blockOnApproval = (callId: string, e: NeedsApproval, purpose?: string, tool = "execute") => {
     ref.pendingApprovals?.push({
       command: e.command,
       reason: e.approvalReason,
@@ -570,7 +587,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ref.pausedOnApproval = true;
     return recordResult(
       callId,
-      { tool: "execute", blocked: "needs_approval", reason: e.approvalReason },
+      { tool, blocked: "needs_approval", reason: e.approvalReason },
       { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
       true,
     );
@@ -581,6 +598,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     params: {
       command: string;
       computer?: string;
+      sandbox_id?: string | null;
+      backend?: string;
+      name?: string;
       to?: string;
       timeout_seconds?: number;
       purpose?: string;
@@ -590,68 +610,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
-    if (params.computer) {
-      await recordCall(callId, { tool: "execute", computer: params.computer });
-      if (route?.scratch || route?.ownerAuth || route?.reachTarget !== undefined) {
-        return recordResult(
-          callId,
-          { tool: "execute", computer: params.computer, invalid: "scoped_only" },
-          text("[error] `computer` manages this conversation's scoped computer only — drop `scope`"),
-          true,
-        );
-      }
-      try {
-        if (params.computer === "restart") {
-          await tc.restartComputer();
-          return recordResult(
-            callId,
-            { tool: "execute", computer: "restart", restarted: true },
-            text("Computer restarting. Give it a moment to boot before running the next command."),
-          );
-        }
-        if (params.computer === "migrate") {
-          if (!params.to) {
-            return recordResult(
-              callId,
-              { tool: "execute", computer: "migrate", invalid: "missing_to" },
-              text('[error] computer:"migrate" needs `to`: the destination provider'),
-              true,
-            );
-          }
-          const moved = await tc.migrateComputer(params.to);
-          return recordResult(
-            callId,
-            { tool: "execute", computer: "migrate", from: moved.from, to: moved.to },
-            text(
-              `Computer moved from ${moved.from} to ${moved.to}, files included. The next command runs on the new computer.`,
-            ),
-          );
-        }
-        const s = await tc.computerStatus();
-        const verdict = computerVerdict(s);
-        const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
-        const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
-        const verdictLine =
-          verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
-            : "";
-        return recordResult(
-          callId,
-          { tool: "execute", computer: "status", verdict, ...s },
-          text(
-            `machine: ${machineLine}; shell: ${s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`}${pressureLine}${verdictLine}`,
-          ),
-        );
-      } catch (e) {
-        if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose);
-        return recordResult(
-          callId,
-          { tool: "execute", computer: params.computer, failed: true },
-          text(`[error] ${errMessage(e)}`),
-          true,
-        );
-      }
-    }
+    if (params.computer) throw new Error("Computer actions moved to the sandbox tool; migrate has been retired.");
     let scopeNote: { scope?: string } = {};
     if (route?.reachTarget !== undefined) {
       scopeNote = { scope: route.reachTarget };
@@ -661,9 +620,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       else if (route.scratch) scope = "scratch";
       scopeNote = { scope };
     }
-    await recordCall(callId, { tool: "execute", command: params.command, ...scopeNote });
+    await recordCall(callId, {
+      tool: "execute",
+      command: params.command,
+      ...scopeNote,
+      ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
+    });
     try {
+      if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
+        ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
         ...(route?.ownerAuth ? { ownerAuth: true } : {}),
@@ -677,7 +643,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const localExec = !route?.scratch && !route?.ownerAuth && route?.reachTarget === undefined && !r.reached;
       const pressureNote =
         localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
-          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work${scratchExec ? ', move self-contained runs to scope:"scratch"' : ""}, or check computer:"status"`
+          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work${scratchExec ? ', move self-contained runs to scope:"scratch"' : ""}, or check sandbox action=status`
           : "";
       return recordResult(
         callId,
@@ -691,7 +657,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ],
           details: r,
         },
-        false,
+        r.code !== 0 || r.timedOut,
         undefined,
         false,
         undefined,
@@ -719,9 +685,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const SCOPED_EPHEMERAL_ERROR =
     '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for a run that leaves no trace.';
   const FILE_SEND_GUIDANCE =
-    "The read/write/publish/background tools always use the scoped computer. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+    "The read/write/publish tools use the default sandbox; execute and background can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
-    "Must this command's writes/installs/logins survive future turns? Scoped is durable; scratch and owner are invocation-only.";
+    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch and owner are invocation-only. Publish durable code to git and artifacts to Files.";
 
   const reachScopeDescription =
     (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
@@ -729,9 +695,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
   const reachDescription =
     "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
-    '- "scoped" (DEFAULT): this conversation\'s durable computer — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; writes/installs/logins survive future turns.\n' +
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (scratchExec
-      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the durable computer responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
+      ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the sandbox responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
       : "") +
     (ownerAuthExec
       ? "- \"owner\": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
@@ -745,7 +711,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
-    '- "scoped" (DEFAULT): this conversation\'s durable computer — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; writes/installs/logins survive future turns, so follow-up work ("now tweak that", "where\'s that file?") just works.\n' +
+    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (ownerAuthExec
       ? '- "owner": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for owner-authenticated work in shared automation.\n'
       : "") +
@@ -854,7 +820,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ],
             {
               description:
-                'Which computer runs this command: "scoped" (default — this conversation\'s durable computer: its files, logins, and tokens; survives for follow-ups) or "scratch" (blank, instant, credential-free, nothing persists — prefer for heavy self-contained runs needing no logins, workspace files, or follow-up).',
+                'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and authorized logins; recovery depends on the provider) or "scratch" (blank, instant, credential-free, nothing persists — prefer for heavy self-contained runs needing no logins, workspace files, or follow-up).',
             },
           ),
         ),
@@ -871,6 +837,105 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       execute: (callId, params) => runExecute(callId, params as Parameters<typeof runExecute>[1]),
     });
   }
+
+  const sandboxActions = [
+    "status",
+    "restart",
+    ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
+  ];
+  const sandboxManagement = defineTool({
+    name: "sandbox",
+    label: "sandbox",
+    description:
+      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
+    parameters: Type.Object({
+      action: Type.String({ enum: sandboxActions }),
+      sandbox_id: Type.Optional(
+        Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
+          description: "Exact sandbox ID; null is allowed only for set_default.",
+        }),
+      ),
+      backend: Type.Optional(Type.String({ description: "create only: provider from list." })),
+      name: Type.Optional(Type.String({ description: "create only: human-readable name." })),
+      purpose: Type.String({ description: "Briefly explain why this action is needed." }),
+    }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc) return text("[error] no active tool context");
+      await recordCall(callId, {
+        tool: "sandbox",
+        action: params.action,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
+        ...(params.backend ? { backend: params.backend } : {}),
+        ...(params.name ? { name: params.name } : {}),
+      });
+      try {
+        if (!sandboxActions.includes(params.action)) throw new Error("unsupported sandbox action");
+        if (["list", "create", "set_default", "retire"].includes(params.action)) {
+          if (!tc.sandboxResources) throw new Error("sandbox inventory unavailable");
+          const result = await tc.sandboxResources(
+            (params.action === "set_default" ? "default" : params.action) as "list" | "create" | "default" | "retire",
+            {
+              backend: params.backend,
+              name: params.name,
+              sandboxId: params.sandbox_id,
+            },
+          );
+          return recordResult(callId, { tool: "sandbox", action: params.action }, text(JSON.stringify(result)));
+        }
+        if (params.sandbox_id === null) throw new Error("null only clears a default");
+        if (params.action === "restart") {
+          await tc.restartComputer(params.sandbox_id);
+          return recordResult(
+            callId,
+            { tool: "sandbox", action: "restart", restarted: true },
+            text("Computer restarting. Give it a moment to boot before running the next command."),
+          );
+        }
+        const s = await tc.computerStatus(params.sandbox_id);
+        const verdict = computerVerdict(s);
+        const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
+        const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
+        let shellLine = s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`;
+        if (s.lifecycleState === "paused") shellLine = "paused (not probed)";
+        const recoveryLines: string[] = [];
+        if (s.lifecycleState) recoveryLines.push(`lifecycle: ${s.lifecycleState}`);
+        if (s.expiresAtMs !== undefined)
+          recoveryLines.push(`machine expires: ${new Date(s.expiresAtMs).toISOString()}`);
+        if (s.recovery) {
+          recoveryLines.push(`recovery strategy: ${s.recovery.strategy}`);
+          if (s.recovery.state) recoveryLines.push(`recovery state: ${s.recovery.state}`);
+          if (s.recovery.checkpointId) recoveryLines.push(`checkpoint: ${s.recovery.checkpointId}`);
+          if (s.recovery.checkpointAtMs !== undefined)
+            recoveryLines.push(`checkpoint captured: ${new Date(s.recovery.checkpointAtMs).toISOString()}`);
+          if (s.recovery.checkpointExpiresAtMs === null)
+            recoveryLines.push("checkpoint expires: no provider expiry reported");
+          else if (s.recovery.checkpointExpiresAtMs !== undefined)
+            recoveryLines.push(`checkpoint expires: ${new Date(s.recovery.checkpointExpiresAtMs).toISOString()}`);
+          if (s.recovery.error) recoveryLines.push(`recovery error: ${s.recovery.error}`);
+        }
+        const verdictLine =
+          verdict === "wedged"
+            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer"
+            : "";
+        return recordResult(
+          callId,
+          { tool: "sandbox", action: "status", verdict, ...s },
+          text(
+            [`machine: ${machineLine}; shell: ${shellLine}${pressureLine}${verdictLine}`, ...recoveryLines].join("\n"),
+          ),
+        );
+      } catch (e) {
+        if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose, "sandbox");
+        return recordResult(
+          callId,
+          { tool: "sandbox", action: params.action, failed: true },
+          text(`[error] ${errMessage(e)}`),
+          true,
+        );
+      }
+    },
+  });
 
   const read = defineTool({
     name: "read",
@@ -1292,7 +1357,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "remind your future self what to do with each wake. action=unwatch (with monitor_id from " +
       `watch) disarms it. Each job has a hard time-to-live (default ${bgTtlMin} minutes, max ${bgTtlMaxMin}) after which ` +
       "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
-      `that finishes within ${execCeilingSec}s, just use \`execute\`. Available only on your durable computer; ` +
+      `that finishes within ${execCeilingSec}s, just use \`execute\`. Available on the default sandbox or an authorized explicit sandbox_id; ` +
       "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
       `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. Two limits: those turn tokens expire ${capabilityTtlMin} minutes after the turn that launched the job started (past that they 401 — checkpoint your progress to the workspace and continue from a later turn or a cron), and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
       "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
@@ -1318,6 +1383,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description:
             "start a long command, poll its output by id, write to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
         },
+      ),
+      purpose: Type.Optional(
+        Type.String({ description: "Brief intent for a process operation that may require approval." }),
       ),
       command: Type.Optional(Type.String({ description: "start only: the shell command to run in the background." })),
       process_id: Type.Optional(Type.String({ description: "poll/write/stop/watch only: the id start returned." })),
@@ -1365,6 +1433,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           { description: "stop only: default TERM; use KILL to force." },
         ),
       ),
+      sandbox_id: Type.Optional(
+        Type.String({
+          description: "start only: exact sandbox to run on; later operations use the job’s saved target.",
+        }),
+      ),
       timeout_seconds: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -1380,6 +1453,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         action: params.action,
         command: params.command,
         process_id: params.process_id,
+        ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
         ...(params.monitor_id ? { monitor_id: params.monitor_id } : {}),
       });
       try {
@@ -1388,17 +1462,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.command)
               return recordResult(
                 callId,
-                { tool: "background", error: "start requires command" },
+                { tool: "background", action: params.action, error: "start requires command" },
                 text("[error] background start requires `command`."),
                 true,
               );
-            const r = await tc.backgroundStart(
-              params.command,
-              params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : undefined,
-            );
+            const r = await tc.backgroundStart(params.command, {
+              ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
+              ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
+            });
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   {
@@ -1419,7 +1493,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "poll requires process_id" },
+                { tool: "background", action: params.action, error: "poll requires process_id" },
                 text("[error] background poll requires `process_id`."),
                 true,
               );
@@ -1430,7 +1504,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             });
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   { type: "text" as const, text: `${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]` },
@@ -1448,14 +1522,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "stop requires process_id" },
+                { tool: "background", action: params.action, error: "stop requires process_id" },
                 text("[error] background stop requires `process_id`."),
                 true,
               );
             const r = await tc.backgroundStop(params.process_id, params.signal);
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   { type: "text" as const, text: `signalled ${r.processId}; status now ${fmtStatus(r.status)}` },
@@ -1468,7 +1542,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "watch requires process_id" },
+                { tool: "background", action: params.action, error: "watch requires process_id" },
                 text("[error] background watch requires `process_id`."),
                 true,
               );
@@ -1485,7 +1559,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                   : `job already ${status} — no watch armed; it produced no output.`;
                 return recordResult(
                   callId,
-                  { tool: "background", ...r },
+                  { tool: "background", action: params.action, ...r },
                   {
                     content: [{ type: "text" as const, text: result }],
                     details: r,
@@ -1500,7 +1574,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const trigger = params.pattern ? `new output matching /${params.pattern}/` : "new output";
               return recordResult(
                 callId,
-                { tool: "background", ...r },
+                { tool: "background", action: params.action, ...r },
                 {
                   content: [
                     {
@@ -1518,7 +1592,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const msg = errMessage(e);
               return recordResult(
                 callId,
-                { tool: "background", action: "watch", error: msg },
+                { tool: "background", action: params.action, error: msg },
                 text(`[watch failed] ${msg}`),
                 true,
               );
@@ -1528,7 +1602,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.monitor_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "unwatch requires monitor_id" },
+                { tool: "background", action: params.action, error: "unwatch requires monitor_id" },
                 text("[error] background unwatch requires `monitor_id`."),
                 true,
               );
@@ -1536,7 +1610,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const r = await tc.backgroundUnwatch(params.monitor_id);
               return recordResult(
                 callId,
-                { tool: "background", ...r },
+                { tool: "background", action: params.action, ...r },
                 text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
                 !r.removed,
               );
@@ -1544,7 +1618,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               const msg = errMessage(e);
               return recordResult(
                 callId,
-                { tool: "background", action: "unwatch", error: msg },
+                { tool: "background", action: params.action, error: msg },
                 text(`[unwatch failed] ${msg}`),
                 true,
               );
@@ -1554,21 +1628,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             if (!params.process_id)
               return recordResult(
                 callId,
-                { tool: "background", error: "write requires process_id" },
+                { tool: "background", action: params.action, error: "write requires process_id" },
                 text("[error] background write requires `process_id`."),
                 true,
               );
             if (params.data === undefined)
               return recordResult(
                 callId,
-                { tool: "background", error: "write requires data" },
+                { tool: "background", action: params.action, error: "write requires data" },
                 text("[error] background write requires `data` (the text to send to the job's stdin)."),
                 true,
               );
             const r = await tc.backgroundWrite(params.process_id, params.data);
             return recordResult(
               callId,
-              { tool: "background", ...r },
+              { tool: "background", action: params.action, ...r },
               {
                 content: [
                   { type: "text" as const, text: `wrote ${r.bytes}B to ${r.processId} stdin; ${fmtStatus(r.status)}` },
@@ -1581,7 +1655,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             const jobs = await tc.backgroundList();
             return recordResult(
               callId,
-              { tool: "background", jobs },
+              { tool: "background", action: params.action, jobs },
               {
                 content: [
                   {
@@ -1608,12 +1682,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             reason: e.approvalReason,
             kind: e.kind,
             matched: e.matched,
+            ...(params.purpose ? { purpose: params.purpose } : {}),
             ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
           });
           ref.pausedOnApproval = true;
           return recordResult(
             callId,
-            { tool: "background", blocked: "needs_approval", reason: e.approvalReason },
+            { tool: "background", action: params.action, blocked: "needs_approval", reason: e.approvalReason },
             { ...text(`[blocked: needs human approval] ${e.approvalReason}`), terminate: true },
             true,
           );
@@ -1621,7 +1696,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         if (e instanceof CommandDenied) {
           return recordResult(
             callId,
-            { tool: "background", denied: true, reason: e.message },
+            { tool: "background", action: params.action, denied: true, reason: e.message },
             text(`[denied by policy] ${e.message}`),
             true,
           );
@@ -1630,6 +1705,153 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
     },
   });
+
+  const processFieldDescription = (description: string) =>
+    description.replace(
+      /\b(start|poll|write|stop|watch|unwatch)\b/g,
+      (action) => Object.entries(processActions).find(([, legacy]) => legacy === action)?.[0] ?? action,
+    );
+  const schemas = (tool: ToolDefinition) => (tool.parameters as { properties: Record<string, TSchema> }).properties;
+  const sandboxProperties = {
+    ...Object.fromEntries(
+      Object.entries(schemas(background)).map(([key, schema]) => {
+        const description = (schema as TSchema & { description?: string }).description;
+        return [
+          key,
+          description ? Object.assign(Clone(schema), { description: processFieldDescription(description) }) : schema,
+        ];
+      }),
+    ),
+    ...schemas(execute),
+    ...schemas(sandboxManagement),
+    command: Type.Optional(executeBaseParams.command),
+    purpose: Type.Optional(
+      Type.String({
+        description: "Required for exec and management actions: briefly explain why. Optional for process actions.",
+      }),
+    ),
+    timeout_seconds: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description: `exec: wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s). start_process: job lifetime (default ${bgTtlSec}s, max ${bgTtlMaxSec}s).`,
+      }),
+    ),
+    action: Type.String({ enum: [...sandboxActions, "exec", ...Object.keys(processActions)] }),
+  };
+  const actionFields: Record<string, string[]> = {
+    status: ["sandbox_id"],
+    restart: ["sandbox_id"],
+    list: [],
+    create: ["backend", "name"],
+    set_default: ["sandbox_id"],
+    retire: ["sandbox_id"],
+    exec: Object.keys(schemas(execute)),
+    start_process: ["command", "sandbox_id", "timeout_seconds"],
+    read_process: ["process_id", "since_cursor", "wait_seconds", "max_bytes"],
+    write_stdin: ["process_id", "data"],
+    signal_process: ["process_id", "signal"],
+    list_processes: [],
+    watch_process: ["process_id", "since_cursor", "pattern", "instructions"],
+    unwatch_process: ["monitor_id"],
+  };
+  const requiredFields: Record<string, string[]> = {
+    status: ["purpose"],
+    restart: ["purpose"],
+    list: ["purpose"],
+    create: ["purpose", "backend"],
+    set_default: ["purpose", "sandbox_id"],
+    retire: ["purpose", "sandbox_id"],
+    exec: ["purpose", "command"],
+    start_process: ["command"],
+    read_process: ["process_id"],
+    write_stdin: ["process_id", "data"],
+    signal_process: ["process_id"],
+    watch_process: ["process_id"],
+    unwatch_process: ["monitor_id"],
+  };
+  const actionSchemas = Object.fromEntries(
+    Object.entries(actionFields).map(([action, fields]) => [
+      action,
+      Type.Object(
+        Object.fromEntries(
+          [...new Set(["action", "purpose", ...fields])].map((field) => [
+            field,
+            sandboxProperties[field as keyof typeof sandboxProperties],
+          ]),
+        ),
+        { additionalProperties: false },
+      ),
+    ]),
+  );
+  const describeSandbox = (description: string) =>
+    description
+      .replaceAll("action=start", "action=start_process")
+      .replaceAll("action=poll", "action=read_process")
+      .replaceAll("action=write", "action=write_stdin")
+      .replaceAll("action=stop", "action=signal_process")
+      .replaceAll("action=list", "action=list_processes")
+      .replaceAll("action=watch", "action=watch_process")
+      .replaceAll("action=unwatch", "action=unwatch_process")
+      .replaceAll("`execute`", "sandbox action=exec")
+      .replaceAll("`background`", "sandbox action=start_process")
+      .replaceAll("execute and background", "exec and start_process")
+      .replaceAll("`watch`", "watch_process")
+      .replaceAll("`poll`", "read_process")
+      .replaceAll("`stop`", "signal_process");
+  const sandbox = opts?.sandboxResources
+    ? defineTool({
+        name: "sandbox",
+        label: "sandbox",
+        description:
+          sandboxManagement.description +
+          "\nexec: " +
+          describeSandbox(execute.description) +
+          "\nProcess actions: " +
+          describeSandbox(background.description) +
+          "\nProcess IDs retain their original sandbox target; route changes do not move running jobs. Fields are action-specific; do not pass a sandbox_id to process operations after start_process.",
+        parameters: Type.Object(sandboxProperties, { additionalProperties: false }),
+        async execute(callId, params, signal, onUpdate, ctx) {
+          const action = params.action;
+          const schema = Object.hasOwn(actionSchemas, action) ? actionSchemas[action] : undefined;
+          const missing = (Object.hasOwn(requiredFields, action) ? requiredFields[action]! : []).find((field) => {
+            const value = (params as Record<string, unknown>)[field];
+            return value === undefined || (typeof value === "string" && field !== "data" && !value.trim());
+          });
+          if (
+            !schema ||
+            missing ||
+            !Check(schema, params) ||
+            ((params as Record<string, unknown>).sandbox_id === null && action !== "set_default")
+          ) {
+            await recordCall(callId, { tool: "sandbox", action });
+            return recordResult(
+              callId,
+              { tool: "sandbox", action, invalid: true },
+              text(
+                !schema
+                  ? "[error] unsupported sandbox action"
+                  : `[error] sandbox ${action}: ${missing ? `requires ${missing}` : "invalid or unrelated parameters"}`,
+              ),
+              true,
+            );
+          }
+          const { action: _, ...input } = params;
+          if (action === "exec") return execute.execute(callId, input, signal, onUpdate, ctx);
+          if (Object.hasOwn(processActions, action))
+            return background.execute(
+              callId,
+              {
+                ...input,
+                action: processActions[action as keyof typeof processActions],
+              },
+              signal,
+              onUpdate,
+              ctx,
+            );
+          return sandboxManagement.execute(callId, params, signal, onUpdate, ctx);
+        },
+      })
+    : sandboxManagement;
 
   const unavailable = (callId: string, tool: string) =>
     recordResult(
@@ -2471,7 +2693,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       text: Type.Optional(
         Type.String({
           description:
-            "post/reach: the message to send (the surface renders it). To @-mention, use real Slack syntax — `<@U…>` for a person, `<!subteam^S…>` for a user group (both ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping. edit: the new message content.",
+            "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
+            (surfaceName === "slack"
+              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
+              : ""),
         }),
       ),
       channel: Type.Optional(
@@ -3326,15 +3551,70 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }),
     );
 
+  const runtime = defineTool({
+    name: "runtime",
+    label: "runtime",
+    description:
+      "Inspect or change your model, harness, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved. lifetime defaults to task (this user request, including retries); scope changes the default for future requests in this scope too. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
+    parameters: Type.Object({
+      action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
+      model: Type.Optional(Type.String({ description: "Model ID or exact display name from get, such as Astra." })),
+      harness: Type.Optional(Type.String()),
+      effort: Type.Optional(Type.String()),
+      fastMode: Type.Optional(Type.Boolean()),
+      lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
+    }),
+    async execute(callId, params) {
+      const request = params as RuntimeRequest;
+      await recordCall(callId, { tool: "runtime", ...request });
+      if (
+        request.action !== "get" &&
+        ref.goal &&
+        (ref.goal.status === "active" ||
+          ref.goal.status === "paused" ||
+          (ref.goal.floor &&
+            !grindState(ref.goal.floor, goalFloorMeter(ref.goal, ref.goalMeter ?? createGrindMeter())).met))
+      ) {
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "runtime", error: "goal_in_progress" },
+          text(
+            "Runtime changes are unavailable while a goal or work floor is unfinished. Continue the goal on the current runtime.",
+          ),
+          true,
+        );
+      }
+      const result =
+        opts?.readOnly && request.action !== "get"
+          ? { ok: false as const, error: "read_only" }
+          : ((await ref.current?.runtime?.(request, ref.abortSignal)) ?? { ok: false, error: "runtime_unavailable" });
+      const handoff = result.ok ? result.handoff : undefined;
+      const ret = await recordCoreAuthoredResult(
+        callId,
+        {
+          tool: "runtime",
+          action: request.action,
+          ok: result.ok,
+          ...(handoff ? { runtimeHandoff: handoff, runId: ref.runtimeRunId, actorId: ref.runtimeActorId } : {}),
+        },
+        { ...text(JSON.stringify(result)), ...(handoff ? { terminate: true } : {}) },
+        !result.ok,
+      );
+      if (handoff) ref.runtimeHandoff = handoff;
+      return ret;
+    },
+  });
+
   const tools = [
-    execute,
+    ...(!opts?.sandboxResources ? [execute] : []),
     ...(credentialExecServices.length ? [credentialExec] : []),
     read,
     write,
     publish,
     memory,
     history,
-    background,
+    ...(!opts?.sandboxResources ? [background] : []),
+    sandbox,
     registerLogin,
     ...(controlTools ? [cron, webhook, share] : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
@@ -3342,11 +3622,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     createGoal,
     getGoal,
     updateGoal,
+    runtime,
     ...mcpTools,
   ];
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
-  return active.map((t) => withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref));
+  return active.map((t) =>
+    withRuntimeBarrier(withToolBodyTiming(withToolApprovalGate(t, ref, { recordCall, recordResult }), ref), ref),
+  );
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "stay_silent"]);
@@ -3371,22 +3654,35 @@ function withToolApprovalGate(
     ...tool,
     async execute(callId: string, params: unknown) {
       const gate = ref.toolApprovalGate;
-      if (gate && !gate(tool.name)) {
+      const sandboxAction =
+        tool.name === "sandbox" && isObj(params) && typeof params.action === "string" ? params.action : undefined;
+      const approvalIdentity = tool.name === "sandbox" ? `sandbox:${sandboxAction ?? "invalid"}` : tool.name;
+      const commandLabel = tool.name === "sandbox" ? `sandbox ${sandboxAction ?? "invalid"}` : tool.name;
+      if (gate && !gate(approvalIdentity)) {
         ref.pendingApprovals?.push({
-          command: tool.name,
+          command: commandLabel,
           reason: STRICT_TOOL_APPROVAL_REASON,
           kind: "approval",
-          approvalKey: `tool:${tool.name}`,
+          approvalKey: `tool:${approvalIdentity}`,
+          ...(tool.name === "sandbox" && isObj(params) && typeof params.purpose === "string"
+            ? { purpose: params.purpose }
+            : {}),
         });
         ref.pausedOnApproval = true;
         await rec.recordCall(callId, {
           tool: tool.name,
+          ...(tool.name === "sandbox" && isObj(params) ? { action: params.action } : {}),
           blocked: "needs_approval",
           reason: STRICT_TOOL_APPROVAL_REASON,
         });
         return rec.recordResult(
           callId,
-          { tool: tool.name, blocked: "needs_approval", reason: STRICT_TOOL_APPROVAL_REASON },
+          {
+            tool: tool.name,
+            ...(tool.name === "sandbox" && isObj(params) ? { action: params.action } : {}),
+            blocked: "needs_approval",
+            reason: STRICT_TOOL_APPROVAL_REASON,
+          },
           {
             content: [
               { type: "text" as const, text: `[blocked: needs human approval] ${STRICT_TOOL_APPROVAL_REASON}` },
@@ -3419,4 +3715,48 @@ function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
       }
     },
   } as ToolDefinition;
+}
+
+function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
+  return {
+    ...tool,
+    async execute(...args) {
+      const [, params] = args;
+      if (ref.runtimeHandoff || ref.runtimeMutationPending)
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
+            },
+          ],
+          details: {},
+          terminate: !!ref.runtimeHandoff,
+        };
+      const mutation = tool.name === "runtime" && (!isObj(params) || params.action !== "get");
+      if (mutation) {
+        ref.runtimeMutationPending = true;
+        try {
+          await Promise.allSettled(ref.runtimeInFlight ?? []);
+          if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
+            return {
+              content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],
+              details: {},
+              terminate: true,
+            };
+          return await tool.execute(...args);
+        } finally {
+          ref.runtimeMutationPending = false;
+        }
+      }
+      const inFlight = (ref.runtimeInFlight ??= new Set());
+      const result = Promise.resolve().then(() => tool.execute(...args));
+      inFlight.add(result);
+      try {
+        return await result;
+      } finally {
+        inFlight.delete(result);
+      }
+    },
+  };
 }

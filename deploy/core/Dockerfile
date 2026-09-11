@@ -23,5 +23,6 @@ ENV GIT_SHA=$GIT_SHA
 RUN mkdir -p /data && chown node:node /data
 EXPOSE 8080
 
+RUN apk add --no-cache util-linux
 USER node
 CMD ["node", "src/index.ts"]

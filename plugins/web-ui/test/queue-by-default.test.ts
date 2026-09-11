@@ -186,7 +186,7 @@ test("the strip renders core's queue, refreshed from the same read that names th
 test("the queued strip sits behind and outside the composer form", () => {
   assert.match(
     chat,
-    /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent, backgroundActivityStrip\(\)\)/,
+    /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent, html`\$\{glanceTier \? nothing : liveWorkStatus\(agent\)\} \$\{backgroundActivityStrip\(\)\}`\)/,
   );
   const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
   assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);

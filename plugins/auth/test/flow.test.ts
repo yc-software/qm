@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWK } from "jose";
 import {
@@ -638,4 +638,114 @@ test("a live brandName accessor overrides the env default on pages and emails", 
 
   await requestLink(h);
   assert.match(h.mailer.sent[0]!.subject, /straylight/);
+});
+
+test("remembered browsers silently reauthorize with fresh PKCE and the original auth_time", async (t) => {
+  const h = await startHarness();
+  t.after(() => h.close());
+  await requestLink(h);
+  const verified = await openLink(h, linkFrom(h.mailer));
+  assert.equal(verified.status, 302);
+  const cookie = verified.headers.get("set-cookie")!;
+  assert.match(cookie, /HttpOnly; Secure; SameSite=Lax; Path=\/idp; Max-Age=/);
+  const authTime = Math.floor(h.now.ms / 1000);
+  h.now.ms += 60000;
+  const { verifier, challenge } = pkcePair();
+  const response = await fetch(
+    `${h.base}/authorize?${authorizeQuery({ code_challenge: challenge, nonce: "fresh-nonce", state: "fresh-state" })}`,
+    { headers: { cookie: cookie.split(";")[0]! }, redirect: "manual" },
+  );
+  assert.equal(response.status, 302);
+  assert.equal(h.mailer.sent.length, 1);
+  const location = new URL(response.headers.get("location")!);
+  assert.equal(location.searchParams.get("state"), "fresh-state");
+  const exchanged = await exchange(h, location.searchParams.get("code")!, verifier);
+  assert.equal(exchanged.status, 200);
+  const body = (await exchanged.json()) as { id_token: string };
+  const payload = JSON.parse(Buffer.from(body.id_token.split(".")[1]!, "base64url").toString());
+  assert.equal(payload.nonce, "fresh-nonce");
+  assert.equal(payload.auth_time, authTime);
+  assert.equal((await exchange(h, location.searchParams.get("code")!, verifier)).status, 400);
+});
+
+test("fresh-auth requests, expired sessions, revocation and invalid requests cannot silently sign in", async (t) => {
+  const h = await startHarness({ env: { AUTH_SESSION_IDLE_S: "60", AUTH_SESSION_ABSOLUTE_S: "180" } });
+  t.after(() => h.close());
+  await requestLink(h);
+  const verified = await openLink(h, linkFrom(h.mailer));
+  const cookie = verified.headers.get("set-cookie")!.split(";")[0]!;
+  const authorize = (params: Record<string, string> = {}) =>
+    fetch(`${h.base}/authorize?${authorizeQuery(params)}`, { headers: { cookie }, redirect: "manual" });
+  assert.equal((await authorize({ prompt: "login" })).status, 200);
+  assert.equal((await authorize({ max_age: "0" })).status, 200);
+  assert.equal((await authorize({ max_age: "-1" })).status, 400);
+  assert.equal((await authorize({ prompt: "none login" })).status, 400);
+  assert.equal((await authorize({ redirect_uri: "https://evil.example" })).status, 400);
+  h.now.ms += 2000;
+  assert.equal((await authorize({ max_age: "1" })).status, 200);
+  for (let i = 0; i < 3; i++) {
+    h.now.ms += 50000;
+    assert.equal((await authorize()).status, 302);
+  }
+  h.now.ms += 30000;
+  assert.equal((await authorize()).status, 200);
+  const silent = await authorize({ prompt: " none " });
+  assert.equal(new URL(silent.headers.get("location")!).searchParams.get("error"), "login_required");
+  h.now.ms -= 100000;
+  h.remembered.clear();
+  assert.equal((await authorize()).status, 200);
+  assert.equal(h.mailer.sent.length, 1);
+});
+
+test("remembered-session backend failures fail closed", async (t) => {
+  const h = await startHarness({
+    sessions: {
+      async create() {
+        throw new Error("offline");
+      },
+      async use() {
+        throw new Error("offline");
+      },
+    },
+  });
+  t.after(() => h.close());
+  const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`, {
+    headers: {
+      cookie: `qm_idp_session=${"a".repeat(43)}.${createHmac("sha256", h.cfg.tokenSecret)
+        .update(`qm-auth.browser.v1\n${h.cfg.issuer}\n${h.cfg.clientId}\n${"a".repeat(43)}`)
+        .digest("base64url")}`,
+    },
+    redirect: "manual",
+  });
+  assert.equal(response.status, 503);
+  await requestLink(h);
+  assert.equal((await openLink(h, linkFrom(h.mailer))).status, 503);
+});
+
+test("core source credentials cannot mint broker cookies", async (t) => {
+  const h = await startHarness();
+  t.after(() => h.close());
+  const forged = await h.sessions.create("admin@example.com", 3600, 7200);
+  for (const value of [forged.token, `${forged.token}.${"x".repeat(43)}`]) {
+    const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`, {
+      headers: { cookie: `qm_idp_session=${value}` },
+      redirect: "manual",
+    });
+    assert.equal(response.status, 200);
+  }
+});
+
+test("a remembered browser loses access when email eligibility is withdrawn", async (t) => {
+  let allowed = true;
+  const h = await startHarness({ env: { AUTH_ALLOWED_EMAILS: "" }, emailAllowed: async () => allowed });
+  t.after(() => h.close());
+  await requestLink(h);
+  const verified = await openLink(h, linkFrom(h.mailer));
+  const cookie = verified.headers.get("set-cookie")!.split(";")[0]!;
+  allowed = false;
+  const response = await fetch(`${h.base}/authorize?${authorizeQuery({ prompt: "none" })}`, {
+    headers: { cookie },
+    redirect: "manual",
+  });
+  assert.equal(new URL(response.headers.get("location")!).searchParams.get("error"), "login_required");
 });

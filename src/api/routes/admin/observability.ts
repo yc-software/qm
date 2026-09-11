@@ -312,21 +312,25 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: "errors.read", resource: "errors", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   const sessionId = url.searchParams.get("sessionId") || undefined;
-  if (url.searchParams.get("count")) {
-    const total =
-      (await deps.errors?.count({
-        ...(orgWide ? {} : { scopeId: scope }),
-        ...(sessionId ? { sessionId } : {}),
-      })) ?? 0;
-    return sendJson(res, 200, { scopeId: scope, total });
+  const filters = {
+    ...(orgWide ? {} : { scopeId: scope }),
+    ...(sessionId ? { sessionId } : {}),
+  };
+  const rawLimit = Number(url.searchParams.get("limit") ?? ERRORS_LIST_LIMIT);
+  const rawOffset = Number(url.searchParams.get("offset") ?? 0);
+  if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || !Number.isSafeInteger(rawOffset) || rawOffset < 0) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "limit must be a positive integer and offset a non-negative integer.",
+    });
   }
-  const fromLog =
-    (await deps.errors?.list({
-      ...(orgWide ? {} : { scopeId: scope }),
-      ...(sessionId ? { sessionId } : {}),
-    })) ?? [];
-  const errors = [...fromLog].sort((a, b) => b.ts - a.ts).slice(0, ERRORS_LIST_LIMIT);
-  return sendJson(res, 200, { scopeId: scope, errors });
+  const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
+  const total = (await deps.errors?.count(filters)) ?? 0;
+  if (url.searchParams.get("count")) return sendJson(res, 200, { scopeId: scope, total });
+  const lastOffset = total ? Math.floor((total - 1) / limit) * limit : 0;
+  const offset = Math.min(rawOffset, lastOffset);
+  const errors = (await deps.errors?.list({ ...filters, limit, offset })) ?? [];
+  return sendJson(res, 200, { scopeId: scope, errors, total, limit, offset });
 }
 
 export async function listAdminAudit(ctx: ApiCtx): Promise<void> {

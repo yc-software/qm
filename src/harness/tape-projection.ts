@@ -313,6 +313,7 @@ export function projectTapeEntries(
         });
       }
     } else if (message.role === "toolResult") {
+      if (message.toolName === "attach") return null;
       const draft = toolResultDraft(row);
       if (draft) events.push({ kind: "item", item: draft });
     } else {

@@ -8,6 +8,7 @@ import { CONFIG_DEFAULTS } from "../config.ts";
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
   registry: ProcessRegistry;
+  provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   scopeId: string;
   sessionRef?: string;
   ttlMs?: number;
@@ -53,6 +54,7 @@ export interface BackgroundWriteResult {
 }
 
 export interface BackgroundExecBroker {
+  handleFor?(processId: string): Promise<SandboxHandle | null>;
   start(handle: SandboxHandle, command: string, ttlMs?: number): Promise<BackgroundStartResult>;
   poll(
     handle: SandboxHandle,
@@ -83,6 +85,13 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
   return {
+    async handleFor(processId) {
+      const rec = await deps.registry.get(processId);
+      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") throw new Error("no such background job");
+      if (!rec.sandboxId) return null;
+      if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
+      return deps.provisionSandbox(rec.sandboxId);
+    },
     async start(handle, command, ttlMs): Promise<BackgroundStartResult> {
       const ttl = Math.min(ttlMs ?? defaultTtlMs, maxTtlMs);
 
@@ -92,7 +101,11 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       let processId =
         redacted === normalized
           ? ((await deps.registry.listByScope(deps.scopeId)).find(
-              (r) => r.kind === "background" && r.command === redacted && r.status === "running",
+              (r) =>
+                r.kind === "background" &&
+                r.command === redacted &&
+                r.status === "running" &&
+                r.sandboxId === handle.resourceId,
             )?.processId ?? null)
           : null;
 
@@ -125,17 +138,24 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         return { processId, output: read.chunks, cursor: read.cursor, status: read.status, reattached: true };
       }
 
-      ({ processId } = await deps.sandbox.startProcess(handle, command, {
-        env: { PYTHONUNBUFFERED: "1" },
-      }));
-      await deps.registry.register({
-        processId,
-        scopeId: deps.scopeId,
-        kind: "background",
-        command: redacted,
-        ttlMs: ttl,
-        ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
-      });
+      const register = async (id: string): Promise<void> => {
+        await deps.registry.register({
+          processId: id,
+          scopeId: deps.scopeId,
+          ...(handle.resourceId ? { sandboxId: handle.resourceId } : {}),
+          kind: "background",
+          command: redacted,
+          ttlMs: ttl,
+          ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+        });
+      };
+      const startOptions = { env: { PYTHONUNBUFFERED: "1" } };
+      if (deps.sandbox.startRegisteredProcess) {
+        ({ processId } = await deps.sandbox.startRegisteredProcess(handle, command, register, startOptions));
+      } else {
+        ({ processId } = await deps.sandbox.startProcess(handle, command, startOptions));
+        await register(processId);
+      }
 
       const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, { deadlineMs: POLL_MS });
       if (status.state === "exited") await deps.registry.markStatus(processId, "exited");
@@ -146,6 +166,10 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const rec = await deps.registry.get(processId);
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
+      }
+      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
+        if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
+        handle = await deps.provisionSandbox(rec.sandboxId);
       }
       const read = await deps.sandbox.readProcess(handle, processId, {
         sinceCursor: opts?.sinceCursor ?? 0,
@@ -161,6 +185,10 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
       }
+      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
+        if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
+        handle = await deps.provisionSandbox(rec.sandboxId);
+      }
       await deps.sandbox.writeStdin(handle, processId, data);
       const read = await deps.sandbox.readProcess(handle, processId, { sinceCursor: 0, maxBytes: 1, waitMs: 0 });
       if (read.status.state === "exited") await deps.registry.markStatus(processId, "exited");
@@ -171,6 +199,10 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const rec = await deps.registry.get(processId);
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
+      }
+      if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
+        if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
+        handle = await deps.provisionSandbox(rec.sandboxId);
       }
       await deps.sandbox.signalProcess(handle, processId, signal);
       let status = await awaitProcessExit(deps.sandbox, handle, processId, termGraceMs);

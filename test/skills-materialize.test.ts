@@ -500,3 +500,31 @@ test("materializeSkillTree uses importFiles (one batch) when the backend offers 
   assert.equal(files.get("skills/gamma/a.py"), "A");
   assert.equal(files.get("skills/gamma/b.py"), "B");
 });
+
+test("switching a same-named skill source removes prior private assets before any command", async () => {
+  const { sandbox, files, calls } = fakeSandbox();
+  const privateSkill = res(
+    "deploy",
+    "Same instructions",
+    [{ path: "private.txt", content: "PRIVATE_ASSET" }],
+    "private-pack",
+  );
+  Object.assign(privateSkill.skill!, { id: "private", scopeId: "personal:U1" });
+  const orgSkill = res("deploy", "Same instructions");
+  Object.assign(orgSkill.skill!, { id: "public", scopeId: "org:acme" });
+  await materializeSkillIndex(sandbox, handle, [privateSkill]);
+  await materializeSkillTree(sandbox, handle, privateSkill, [
+    bundle("private-pack", [{ path: "private-lib.txt", content: "PRIVATE_PACK" }]),
+  ]);
+  assert.ok([...files.values()].some((body) => body.includes("PRIVATE_ASSET")));
+  assert.ok([...files.values()].some((body) => body.includes("PRIVATE_PACK")));
+  await materializeSkillIndex(sandbox, handle, [orgSkill]);
+  assert.equal(files.get("skills/deploy/SKILL.md"), "Same instructions");
+  assert.equal(
+    [...files.values()].some((body) => body.includes("PRIVATE_ASSET") || body.includes("PRIVATE_PACK")),
+    false,
+  );
+  const writes = calls.writes;
+  await materializeSkillIndex(sandbox, handle, [orgSkill]);
+  assert.equal(calls.writes, writes);
+});

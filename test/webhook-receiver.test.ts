@@ -291,3 +291,35 @@ test("a third-party principal destination with accepted consent delivers to the 
   assert.equal(pending[0]?.destination.target, "U2");
   assert.equal(pending[0]?.text, "DID-THE-WORK");
 });
+
+test("linear rejects signed untimed deliveries without firing a turn", async () => {
+  const { webhooks, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage",
+    verification: { scheme: "linear", secret: SECRET },
+  });
+  for (const rawBody of [
+    "not json",
+    JSON.stringify({ action: "create" }),
+    JSON.stringify({ webhookTimestamp: null }),
+  ]) {
+    const out = await receiver.deliver(wh.id, {
+      rawBody,
+      headers: { "linear-signature": createHmac("sha256", SECRET).update(rawBody).digest("hex") },
+    });
+    assert.equal(out.status, 401);
+  }
+  await flush();
+  assert.equal(calls.length, 0);
+  const rawBody = JSON.stringify({ action: "create", webhookTimestamp: Date.now() });
+  const out = await receiver.deliver(wh.id, {
+    rawBody,
+    headers: { "linear-signature": createHmac("sha256", SECRET).update(rawBody).digest("hex") },
+  });
+  assert.equal(out.status, 202);
+  await flush();
+  assert.equal(calls.length, 1);
+});

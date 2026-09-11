@@ -202,3 +202,130 @@ test("a hydrate failure terminates the fresh body instead of cold-starting over 
   const h2 = await sb.provision(layers);
   assert.equal(await sb.readFile(h2, "notes/todo.txt"), "buy milk");
 });
+
+test("scope retirement terminates its body and removes only its snapshot, including after restart", async () => {
+  const fake = installFakeMicrovm();
+  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
+  const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+  const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
+  const first = await sb.provision(rw("personal:retire-one"));
+  const other = await sb.provision(rw("personal:retire-other"));
+  await sb.teardown(first);
+  await sb.teardown(other);
+  assert.equal(fake.s3store.size, 2);
+  await makeSandbox(fake, { store }).destroyScope!("personal:retire-one");
+  assert.equal(fake.bodies.get(first.id)!.state, "TERMINATED");
+  assert.equal(fake.bodies.get(other.id)!.state, "SUSPENDED");
+  assert.equal(fake.s3store.size, 1);
+  assert.equal(await store.get("personal:retire-one"), null);
+  assert.ok(await store.get("personal:retire-other"));
+  await sb.destroyScope!("personal:retire-one");
+  assert.equal(fake.s3store.size, 1);
+});
+
+for (const stage of ["terminate", "snapshot"] as const) {
+  test(`scope retirement retains durable recovery metadata when ${stage} deletion fails`, async () => {
+    const fake = installFakeMicrovm();
+    const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
+    const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+    const sb = makeSandbox(fake, { store });
+    const handle = await sb.provision(rw("personal:retire-failure"));
+    await sb.teardown(handle);
+    const terminate = fake.api.terminate;
+    const send = fake.s3.send;
+    if (stage === "terminate")
+      fake.api.terminate = async () => {
+        throw new Error("termination failed");
+      };
+    else
+      fake.s3.send = async () => {
+        throw new Error("snapshot deletion failed");
+      };
+    await assert.rejects(sb.destroyScope!("personal:retire-failure"), /failed/);
+    assert.ok(await store.get("personal:retire-failure"));
+    fake.api.terminate = terminate;
+    fake.s3.send = send;
+    await sb.destroyScope!("personal:retire-failure");
+    assert.equal(await store.get("personal:retire-failure"), null);
+  });
+}
+
+test("failed AWS readiness remains discoverable for retirement when immediate termination fails", async () => {
+  const fake = installFakeMicrovm();
+  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
+  const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+  const sb = makeSandbox(fake, { store });
+  const wait = fake.api.waitForState;
+  const terminate = fake.api.terminate;
+  fake.api.waitForState = async () => {
+    throw new Error("not ready");
+  };
+  fake.api.terminate = async () => {
+    throw new Error("unavailable");
+  };
+  await assert.rejects(sb.provision(rw("personal:failed-launch")), /launch .* failed/);
+  const pending = await store.get("personal:failed-launch");
+  assert.ok(pending?.provisioning);
+  fake.api.waitForState = wait;
+  await assert.rejects(sb.provision(rw("personal:failed-launch")), /incomplete provisioning/);
+  fake.api.terminate = terminate;
+  await makeSandbox(fake, { store }).destroyScope!("personal:failed-launch");
+  assert.equal(fake.bodies.get(pending.microvmId)!.state, "TERMINATED");
+  assert.equal(await store.get("personal:failed-launch"), null);
+});
+
+test("destructive teardown of a stale AWS handle preserves a replacement scope", async () => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
+  const layers = rw("personal:stale-destroy");
+  const old = await sb.provision(layers);
+  await sb.teardown(old);
+  fake.killBody(old.id);
+  const replacement = await sb.provision(layers);
+  await sb.teardown(replacement);
+  await sb.teardown(old, { destroy: true });
+  assert.equal(fake.bodies.get(replacement.id)!.state, "SUSPENDED");
+  assert.equal(fake.s3store.size, 1);
+  assert.equal((await sb.provision(layers)).id, replacement.id);
+});
+
+for (const writer of ["teardown", "reaper"] as const) {
+  test(`retirement waits for an in-flight ${writer} snapshot and prevents restoration`, async () => {
+    const fake = installFakeMicrovm();
+    const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
+    const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+    const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
+    const scope = `personal:retire-race-${writer}`;
+    const handle = await sb.provision(rw(scope));
+    await sb.writeFile(handle, "retired.txt", "must not return");
+    if (writer === "reaper") {
+      await sb.teardown(handle);
+      await store.merge(scope, { lastActivityMs: 2, lastSnapshotMs: 1 });
+    }
+    const uploading = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const send = fake.s3.send;
+    fake.s3.send = async (command: unknown) => {
+      if (command?.constructor.name === "CompleteMultipartUploadCommand") {
+        uploading.resolve();
+        await release.promise;
+      }
+      return send(command);
+    };
+    const snapshot = writer === "reaper" ? sb.reapDeepIdle!(1) : sb.teardown(handle);
+    await uploading.promise;
+    let retired = false;
+    const retirement = sb.destroyScope!(scope).then(() => {
+      retired = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(retired, false);
+    release.resolve();
+    await Promise.all([snapshot, retirement]);
+    assert.equal(fake.s3store.size, 0);
+    assert.equal(await store.get(scope), null);
+    const replacement = await sb.provision(rw(scope));
+    assert.equal(await sb.readFile(replacement, "retired.txt"), null);
+    await sb.destroyScope!(scope);
+  });
+}

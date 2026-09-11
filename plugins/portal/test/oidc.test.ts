@@ -7,6 +7,7 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   fetchUserinfo,
+  hostedDomainHint,
   resolvePrincipal,
   verifyIdToken,
   type OidcConfig,
@@ -46,6 +47,29 @@ test("buildAuthorizeUrl carries code+PKCE+state+nonce", () => {
   assert.equal(u.searchParams.get("nonce"), "NO");
   assert.equal(u.searchParams.get("code_challenge"), "CH");
   assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(u.searchParams.get("prompt"), null);
+  assert.equal(u.searchParams.get("hd"), null);
+});
+
+test("buildAuthorizeUrl forwards prompt and hosted-domain hints when configured", () => {
+  const google: OidcConfig = {
+    ...cfg,
+    authEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+    issuer: "https://accounts.google.com",
+    prompt: "select_account",
+    hostedDomain: "example.com",
+  };
+  const u = new URL(buildAuthorizeUrl(google, { state: "ST", nonce: "NO", challenge: "CH" }));
+  assert.equal(u.origin + u.pathname, "https://accounts.google.com/o/oauth2/v2/auth");
+  assert.equal(u.searchParams.get("prompt"), "select_account");
+  assert.equal(u.searchParams.get("hd"), "example.com");
+});
+
+test("hostedDomainHint applies only to the Google issuer with a domain gate", () => {
+  assert.equal(hostedDomainHint("https://accounts.google.com", "example.com"), "example.com");
+  assert.equal(hostedDomainHint("https://accounts.google.com", undefined), undefined);
+  assert.equal(hostedDomainHint("https://accounts.google.com", ""), undefined);
+  assert.equal(hostedDomainHint("https://slack.com", "example.com"), undefined);
 });
 
 test("exchangeCode posts client_secret_basic + PKCE verifier and parses the token", async () => {

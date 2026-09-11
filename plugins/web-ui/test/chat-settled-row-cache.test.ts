@@ -31,8 +31,11 @@ test("the cache key covers every mutable render input of a settled row", () => {
     "hit.speakerLabel === speakerLabel",
     "hit.edited === edited",
     "hit.deleted === deleted",
-    "hit.expanded === expanded",
   ]) {
     assert.ok(chat.includes(field), `cache key must compare: ${field}`);
   }
+});
+
+test("prompt expansion is managed by the viewport without invalidating cached templates", () => {
+  assert.doesNotMatch(chat, /expandedPrompt|togglePromptExpanded/);
 });

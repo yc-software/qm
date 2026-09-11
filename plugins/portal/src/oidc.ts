@@ -14,6 +14,14 @@ export interface OidcConfig {
   issuer: string;
   jwksUri: string;
   expectedTeamId?: string;
+  prompt?: string;
+  hostedDomain?: string;
+}
+
+const GOOGLE_ISSUER = "https://accounts.google.com";
+
+export function hostedDomainHint(issuer: string, allowedEmailDomain: string | undefined): string | undefined {
+  return issuer === GOOGLE_ISSUER && allowedEmailDomain ? allowedEmailDomain : undefined;
 }
 
 export function pkcePair(): { verifier: string; challenge: string } {
@@ -32,6 +40,8 @@ export function buildAuthorizeUrl(cfg: OidcConfig, args: { state: string; nonce:
   u.searchParams.set("nonce", args.nonce);
   u.searchParams.set("code_challenge", args.challenge);
   u.searchParams.set("code_challenge_method", "S256");
+  if (cfg.prompt) u.searchParams.set("prompt", cfg.prompt);
+  if (cfg.hostedDomain) u.searchParams.set("hd", cfg.hostedDomain);
   return u.toString();
 }
 
