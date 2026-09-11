@@ -304,7 +304,7 @@ test("prompt expansion control belongs inside the bubble in both renderers", () 
       dom.window.close();
     }
   }
-  assert.match(css, /:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{/);
+  assert.match(css, /:not\(\.pin-expanded\):not\(\.pin-fits\)\s+\.user-bubble\s+>\s+\.pin-content \{/);
   assert.match(css, /\.user-bubble > \.pin-toggle:not\(\[hidden\]\)/);
 });
 
@@ -338,4 +338,31 @@ test("plain-text copy confirmation can grow beyond its icon width", () => {
   const rule = css.match(/\.user-bubble code-block\[language="text"\] copy-button button \{[^}]*\}/)?.[0] ?? "";
   assert.match(rule, /min-width: var\(--meta-lane\)/);
   assert.doesNotMatch(rule, /(?:^|[;{])\s*width:/);
+});
+
+test("marginal overflow is shown in full without an expansion control", () => {
+  const f = fixture();
+  try {
+    f.prompt.innerHTML =
+      '<div class="user-bubble"><div class="pin-content"></div><button class="pin-toggle" hidden>Show more</button></div>';
+    const content = f.prompt.querySelector<HTMLElement>(".pin-content")!;
+    const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
+    let overflow = 5;
+    Object.defineProperties(content, {
+      scrollHeight: { get: () => 160 + overflow },
+      clientHeight: { get: () => (f.prompt.classList.contains("pin-fits") ? 160 + overflow : 160) },
+    });
+    f.viewport.sync(f.s);
+    for (overflow of [0, 5, 24, 25, 100, 5]) {
+      f.resize(30, 50);
+      assert.equal(toggle.hidden, overflow <= 24);
+      assert.equal(f.prompt.classList.contains("pin-fits"), overflow <= 24);
+      f.resize(30, 50);
+      assert.equal(toggle.hidden, overflow <= 24, "stable on repeated measurements");
+    }
+    f.viewport.dispose();
+    assert.equal(f.prompt.classList.contains("pin-fits"), false);
+  } finally {
+    f.close();
+  }
 });

@@ -23,7 +23,7 @@ export function createTranscriptViewport() {
   }
 
   function clearPrompt(): void {
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-fits");
     prompt?.style.removeProperty("--pin-clamp");
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
@@ -38,7 +38,10 @@ export function createTranscriptViewport() {
       `${Math.round(Math.min(320, Math.max(96, scroller.clientHeight * 0.35)))}px`,
     );
     prompt.classList.toggle("pin-expanded", expanded);
-    const clipped = !expanded && content.scrollHeight > content.clientHeight + 1;
+    // Measure at the normal clamp before deciding whether collapsing saves a useful amount.
+    prompt.classList.remove("pin-fits");
+    const clipped = !expanded && content.scrollHeight > content.clientHeight + 24;
+    prompt.classList.toggle("pin-fits", !expanded && !clipped);
     const toggle = prompt.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) {
       toggle.hidden = !clipped && !expanded;

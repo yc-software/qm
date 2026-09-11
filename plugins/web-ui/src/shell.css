@@ -1775,7 +1775,7 @@ a.chat-row-open {
 .user-bubble > .pin-content {
   display: flow-root;
 }
-.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
+.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits) .user-bubble > .pin-content {
   max-height: var(--pin-clamp, 320px);
   overflow: hidden;
 }
@@ -8956,7 +8956,11 @@ h3.ambient-field-label {
 .mini-convo-body .message-stack {
   width: 100%;
 }
-.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
+.mini-convo-body
+  .message-stack
+  .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits)
+  .user-bubble
+  > .pin-content {
   max-height: 100px;
 }
 .mini-convo-missing {
