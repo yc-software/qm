@@ -4,9 +4,9 @@ cd "$(dirname "$0")/.."
 
 BASE_TAG="qm-sandbox-base:dev"
 LOCAL_TAG="${LOCAL_SANDBOX_IMAGE:-qm-sandbox-local:latest}"
-# Default to the docker host's own architecture: an emulated amd64 image on an arm64 host runs
-# node without its JIT, which makes the sandbox test suite crawl and hang on process tests.
-PLATFORM="${LOCAL_SANDBOX_PLATFORM:-linux/$(docker version --format '{{.Server.Arch}}')}"
+# Match the docker host arch: emulated amd64 on arm64 runs node without its JIT and hangs the sandbox tests.
+HOST_ARCH="$(docker version --format '{{.Server.Arch}}')"
+PLATFORM="${LOCAL_SANDBOX_PLATFORM:-linux/${HOST_ARCH}}"
 
 FINGERPRINT="$(node --input-type=module -e '
 const { computeSandboxImageFingerprint } = await import("./src/sandbox/local-sandbox.ts");
