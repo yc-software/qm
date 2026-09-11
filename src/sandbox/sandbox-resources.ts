@@ -1,4 +1,5 @@
-import { randomUUID, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
+import { reservedOrRandomId } from "../util/reserved-id.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
@@ -47,7 +48,13 @@ export interface SandboxResources {
     defaultMode: "none" | "selected";
     providers: Array<{ name: SandboxBackendName; spec?: AgentComputerSpec; actions: string[] }>;
   }>;
-  create(actorId: string, scopeId: ScopeId, backend: string, name?: string): Promise<SandboxResource>;
+  create(
+    actorId: string,
+    scopeId: ScopeId,
+    backend: string,
+    name?: string,
+    reservedId?: string,
+  ): Promise<SandboxResource>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string): Promise<void>;
@@ -284,13 +291,13 @@ export function createSandboxResources(opts: {
         providers,
       };
     },
-    async create(actorId, scopeId, backend, name) {
+    async create(actorId, scopeId, backend, name, reservedId) {
       await requireEnabled();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
-      const id = randomUUID();
-      const record: SandboxResource = {
+      const id = reservedOrRandomId(reservedId);
+      const initial: SandboxResource = {
         id,
         backend: backend as SandboxBackendName,
         ownerScopeId: scopeId,
@@ -302,6 +309,20 @@ export function createSandboxResources(opts: {
         state: "provisioning",
       };
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
+        const existing = await opts.records.get(id);
+        if (
+          existing &&
+          (existing.ownerScopeId !== scopeId ||
+            existing.backend !== backend ||
+            existing.createdBy !== actorId ||
+            existing.name !== initial.name ||
+            existing.legacy ||
+            existing.state === "retired")
+        )
+          throw new Error("sandbox reservation conflicts with existing resource");
+        if (existing?.state === "ready") return existing;
+        const record = existing ? { ...existing, state: "provisioning" as const } : initial;
+        delete record.error;
         await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {

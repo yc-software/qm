@@ -19,6 +19,7 @@ export interface RunDeliveryState {
 export interface Run {
   id: string;
   sessionId: string;
+  sessionRecordId?: string | null;
   status: RunStatus;
   request: OrchestratorInput;
   result: TurnResult | null;
@@ -34,6 +35,7 @@ export interface Run {
   createdAt: number;
   startedAt: number | null;
   finishedAt: number | null;
+  availableAt?: number;
 }
 
 export interface EnqueueInput {
@@ -61,6 +63,7 @@ export interface RunStore {
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
   releaseLease(runId: string, leaseToken: string): Promise<boolean>;
+  defer(runId: string, leaseToken: string, delayMs: number): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 
@@ -77,6 +80,10 @@ export interface RunStore {
   activeForThread(sessionId: string): Promise<Run | null>;
 
   inFlightForThread(sessionId: string): Promise<Run[]>;
+
+  bindSession(runId: string, leaseToken: string, sessionRecordId: string): Promise<boolean>;
+
+  firstExecutedForSession(sessionId: string, sessionRecordId: string): Promise<Run | null>;
 
   withdraw(runId: string): Promise<boolean>;
 
