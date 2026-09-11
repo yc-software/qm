@@ -10,14 +10,20 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
-import { scopeId, type Loop, type ShipGrant } from "../src/types.ts";
+import { scopeId, type Loop, type LoopOutput, type ScopeId, type ShipGrant } from "../src/types.ts";
+import { orgId } from "../src/config.ts";
+import { createAdminService, type AdminGrant, type AdminService } from "../src/admin/admin-service.ts";
+import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
+import { ensureFactoryLoop } from "../src/loops/factory/factory-loop.ts";
+import { createCanManageScope } from "../src/resolution/scope-membership.ts";
 
 function fakeRes() {
-  const out = { status: 0, body: undefined as unknown };
+  const out = { status: 0, body: undefined as unknown, writes: 0 };
   return {
     res: {
       writeHead(status: number) {
         out.status = status;
+        out.writes += 1;
         return this;
       },
       end(data?: string) {
@@ -39,15 +45,23 @@ function services(): LoopServiceDeps {
   };
 }
 
+interface CallOptions {
+  actor?: string;
+  mode?: "capability" | "source";
+  liveActor?: boolean;
+  scope?: ScopeId;
+  deps?: Record<string, unknown>;
+  app?: Record<string, unknown>;
+}
+
 async function call(
   deps: LoopServiceDeps,
   method: string,
   path: string,
   body?: unknown,
-  actor = "josh",
-  mode: "capability" | "source" = "capability",
-  liveActor = true,
-): Promise<{ status: number; body: unknown }> {
+  opts: CallOptions = {},
+): Promise<{ status: number; body: unknown; writes: number }> {
+  const { actor = "josh", mode = "capability", liveActor = true } = opts;
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
   const { res, out } = fakeRes();
@@ -62,7 +76,7 @@ async function call(
       mode === "capability"
         ? {
             actorId: actor,
-            scopeId: scopeId("personal", actor),
+            scopeId: opts.scope ?? scopeId("personal", actor),
             ...(liveActor ? { liveActor: true } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
           }
@@ -71,8 +85,9 @@ async function call(
       membershipControlsScope: async () => false,
       managesScope: async () => false,
       samePerson: async (a: string, b: string) => a === b,
+      ...opts.app,
     },
-    deps: { loops: deps },
+    deps: { loops: deps, ...opts.deps },
   } as unknown as ApiCtx;
   await found.route.handle(ctx);
   return out;
@@ -129,9 +144,7 @@ test("create and patch configure a validated escalation destination", async () =
     "PATCH",
     `/v1/loops/${loop.id}`,
     { destinationKey: "alerts" },
-    "josh",
-    "capability",
-    false,
+    { actor: "josh", mode: "capability", liveActor: false },
   );
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
@@ -231,9 +244,7 @@ test("only a live human can introduce an auto ship gate", async () => {
     "POST",
     "/v1/loops",
     { ...CREATE, shipActions: [{ action: "open_pr", gate: "auto" }] },
-    "josh",
-    "capability",
-    false,
+    { actor: "josh", mode: "capability", liveActor: false },
   );
   assert.equal(deniedCreate.status, 403);
   assert.equal((deniedCreate.body as { error: string }).error, "human_required");
@@ -242,8 +253,7 @@ test("only a live human can introduce an auto ship gate", async () => {
     "POST",
     "/v1/loops",
     { ...CREATE, shipActions: [{ action: "open_pr", gate: "auto" }] },
-    "josh",
-    "source",
+    { actor: "josh", mode: "source" },
   );
   assert.equal(signedCreate.status, 403);
   assert.equal((signedCreate.body as { error: string }).error, "human_required");
@@ -255,9 +265,7 @@ test("only a live human can introduce an auto ship gate", async () => {
     "PATCH",
     `/v1/loops/${id}`,
     { shipActions: [{ action: "open_pr", gate: "auto" }] },
-    "josh",
-    "capability",
-    false,
+    { actor: "josh", mode: "capability", liveActor: false },
   );
   assert.equal(deniedPatch.status, 403);
   assert.equal((deniedPatch.body as { error: string }).error, "human_required");
@@ -270,9 +278,7 @@ test("only a live human can introduce an auto ship gate", async () => {
         "PATCH",
         `/v1/loops/${id}`,
         { shipActions: [{ action: "open_pr", gate: "auto" }] },
-        "josh",
-        "capability",
-        false,
+        { actor: "josh", mode: "capability", liveActor: false },
       )
     ).status,
     200,
@@ -284,9 +290,7 @@ test("only a live human can introduce an auto ship gate", async () => {
         "PATCH",
         `/v1/loops/${id}`,
         { shipActions: [{ action: "open_pr", gate: "hold" }] },
-        "josh",
-        "capability",
-        false,
+        { actor: "josh", mode: "capability", liveActor: false },
       )
     ).status,
     200,
@@ -308,10 +312,10 @@ test("only the owner may read, patch, or delete a personal loop", async () => {
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const id = (created.body as { loop: { id: string } }).loop.id;
   assert.equal((await call(deps, "GET", `/v1/loops/${id}`)).status, 200);
-  assert.equal((await call(deps, "GET", `/v1/loops/${id}`, undefined, "mallory")).status, 403);
-  assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { name: "stolen" }, "mallory")).status, 403);
-  assert.equal((await call(deps, "DELETE", `/v1/loops/${id}`, undefined, "mallory")).status, 403);
-  const list = await call(deps, "GET", "/v1/loops", undefined, "mallory");
+  assert.equal((await call(deps, "GET", `/v1/loops/${id}`, undefined, { actor: "mallory" })).status, 403);
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { name: "stolen" }, { actor: "mallory" })).status, 403);
+  assert.equal((await call(deps, "DELETE", `/v1/loops/${id}`, undefined, { actor: "mallory" })).status, 403);
+  const list = await call(deps, "GET", "/v1/loops", undefined, { actor: "mallory" });
   assert.deepEqual((list.body as { loops: unknown[] }).loops, []);
 });
 
@@ -329,8 +333,20 @@ test("only a live human can clear quarantine and the clearance is audited", asyn
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const id = (created.body as { loop: Loop }).loop.id;
-  await call(deps, "PATCH", `/v1/loops/${id}`, { state: "quarantined" }, "josh", "capability", false);
-  const denied = await call(deps, "PATCH", `/v1/loops/${id}`, { state: "enabled" }, "josh", "capability", false);
+  await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${id}`,
+    { state: "quarantined" },
+    { actor: "josh", mode: "capability", liveActor: false },
+  );
+  const denied = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${id}`,
+    { state: "enabled" },
+    { actor: "josh", mode: "capability", liveActor: false },
+  );
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
   assert.equal((await deps.store.get(id))?.state, "quarantined");
@@ -340,7 +356,13 @@ test("only a live human can clear quarantine and the clearance is audited", asyn
   assert.equal(typeof loop.quarantineClearedAt, "number");
 
   await call(deps, "PATCH", `/v1/loops/${id}`, { state: "paused" });
-  const agentEnabled = await call(deps, "PATCH", `/v1/loops/${id}`, { state: "enabled" }, "josh", "capability", false);
+  const agentEnabled = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${id}`,
+    { state: "enabled" },
+    { actor: "josh", mode: "capability", liveActor: false },
+  );
   assert.equal(agentEnabled.status, 200);
 });
 
@@ -394,25 +416,27 @@ test("decisions and grants require verified live-human evidence", async () => {
     "POST",
     `/v1/loops/${id}/grants`,
     { shipAction: "open_pr" },
-    "josh",
-    "capability",
-    false,
+    { actor: "josh", mode: "capability", liveActor: false },
   );
   const decide = await call(
     deps,
     "POST",
     `/v1/loops/${id}/outputs/o1/decide`,
     { decision: "shipped" },
-    "josh",
-    "capability",
-    false,
+    { actor: "josh", mode: "capability", liveActor: false },
   );
   assert.equal(grant.status, 403);
   assert.equal((grant.body as { error: string }).error, "human_required");
   assert.equal(decide.status, 403);
   assert.equal((decide.body as { error: string }).error, "human_required");
   assert.equal((await call(deps, "POST", `/v1/loops/${id}/grants`, { shipAction: "open_pr" })).status, 200);
-  const signedGrant = await call(deps, "POST", `/v1/loops/${id}/grants`, { shipAction: "open_pr" }, "josh", "source");
+  const signedGrant = await call(
+    deps,
+    "POST",
+    `/v1/loops/${id}/grants`,
+    { shipAction: "open_pr" },
+    { actor: "josh", mode: "source" },
+  );
   assert.equal(signedGrant.status, 403);
   assert.equal((signedGrant.body as { error: string }).error, "human_required");
   const signedDecision = await call(
@@ -420,8 +444,7 @@ test("decisions and grants require verified live-human evidence", async () => {
     "POST",
     `/v1/loops/${id}/outputs/o1/decide`,
     { decision: "ship" },
-    "josh",
-    "source",
+    { actor: "josh", mode: "source" },
   );
   assert.equal(signedDecision.status, 403);
   assert.equal((signedDecision.body as { error: string }).error, "human_required");
@@ -454,14 +477,10 @@ test("ship grants become stale after policy edits and can be revoked by a live h
     grant: ShipGrant;
   };
 
-  const denied = await call(
-    deps,
-    "DELETE",
-    `/v1/loops/${loop.id}/grants/${currentGrant.grant.id}`,
-    undefined,
-    "josh",
-    "source",
-  );
+  const denied = await call(deps, "DELETE", `/v1/loops/${loop.id}/grants/${currentGrant.grant.id}`, undefined, {
+    actor: "josh",
+    mode: "source",
+  });
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
   const revoked = await call(deps, "DELETE", `/v1/loops/${loop.id}/grants/${currentGrant.grant.id}`);
@@ -493,9 +512,7 @@ test("autopilot requires a live human to enable every gate and grant", async () 
     "POST",
     `/v1/loops/${loop.id}/autopilot`,
     { enabled: true },
-    "josh",
-    "capability",
-    false,
+    { actor: "josh", mode: "capability", liveActor: false },
   );
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
@@ -525,9 +542,7 @@ test("an agent can disable autopilot and revoke every active grant", async () =>
     "POST",
     `/v1/loops/${loop.id}/autopilot`,
     { enabled: false },
-    "josh",
-    "capability",
-    false,
+    { actor: "josh", mode: "capability", liveActor: false },
   );
   assert.equal(disabled.status, 200);
   const body = disabled.body as { loop: Loop; grants: ShipGrant[] };
@@ -539,9 +554,7 @@ test("an agent can disable autopilot and revoke every active grant", async () =>
     "POST",
     `/v1/loops/${loop.id}/autopilot`,
     { enabled: false },
-    "mallory",
-    "capability",
-    false,
+    { actor: "mallory", mode: "capability", liveActor: false },
   );
   assert.equal(stranger.status, 403);
 });
@@ -664,13 +677,16 @@ test("deciding an output reports an active item decision lease", async () => {
 
 test("the portal's source-authed path acts as the signed principalId", async () => {
   const deps = services();
-  const created = await call(deps, "POST", "/v1/loops", CREATE, "josh", "source");
+  const created = await call(deps, "POST", "/v1/loops", CREATE, { actor: "josh", mode: "source" });
   assert.equal(created.status, 200);
   const id = (created.body as { loop: { id: string; owner: string } }).loop.id;
   assert.equal((created.body as { loop: { owner: string } }).loop.owner, "josh");
-  assert.equal((await call(deps, "GET", `/v1/loops/${id}`, undefined, "josh", "source")).status, 200);
-  assert.equal((await call(deps, "GET", `/v1/loops/${id}`, undefined, "mallory", "source")).status, 403);
-  const bare = await call(deps, "GET", "/v1/loops", undefined, "", "capability");
+  assert.equal((await call(deps, "GET", `/v1/loops/${id}`, undefined, { actor: "josh", mode: "source" })).status, 200);
+  assert.equal(
+    (await call(deps, "GET", `/v1/loops/${id}`, undefined, { actor: "mallory", mode: "source" })).status,
+    403,
+  );
+  const bare = await call(deps, "GET", "/v1/loops", undefined, { actor: "", mode: "capability" });
   assert.ok(bare.status === 200 || bare.status === 403);
 });
 
@@ -722,10 +738,288 @@ test("only a live human can re-enable an archived loop", async () => {
   const loop = (created.body as { loop: Loop }).loop;
   const archived = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "archived" });
   assert.equal(archived.status, 200);
-  const denied = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" }, "josh", "capability", false);
+  const denied = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { state: "enabled" },
+    { actor: "josh", mode: "capability", liveActor: false },
+  );
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
   const revived = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" });
   assert.equal(revived.status, 200);
   assert.equal((revived.body as { loop: Loop }).loop.state, "enabled");
+});
+
+const ORG_SCOPE = scopeId("org", orgId());
+
+const FORBIDDEN = { error: "forbidden", message: "you may not administer this loop" };
+
+function identityStub(deactivated: readonly string[] = []) {
+  return {
+    refresh: async () => {},
+    classify: (id: string) => ({ id, type: deactivated.includes(id) ? "guest" : "internal" }),
+  };
+}
+
+function adminServiceWith(grants: AdminGrant[]): AdminService {
+  return createAdminService(createAdminGrantStore(createMemoryAdminGrantPersistence(), { seed: grants }));
+}
+
+const orgGrant = (principalId: string, scope: ScopeId = ORG_SCOPE): AdminGrant => ({
+  principalId,
+  scopeId: scope,
+  role: "org_admin",
+});
+
+function factoryLoop(deps: LoopServiceDeps): Promise<Loop> {
+  return ensureFactoryLoop(deps.store, { owner: "admin-alice", orgScopeId: ORG_SCOPE });
+}
+
+function fireStub(shipped: string[]): LoopServiceDeps["fire"] {
+  const output = (loopId: string, id: string, state: LoopOutput["state"]): LoopOutput => ({
+    id,
+    loopId,
+    itemId: "i1",
+    attemptId: "a1",
+    shipAction: "open_pr",
+    title: "t",
+    state,
+    capturedBy: "agent",
+    createdAt: 0,
+    updatedAt: 0,
+  });
+  return {
+    fire: async () => ({ status: "ok" as const }),
+    shipOutput: async (loopId, outputId, actorId) => {
+      shipped.push(`${outputId}:${actorId}`);
+      return output(loopId, outputId, "shipped");
+    },
+    returnOutput: async (loopId, outputId) => output(loopId, outputId, "returned"),
+    sweepStale: async () => {},
+    followUp: async () => null,
+    itemAction: async () => ({ ok: true }),
+  };
+}
+
+test("a second org admin reads and lists the org-scoped factory loop", async () => {
+  const deps = services();
+  const loop = await factoryLoop(deps);
+  const admin = { admin: createAdminService(), identity: identityStub() };
+
+  const relayed = await call(deps, "GET", `/v1/loops/${loop.id}`, undefined, {
+    actor: "admin-bob",
+    mode: "source",
+    deps: admin,
+  });
+  assert.equal(relayed.status, 200);
+  const read = relayed.body as { loop: Loop; items: unknown[]; outputs: unknown[]; grants: unknown[]; vitals: unknown };
+  assert.equal(read.loop.owner, "admin-alice");
+  assert.deepEqual([read.items, read.outputs, read.grants], [[], [], []]);
+  assert.ok(read.vitals);
+
+  const relayedList = await call(deps, "GET", "/v1/loops", undefined, {
+    actor: "admin-bob",
+    mode: "source",
+    deps: admin,
+  });
+  assert.deepEqual(
+    (relayedList.body as { loops: Loop[] }).loops.map((l) => l.id),
+    [loop.id],
+  );
+
+  const live = await call(deps, "GET", `/v1/loops/${loop.id}`, undefined, { actor: "admin-bob", deps: admin });
+  assert.equal(live.status, 200);
+  const liveList = await call(deps, "GET", "/v1/loops", undefined, { actor: "admin-bob", deps: admin });
+  assert.deepEqual(
+    (liveList.body as { loops: Loop[] }).loops.map((l) => l.id),
+    [loop.id],
+  );
+
+  const denied = await call(deps, "GET", `/v1/loops/${loop.id}`, undefined, {
+    actor: "carol",
+    mode: "source",
+    deps: admin,
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.writes, 1);
+  assert.deepEqual(denied.body, FORBIDDEN);
+});
+
+test("a second org admin drives every org loop mutation as themselves", async () => {
+  const deps = services();
+  const shipped: string[] = [];
+  deps.fire = fireStub(shipped);
+  const loop = await factoryLoop(deps);
+  const admin = { admin: createAdminService(), identity: identityStub() };
+  const bob = { actor: "admin-bob", deps: admin };
+  const relay = { actor: "admin-bob", mode: "source" as const, deps: admin };
+
+  await deps.store.setState(loop.id, "quarantined");
+  const autopilotQuarantined = await call(deps, "POST", `/v1/loops/${loop.id}/autopilot`, { enabled: true }, bob);
+  assert.equal(autopilotQuarantined.status, 409);
+  const relayedClear = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" }, relay);
+  assert.equal(relayedClear.status, 403);
+  assert.equal((relayedClear.body as { error: string }).error, "human_required");
+  const cleared = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" }, bob);
+  assert.equal(cleared.status, 200);
+  const clearedLoop = (cleared.body as { loop: Loop }).loop;
+  assert.equal(clearedLoop.quarantineClearedBy, "admin-bob");
+  assert.equal(typeof clearedLoop.quarantineClearedAt, "number");
+
+  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, undefined, bob)).status, 200);
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "paused" }, bob)).status, 200);
+  const edited = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "work the queue" }, bob);
+  assert.equal(edited.status, 200);
+  const history = (edited.body as { loop: Loop }).loop.playbookHistory;
+  assert.equal(history[history.length - 1]?.by, "admin-bob");
+
+  const shipDecision = await call(deps, "POST", `/v1/loops/${loop.id}/outputs/o1/decide`, { decision: "ship" }, bob);
+  assert.equal(shipDecision.status, 200);
+  assert.deepEqual(shipped, ["o1:admin-bob"]);
+  const noteless = await call(deps, "POST", `/v1/loops/${loop.id}/outputs/o1/decide`, { decision: "return" }, bob);
+  assert.equal(noteless.status, 400);
+  assert.equal((noteless.body as { error: string }).error, "bad_request");
+
+  const granted = await call(deps, "POST", `/v1/loops/${loop.id}/grants`, { shipAction: "open_pr" }, bob);
+  assert.equal(granted.status, 200);
+  const grant = (granted.body as { grant: ShipGrant }).grant;
+  assert.equal(grant.actorId, "admin-bob");
+  const undeclared = await call(deps, "POST", `/v1/loops/${loop.id}/grants`, { shipAction: "deploy" }, bob);
+  assert.equal(undeclared.status, 400);
+  assert.equal((undeclared.body as { error: string }).error, "bad_request");
+
+  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/autopilot`, { enabled: true }, bob)).status, 200);
+  const off = await call(deps, "POST", `/v1/loops/${loop.id}/autopilot`, { enabled: false }, bob);
+  assert.equal(off.status, 200);
+  const offBody = off.body as { loop: Loop; grants: ShipGrant[] };
+  assert.ok(offBody.loop.shipActions.every((policy) => policy.gate === "hold"));
+  assert.ok(offBody.grants.every((g) => g.revokedBy === "admin-bob" && g.revokedAt !== undefined));
+
+  const regranted = await call(deps, "POST", `/v1/loops/${loop.id}/grants`, { shipAction: "open_pr" }, bob);
+  const liveGrant = (regranted.body as { grant: ShipGrant }).grant;
+  const revoked = await call(deps, "DELETE", `/v1/loops/${loop.id}/grants/${liveGrant.id}`, undefined, bob);
+  assert.equal(revoked.status, 200);
+  assert.equal((revoked.body as { grant: ShipGrant }).grant.revokedBy, "admin-bob");
+
+  for (const [path, body] of [
+    [`/v1/loops/${loop.id}/outputs/o1/decide`, { decision: "ship" }],
+    [`/v1/loops/${loop.id}/grants`, { shipAction: "open_pr" }],
+    [`/v1/loops/${loop.id}/autopilot`, { enabled: true }],
+  ] as const) {
+    const refused = await call(deps, "POST", path, body, relay);
+    assert.equal(refused.status, 403);
+    assert.equal((refused.body as { error: string }).error, "human_required");
+  }
+
+  const still = await deps.store.get(loop.id);
+  assert.equal(still?.owner, "admin-alice");
+  assert.equal(still?.runAs, undefined);
+  assert.equal((await call(deps, "DELETE", `/v1/loops/${loop.id}`, undefined, bob)).status, 200);
+  assert.equal(await deps.store.get(loop.id), null);
+});
+
+test("a non-admin member and a deactivated admin may not administer the org loop", async () => {
+  const deps = services();
+  deps.fire = fireStub([]);
+  const loop = await factoryLoop(deps);
+  const admin = {
+    admin: adminServiceWith([orgGrant("admin-bob"), orgGrant("admin-dave"), orgGrant("admin-erin", "org:other-org")]),
+    identity: identityStub(["admin-dave"]),
+  };
+  const routes = [
+    ["GET", `/v1/loops/${loop.id}`, undefined],
+    ["PATCH", `/v1/loops/${loop.id}`, { name: "stolen" }],
+    ["POST", `/v1/loops/${loop.id}/fire`, undefined],
+    ["POST", `/v1/loops/${loop.id}/outputs/o1/decide`, { decision: "ship" }],
+    ["POST", `/v1/loops/${loop.id}/grants`, { shipAction: "open_pr" }],
+    ["POST", `/v1/loops/${loop.id}/autopilot`, { enabled: true }],
+    ["DELETE", `/v1/loops/${loop.id}`, undefined],
+  ] as const;
+  for (const actor of ["carol", "admin-dave", "admin-erin"]) {
+    for (const [method, path, body] of routes) {
+      const out = await call(deps, method, path, body, { actor, deps: admin });
+      assert.deepEqual(out.body, FORBIDDEN, `${actor} ${method} ${path}`);
+      assert.equal(out.status, 403);
+    }
+    const listed = await call(deps, "GET", "/v1/loops", undefined, { actor, deps: admin });
+    assert.deepEqual(listed.body, { loops: [] });
+  }
+  assert.equal(
+    (await call(deps, "GET", `/v1/loops/${loop.id}`, undefined, { actor: "admin-bob", deps: admin })).status,
+    200,
+  );
+
+  const unwired = await call(deps, "GET", `/v1/loops/${loop.id}`, undefined, { actor: "admin-bob" });
+  assert.equal(unwired.status, 403);
+  assert.deepEqual(unwired.body, FORBIDDEN);
+  assert.deepEqual((await call(deps, "GET", "/v1/loops", undefined, { actor: "admin-bob" })).body, { loops: [] });
+});
+
+test("org admin authority does not widen personal, group or channel loops", async () => {
+  const deps = services();
+  const orgLoop = await factoryLoop(deps);
+  const { loop: personal } = await deps.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: scopeId("personal", "josh"),
+    name: "Josh triage",
+    playbook: "p",
+    successCondition: "c",
+  });
+  const { loop: group } = await deps.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: "group:g1",
+    name: "Group triage",
+    playbook: "p",
+    successCondition: "c",
+  });
+  const { loop: channel } = await deps.store.create({
+    owner: "josh",
+    createdBy: "josh",
+    ownerScopeId: "channel:c1",
+    name: "Channel triage",
+    playbook: "p",
+    successCondition: "c",
+    runAs: "scopeShared",
+  });
+  const admin = { admin: createAdminService(), identity: identityStub() };
+
+  const strangerLoop = await call(deps, "GET", `/v1/loops/${personal.id}`, undefined, {
+    actor: "admin-bob",
+    deps: admin,
+  });
+  assert.equal(strangerLoop.status, 403);
+  const bobList = await call(deps, "GET", "/v1/loops", undefined, { actor: "admin-bob", deps: admin });
+  assert.deepEqual(
+    (bobList.body as { loops: Loop[] }).loops.map((l) => l.id),
+    [orgLoop.id],
+  );
+  assert.equal((await call(deps, "GET", `/v1/loops/${personal.id}`, undefined, { actor: "josh" })).status, 200);
+
+  const groupApp = {
+    membershipControlsScope: async (scope: ScopeId) => scope === "group:g1",
+    managesScope: async (_actor: string, scope: ScopeId) => scope === "group:g1",
+  };
+  const viaMembership = await call(deps, "GET", `/v1/loops/${group.id}`, undefined, {
+    actor: "carol",
+    app: groupApp,
+    deps: admin,
+  });
+  assert.equal(viaMembership.status, 200);
+  const viaScopeShared = await call(deps, "GET", `/v1/loops/${channel.id}`, undefined, {
+    actor: "carol",
+    scope: "channel:c1",
+    deps: admin,
+  });
+  assert.equal(viaScopeShared.status, 200);
+  assert.equal(await createCanManageScope({})("admin-bob", ORG_SCOPE), false);
+
+  const bobOnly = { admin: adminServiceWith([orgGrant("admin-bob")]), identity: identityStub() };
+  const owner = await call(deps, "GET", `/v1/loops/${orgLoop.id}`, undefined, { actor: "admin-alice", deps: bobOnly });
+  assert.equal(owner.status, 200);
+  const ownerList = await call(deps, "GET", "/v1/loops", undefined, { actor: "admin-alice", deps: bobOnly });
+  assert.ok((ownerList.body as { loops: Loop[] }).loops.some((l) => l.id === orgLoop.id));
 });
