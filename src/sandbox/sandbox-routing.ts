@@ -16,7 +16,8 @@ import {
   type TeardownOptions,
 } from "./sandbox.ts";
 
-export type SandboxBackendName = "sprites" | "aws" | "local" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
+export type SandboxBackendName =
+  "sprites" | "aws" | "local" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "kubernetes";
 
 export interface SandboxRoute {
   backend: SandboxBackendName;

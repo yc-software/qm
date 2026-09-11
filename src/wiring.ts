@@ -170,6 +170,7 @@ import {
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
+import { createKubernetesSandbox } from "./sandbox/kubernetes-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
@@ -749,6 +750,11 @@ export function buildApp(
       message: e.message,
       scopeLabel: (e.scopeLabel ?? "unknown") as ScopeId,
     });
+  const buildKubernetes = (): Sandbox =>
+    createKubernetesSandbox(workspace, {
+      ...config.kubernetesSandbox,
+      orgId: config.orgId,
+    });
   const buildLocal = (): Sandbox =>
     createLocalSandbox(workspace, {
       ...config.localSandbox,
@@ -899,6 +905,7 @@ export function buildApp(
       onError: sandboxOnError,
     });
   const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
+    kubernetes: buildKubernetes,
     local: buildLocal,
     sprites: buildSprites,
     smolmachines: buildSmolmachines,

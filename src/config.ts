@@ -49,8 +49,9 @@ export interface Config {
   securityPosture: SecurityPosture;
   sandboxResourcesEnabled: boolean;
   sharingPosture: SharingPosture;
-  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
-  sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
+  sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "kubernetes";
+  sandboxSecondaryBackend?:
+    "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37" | "kubernetes";
   deployProvider: "docker" | "aws" | "fly" | "porter";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
@@ -169,6 +170,7 @@ export interface Config {
   surfaceDebugFooter: boolean;
   eagerProvisionEnabled: boolean;
   awsSandbox: AwsSandboxEnv;
+  kubernetesSandbox: KubernetesSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
@@ -291,6 +293,26 @@ function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
     ...(numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) !== undefined
       ? { diskGb: numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) }
       : {}),
+  };
+}
+
+interface KubernetesSandboxEnv {
+  namespace: string;
+  coreNamespace: string;
+  image: string;
+  runtimeClassName?: string;
+  storageClassName?: string;
+  storageSize?: string;
+}
+
+function kubernetesSandboxEnv(env: NodeJS.ProcessEnv): KubernetesSandboxEnv {
+  return {
+    namespace: env.KUBERNETES_SANDBOX_NAMESPACE ?? "qm-sandboxes",
+    coreNamespace: env.KUBERNETES_CORE_NAMESPACE ?? "qm",
+    image: env.KUBERNETES_SANDBOX_IMAGE ?? "",
+    ...(env.KUBERNETES_SANDBOX_RUNTIME_CLASS ? { runtimeClassName: env.KUBERNETES_SANDBOX_RUNTIME_CLASS } : {}),
+    ...(env.KUBERNETES_SANDBOX_STORAGE_CLASS ? { storageClassName: env.KUBERNETES_SANDBOX_STORAGE_CLASS } : {}),
+    ...(env.KUBERNETES_SANDBOX_STORAGE_SIZE ? { storageSize: env.KUBERNETES_SANDBOX_STORAGE_SIZE } : {}),
   };
 }
 
@@ -841,6 +863,7 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
 
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
   const credentialed: Record<Config["sandboxBackend"], boolean> = {
+    kubernetes: Boolean(config.kubernetesSandbox?.image),
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
@@ -868,11 +891,12 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
     backend === "e2b" ||
     backend === "modal" ||
     backend === "agent37" ||
-    backend === "porter"
+    backend === "porter" ||
+    backend === "kubernetes"
   )
     return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, or agent37, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, or kubernetes, or unset it.`,
   );
 }
 
@@ -1063,7 +1087,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, aws, or local.",
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, aws, local, or kubernetes.",
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
@@ -1394,6 +1418,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
     eagerProvisionEnabled: boolEnvStrict("EAGER_PROVISION", env.EAGER_PROVISION) ?? false,
     awsSandbox: awsSandboxEnv(env),
+    kubernetesSandbox: kubernetesSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),

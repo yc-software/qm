@@ -1,0 +1,77 @@
+{{- if .Values.kubernetesSandbox.enabled }}
+{{- if not .Values.services.core.enabled }}
+{{- fail "kubernetesSandbox.enabled requires services.core.enabled" }}
+{{- end }}
+{{- if ne (toString .Values.services.core.replicas) "1" }}
+{{- fail "kubernetesSandbox.enabled requires services.core.replicas=1" }}
+{{- end }}
+{{- $_ := required "kubernetesSandbox.image is required when enabled" (.Values.kubernetesSandbox.image | trim) }}
+{{- $namespace := include "qm.sandboxNamespace" . }}
+{{- if or (gt (len $namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $namespace)) }}
+{{- fail "kubernetesSandbox.namespace must be a valid namespace name" }}
+{{- end }}
+{{- if eq $namespace .Release.Namespace }}
+{{- fail "kubernetesSandbox.namespace must differ from the core release namespace" }}
+{{- end }}
+{{- range $source := list .Values.env .Values.services.core.env }}
+{{- range $key, $value := $source }}
+{{- if or (eq $key "SANDBOX_BACKEND") (hasPrefix "KUBERNETES_" $key) }}
+{{- fail (printf "configure %s through kubernetesSandbox values when enabled" $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $key, $value := .Values.secretEnv }}
+{{- if and $value (or (eq $key "SANDBOX_BACKEND") (hasPrefix "KUBERNETES_" $key)) }}
+{{- fail (printf "configure %s through kubernetesSandbox values when enabled" $key) }}
+{{- end }}
+{{- end }}
+{{- if .Values.kubernetesSandbox.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "qm.sandboxManager" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "qm.sandboxManager" . }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, persistentvolumeclaims]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "qm.sandboxManager" . }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "qm.sandboxManager" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "qm.sandboxManager" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

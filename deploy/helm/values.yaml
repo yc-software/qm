@@ -11,6 +11,15 @@ fullnameOverride: ""
 
 publicUrl: ""
 
+kubernetesSandbox:
+  enabled: false
+  image: ""
+  namespace: ""
+  createNamespace: true
+  runtimeClassName: ""
+  storageClassName: ""
+  storageSize: 10Gi
+
 env: {}
 
 envFrom: []
