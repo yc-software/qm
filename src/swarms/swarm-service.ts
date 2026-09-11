@@ -316,10 +316,10 @@ export function createSwarmService(deps: {
     }
   }
 
-  async function reconcile(rootId: string): Promise<void> {
+  async function reconcile(rootId: string, phase: "resources" | "delivery"): Promise<void> {
     const deadline = Date.now() + SWARM_LIMITS.reconcileMs;
     const claim = deps.lock.tryWithLock?.bind(deps.lock) ?? deps.lock.withLock.bind(deps.lock);
-    await claim(`swarm-reconcile:${rootId}`, async () => {
+    await claim(phase === "resources" ? `swarm-reconcile:${rootId}` : `swarm-delivery:${rootId}`, async () => {
       const pending = new Set<Promise<unknown>>();
       const step = <Result>(
         start: () => Promise<Result>,
@@ -338,6 +338,10 @@ export function createSwarmService(deps: {
       try {
         let swarm = await step(() => store.get(rootId));
         if (!swarm) return;
+        if (phase === "delivery") {
+          await deliver(swarm, step);
+          return;
+        }
         for (const member of swarm.members.filter((peer) => peer.state === "reserved")) {
           let provisioningTimedOut = false;
           try {
@@ -416,7 +420,6 @@ export function createSwarmService(deps: {
             }),
           );
         }
-        if (swarm) await deliver(swarm, step);
       } finally {
         await Promise.allSettled(pending);
       }
@@ -424,30 +427,47 @@ export function createSwarmService(deps: {
   }
 
   let sweeping: Promise<void> | undefined;
+  let selecting: Promise<Swarm[]> | undefined;
   let afterId: string | undefined;
-  const reconciling = new Map<string, Promise<void>>();
+  const reconciling = {
+    resources: new Map<string, Promise<void>>(),
+    delivery: new Map<string, Promise<void>>(),
+  };
+  async function reconcileBatch(batch: Swarm[], phase: keyof typeof reconciling): Promise<void> {
+    const active = reconciling[phase];
+    const remaining = batch.values();
+    await Promise.all(
+      Array.from({ length: Math.min(batch.length, SWARM_LIMITS.sweepConcurrency - active.size) }, async () => {
+        for (const swarm of remaining) {
+          if (active.has(swarm.id)) continue;
+          if (
+            phase === "resources" &&
+            !swarm.members.some((member) => member.state === "reserved" || member.cleanupPending)
+          )
+            continue;
+          if (active.size >= SWARM_LIMITS.sweepConcurrency) return;
+          const operation = reconcile(swarm.id, phase)
+            .catch((error) => swallow("swarm outbox reconciliation", error))
+            .finally(() => {
+              active.delete(swarm.id);
+            });
+          active.set(swarm.id, operation);
+          await withTimeout(() => operation, SWARM_LIMITS.reconcileMs, "swarm reconciliation").catch((error) =>
+            swallow("swarm outbox reconciliation", error),
+          );
+        }
+      }),
+    );
+  }
   const sweep = (): Promise<void> => {
     sweeping ??= (async () => {
-      const batch = await withTimeout(() => store.pending(afterId), SWARM_LIMITS.reconcileMs, "swarm pending batch");
+      selecting ??= store.pending(afterId).finally(() => {
+        selecting = undefined;
+      });
+      const batch = await withTimeout(() => selecting!, SWARM_LIMITS.reconcileMs, "swarm pending batch");
       afterId = batch.length === SWARM_LIMITS.sweepBatch ? batch.at(-1)!.id : undefined;
-      const remaining = batch.values();
-      await Promise.all(
-        Array.from({ length: Math.min(batch.length, SWARM_LIMITS.sweepConcurrency - reconciling.size) }, async () => {
-          for (const swarm of remaining) {
-            if (reconciling.has(swarm.id)) continue;
-            if (reconciling.size >= SWARM_LIMITS.sweepConcurrency) return;
-            const operation = reconcile(swarm.id)
-              .catch((error) => swallow("swarm outbox reconciliation", error))
-              .finally(() => {
-                reconciling.delete(swarm.id);
-              });
-            reconciling.set(swarm.id, operation);
-            await withTimeout(() => operation, SWARM_LIMITS.reconcileMs, "swarm reconciliation").catch((error) =>
-              swallow("swarm outbox reconciliation", error),
-            );
-          }
-        }),
-      );
+      await reconcileBatch(batch, "resources");
+      await reconcileBatch(batch, "delivery");
     })().finally(() => {
       sweeping = undefined;
     });

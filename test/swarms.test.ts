@@ -207,6 +207,87 @@ test("timed-out provider calls retain bounded execution slots across repeated sw
   }
 });
 
+test("ready notifications progress while every provider slot remains fenced after timeout", async (context) => {
+  const first = await swarmFixture();
+  const fixtures = [first];
+  for (let index = 0; index < SWARM_LIMITS.sweepConcurrency; index++)
+    fixtures.push(await swarmFixture(first.serviceOptions));
+  fixtures.sort((left, right) => left.root.id.localeCompare(right.root.id));
+  const healthy = fixtures.at(-1)!;
+  const [worker] = await healthy.service.spawn(healthy.caller, { requestId: "ready", text: "Work" });
+  await first.service.sweep();
+  const message = await healthy.service.send(healthy.caller, {
+    requestId: "follow-up",
+    audience: `.[] | select(.id == "${worker!.id}")`,
+    text: "Continue",
+  });
+  for (const fixture of fixtures.slice(0, -1))
+    await fixture.service.spawn(fixture.caller, { requestId: "stalled", text: "Work" });
+  const releases: (() => void)[] = [];
+  const create = first.sandboxes.create.bind(first.sandboxes);
+  first.sandboxes.create = async (...args) => {
+    await new Promise<void>((resolve) => releases.push(resolve));
+    return create(...args);
+  };
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  try {
+    const sweep = first.service.sweep();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(releases.length, SWARM_LIMITS.sweepConcurrency);
+    context.mock.timers.tick(SWARM_LIMITS.provisionMs + 1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
+    await sweep;
+    for (let iteration = 0; iteration < 10; iteration++) await first.service.sweep();
+    assert.equal(releases.length, SWARM_LIMITS.sweepConcurrency);
+    const delivered = (await first.store.get(healthy.root.id))!.messages.find((item) => item.id === message.id)!;
+    assert.equal(delivered.notifications[worker!.id]!.state, "queued");
+    for (const fixture of fixtures.slice(0, -1)) {
+      const failed = (await first.store.get(fixture.root.id))!.members[1]!;
+      assert.equal(failed.state, "failed");
+      assert.equal(failed.cleanupPending, true);
+      assert.equal(failed.attempts, 1);
+    }
+  } finally {
+    for (const release of releases) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await first.service.sweep();
+    context.mock.timers.reset();
+  }
+});
+
+test("timed-out pending selection stays single-flight until the query settles", async (context) => {
+  const { service, store } = await swarmFixture();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = store.pending.bind(store);
+  let selections = 0;
+  store.pending = async (afterId) => {
+    selections++;
+    await gate;
+    return pending(afterId);
+  };
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  try {
+    for (let iteration = 0; iteration < 6; iteration++) {
+      const sweep = assert.rejects(service.sweep(), /swarm pending batch timed out/);
+      context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
+      await sweep;
+    }
+    assert.equal(selections, 1);
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await service.sweep();
+    assert.equal(selections, 2);
+  } finally {
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    context.mock.timers.reset();
+  }
+});
+
 test("a fresh reconciler retires stale provisioning after the creating process is gone", async () => {
   const { service, serviceOptions, caller, root, store, records, sandboxes, disks } = await swarmFixture();
   const [member] = await service.spawn(caller, { requestId: "pool", text: "Work" });
