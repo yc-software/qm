@@ -317,18 +317,12 @@ test("fork origin DOM navigates, reports access failure once, pages, toggles, su
   assert.match(host.textContent ?? "", /2 messages/);
   host.querySelector<HTMLButtonElement>(".fork-origin-toggle")!.click();
   assert.doesNotMatch(host.textContent ?? "", /old one/);
-  const staleGeneration = controller.beginRefresh();
-  const generation = controller.beginRefresh();
   const refresh = inheritedRefreshEntries(
     session,
     [{ type: "assistant", payload: { text: "new reply" }, createdAt: 3, seq: 3 }],
     state.inheritedLoaded,
   );
-  assert.equal(controller.applyRefresh(generation, refresh), true);
-  assert.equal(
-    controller.applyRefresh(staleGeneration, [{ type: "user", payload: { text: "stale" }, createdAt: 0, seq: 1 }]),
-    false,
-  );
+  assert.equal(refresh, null);
   host.querySelector<HTMLButtonElement>(".fork-origin-toggle")!.click();
   assert.match(host.textContent ?? "", /old one/);
   assert.equal(host.textContent?.match(/old one/g)?.length, 1);

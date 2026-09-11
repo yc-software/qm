@@ -1,3 +1,4 @@
+import { postCallText, postResultOk } from "./surface-post.ts";
 import type { ModelMetadata } from "./pi-models.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -1631,18 +1632,6 @@ function messageRevisionPayload(payload: unknown): HistorySystemNote | null {
     content: typeof p.text === "string" ? p.text : "",
     ...(typeof p.name === "string" && p.name.trim() ? { speaker: p.name.trim() } : {}),
   };
-}
-
-function postCallText(payload: unknown): string | null {
-  const p = (payload ?? {}) as { action?: unknown; text?: unknown; files?: unknown };
-  if (p.action !== "post" || typeof p.text !== "string") return null;
-  if (!p.text.trim() && !(Array.isArray(p.files) && p.files.length)) return null;
-  return p.text;
-}
-
-function postResultOk(payload: unknown): boolean {
-  const p = (payload ?? {}) as { ok?: unknown; isError?: unknown };
-  return p.isError !== true && p.ok !== false;
 }
 
 function userEntryText(payload: unknown): string | null {

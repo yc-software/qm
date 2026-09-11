@@ -21,6 +21,7 @@ import {
   Files,
   GitFork,
   Maximize2,
+  MessageSquare,
   Paperclip,
   Pause,
   Pencil,
@@ -83,6 +84,7 @@ import {
 } from "./core-bridge";
 import {
   buildTimeline,
+  postSpeechText,
   toolCategory,
   toolRowKind,
   toolExecutionOutput,
@@ -246,6 +248,7 @@ export function createChatSurface(
     const speaker = (message as { speaker?: string }).speaker;
     return typeof speaker === "string" && speaker.trim() ? speaker.trim() : undefined;
   }
+  let transcriptRefreshGeneration = 0;
   const forkOriginController = createForkOriginController({
     state: chatState,
     load: async () => {
@@ -293,7 +296,7 @@ export function createChatSurface(
 
   function teardownActiveChat(): void {
     transcriptViewport.dispose();
-    forkOriginController.invalidateRefresh();
+    transcriptRefreshGeneration++;
     readOnlyView = null;
     preserveOutgoingWorkingDot(null);
     detachActiveAgent();
@@ -704,7 +707,7 @@ export function createChatSurface(
   async function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
     const sessionId = chatState.sessionId;
     if (!sessionId || agent !== chatState.agent || agent.state.isStreaming) return drawActiveChat(agent);
-    const generation = forkOriginController.beginRefresh();
+    const generation = ++transcriptRefreshGeneration;
     const last = agent.state.messages[agent.state.messages.length - 1] as { stopReason?: string } | undefined;
     if (last?.stopReason === "error") return drawActiveChat(agent);
     if (last?.stopReason === "aborted" && !runSlot.unreachedAbort) return drawActiveChat(agent);
@@ -712,7 +715,7 @@ export function createChatSurface(
       const anchor = chatState.transcriptAnchorSeq;
       const page = await transcriptFetcher(sessionId, anchor !== null ? { sinceSeq: anchor } : undefined);
       if (
-        !forkOriginController.isCurrentRefresh(generation) ||
+        generation !== transcriptRefreshGeneration ||
         sessionId !== chatState.sessionId ||
         agent !== chatState.agent ||
         agent.state.isStreaming
@@ -726,18 +729,15 @@ export function createChatSurface(
         page.entries ?? [],
         chatState.inheritedLoaded,
       );
-      forkOriginController.applyRefresh(
-        generation,
-        refreshedInherited ? entriesToMessages(refreshedInherited, transcriptModel()) : null,
-      );
       await syncPendingApprovals(agent, messages);
       if (
-        !forkOriginController.isCurrentRefresh(generation) ||
+        generation !== transcriptRefreshGeneration ||
         sessionId !== chatState.sessionId ||
         agent !== chatState.agent ||
         agent.state.isStreaming
       )
         return;
+      if (refreshedInherited) chatState.inheritedMessages = entriesToMessages(refreshedInherited, transcriptModel());
       agent.state.messages = messages;
       runSlot.unreachedAbort = false;
       const rawEarlier = page.earlierEntries ?? 0;
@@ -2197,6 +2197,14 @@ export function createChatSurface(
     const tool = call.tool ?? result.tool ?? "unknown";
     const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
     const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
+    const posting = postSpeechText(row, true);
+    if (posting) {
+      return {
+        icon: MessageSquare,
+        label: secs > 0 ? `Posting message for ${secs}s` : "Posting message",
+        detail: firstLine(posting, 60),
+      };
+    }
     return {
       icon: meta.icon,
       label: secs > 0 ? `${meta.active} for ${secs}s` : meta.active,
@@ -2255,6 +2263,7 @@ export function createChatSurface(
       );
     };
     for (const it of timeline) {
+      const speech = it.kind === "tool" ? postSpeechText(it.row) : null;
       const demoted = it.kind === "text" && (it.activity.payload as { demoted?: boolean } | null)?.demoted === true;
       // Closing self-logs after a successful surface post are bookkeeping, not
       // another piece of visible work. Keeping them in the transcript is useful
@@ -2264,6 +2273,9 @@ export function createChatSurface(
         flushSeg();
         const text = ((it.activity.payload as { text?: string } | null)?.text ?? "").trim();
         if (text) parts.push(html`<div class="work-said">${markdown(text)}</div>`);
+      } else if (speech) {
+        flushSeg();
+        parts.push(html`<div class="work-said">${markdown(speech)}</div>`);
       } else {
         seg.push(it);
       }
@@ -2332,6 +2344,8 @@ export function createChatSurface(
     if (item.kind === "thinking") return thinkingRow(item.activity);
     if (item.kind === "text") return messageRow(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
+    const speech = postSpeechText(item.row);
+    if (speech) return messageRow({ ...item.row.call!, payload: { text: speech } });
     return toolRow(item.row, work, status, stale);
   }
 

@@ -1,3 +1,4 @@
+import { postCallText, postResultOk } from "./surface-post.ts";
 import type { PendingApproval, ToolActivity, WorkBlock } from "./core-bridge.ts";
 
 export interface ToolPayload {
@@ -93,6 +94,13 @@ export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): Too
 function callIdOf(a: ToolActivity): string | undefined {
   const id = (a.payload as { callId?: unknown } | null)?.callId;
   return typeof id === "string" && id ? id : undefined;
+}
+
+export function postSpeechText(row: ToolRowModel, allowInFlight = false): string | null {
+  const text = postCallText(row.call?.payload);
+  if (!text?.trim()) return null;
+  if (row.result) return postResultOk(row.result.payload) ? text : null;
+  return allowInFlight && !row.approval && !row.pending ? text : null;
 }
 
 function orphanCallSignature(row: ToolRowModel): string | null {
