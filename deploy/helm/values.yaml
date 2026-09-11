@@ -6,9 +6,6 @@ image:
 
 imagePullSecrets: []
 
-# Service account the deployments run as. Leave create false to use the namespace default;
-# set create true (and optionally annotations) to bind a cloud identity such as EKS Pod Identity
-# or IRSA to the qm pods.
 serviceAccount:
   create: false
   name: ""
