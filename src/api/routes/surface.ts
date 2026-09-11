@@ -1068,6 +1068,9 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
   const configuredKeys = deps.providerKeys ?? managedKeys;
   const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
+  const customProviderConfigured =
+    harnessId === "pi" &&
+    (await deps.customProviders?.statuses())?.some((provider) => !provider.disabled && provider.hasKey);
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
@@ -1088,12 +1091,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     webuiModels: webuiModels != null ? configuredPicker : allowed,
     baseModel: resolvedBase,
     harnessId,
-    ...(providerStatus && {
+    ...((providerStatus || customProviderConfigured) && {
       modelProviderConfigured: Boolean(
-        providerStatus.anthropic ||
-        providerStatus.openai ||
-        providerStatus.openrouter ||
-        providerStatus.modelIds?.size ||
+        providerStatus?.anthropic ||
+        providerStatus?.openai ||
+        providerStatus?.openrouter ||
+        providerStatus?.modelIds?.size ||
+        customProviderConfigured ||
         deps.harnessCarriedModelAuth,
       ),
     }),
