@@ -9,6 +9,59 @@ import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
+test("delayed ready acknowledgment cannot roll back a delivered worker across phase locks", async (context) => {
+  const fixture = await swarmFixture();
+  const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
+  const second = createSwarmService(fixture.serviceOptions);
+  const update = fixture.store.update.bind(fixture.store);
+  const readyWritten = Promise.withResolvers<void>();
+  const acknowledgment = Promise.withResolvers<void>();
+  const resourceLock = `swarm-reconcile:${fixture.root.id}`;
+  let gated = false;
+  fixture.store.update = async (id, mutate) => {
+    const updated = await update(id, mutate);
+    if (!gated && updated.members.find((member) => member.id === worker!.id)?.state === "ready") {
+      gated = true;
+      readyWritten.resolve();
+      await acknowledgment.promise;
+    }
+    return updated;
+  };
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  try {
+    const firstSweep = fixture.service.sweep();
+    await readyWritten.promise;
+    assert.equal(await fixture.serviceOptions.lock.tryWithLock!(resourceLock, async () => true), null);
+    await second.sweep();
+    const delivered = (await fixture.store.get(fixture.root.id))!;
+    const notification = delivered.messages[0]!.notifications[worker!.id]!;
+    assert.equal(notification.state, "queued");
+    const run = await fixture.runs.claimById(notification.runId!, "delayed-ready-worker", 60_000);
+    assert.ok(run);
+    assert.ok(await second.binding({ ...run.request, runId: run.id }));
+    context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
+    await firstSweep;
+    assert.equal(await fixture.serviceOptions.lock.tryWithLock!(resourceLock, async () => true), null);
+    acknowledgment.resolve();
+    await fixture.serviceOptions.lock.withLock(resourceLock, async () => undefined);
+    await second.sweep();
+    const final = (await fixture.store.get(fixture.root.id))!;
+    const member = final.members.find((peer) => peer.id === worker!.id)!;
+    assert.equal(member.state, "ready");
+    assert.equal(member.cleanupPending, undefined);
+    assert.equal(member.error, undefined);
+    assert.equal((await fixture.records.get(worker!.id))!.state, "ready");
+    assert.ok(await fixture.sessions.get(member.sessionId!));
+    assert.equal((await fixture.runs.get(run.id))!.status, "running");
+    assert.deepEqual(final.messages[0]!.notifications[worker!.id], notification);
+    assert.ok(await second.binding({ ...run.request, runId: run.id }));
+  } finally {
+    acknowledgment.resolve();
+    context.mock.timers.reset();
+    await fixture.serviceOptions.lock.withLock(resourceLock, async () => undefined);
+  }
+});
+
 test("every agent swarm operation requires a running persisted run with a live lease", async () => {
   for (const status of ["pending", "done", "failed", "expired"] as const) {
     const { service, caller, runs } = await swarmFixture();

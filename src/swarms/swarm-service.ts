@@ -390,6 +390,7 @@ export function createSwarmService(deps: {
           } catch (error) {
             await store.update(rootId, (current) => {
               const failed = current.members.find((peer) => peer.id === member.id)!;
+              if (failed.state !== "reserved") return;
               failed.error = errMessage(error).slice(0, 500);
               if (
                 provisioningTimedOut ||
