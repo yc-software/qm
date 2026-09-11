@@ -5647,24 +5647,33 @@
                   <h2>Models &amp; browsing</h2>
                   <p>The models, browser runtime, and organization context available on future turns.</p>
                 </div>
-                <section class="card sv-models setting-row hidden" id="card-base-model">
+                <section class="card sv-governance setting-row hidden" id="card-base-model">
                   <div class="head">
                     <h2>Default runtime</h2>
+                    <p id="base-runtime-target"></p>
                   </div>
                   <div class="body">
-                    <label for="base-harness">Harness</label>
-                    <select id="base-harness" style="max-width: 360px"></select>
-                    <label for="base-model">Model</label>
-                    <select id="base-model" style="max-width: 360px"></select>
-                    <label for="base-effort">Reasoning level</label>
-                    <select id="base-effort" style="max-width: 360px"></select>
-                    <label class="setting-toggle" id="base-fast-mode-control" style="display: none; margin-top: 10px">
-                      <input type="checkbox" id="base-fast-mode" />
+                    <label class="setting-toggle hidden" id="base-inherit-control">
+                      <input type="checkbox" id="base-inherit" />
                       <span class="setting-switch" aria-hidden="true"></span>
-                      <span class="setting-copy"
-                        ><strong>Fast mode</strong><small>Only available for supported models.</small></span
-                      >
+                      <span class="setting-copy"><strong>Use organization default</strong></span>
                     </label>
+                    <p class="hint" id="base-runtime-note" aria-live="polite"></p>
+                    <div id="base-runtime-fields">
+                      <label for="base-harness">Harness</label>
+                      <select id="base-harness" style="max-width: 360px"></select>
+                      <label for="base-model">Model</label>
+                      <select id="base-model" style="max-width: 360px"></select>
+                      <label for="base-effort">Reasoning level</label>
+                      <select id="base-effort" style="max-width: 360px"></select>
+                      <label class="setting-toggle" id="base-fast-mode-control" style="display: none; margin-top: 10px">
+                        <input type="checkbox" id="base-fast-mode" />
+                        <span class="setting-switch" aria-hidden="true"></span>
+                        <span class="setting-copy"
+                          ><strong>Fast mode</strong><small>Only available for supported models.</small></span
+                        >
+                      </label>
+                    </div>
                   </div>
                   <div class="foot">
                     <button class="primary" data-save="runtime">Apply</button
@@ -6326,7 +6335,6 @@
         $("card-feature-flags").classList.remove("hidden");
 
         [
-          $("card-base-model"),
           providers,
           $("card-webui-models"),
           $("card-soul"),
@@ -6340,6 +6348,7 @@
         ].forEach((card) => content.insertBefore(card, anchor));
         content.insertBefore(anchor, $("card-service-credentials"));
         [
+          $("card-base-model"),
           $("card-security-posture"),
           $("card-auto-flagger"),
           $("card-sharing-posture"),
@@ -6480,6 +6489,7 @@
       let memDraft = null;
       let memDraftScope = null;
       let cronDestinationEditId = null;
+      let webuiModelIds = [];
       let ackEmojiNames = [];
       let ackEmojiStandard = [];
       let ackEmojiCatalog = {};
@@ -7879,12 +7889,17 @@
         } else {
           setGovernanceStatus("governance-status-audience", "Inherited", "Resolved at organization scope", "neutral");
         }
-        const model = data.baseModel || data.baseModelDefault || "Deployment default";
+        const inherited = !scope.startsWith("org:") && !data.runtime && !data.baseModel;
+        const model = data.runtime?.modelId || data.baseModel || data.baseModelDefault || "Deployment default";
         const option = (data.baseModelOptions || []).find((candidate) => candidate.id === model);
         setGovernanceStatus(
           "governance-status-model",
-          option?.name || model,
-          data.baseModel ? "Local override" : "Effective default",
+          inherited ? "Inherited from organization" : option?.name || model,
+          inherited
+            ? "No local runtime override"
+            : data.runtime || data.baseModel
+              ? "Local override"
+              : "Deployment default",
           "neutral",
         );
       }
@@ -7916,13 +7931,46 @@
           go({ view: "governance", scope: attachment.environmentId, session: null, page: 1 });
       }
       let governanceReq = 0;
+      let runtimeScope = null;
+      let runtimeClearable = false;
+      let syncRuntimeControls = () => {};
+      function runtimeInherits() {
+        return runtimeClearable && !scope.startsWith("org:") && $("base-inherit").checked;
+      }
+      function runtimeSelectionValid() {
+        return ["base-harness", "base-model", "base-effort"].every((id) => {
+          const select = $(id);
+          return select.value && select.selectedOptions[0] && !select.selectedOptions[0].disabled;
+        });
+      }
+      function runtimeCanSave() {
+        return (
+          view === "governance" &&
+          runtimeScope === scope &&
+          !sectionButton("runtime").dataset.saveRequest &&
+          (runtimeInherits() || runtimeSelectionValid())
+        );
+      }
       async function loadScope() {
         const requestedScope = scope;
         const requestId = ++governanceReq;
         const scopeChanged = scope !== loadedGovernanceScope;
-        const r = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
+        runtimeScope = null;
+        $("base-runtime-target").textContent = "Applies to " + requestedScope;
+        syncRuntimeControls();
+        sectionButton("runtime").disabled = true;
+        $("card-base-model").classList.remove("hidden");
+        $("base-inherit-control").classList.add("hidden");
+        $("base-runtime-fields").classList.add("hidden");
+        $("base-runtime-note").textContent = "";
+        setStatus("st-runtime", "Loading runtime settings…", "", true);
+        const [r, resources] = await Promise.all([
+          api("GET", "/api/scopes/" + encodeURIComponent(requestedScope)),
+          api("GET", "/api/resources"),
+        ]);
         if (requestId !== governanceReq || requestedScope !== scope) return;
-        if (!r.ok) {
+        if (!r.ok || r.data.scopeId !== requestedScope) {
+          setStatus("st-runtime", "Runtime settings could not be loaded. Reload to retry.", "err", true);
           setStatus(
             "st-policy",
             r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.",
@@ -8027,77 +8075,120 @@
         const opts = r.data.baseModelOptions || [];
         const dflt = r.data.baseModelDefault || "";
         const harnessDefault = r.data.harnessDefault || "pi";
-        const harnessOptions =
-          Array.isArray(r.data.harnessOptions) && r.data.harnessOptions.length
-            ? r.data.harnessOptions
-            : [harnessDefault];
+        const harnessOptions = Array.isArray(r.data.harnessOptions) ? r.data.harnessOptions : [harnessDefault];
         const modelsByHarness = r.data.modelsByHarness || {};
-        const showBaseModel = scope.startsWith("org:") && opts.length > 0 && dflt && "runtime" in r.data;
-        $("card-base-model").classList.toggle("hidden", !showBaseModel);
+        const runtimeResource = resources.ok && resources.data.resources?.find((resource) => resource.id === "runtime");
+        const showBaseModel =
+          runtimeResource &&
+          (runtimeResource.target === "any" || (runtimeResource.target === "org" && scope.startsWith("org:")));
+        setStatus(
+          "st-runtime",
+          resources.ok ? "" : "Runtime capabilities could not be loaded. Reload to retry.",
+          "err",
+          true,
+        );
+        $("card-base-model").classList.toggle("hidden", resources.ok && !showBaseModel);
         if (showBaseModel) {
-          const current = r.data.runtime || { harnessId: harnessDefault, modelId: r.data.baseModel || dflt };
-          const harness = $("base-harness");
-          harness.textContent = "";
-          harnessOptions.forEach((id) => {
-            const o = document.createElement("option");
-            o.value = id;
-            o.textContent =
-              { pi: "pi (default)", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
-            harness.appendChild(o);
-          });
-          harness.value = harnessOptions.includes(current.harnessId) ? current.harnessId : harnessOptions[0];
-          const effort = $("base-effort");
-          const thinkingLevelsByHarness = r.data.thinkingLevelsByHarness || {};
-          const syncEffort = () => {
-            const thinkingLevels = thinkingLevelsByHarness[harness.value] || ["auto"];
-            const prior = effort.value || current.effortLevel || "auto";
-            effort.textContent = "";
-            thinkingLevels.forEach((level) => {
-              const o = document.createElement("option");
-              o.value = level;
-              o.textContent =
-                {
-                  auto: "Auto",
-                  low: "Low",
-                  medium: "Medium",
-                  high: "High",
-                  xhigh: "Extra high",
-                  max: "Max",
-                  ultracode: "Ultracode",
-                }[level] || level;
-              effort.appendChild(o);
-            });
-            effort.value = thinkingLevels.includes(prior) ? prior : "auto";
+          const hasOverride = r.data.runtime != null || r.data.baseModel != null;
+          const current = r.data.runtime || {
+            harnessId: hasOverride || scope.startsWith("org:") ? harnessDefault : "",
+            modelId: r.data.baseModel || (scope.startsWith("org:") ? dflt : ""),
           };
+          runtimeScope = requestedScope;
+          runtimeClearable = runtimeResource.clearable === true;
+          const inherit = $("base-inherit");
+          inherit.checked = !hasOverride && !scope.startsWith("org:");
+          $("base-inherit-control").classList.toggle("hidden", !runtimeClearable || scope.startsWith("org:"));
+          const approvedHarnesses = r.data.approvedHarnesses || [harnessDefault];
+          const fill = (select, options, value, prompt) => {
+            select.textContent = "";
+            options.forEach(({ id, name, available = true }) => {
+              const option = document.createElement("option");
+              option.value = id;
+              option.textContent = available ? name : name + " (unavailable)";
+              option.disabled = !available;
+              select.appendChild(option);
+            });
+            if (!options.some((option) => option.id === value)) {
+              const option = document.createElement("option");
+              option.value = value;
+              option.textContent = value ? value + " (unavailable)" : prompt;
+              option.disabled = true;
+              select.appendChild(option);
+            }
+            select.value = value;
+          };
+          const harness = $("base-harness");
+          const model = $("base-model");
+          const effort = $("base-effort");
+          fill(
+            harness,
+            harnessOptions.map((id) => ({
+              id,
+              name: { pi: "pi (default)", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id,
+              available: approvedHarnesses.includes(id),
+            })),
+            current.harnessId,
+            "Choose a harness…",
+          );
+          const thinkingLevelsByHarness = r.data.thinkingLevelsByHarness || {};
           const fastMode = $("base-fast-mode");
           fastMode.checked = current.fastMode === true;
-          const syncFastMode = () => {
+          syncRuntimeControls = () => {
+            const busy = runtimeScope !== scope || !!sectionButton("runtime").dataset.saveRequest;
+            const inherited = runtimeInherits();
+            inherit.disabled = busy || !runtimeClearable;
+            [harness, model, effort].forEach((select) => (select.disabled = busy || inherited));
+            $("base-runtime-fields").classList.toggle("hidden", inherited || runtimeScope !== scope);
             const fastCapable =
               (r.data.fastModeHarnessIds || []).includes(harness.value) &&
-              (r.data.fastModeModelIds || []).includes($("base-model").value);
+              (r.data.fastModeModelIds || []).includes(model.value);
             $("base-fast-mode-control").style.display = fastCapable ? "" : "none";
-            fastMode.disabled = !fastCapable;
+            fastMode.disabled = busy || inherited || !fastCapable;
             if (!fastCapable) fastMode.checked = false;
+            $("base-runtime-note").textContent = inherited
+              ? "Organization defaults apply while no local override is saved."
+              : runtimeSelectionValid()
+                ? ""
+                : "Choose an available harness, model and reasoning level.";
           };
-          const syncModels = () => {
-            const selectedHarness = harness.value;
-            const compatible = modelsByHarness[selectedHarness] || opts;
-            const sel = $("base-model");
-            const prior = sel.value || current.modelId;
-            sel.textContent = "";
-            compatible.forEach((m) => {
-              const o = document.createElement("option");
-              o.value = m.id;
-              o.textContent = m.name + " (" + m.id + ")";
-              sel.appendChild(o);
-            });
-            sel.value = compatible.some((m) => m.id === prior) ? prior : (compatible[0] || {}).id || "";
-            sel.oninput = syncFastMode;
-            syncEffort();
-            syncFastMode();
+          const syncModels = (modelId, effortLevel, initializing = false) => {
+            const compatible = modelsByHarness[harness.value] || (harness.value === harnessDefault ? opts : []);
+            const levels = thinkingLevelsByHarness[harness.value] || ["auto"];
+            if (!initializing) {
+              if (!compatible.some((m) => m.id === modelId && m.available !== false))
+                modelId = compatible.find((m) => m.available !== false)?.id || "";
+              if (!levels.includes(effortLevel)) effortLevel = "auto";
+            }
+            fill(
+              model,
+              compatible.map((m) => ({ id: m.id, name: m.name + " (" + m.id + ")", available: m.available })),
+              modelId,
+              "Choose a model…",
+            );
+            fill(
+              effort,
+              levels.map((id) => ({
+                id,
+                name:
+                  {
+                    auto: "Auto",
+                    low: "Low",
+                    medium: "Medium",
+                    high: "High",
+                    xhigh: "Extra high",
+                    max: "Max",
+                    ultracode: "Ultracode",
+                  }[id] || id,
+              })),
+              effortLevel,
+              "Choose a reasoning level…",
+            );
+            syncRuntimeControls();
           };
-          harness.oninput = syncModels;
-          syncModels();
+          harness.oninput = () => syncModels(model.value, effort.value);
+          model.oninput = effort.oninput = inherit.oninput = syncRuntimeControls;
+          syncModels(current.modelId, current.effortLevel || "auto", true);
         }
         const showWebuiModels = scope.startsWith("org:") && opts.length > 0;
         $("card-webui-models").classList.toggle("hidden", !showWebuiModels);
@@ -10634,12 +10725,15 @@
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
         "org-ambient": () => ({ on: $("org-ambient").checked }),
         "channel-header-pin-default": () => ({ on: $("channel-header-pin-default").checked }),
-        runtime: () => ({
-          harnessId: $("base-harness").value,
-          modelId: $("base-model").value,
-          effortLevel: $("base-effort").value,
-          fastMode: $("base-fast-mode").checked,
-        }),
+        runtime: () =>
+          runtimeInherits()
+            ? { inherit: true }
+            : {
+                harnessId: $("base-harness").value,
+                modelId: $("base-model").value,
+                effortLevel: $("base-effort").value,
+                fastMode: $("base-fast-mode").checked,
+              },
         "webui-models": () => ({ ids: webuiModelIds }),
         "people-directory-url": () => ({ url: $("people-directory-url").value.trim() }),
         "ack-emoji": () => ({ names: ackEmojiNames }),
@@ -10712,6 +10806,7 @@
         const btn = sectionButton(key);
         setCardDirty(btn?.closest(".card"), dirty, SAVE_ST[key], '[data-save="' + key + '"]');
         if (key === "egress" && $("card-egress").classList.contains("egress-disabled")) btn.disabled = true;
+        if (key === "runtime" && !runtimeCanSave()) btn.disabled = true;
       }
       function captureSection(key) {
         if (!SAVE[key] || !sectionButton(key)) return;
@@ -10885,6 +10980,8 @@
         btn.onclick = async () => {
           const key = btn.dataset.save;
           const requestedScope = scope;
+          const runtimeRequest = governanceReq;
+          if (key === "runtime" && (!runtimeCanSave() || !btn.classList.contains("dirty"))) return;
           let body;
           try {
             body = SAVE[key]();
@@ -10893,11 +10990,19 @@
             return;
           }
           if (!(await governanceSaveReview(key, body)) || requestedScope !== scope) return;
+          if (key === "runtime" && (runtimeRequest !== governanceReq || !runtimeCanSave())) return;
           const saveRequest = String(++governanceSaveSeq);
           btn.dataset.saveRequest = saveRequest;
           btn.disabled = true;
+          if (key === "runtime") syncRuntimeControls();
           setStatus(SAVE_ST[key], "Saving...", "saving", true);
           const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + key, body);
+          if (key === "runtime" && (runtimeRequest !== governanceReq || requestedScope !== scope)) {
+            if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
+            syncRuntimeControls();
+            btn.disabled = !btn.classList.contains("dirty") || !runtimeCanSave();
+            return;
+          }
           if (requestedScope !== scope) {
             if (btn.dataset.saveRequest === saveRequest) {
               delete btn.dataset.saveRequest;
@@ -10907,6 +11012,7 @@
             return;
           }
           if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
+          if (key === "runtime") syncRuntimeControls();
           if (r.ok) {
             if (key === "security-posture" || key === "sharing-posture" || key === "ambient-policy") {
               const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
@@ -10923,8 +11029,15 @@
             } else if (key === "branding") {
               location.reload();
               return;
-            } else if (SAVE_RELOADS.has(key)) await loadScope();
-            else {
+            } else if (SAVE_RELOADS.has(key)) {
+              const reloadRequest = governanceReq + 1;
+              await loadScope();
+              if (
+                key === "runtime" &&
+                (reloadRequest !== governanceReq || runtimeScope !== requestedScope || scope !== requestedScope)
+              )
+                return;
+            } else {
               if (key === "egress") {
                 renderGovernanceOverview({ ...governanceOverviewData, egress: body });
                 populateEgress(body);

@@ -13,6 +13,7 @@
       "entry": [
         "src/migrate-main.ts",
         "src/sandbox/local-sandbox.ts",
+        "scripts/admin-runtime.browser.mjs",
         "scripts/aws-deploy-smoke.ts",
         "scripts/aws-litestream-smoke.ts",
         "scripts/backfill-search-index.ts",
