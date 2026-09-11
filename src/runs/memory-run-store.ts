@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { createKeyedQueue } from "../util/async.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
 import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
@@ -70,7 +71,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claim(workerId, ttlMs) {
       const pending = [...runs.values()]
-        .filter((r) => r.status === "pending" && !sessionHasRunning(r.sessionId))
+        .filter((r) => r.status === "pending" && (r.availableAt ?? 0) <= Date.now() && !sessionHasRunning(r.sessionId))
         .sort((a, b) => a.createdAt - b.createdAt);
       const run = pending[0];
       if (!run) return null;
@@ -79,10 +80,24 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claimById(runId, workerId, ttlMs) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending" || sessionHasRunning(run.sessionId)) return null;
+      if (!run || run.status !== "pending" || (run.availableAt ?? 0) > Date.now() || sessionHasRunning(run.sessionId))
+        return null;
       return lease(run, workerId, ttlMs);
     },
 
+    async defer(runId, leaseToken, delayMs) {
+      if (!Number.isSafeInteger(delayMs) || delayMs < 1 || delayMs > 60_000) throw new Error("invalid run deferral");
+      const run = runs.get(runId);
+      if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
+      run.status = "pending";
+      run.leaseToken = null;
+      run.leaseExpiresAt = null;
+      run.workerId = null;
+      run.availableAt = Date.now() + delayMs;
+      if (run.attempts <= 1) run.startedAt = null;
+      run.attempts = Math.max(0, run.attempts - 1);
+      return true;
+    },
     async heartbeat(runId, leaseToken, ttlMs) {
       const run = runs.get(runId);
       if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
@@ -163,6 +178,37 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         .sort((a, b) => a.createdAt - b.createdAt);
     },
 
+    async bindSession(runId, leaseToken, sessionRecordId) {
+      const run = runs.get(runId);
+      if (
+        !run ||
+        run.status !== "running" ||
+        run.leaseToken !== leaseToken ||
+        run.leaseExpiresAt === null ||
+        run.leaseExpiresAt <= Date.now() ||
+        (run.sessionRecordId == null && run.result?.sessionId == null && run.attempts !== 1) ||
+        (run.sessionRecordId != null && run.sessionRecordId !== sessionRecordId) ||
+        (run.sessionRecordId == null && run.result?.sessionId != null && run.result.sessionId !== sessionRecordId)
+      )
+        return false;
+      run.sessionRecordId = sessionRecordId;
+      return true;
+    },
+
+    async firstExecutedForSession(sessionId, sessionRecordId) {
+      return (
+        [...runs.values()]
+          .filter(
+            (run) =>
+              run.sessionId === sessionId &&
+              run.startedAt !== null &&
+              run.request.actor.type === "internal" &&
+              (run.sessionRecordId ?? run.result?.sessionId) === sessionRecordId,
+          )
+          .sort((a, b) => a.startedAt! - b.startedAt! || a.createdAt - b.createdAt)[0] ?? null
+      );
+    },
+
     async withdraw(runId) {
       const run = runs.get(runId);
       if (!run || run.status !== "pending") return false;
@@ -182,7 +228,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     },
 
     async reapExpired(
-      onRetired?: (sessionIds: string[]) => Promise<void>,
+      onRetired?: Parameters<RunStore["reapExpired"]>[0],
       opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
     ) {
       const now = Date.now();
@@ -281,5 +327,19 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     },
   };
 
-  return { runs: store, ledger: toolLedger };
+  const mutationQueue = createKeyedQueue();
+  const locked: RunStore = {
+    ...store,
+    enqueue: (...args) => mutationQueue("runs", () => store.enqueue(...args)),
+    claim: (...args) => mutationQueue("runs", () => store.claim(...args)),
+    claimById: (...args) => mutationQueue("runs", () => store.claimById(...args)),
+    heartbeat: (...args) => mutationQueue("runs", () => store.heartbeat(...args)),
+    releaseLease: (...args) => mutationQueue("runs", () => store.releaseLease(...args)),
+    defer: (...args) => mutationQueue("runs", () => store.defer(...args)),
+    complete: (...args) => mutationQueue("runs", () => store.complete(...args)),
+    fail: (...args) => mutationQueue("runs", () => store.fail(...args)),
+    bindSession: (...args) => mutationQueue("runs", () => store.bindSession(...args)),
+    withdraw: (...args) => mutationQueue("runs", () => store.withdraw(...args)),
+  };
+  return { runs: locked, ledger: toolLedger };
 }

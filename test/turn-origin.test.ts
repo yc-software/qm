@@ -1,11 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  isPersonAuthored,
   normalizeTurnOrigin,
   resolveTurnOrigin,
   turnOriginRequestFields,
   type TurnOrigin,
 } from "../src/core/turn-origin.ts";
+
+test("peer provenance survives legacy flags without acquiring human authority", () => {
+  const origin: TurnOrigin = {
+    kind: "peer",
+    messageId: "m",
+    senderSessionId: "sender",
+    senderName: "Builder",
+    recipientSessionId: "recipient",
+    deliveryId: "m:recipient",
+  };
+  assert.equal(isPersonAuthored(origin.kind), false);
+  assert.deepEqual(resolveTurnOrigin({ origin, liveActor: true, triggered: true, ownerKeychainUnion: true }), origin);
+  assert.deepEqual(turnOriginRequestFields(origin), { triggered: true, liveActor: false, ownerKeychainUnion: false });
+});
 
 test("legacy turn provenance normalizes to one origin", () => {
   assert.deepEqual(normalizeTurnOrigin({ liveActor: true, triggerTs: "1", entryTs: "1" }), {

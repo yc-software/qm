@@ -75,6 +75,7 @@ import {
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
+import { renderBoardPage } from "./board";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
@@ -146,7 +147,9 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const fromState =
     sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
   const sessionId = splitState.active ? null : fromState;
-  const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
+  const boardMessage =
+    appState.currentView === "board" ? parseDeepLink(UI_BASE, location.pathname, location.search).item : null;
+  const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected, boardMessage);
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
 
@@ -701,6 +704,9 @@ export function switchView(v: View): void {
     case "loops":
       void renderLoopsPage();
       break;
+    case "board":
+      void renderBoardPage();
+      break;
     case "contexts":
       void renderContexts();
       break;
@@ -767,6 +773,9 @@ function refreshActiveView(v: View): void {
       break;
     case "loops":
       void renderLoopsPage();
+      break;
+    case "board":
+      void renderBoardPage();
       break;
     case "files":
       void renderFiles();

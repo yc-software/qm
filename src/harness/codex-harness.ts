@@ -53,6 +53,7 @@ export interface CodexHarnessOptions extends HarnessToolPlumbing {
 
 export function codexHarnessConfigOptions(config: Config): CodexHarnessOptions {
   return {
+    nativeSubagents: !config.coordinationEnabled,
     ...(config.codexModel ? { defaultModelId: config.codexModel } : {}),
     ...(config.judgeModelId && modelSupportedByHarness(config.judgeModelId, "codex")
       ? { judgeModelId: config.judgeModelId }
@@ -909,7 +910,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             computer_use: false,
             image_generation: false,
             in_app_browser: false,
-            multi_agent: !turn.readOnly,
+            multi_agent: !turn.readOnly && opts.nativeSubagents !== false,
             request_permissions_tool: false,
             tool_suggest: false,
           },

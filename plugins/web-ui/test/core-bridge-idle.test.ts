@@ -65,6 +65,87 @@ function stubRuns(snapshots: Array<Record<string, unknown>>): void {
   }) as typeof fetch;
 }
 
+test("pending runs remain queued beyond the execution idle window and transition when admitted", async () => {
+  let clock = 1_000_000;
+  setClock(() => clock);
+  instantSleep();
+  const snapshots = [
+    { status: "pending", result: null },
+    { status: "pending", result: null },
+    { status: "running", result: null, alive: true, startedAt: clock },
+    { status: "pending", result: null },
+    { status: "done", result: { status: "ok", reply: "done" } },
+  ];
+  let index = 0;
+  globalThis.fetch = (async () => {
+    clock += RUN_IDLE_MS + 1;
+    const body = snapshots[index++];
+    assert.ok(body);
+    return new Response(JSON.stringify(body));
+  }) as typeof fetch;
+  const stream = createAssistantMessageEventStream();
+  const partial = blankAssistant() as AssistantWork;
+  partial.work = { status: "thinking", activity: [] };
+  const states: boolean[] = [];
+  await pollRun(stream, partial, "parked", freshAcc(clock), undefined, () =>
+    states.push(partial.work!.queued === true),
+  );
+  const final = await drain(stream);
+  assert.equal(final.stopReason, "stop");
+  assert.equal(index, snapshots.length);
+  assert.deepEqual(states, [true, false, true, false, false]);
+  assert.equal(partial.work.queued, false);
+});
+
+test("a disconnected pending run still reaches the observation timeout", async () => {
+  let clock = 1_000_000;
+  setClock(() => clock);
+  instantSleep();
+  let polls = 0;
+  globalThis.fetch = (async () => {
+    if (polls++ === 0) return new Response(JSON.stringify({ status: "pending", result: null }));
+    clock += RUN_IDLE_MS + 1;
+    throw new Error("disconnected");
+  }) as typeof fetch;
+  const stream = createAssistantMessageEventStream();
+  const partial = blankAssistant() as AssistantWork;
+  partial.work = { status: "thinking", activity: [] };
+  await pollRun(stream, partial, "parked-disconnected", freshAcc(clock));
+  assert.equal((await drain(stream)).stopReason, "error");
+  assert.equal(partial.work.queued, false);
+  assert.equal(polls, 2);
+});
+
+test("streamed queue status transitions update work without requiring tool activity", async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "EventSource");
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, "EventSource", descriptor);
+    else Reflect.deleteProperty(globalThis, "EventSource");
+  });
+  class StatusEvents extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => {
+        for (const status of ["pending", "running", "pending", "running"])
+          this.dispatchEvent(new MessageEvent("status", { data: JSON.stringify({ status }) }));
+        this.dispatchEvent(
+          new MessageEvent("done", {
+            data: JSON.stringify({ status: "done", result: { status: "ok", reply: "done" } }),
+          }),
+        );
+      });
+    }
+    close() {}
+  }
+  Object.defineProperty(globalThis, "EventSource", { configurable: true, value: StatusEvents });
+  globalThis.fetch = (async () => assert.fail("status stream should not fall back to polling")) as typeof fetch;
+  const states: boolean[] = [];
+  const streamFn = makeRunResumeStreamFn("streamed-queue", undefined, (work) => states.push(work.queued === true));
+  const stream = await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never);
+  assert.equal((await drain(stream)).stopReason, "stop");
+  assert.deepEqual(states, [false, true, false, true, false, false]);
+});
+
 test("the idle deadline RESETS on each delta — sustained progress past the window never times out", async () => {
   let clock = 1_000_000;
   setClock(() => clock);

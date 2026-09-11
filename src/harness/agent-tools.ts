@@ -1662,10 +1662,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                     type: "text" as const,
                     text: jobs.length
                       ? jobs
-                          .map(
-                            (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.command}`,
-                          )
+                          .map((j) => {
+                            let status = fmtStatus(j.status);
+                            if (j.registryStatus === "reaped") status = "stopped (ttl)";
+                            return `${j.processId}  ${status}  ${new Date(j.startedAt).toISOString()}  ${j.command}`;
+                          })
                           .join("\n")
                       : "(no background jobs)",
                   },
@@ -3727,7 +3728,7 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
           content: [
             {
               type: "text" as const,
-              text: "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
+              text: "Turn transition in progress; this call was not executed. Resume unfinished work after the transition.",
             },
           ],
           details: {},
@@ -3740,7 +3741,7 @@ function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefi
           await Promise.allSettled(ref.runtimeInFlight ?? []);
           if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
             return {
-              content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],
+              content: [{ type: "text" as const, text: "Turn transition cancelled before execution." }],
               details: {},
               terminate: true,
             };

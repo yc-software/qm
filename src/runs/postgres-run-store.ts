@@ -25,6 +25,7 @@ function rowToRun(r: Record<string, unknown>): Run {
   return {
     id: r.id as string,
     sessionId: r.session_id as string,
+    sessionRecordId: (r.session_record_id as string | null) ?? null,
     status: r.status as Run["status"],
     request: { ...request, origin: resolveTurnOrigin(request) },
     result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
@@ -40,6 +41,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     createdAt: Number(r.created_at),
     startedAt: r.started_at === null ? null : Number(r.started_at),
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
+    ...(Number(r.available_at) > 0 ? { availableAt: Number(r.available_at) } : {}),
   };
 }
 
@@ -101,6 +103,21 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         expectedChecksum: "8594c46c02ee90d43292a4c083fedea6c72d93b5f414f75e9e20d2db51b1b595",
         statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS turn_user_seq BIGINT`],
       },
+      {
+        id: "runs/store/0004-execution-owner-v1",
+        statements: [
+          `CREATE INDEX IF NOT EXISTS idx_runs_first_internal_execution_v1
+           ON runs(session_id, started_at, created_at, seq)
+           WHERE started_at IS NOT NULL AND request::jsonb->'actor'->>'type'='internal'`,
+        ],
+      },
+      {
+        id: "runs/store/0006-session-incarnation",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS session_record_id TEXT`,
+        ],
+      },
     ],
     [
       {
@@ -133,6 +150,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         END IF;
       END $$`,
         ],
+      },
+      {
+        id: "runs/store/0005-admission-deferral",
+        statements: ["ALTER TABLE runs ADD COLUMN IF NOT EXISTS available_at BIGINT NOT NULL DEFAULT 0"],
       },
     ],
   );
@@ -210,7 +231,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
-             SELECT id FROM runs WHERE status='pending'
+             SELECT id FROM runs WHERE status='pending' AND available_at <= $4
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
              ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
@@ -231,7 +252,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
-             SELECT id FROM runs WHERE id=$5 AND status='pending'
+             SELECT id FROM runs WHERE id=$5 AND status='pending' AND available_at <= $4
                AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running')
              FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
@@ -244,6 +265,16 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       }
     },
 
+    async defer(runId, leaseToken, delayMs): Promise<boolean> {
+      if (!Number.isSafeInteger(delayMs) || delayMs < 1 || delayMs > 60_000) throw new Error("invalid run deferral");
+      const { rowCount } = await q(
+        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
+        available_at=$3, started_at=CASE WHEN attempts<=1 THEN NULL ELSE started_at END, attempts=GREATEST(0, attempts-1)
+        WHERE id=$1 AND lease_token=$2 AND status='running'`,
+        [runId, leaseToken, Date.now() + delayMs],
+      );
+      return rowCount > 0;
+    },
     async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
       const { rowCount } = await q(
         "UPDATE runs SET lease_expires_at=$1 WHERE id=$2 AND lease_token=$3 AND status='running'",
@@ -320,6 +351,29 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         [sessionId],
       );
       return rows.map(rowToRun);
+    },
+
+    async bindSession(runId, leaseToken, sessionRecordId) {
+      const { rowCount } = await q(
+        `UPDATE runs SET session_record_id=$3 WHERE id=$1 AND lease_token=$2
+         AND status='running' AND lease_expires_at>$4
+         AND (session_record_id=$3 OR (session_record_id IS NULL
+           AND (attempts=1 OR result::jsonb->>'sessionId'=$3)
+           AND (result::jsonb->>'sessionId' IS NULL OR result::jsonb->>'sessionId'=$3)))`,
+        [runId, leaseToken, sessionRecordId, Date.now()],
+      );
+      return rowCount > 0;
+    },
+
+    async firstExecutedForSession(sessionId, sessionRecordId): Promise<Run | null> {
+      const { rows } = await q(
+        `SELECT * FROM runs WHERE session_id=$1 AND started_at IS NOT NULL
+         AND request::jsonb->'actor'->>'type'='internal'
+         AND COALESCE(session_record_id, result::jsonb->>'sessionId')=$2
+         ORDER BY started_at, created_at, seq LIMIT 1`,
+        [sessionId, sessionRecordId],
+      );
+      return rows[0] ? rowToRun(rows[0]) : null;
     },
 
     async withdraw(runId: string): Promise<boolean> {

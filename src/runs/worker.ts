@@ -12,10 +12,11 @@ import { sleep } from "../util/async.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
-  orchestrator: Orchestrator;
+  orchestrator: Pick<Orchestrator, "handleTurn">;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
   errors?: ErrorLog;
+  coordinationPaused?(run: Run): Promise<boolean>;
 }
 
 export const LEASE_LOST_CONSECUTIVE = 3;
@@ -59,12 +60,18 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     clearInterval(beat);
   };
   try {
+    if (await deps.coordinationPaused?.(run)) {
+      if (!(await deps.runs.defer(run.id, token, 1_000)))
+        throw new Error(`run ${run.id} lost its lease before coordination deferral`);
+      return { status: "queued", runId: run.id, reason: "coordination_paused" };
+    }
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
       attempt: run.attempts,
+      runLeaseToken: token,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
       cancel: cancel.signal,

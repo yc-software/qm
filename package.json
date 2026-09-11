@@ -20,6 +20,7 @@
     "test": "node --experimental-test-module-mocks --test test/*.test.ts",
     "test:root:shard": "node scripts/run-root-test-shard.mjs",
     "test:root:shard:check": "node scripts/run-root-test-shard.mjs --check --shards 5",
+    "test:coordination:pg": "node -e \"if (!process.env.COORDINATION_TEST_DATABASE_URL) throw new Error('COORDINATION_TEST_DATABASE_URL is required')\" && node --experimental-test-module-mocks --test --test-concurrency=4 test/coordination-*.test.ts test/session-deleted-identities.test.ts test/session-reservations.test.ts test/run-deferral.test.ts",
     "test:e2e": "node --test test/e2e/*.test.ts",
     "live-e2e": "node test/live-slack/run.ts",
     "gallery:shots": "node test/live-slack/screenshots.ts",

@@ -265,7 +265,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const doProvision = async (emit: typeof emitGapWork): Promise<SandboxHandle> => {
     const provisionStart = Date.now();
+    const sandboxId = await deps.sessionSandboxId?.(session.id);
     const handle = await deps.sandbox.provision(resolution.layers, {
+      ...(sandboxId ? { sandboxId } : {}),
       env: connectorEnv,
       egress: resolution.egress,
       ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),

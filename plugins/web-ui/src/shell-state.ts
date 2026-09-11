@@ -19,6 +19,7 @@ const VIEWS = [
   "webhooks",
   "crons",
   "loops",
+  "board",
   "files",
   "keychain",
   "deploys",

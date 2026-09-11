@@ -143,6 +143,7 @@ function userDraft(row: TapeRecord, isTrigger: boolean): DraftEntry | null {
       type: "user",
       payload: {
         text: meta.bareText,
+        ...(meta.peerOrigin ? { peerOrigin: meta.peerOrigin } : {}),
         ...(meta.ts ? { ts: meta.ts } : {}),
         ...(meta.author ? { name: meta.author } : {}),
         ...(meta.display ? { display: meta.display } : {}),

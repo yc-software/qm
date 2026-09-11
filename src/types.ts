@@ -561,7 +561,17 @@ export interface OverheardMessage {
   mentions?: Record<string, string>;
 }
 
+export interface PeerOrigin {
+  kind: "peer";
+  messageId: string;
+  senderSessionId: string;
+  senderName: string;
+  recipientSessionId: string;
+  deliveryId: string;
+}
+
 export type TurnOrigin =
+  | PeerOrigin
   | { kind: "human"; messageTs?: string; entryTs?: string }
   | { kind: "ambient"; entryTs?: string; live?: boolean }
   | { kind: "automation"; screenData?: string; destination?: Destination; useOwnerKeychain?: boolean }

@@ -87,6 +87,41 @@ test("a handle's later calls follow the backend that provisioned it", async () =
   assert.ok(!aws.calls.some((c) => c.startsWith("run")), "aws must not have seen the routed handle");
 });
 
+test("registered starts never silently fall back to launch-before-registration", async () => {
+  const { router, aws, sprites } = build();
+  const handle = await router.provision(layersFor("personal:registered"));
+  let launched = false;
+  aws.startProcess = async () => {
+    launched = true;
+    return { processId: "unregistered" };
+  };
+  let registered = false;
+  await assert.rejects(
+    router.startRegisteredProcess!(handle, "work", async () => {
+      registered = true;
+    }),
+    CapabilityUnsupportedError,
+  );
+  assert.equal(launched, false);
+  assert.equal(registered, false);
+  sprites.startRegisteredProcess = async () => {
+    assert.fail("must not switch backends");
+  };
+  aws.startRegisteredProcess = async (_handle, _command, register) => {
+    await register("registered");
+    launched = true;
+    return { processId: "registered" };
+  };
+  const started = await router.startRegisteredProcess!(handle, "work", async (id) => {
+    assert.equal(id, "registered");
+    assert.equal(launched, false);
+    registered = true;
+  });
+  assert.deepEqual(started, { processId: "registered" });
+  assert.equal(registered, true);
+  assert.equal(launched, true);
+});
+
 test("profileFor returns the substrate the scope is actually on", async () => {
   const { router, seed } = build({ "personal:m": { backend: "sprites" } });
   await seed();

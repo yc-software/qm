@@ -24,6 +24,33 @@ test("mint → verify round-trips the claims", async () => {
   assert.deepEqual(got, { orgId: "default-org", ...c });
 });
 
+test("run attempt claims round-trip and reject invalid counters", async () => {
+  const current = claims({ runId: "run", runAttempt: 2, runLeaseToken: "original-token" });
+  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(current, SECRET), SECRET), {
+    orgId: "default-org",
+    ...current,
+  });
+  for (const runAttempt of [0, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1])
+    assert.equal(
+      await verifyCapabilityToken(
+        await mintCapabilityToken(claims({ runAttempt } as unknown as Partial<CapabilityClaims>), SECRET),
+        SECRET,
+      ),
+      null,
+    );
+});
+
+test("run lease claims reject empty and nonstring tokens", async () => {
+  for (const runLeaseToken of ["", 2, null, {}])
+    assert.equal(
+      await verifyCapabilityToken(
+        await mintCapabilityToken(claims({ runLeaseToken } as unknown as Partial<CapabilityClaims>), SECRET),
+        SECRET,
+      ),
+      null,
+    );
+});
+
 test("grants round-trip and reject malformed claims", async () => {
   const granted = claims({ grants: ["admin.sessions.read"] });
   assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(granted, SECRET), SECRET), {

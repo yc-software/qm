@@ -1,4 +1,5 @@
 import type { RuntimeService } from "../../harness/runtime-types.ts";
+import type { PeerIdentity } from "../../coordination/identity.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
@@ -88,6 +89,7 @@ export interface OrchestratorInput extends Omit<
   conversation: Conversation;
   origin: TurnOrigin;
   runId?: string;
+  runLeaseToken?: string;
   attempt?: number;
 
   runStartedAt?: number;
@@ -100,6 +102,7 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  peerIdentity?: PeerIdentity;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
   resolution: ResolutionService;
@@ -157,6 +160,10 @@ export interface OrchestratorDeps {
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
+  authorizePeerTurn?(input: OrchestratorInput): Promise<boolean>;
+  peerScreenData?(input: OrchestratorInput): Promise<string>;
+  sessionSandboxId?(sessionId: string): Promise<string | undefined>;
+  sessionCanRun?(threadRef: string): Promise<boolean>;
   tasks?: TaskStore;
   blobTransfer?: BlobTransferStore;
   processes?: ProcessRegistry;
@@ -218,6 +225,7 @@ interface SurfaceSearchStoreHit {
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
   screenSecuritySteer(input: {
+    origin?: "ambient" | "peer";
     payload: string;
     actor: Principal;
     conversation: Conversation;

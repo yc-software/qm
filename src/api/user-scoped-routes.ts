@@ -9,6 +9,18 @@ function pat(method: string, template: string, field?: Field): Rule {
 }
 
 const USER_SCOPED: Rule[] = [
+  pat("POST", "/v1/peer-spawns", { in: "query", name: "principalId" }),
+  pat("POST", "/v1/peers/:id/lifecycle", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/peers/:id/subtree", { in: "query", name: "principalId" }),
+  pat("PUT", "/v1/peers/:id/subtree-limit", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/peer-messages", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/peer-messages/:id", { in: "query", name: "principalId" }),
+  pat("POST", "/v1/peer-messages", { in: "query", name: "principalId" }),
+  pat("POST", "/v1/peer-messages/preview", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/peers", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/peers/self", { in: "query", name: "principalId" }),
+  pat("GET", "/v1/peers/:id", { in: "query", name: "principalId" }),
+  pat("PUT", "/v1/peers/:id/character", { in: "query", name: "principalId" }),
   pat("POST", "/v1/auth/broker/sessions/revoke"),
   pat("POST", "/v1/loops", { in: "query", name: "principalId" }),
   pat("GET", "/v1/loops", { in: "query", name: "principalId" }),

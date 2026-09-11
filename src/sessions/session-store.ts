@@ -2,6 +2,16 @@ import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType } from "../types.ts";
 import { sleep } from "../util/async.ts";
 
+export function assertSessionReservation(
+  session: Session,
+  reservedId: string | undefined,
+  type: SessionType,
+  scopeId: ScopeId,
+): void {
+  if (reservedId !== undefined && (session.id !== reservedId || session.type !== type || session.scopeId !== scopeId))
+    throw new Error("session reservation conflicts with existing session");
+}
+
 export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
   if (envelope == null) return null;
   let body: string;
@@ -212,6 +222,7 @@ export async function appendEntryOutsideTurn(
 export const TAPE_IMPORT_MAX_ENTRIES = 500;
 
 export interface TapeMeta {
+  peerOrigin?: import("../types.ts").PeerOrigin;
   bareText?: string;
   ts?: string;
   changeTime?: string;
@@ -651,6 +662,7 @@ export interface SessionStore {
     scopeId: ScopeId,
     channelName?: string,
     surface?: string,
+    reservedId?: string,
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
@@ -690,6 +702,8 @@ export interface SessionStore {
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;
+  withSessionLocks?<T>(sessionIds: readonly string[], action: () => Promise<T>): Promise<T>;
+  wasDeleted(sessionId: string): Promise<boolean>;
   deleteSessionIfEmpty(sessionId: string): Promise<boolean>;
 
   updateParticipantView(sessionId: string, principalId: string, patch: ParticipantViewPatch): Promise<void>;

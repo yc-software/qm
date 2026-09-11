@@ -40,6 +40,7 @@ function destinations(): Destination[] {
     to("skills", Box, "Skills", "Reusable procedures QM can follow"),
   ];
   if (can("loops")) list.push(to("loops", Repeat, "Loops", "Standing work QM keeps pushing forward"));
+  list.push(to("board", Repeat, "Agent board", "Inspect peer messages, audiences, and delivery"));
   if (can("admin")) {
     list.push({
       view: null,
