@@ -1479,6 +1479,14 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
+  if (target === "docker" && (out.backend === undefined || out.backend === "sprites")) {
+    const stray = (["env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    if (stray.length) {
+      throw new CliError(
+        `${path}: target "docker" does not support ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — nothing on this path delivers them to the sandbox; remove them and add an org service credential with "delivery": "env" instead`,
+      );
+    }
+  }
   if (out.image && !out.app && out.backend !== "local") {
     throw new CliError(`${path}: "sandbox.image" requires "sandbox.app" unless "sandbox.backend" is "local"`);
   }
