@@ -2,10 +2,12 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import {
   ArrowLeft,
   Boxes,
+  Check,
   Folder,
   FolderPlus,
   Hash,
   Lock,
+  Pencil,
   Plus,
   Search,
   User,
@@ -99,6 +101,10 @@ export const contextsState = {
   slackValue: "",
   slackBusy: false,
   slackError: "",
+  titleEditing: false,
+  titleValue: "",
+  titleBusy: false,
+  titleError: "",
 };
 
 let contextsLoading = false;
@@ -157,6 +163,10 @@ export function resetContextsState(): void {
   contextsState.slackValue = "";
   contextsState.slackBusy = false;
   contextsState.slackError = "";
+  contextsState.titleEditing = false;
+  contextsState.titleValue = "";
+  contextsState.titleBusy = false;
+  contextsState.titleError = "";
   cancelMemberSearchTimer();
   contextsNotice = "";
   memberSearchSeq++;
@@ -427,13 +437,18 @@ function detailTpl(c: CoreContext): TemplateResult {
       <div class="context-detail-head">
         <span class="context-glyph large">${icon(glyph, 22)}</span>
         <div class="context-detail-titles">
-          <h1 class="pane-title">
-            ${title}
+          <h1 class="pane-title project-detail-title">
+            ${c.project ? projectTitleBlock(c, c.project, title) : html`<span dir="auto">${title}</span>`}
             ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 14)}</span>` : nothing}
           </h1>
           <div class="context-sub">
             ${c.project ? sub : `${sub} The agent's files and memory here are separate from your other contexts.`}
           </div>
+          ${
+            c.project && contextsState.titleEditing && contextsState.titleError
+              ? html`<div class="project-member-status error" aria-live="polite">${contextsState.titleError}</div>`
+              : nothing
+          }
         </div>
         <div class="context-detail-actions">
           ${
@@ -506,6 +521,127 @@ function projectPeople(context: CoreContext): string[] {
 
 function isProjectOwner(context: CoreContext): boolean {
   return context.project?.ownerId === appState.me?.user;
+}
+
+function projectTitleBlock(context: CoreContext, project: CoreProject, title: string): TemplateResult {
+  if (contextsState.titleEditing) return projectTitleEditor(project);
+  return html`
+    <span class="project-title-text" dir="auto">${title}</span>
+    ${
+      isProjectOwner(context)
+        ? html`<button
+            class="project-icon-button project-title-edit"
+            type="button"
+            aria-label="Rename project"
+            ${tip("Rename project")}
+            @click=${() => beginProjectTitleRename(project)}
+          >
+            ${icon(Pencil, 14)}
+          </button>`
+        : nothing
+    }
+  `;
+}
+
+function projectTitleEditor(project: CoreProject): TemplateResult {
+  return html`
+    <form
+      class="project-title-form"
+      @submit=${(e: Event) => {
+        e.preventDefault();
+        void commitProjectTitleRename(project);
+      }}
+    >
+      <input
+        class="project-title-input"
+        type="text"
+        data-focus-key="project-title"
+        aria-label="Project name"
+        maxlength="200"
+        autocomplete="off"
+        .value=${contextsState.titleValue}
+        ?disabled=${contextsState.titleBusy}
+        @input=${(e: Event) => {
+          contextsState.titleValue = (e.target as HTMLInputElement).value;
+        }}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.isComposing || e.keyCode === 229) return;
+          if (e.key === "Escape") {
+            e.preventDefault();
+            cancelProjectTitleRename();
+          }
+        }}
+      />
+      <button
+        class="project-icon-button project-title-save"
+        type="submit"
+        aria-label="Save project name"
+        ${tip("Save")}
+        ?disabled=${contextsState.titleBusy}
+      >
+        ${icon(Check, 15)}
+      </button>
+      <button
+        class="project-icon-button project-title-cancel"
+        type="button"
+        aria-label="Cancel renaming project"
+        ${tip("Cancel")}
+        ?disabled=${contextsState.titleBusy}
+        @click=${() => cancelProjectTitleRename()}
+      >
+        ${icon(X, 15)}
+      </button>
+    </form>
+  `;
+}
+
+function beginProjectTitleRename(project: CoreProject): void {
+  contextsState.titleEditing = true;
+  contextsState.titleValue = project.name;
+  contextsState.titleError = "";
+  drawContexts();
+  requestAnimationFrame(() => {
+    const input = appState.mainEl?.querySelector<HTMLInputElement>(".project-title-input");
+    if (!input) return;
+    input.focus();
+    input.select();
+  });
+}
+
+function cancelProjectTitleRename(): void {
+  contextsState.titleEditing = false;
+  contextsState.titleValue = "";
+  contextsState.titleError = "";
+  drawContexts();
+}
+
+async function commitProjectTitleRename(project: CoreProject): Promise<void> {
+  if (!contextsState.titleEditing || contextsState.titleBusy) return;
+  const next = contextsState.titleValue.trim();
+  if (!next) {
+    contextsState.titleError = "Project name can't be empty.";
+    drawContexts();
+    return;
+  }
+  if (next === project.name) {
+    cancelProjectTitleRename();
+    return;
+  }
+  const resetSeq = contextsResetSeq;
+  contextsState.titleBusy = true;
+  contextsState.titleError = "";
+  drawContexts();
+  const ok = await renameProject(project, next);
+  if (resetSeq !== contextsResetSeq) return;
+  contextsState.titleBusy = false;
+  if (ok) {
+    contextsState.titleEditing = false;
+    contextsState.titleValue = "";
+    contextsState.titleError = "";
+  } else {
+    contextsState.titleError = "Couldn't rename this project. Try again.";
+  }
+  drawContexts();
 }
 
 function memberLabel(context: CoreContext, principalId: string): string {
@@ -1425,6 +1561,10 @@ function selectContext(scopeId: string | null): void {
   contextsState.slackValue = "";
   contextsState.slackBusy = false;
   contextsState.slackError = "";
+  contextsState.titleEditing = false;
+  contextsState.titleValue = "";
+  contextsState.titleBusy = false;
+  contextsState.titleError = "";
   contextsState.selected = scopeId;
   contextsState.resources = null;
   contextsState.resourcesScope = null;
