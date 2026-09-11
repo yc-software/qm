@@ -235,7 +235,7 @@ export interface CronFireNote {
   by?: string;
 }
 
-export interface CronFailureBackoff {
+interface CronFailureBackoff {
   scheduledAt: number;
   failures: number;
 }

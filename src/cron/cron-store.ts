@@ -63,7 +63,7 @@ const FAILURE_BACKOFF_MAX_FAILURES = 7;
 
 export type DueCron = Cron & { scheduledAt: number };
 
-export interface CronSlotClaim {
+interface CronSlotClaim {
   id: string;
   cron: Cron;
   scheduledAt: number;
