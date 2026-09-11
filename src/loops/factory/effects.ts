@@ -11,13 +11,19 @@ import { isRunnable, type LoopStore } from "../loop-store.ts";
 import type { CapturedArtifact, LoopRunnerEffects } from "../runner.ts";
 import type { SuccessVerdict } from "../success-evaluation.ts";
 import { createSweeper } from "../../util/sweeper.ts";
-import { swallow } from "../../util/errors.ts";
+import { errMessage, swallow } from "../../util/errors.ts";
 import { shq } from "../../util/shell.ts";
 import { pollProcess } from "../../sandbox/process-poll.ts";
 import { enumerateFactoryCandidates } from "./linear-intake.ts";
 import { readFactoryCredentials } from "./credentials.ts";
 import { preflightFactorySandbox, type PreflightResult } from "./preflight.ts";
-import { renderFactoryEnv, runFactoryProcess, type FactoryProcessResult } from "./process-work.ts";
+import {
+  isFactoryTicketId,
+  renderFactoryEnv,
+  runFactoryProcess,
+  type FactoryProcessResult,
+  type FactorySlackTarget,
+} from "./process-work.ts";
 import { parseFactoryContract } from "./contract.ts";
 import { evaluateFactoryForge } from "./forge-evaluate.ts";
 import type { ForgeRef } from "./ship.ts";
@@ -28,6 +34,9 @@ const DEFAULT_PAUSE_POLL_MS = 30_000;
 const FACTORY_SOURCE_CLONE_DIR = "/workspace/qm-yc";
 const FACTORY_SOURCE_CLONE_URL = "https://github.com/yc-software/qm-yc.git";
 const FACTORY_SOURCE_BOOTSTRAP_TIMEOUT_MS = 300_000;
+
+const SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
+const SLACK_POST_TIMEOUT_MS = 10_000;
 
 export const FACTORY_SOURCE_DIR = `${FACTORY_SOURCE_CLONE_DIR}/layer/factory`;
 export const FACTORY_SOURCE_BRANCH = "qm-30-s18477";
@@ -80,6 +89,7 @@ export interface FactoryContext {
   linearApiKey: string;
   githubToken: string;
   anthropicApiKey: string;
+  slackBotToken?: string;
 }
 
 export type FactoryWorkEffects = Pick<LoopRunnerEffects, "enumerate" | "work" | "captureOutputs" | "evaluate">;
@@ -133,16 +143,57 @@ async function bootstrapFactorySource(sandbox: Sandbox, handle: SandboxHandle, g
   if (status.code !== 0) throw new Error(detail(`exit ${status.code}`));
 }
 
+const factorySlackChannel = (config: FactoryConfig): string | undefined => {
+  const channel = config.slackChannel?.trim();
+  return channel ? channel : undefined;
+};
+
+async function openFactorySlackThread(input: {
+  fetch?: typeof globalThis.fetch;
+  botToken: string;
+  channel: string;
+  ticket: string;
+}): Promise<FactorySlackTarget | undefined> {
+  const doFetch = input.fetch ?? globalThis.fetch;
+  try {
+    const res = await doFetch(SLACK_POST_MESSAGE_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.botToken}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({ channel: input.channel, text: `Working on ${input.ticket}` }),
+      signal: AbortSignal.timeout(SLACK_POST_TIMEOUT_MS),
+    });
+    const body = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      ts?: string;
+      channel?: string;
+    } | null;
+    if (body?.ok !== true) throw new Error(body?.error ?? `HTTP ${res.status}`);
+    const threadTs = body.ts?.trim();
+    if (!threadTs) throw new Error("response carried no ts");
+    return { botToken: input.botToken, channelId: body.channel?.trim() || input.channel, threadTs };
+  } catch (e: unknown) {
+    swallow("factory slack thread root", new Error(`slack_post_failed: ${errMessage(e)}`));
+    return undefined;
+  }
+}
+
 export async function loadFactoryContext(deps: FactoryEffectsDeps): Promise<FactoryContext> {
   const config = deps.config.getFactoryConfig();
   if (!config) throw new Error("factory_config_missing");
-  const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId);
+  const credentials = await readFactoryCredentials(deps.credentials, deps.orgScopeId, {
+    slack: factorySlackChannel(config) !== undefined,
+  });
   if (!credentials.ok) throw new Error(`factory_credentials_missing: ${credentials.missing.join(", ")}`);
   return {
     config,
     linearApiKey: credentials.linearApiKey,
     githubToken: credentials.githubToken,
     anthropicApiKey: credentials.anthropicApiKey,
+    ...(credentials.slackBotToken !== undefined ? { slackBotToken: credentials.slackBotToken } : {}),
   };
 }
 
@@ -175,7 +226,8 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
     },
 
     async work({ loop, item, guidance }) {
-      const { config, linearApiKey, githubToken, anthropicApiKey } = await loadFactoryContext(deps);
+      if (!isFactoryTicketId(item.sourceKey)) throw new Error("factory_ticket_invalid");
+      const { config, linearApiKey, githubToken, anthropicApiKey, slackBotToken } = await loadFactoryContext(deps);
 
       const preflightHandle = await provisionWorkspace(loop.ownerScopeId);
       let preflight: PreflightResult;
@@ -187,6 +239,17 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       }
       if (!preflight.ok) throw new Error(`factory_preflight_failed: ${preflightDetail(preflight)}`);
 
+      const channel = factorySlackChannel(config);
+      const slack =
+        channel && slackBotToken
+          ? await openFactorySlackThread({
+              fetch: deps.fetch,
+              botToken: slackBotToken,
+              channel,
+              ticket: item.sourceKey,
+            })
+          : undefined;
+
       const itemPrefix = `factory:${loop.id}:${item.id}:`;
       const runId = `${itemPrefix}${item.attempts + 1}`;
       const env = renderFactoryEnv({
@@ -195,6 +258,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
         linearApiKey,
         githubToken,
         anthropicApiKey,
+        ...(slack ? { slack } : {}),
         factorySessionId: factorySessionIdFor(runId),
         repoDir,
         factorySourceDir: FACTORY_SOURCE_DIR,

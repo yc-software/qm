@@ -81,6 +81,8 @@ const OPTIONAL_KEYS = ["IO_FEEDBACK", "IO_REPO_SETUP_CMD", "IO_PROOF_START_CMD",
 
 const FORBIDDEN_KEYS = ["SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID", "SLACK_THREAD_TS", "CODING_AGENT_SESSION_URL"];
 
+const SLACK_TARGET = { botToken: "xoxb-secret", channelId: "C0SLACK", threadTs: "1730000000.000100" };
+
 type ReadStep =
   { chunks?: string; cursor: number; status?: ProcessState; delayMs?: number; onServe?: () => void } | { error: Error };
 
@@ -205,7 +207,7 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
   throw new Error("expected the promise to reject");
 }
 
-test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or session key", () => {
+test("renderFactoryEnv renders no Slack or session key without a slack group, whatever the config channel", () => {
   const env = renderFactoryEnv(ENV_INPUT);
   assert.deepEqual(env, {
     IO_FEEDBACK: "reviewer asked for a smaller diff",
@@ -242,6 +244,43 @@ test("renderFactoryEnv renders exactly the wrapper's tabled keys and no Slack or
   for (const [key, value] of Object.entries(env)) assert.notEqual(value, "C123", `${key} leaks the slack channel`);
   const frozen = Object.freeze({ ...ENV_INPUT, config: Object.freeze({ ...FULL_CONFIG }) });
   assert.deepEqual(renderFactoryEnv(frozen), env);
+});
+
+test("renderFactoryEnv adds the whole Slack triple beside the untouched keys when a slack group is given", () => {
+  const without = renderFactoryEnv(ENV_INPUT);
+  const env = renderFactoryEnv({ ...ENV_INPUT, slack: SLACK_TARGET });
+
+  assert.deepEqual(
+    Object.keys(env).sort(),
+    [...Object.keys(without), "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID", "SLACK_THREAD_TS"].sort(),
+  );
+  assert.equal(env.SLACK_BOT_TOKEN, SLACK_TARGET.botToken);
+  assert.equal(env.SLACK_CHANNEL_ID, SLACK_TARGET.channelId);
+  assert.equal(env.SLACK_THREAD_TS, SLACK_TARGET.threadTs);
+  for (const [key, value] of Object.entries(without)) assert.equal(env[key], value, `${key} changed`);
+
+  const frozen = Object.freeze({ ...ENV_INPUT, slack: Object.freeze({ ...SLACK_TARGET }) });
+  assert.deepEqual(renderFactoryEnv(frozen), env);
+});
+
+test("renderFactoryEnv drops the whole Slack group when any one member is blank", () => {
+  for (const blank of ["botToken", "channelId", "threadTs"] as const) {
+    const env = renderFactoryEnv({ ...ENV_INPUT, slack: { ...SLACK_TARGET, [blank]: "" } });
+
+    assert.deepEqual(env, renderFactoryEnv(ENV_INPUT), `a blank ${blank} left a partial triple`);
+  }
+});
+
+test("runFactoryProcess keeps a Slack-bearing env out of the command it starts", async () => {
+  const fake = fakeSandbox({ reads: SUCCESS_READS });
+  const env = renderFactoryEnv({ ...ENV_INPUT, slack: SLACK_TARGET });
+
+  await runFactoryProcess(baseInput(fake, { env }));
+
+  const started = fake.calls.startProcess[0];
+  assert.equal(started?.command, `bash ${SOURCE_DIR}/${FACTORY_WRAPPER} ${TICKET}`);
+  assert.equal(started?.command.includes(SLACK_TARGET.botToken), false);
+  assert.equal(started?.opts?.env?.SLACK_BOT_TOKEN, SLACK_TARGET.botToken);
 });
 
 test("renderFactoryEnv omits every optional key whose source is absent", () => {
