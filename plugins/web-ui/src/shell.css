@@ -2816,7 +2816,7 @@ a.chat-row-open {
 }
 .assistant-body code-block[language="text"] copy-button button,
 .user-bubble code-block[language="text"] copy-button button {
-  width: var(--meta-lane);
+  min-width: var(--meta-lane);
   height: var(--meta-lane);
   padding: 0;
 }

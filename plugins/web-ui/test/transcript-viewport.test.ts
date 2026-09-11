@@ -307,3 +307,35 @@ test("prompt expansion control belongs inside the bubble in both renderers", () 
   assert.match(css, /:not\(\.pin-expanded\) \.user-bubble > \.pin-content \{/);
   assert.match(css, /\.user-bubble > \.pin-toggle:not\(\[hidden\]\)/);
 });
+
+test("nested paste and attachment controls do not toggle the whole prompt", () => {
+  const f = fixture();
+  try {
+    f.prompt.innerHTML =
+      '<div class="user-bubble"><div class="pin-content"><code-block><button class="text-code-toggle">Show more</button><copy-button><button>Copy</button></copy-button></code-block><div class="message-files"><a class="file-chip" href="#file">notes.txt</a></div></div><button class="pin-toggle" hidden>Show more</button></div>';
+    const content = f.prompt.querySelector<HTMLElement>(".pin-content")!;
+    const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
+    Object.defineProperties(content, {
+      scrollHeight: { value: 500 },
+      clientHeight: { value: 160 },
+    });
+    f.viewport.sync(f.s);
+    assert.equal(toggle.hidden, false);
+    for (const expanded of [false, true]) {
+      if (expanded) toggle.click();
+      for (const selector of [".text-code-toggle", "copy-button button", ".file-chip"]) {
+        f.prompt.querySelector<HTMLElement>(selector)!.click();
+        assert.equal(f.prompt.classList.contains("pin-expanded"), expanded);
+        assert.equal(toggle.getAttribute("aria-expanded"), String(expanded));
+      }
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test("plain-text copy confirmation can grow beyond its icon width", () => {
+  const rule = css.match(/\.user-bubble code-block\[language="text"\] copy-button button \{[^}]*\}/)?.[0] ?? "";
+  assert.match(rule, /min-width: var\(--meta-lane\)/);
+  assert.doesNotMatch(rule, /(?:^|[;{])\s*width:/);
+});
