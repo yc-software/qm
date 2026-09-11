@@ -66,6 +66,9 @@ test("poll fire: a closing reply whose final line is a silence marker is not dir
       monitorFire("!narrate-no-update Still queued behind the newer deploy.", "C-watch2", "801.1", "monitor:m1:f2"),
     );
     assert.equal(res.status, "silent", "a marker-terminated poll reply resolves to silent");
+    const metrics = await built.metrics.list({ sessionId: res.sessionId });
+    assert.equal(metrics.length, 1, "the no-update completion has one turn metric");
+    assert.equal(metrics[0]!.status, "silent", "the metric matches the no-update disposition");
     await sleep(300);
     assert.deepEqual(
       (await slackDeliveries(built.deliveries)).map((d) => d.text),
@@ -85,6 +88,9 @@ test("poll fire: a genuine report is still delivered exactly once, buffered to t
       monitorFire("!preamble Deploy finished — all green.", "C-watch3", "802.1", "monitor:m1:f3"),
     );
     assert.equal(res.status, "silent", "surfaceTools turn: delivery happens via the surface, result is silent");
+    const metrics = await built.metrics.list({ sessionId: res.sessionId });
+    assert.equal(metrics.length, 1, "the surface delivery completion has one turn metric");
+    assert.equal(metrics[0]!.status, "silent", "the metric matches the surface-delivery disposition");
     await sleep(300);
     const texts = (await slackDeliveries(built.deliveries)).map((d) => d.text);
     assert.equal(texts.length, 1, `exactly one delivery, buffered to turn end (got: ${JSON.stringify(texts)})`);

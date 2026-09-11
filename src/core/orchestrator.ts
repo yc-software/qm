@@ -235,6 +235,34 @@ const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
+type CompletionDispositionBranch =
+  "cancelled" | "explicit_poll_silence" | "approvals" | "no_update_poll" | "surface_delivery" | "reply";
+
+interface CompletionDisposition {
+  branch: CompletionDispositionBranch;
+  metricStatus: "ok" | "silent" | "paused";
+}
+
+function deriveCompletionDisposition(input: {
+  cancelledWithoutSdkApproval: boolean;
+  explicitPollSilence: boolean;
+  hasApprovals: boolean;
+  completed: boolean;
+  noUpdatePoll: boolean;
+  surfaceDelivery: boolean;
+}): CompletionDisposition {
+  if (input.cancelledWithoutSdkApproval) return { branch: "cancelled", metricStatus: "silent" };
+  if (input.explicitPollSilence) return { branch: "explicit_poll_silence", metricStatus: "silent" };
+  if (input.hasApprovals) {
+    return input.completed
+      ? { branch: "approvals", metricStatus: "ok" }
+      : { branch: "approvals", metricStatus: "paused" };
+  }
+  if (input.noUpdatePoll) return { branch: "no_update_poll", metricStatus: "silent" };
+  if (input.surfaceDelivery) return { branch: "surface_delivery", metricStatus: "silent" };
+  return { branch: "reply", metricStatus: "ok" };
+}
+
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   if (deps.sessions.leaseTtlMs < MIN_SESSION_LEASE_TTL_MS) {
     throw new Error(
@@ -3318,6 +3346,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const turnCompleted = outcome.completed;
         const pausing = outcome.paused;
+        const completionDisposition = deriveCompletionDisposition({
+          cancelledWithoutSdkApproval: cancelStopped && !result.pendingApprovals?.length,
+          explicitPollSilence:
+            isPollFire && !!result.silent && !stagedAttachments.length && result.pausedOnApproval !== true,
+          hasApprovals: !!result.pendingApprovals?.length || quarantineReleaseApprovals.length > 0,
+          completed: turnCompleted,
+          noUpdatePoll: isPollFire && !stagedAttachments.length && isSilentPollReply(reply),
+          surfaceDelivery: !!input.surfaceTools && !!surfaceToolDeps && !strictReadOnly,
+        });
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
         const turnUserSeq = emittedEntries.find((e) => e.type === "user")?.seq;
         let metricProvisionMs: number | undefined;
@@ -3340,7 +3377,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(compactMs !== undefined ? { compactMs } : {}),
           ...(typeof input.queueMs === "number" ? { queueMs: Math.max(0, input.queueMs) } : {}),
           ...(resumedFromSeq !== undefined ? { resumedFromSeq } : {}),
-          status: pausing ? "paused" : "ok",
+          status: completionDisposition.metricStatus,
           scopeLabel: scopeId,
           provisioned:
             !!box.handle ||
@@ -3465,11 +3502,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let finalResult: TurnResult;
         const sourceUserSeq = partial?.userSeq ?? emittedEntries.find((e) => e.type === "user")?.seq;
         const sourceAssistantEntrySeq = [...emittedEntries].reverse().find((e) => e.type === "assistant")?.seq;
-        if (cancelStopped && !result.pendingApprovals?.length) {
+        if (completionDisposition.branch === "cancelled") {
           finalResult = { status: "silent", sessionId: session.id, stopped: true };
-        } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
+        } else if (completionDisposition.branch === "explicit_poll_silence") {
           finalResult = { status: "silent", sessionId: session.id };
-        } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
+        } else if (completionDisposition.branch === "approvals") {
           const approvals: PendingApproval[] = [];
           const grantModesField =
             resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
@@ -3539,9 +3576,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
               }
             : { status: "pending_approval", sessionId: session.id, pendingApprovals: approvals };
-        } else if (isPollFire && !stagedAttachments.length && isSilentPollReply(reply)) {
+        } else if (completionDisposition.branch === "no_update_poll") {
           finalResult = { status: "silent", sessionId: session.id };
-        } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
+        } else if (completionDisposition.branch === "surface_delivery") {
           finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
         } else {
           finalResult = {
