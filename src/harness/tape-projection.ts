@@ -313,7 +313,6 @@ export function projectTapeEntries(
         });
       }
     } else if (message.role === "toolResult") {
-      // Attach results carry file references in the transcript, not in the model's text-only tape.
       if (message.toolName === "attach") return null;
       const draft = toolResultDraft(row);
       if (draft) events.push({ kind: "item", item: draft });
