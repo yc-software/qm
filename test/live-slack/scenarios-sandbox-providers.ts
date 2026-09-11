@@ -34,7 +34,8 @@ export function assertSandboxExecution(entries: readonly unknown[], sandboxId: s
       structured
         ? p.action === "exec" && p.code === 0 && p.timedOut === false && p.stdout === stdout
         : p.result === `${stdout}\n[exit 0]`
-    ) executed = true;
+    )
+      executed = true;
   }
   assert.ok(calls.size, `no sandbox exec call targeted ${sandboxId}`);
   assert.ok(executed, `no successful sandbox exec result with exact stdout on ${sandboxId}`);
