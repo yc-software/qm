@@ -1,3 +1,10 @@
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxDefault,
+  type SandboxResourceRollout,
+} from "../src/sandbox/sandbox-resources.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -350,6 +357,54 @@ test("a failed copy leaves the route untouched", async () => {
     const runner = createSandboxMigrationRunner({ backends: { aws, sprites: corrupt }, routes, defaultBackend: "aws" });
     await assert.rejects(runner.migrateScope("personal:alice", "sprites"), /sha-mismatch|verify\/extract failed/);
     assert.equal(await routes.get("personal:alice"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("activation cannot pass a running migration before its final route and teardown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mig-activation-"));
+  try {
+    const { aws, sprites, routes } = build(root);
+    writeFileSync(join(root, "aws-home", "notes.txt"), "preserve me\n");
+    const lock = createMemoryAdvisoryLock();
+    const rollout = createMemoryMap<SandboxResourceRollout>();
+    const options = {
+      enabled: false,
+      rollout,
+      records: createMemoryMap<SandboxResource>(),
+      defaults: createMemoryMap<SandboxDefault>(),
+      routes,
+      backends: { aws, sprites },
+      defaultBackend: "aws" as const,
+      lock,
+      canUseScope: async () => true,
+    };
+    const reader = createSandboxResources(options);
+    const activating = createSandboxResources({ ...options, enabled: true });
+    const parked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    aws.teardown = async () => {
+      parked.resolve();
+      await release.promise;
+    };
+    const runner = createSandboxMigrationRunner({
+      backends: { aws, sprites },
+      routes,
+      defaultBackend: "aws",
+      advisoryLock: lock,
+      withLegacyMutation: (scope, action) => reader.withLegacyMutation(scope, action),
+    });
+    const migration = runner.migrateScope("personal:alice", "sprites");
+    await parked.promise;
+    const activation = activating.initialize();
+    assert.equal(await rollout.get("explicit-defaults"), null);
+    release.resolve();
+    await Promise.all([migration, activation]);
+    assert.equal((await activating.resolve("personal:alice"))?.backend, "sprites");
+    assert.equal(readFileSync(join(root, "sprites-home", "notes.txt"), "utf8"), "preserve me\n");
+    await assert.rejects(runner.migrateScope("personal:alice", "aws"), /retired/);
+    assert.equal((await routes.get("personal:alice"))?.backend, "sprites");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

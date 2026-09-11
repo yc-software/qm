@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { carriedFileHandles } from "../src/resolution/sharing-access.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -145,6 +146,28 @@ test("a binary shared file materializes in the current turn's private directory"
   assert.match(got.content ?? "", /shared\/turn-1\/orange\.jpg/);
   sameBytes(box.files.get("shared/turn-1/orange.jpg"), JPEG);
   assert.equal(box.files.has("shared/orange.jpg"), false);
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const openHandle = (await carriedFileHandles([owner], workspace, files))[0]!;
+  const carriedBox = memSandbox();
+  const blocked = await toolCtx({
+    scope: grantee,
+    workspace,
+    sandbox: carriedBox.sandbox,
+    acl,
+    grantedHandles: [openHandle],
+  }).read(openHandle.handlePath);
+  assert.match(blocked.content ?? "", /Binary files require an explicit share/);
+  assert.equal(carriedBox.files.size, 0);
+  await workspace.write(owner, "notes.txt", "untrusted source text");
+  const textHandle = (await carriedFileHandles([owner], workspace, files)).find((h) => h.ownerPath === "notes.txt")!;
+  const text = await toolCtx({
+    scope: grantee,
+    workspace,
+    sandbox: carriedBox.sandbox,
+    acl,
+    grantedHandles: [textHandle],
+  }).read(textHandle.handlePath);
+  assert.equal(text.shared, true);
 });
 
 test("the screenshot scenario: shared to the org in a DM, delivered from a channel session", async () => {

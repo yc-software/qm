@@ -90,11 +90,19 @@ export async function provisionSlackTwin(apiKey: string, ttlMinutes: number): Pr
 }
 
 export async function teardownTwin(apiKey: string, runId: string): Promise<void> {
-  await argaFetch(apiKey, `/validate/twins/provision/${runId}/teardown`, { method: "POST" });
+  const path = `/validate/twins/provision/${runId}`;
+  const isGone = (status: string) => status === "torn_down" || status === "expired";
+  if (isGone((await argaFetch(apiKey, `${path}/status`)).status)) return;
+  try {
+    await argaFetch(apiKey, `${path}/teardown`, { method: "POST" });
+  } catch (err) {
+    if (isGone((await argaFetch(apiKey, `${path}/status`)).status)) return;
+    throw err;
+  }
   const deadline = Date.now() + 60_000;
   for (;;) {
     const status = await argaFetch(apiKey, `/validate/twins/provision/${runId}/status`);
-    if (status.status === "torn_down") return;
+    if (isGone(status.status)) return;
     if (Date.now() > deadline) throw new Error(`twin teardown timed out (last status: ${status.status})`);
     await sleep(2000);
   }

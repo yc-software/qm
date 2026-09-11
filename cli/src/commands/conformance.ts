@@ -8,7 +8,9 @@ import { runChecks } from "./check.ts";
 import { hostingProvider } from "../backends/registry.ts";
 
 export function expectedDescriptors(bundle: DeploymentLayerBundle): ToolDescriptor[] {
-  return bundle.tools.map((file) => parseToolDescriptor(file.content, file.path));
+  return bundle.tools
+    .filter((file) => /^tools\/[^/]+\/tool\.json$/.test(file.path))
+    .map((file) => parseToolDescriptor(file.content, file.path));
 }
 
 export interface ConformanceDeployment {

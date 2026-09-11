@@ -1,6 +1,6 @@
 {{- $root := . -}}
 {{- range $name, $svc := .Values.services }}
-{{- if $svc.enabled }}
+{{- if and $svc.enabled (ne $name "admin") (ne $name "auth") }}
 ---
 apiVersion: v1
 kind: Service

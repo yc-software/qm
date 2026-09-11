@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { provisionSlackTwin } from "./live-slack/arga.ts";
+import { provisionSlackTwin, teardownTwin } from "./live-slack/arga.ts";
 
 test("failed Arga provisions are torn down before one fresh retry", async (t) => {
   const requests: Array<{ method: string; path: string }> = [];
@@ -70,4 +70,40 @@ test("a retry is not started when cleanup cannot be confirmed", async (t) => {
 
   await assert.rejects(provisionSlackTwin("key", 60), /cleanup could not be confirmed/);
   assert.equal(provisions, 1);
+});
+
+for (const terminal of ["expired", "torn_down"]) {
+  test(`Arga cleanup accepts an already ${terminal} twin without another teardown`, async (t) => {
+    let requests = 0;
+    t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      requests++;
+      assert.equal(new URL(String(input)).pathname, "/validate/twins/provision/old-run/status");
+      assert.equal(init?.method ?? "GET", "GET");
+      return Response.json({ status: terminal });
+    });
+    await teardownTwin("key", "old-run");
+    assert.equal(requests, 1);
+  });
+}
+
+for (const postFails of [false, true]) {
+  test(`Arga cleanup confirms expiry during teardown when POST fails=${postFails}`, async (t) => {
+    const methods: string[] = [];
+    t.mock.method(globalThis, "fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      methods.push(method);
+      if (method === "POST") return Response.json({}, { status: postFails ? 400 : 200 });
+      return Response.json({ status: methods.length === 1 ? "ready" : "expired" });
+    });
+    await teardownTwin("key", "old-run");
+    assert.deepEqual(methods, ["GET", "POST", "GET"]);
+  });
+}
+
+test("Arga cleanup does not interpret missing or unauthorized status as successful recovery", async (t) => {
+  for (const status of [401, 404, 503]) {
+    const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({}, { status }));
+    await assert.rejects(teardownTwin("key", "old-run"), new RegExp(String(status)));
+    fetchMock.mock.restore();
+  }
 });

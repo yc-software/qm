@@ -1,10 +1,11 @@
-import { markClampedPrompts } from "./prompt-clamp.ts";
-
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
   let pins: HTMLElement | null = null;
   let prompt: HTMLElement | null = null;
   let stack: HTMLElement | null = null;
+  let content: HTMLElement | null = null;
+  let promptKey: string | undefined;
+  let expanded = false;
   let lastTop = 0;
   let observer: ResizeObserver | null = null;
   let following = false;
@@ -21,8 +22,45 @@ export function createTranscriptViewport() {
     frame = null;
   }
 
+  function clearPrompt(): void {
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
+    prompt?.style.removeProperty("--pin-clamp");
+    const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
+    if (toggle) toggle.hidden = true;
+    expanded = false;
+    promptKey = undefined;
+  }
+
+  function syncPrompt(): void {
+    if (!scroller || !prompt || !content) return;
+    prompt.style.setProperty(
+      "--pin-clamp",
+      `${Math.round(Math.min(320, Math.max(96, scroller.clientHeight * 0.35)))}px`,
+    );
+    prompt.classList.toggle("pin-expanded", expanded);
+    const bubble = prompt.querySelector<HTMLElement>(".user-bubble");
+    const clipped = !expanded && !!bubble && bubble.scrollHeight > bubble.clientHeight + 1;
+    const toggle = prompt.querySelector<HTMLButtonElement>(".pin-toggle");
+    if (toggle) {
+      toggle.hidden = !clipped && !expanded;
+      toggle.textContent = expanded ? "Show less" : "Show more";
+      toggle.setAttribute("aria-expanded", String(expanded));
+    }
+  }
+
+  function onClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (target?.nodeType !== 1) return;
+    const toggle = target.closest<HTMLButtonElement>(".pin-toggle");
+    if (!toggle || !prompt?.contains(toggle)) return;
+    cancelFollow();
+    expanded = !expanded;
+    syncSticky();
+  }
+
   function syncSticky(): void {
     if (!scroller) return;
+    syncPrompt();
     const top = pins?.getBoundingClientRect().height ?? 0;
     scroller.style.setProperty("--chat-sticky-top", `${top}px`);
     const style = getComputedStyle(scroller);
@@ -62,10 +100,11 @@ export function createTranscriptViewport() {
     observer = null;
     scroller?.removeEventListener("scroll", onScroll);
     scroller?.removeEventListener("wheel", onWheel);
+    scroller?.removeEventListener("click", onClick);
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
-    prompt?.classList.remove("stuck", "sticky-disabled");
-    scroller = pins = prompt = stack = null;
+    clearPrompt();
+    scroller = pins = prompt = stack = content = null;
     lastTop = 0;
     following = false;
   }
@@ -80,9 +119,9 @@ export function createTranscriptViewport() {
       setFollowing(false);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
       scroller?.addEventListener("wheel", onWheel, { passive: true });
+      scroller?.addEventListener("click", onClick);
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver(() => {
-          markClampedPrompts(scroller);
           syncSticky();
           follow();
         });
@@ -104,12 +143,20 @@ export function createTranscriptViewport() {
       pins = nextPins;
       if (pins) observer?.observe(pins);
     }
-    if (prompt !== nextPrompt) {
+    if (prompt !== nextPrompt || promptKey !== nextPrompt?.dataset.index) {
       changed = true;
-      prompt?.classList.remove("stuck", "sticky-disabled");
+      clearPrompt();
       if (prompt) observer?.unobserve(prompt);
       prompt = nextPrompt;
+      promptKey = prompt?.dataset.index;
       if (prompt) observer?.observe(prompt);
+    }
+    const nextContent = prompt?.querySelector<HTMLElement>(".pin-content") ?? null;
+    if (content !== nextContent) {
+      changed = true;
+      if (content) observer?.unobserve(content);
+      content = nextContent;
+      if (content) observer?.observe(content);
     }
     if (changed) syncSticky();
   }

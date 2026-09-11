@@ -55,6 +55,7 @@ function relay(
     path: string;
     headers: Record<string, string>;
     honorFramePolicy?: boolean;
+    forwardCookies?: boolean;
   },
 ): void {
   const up = httpRequest(
@@ -70,7 +71,8 @@ function relay(
       const out: Record<string, string | string[]> = {};
       for (const [k, v] of Object.entries(upRes.headers)) {
         if (v === undefined) continue;
-        if (DROP_RESPONSE_HEADERS.has(k.toLowerCase())) continue;
+        if (DROP_RESPONSE_HEADERS.has(k.toLowerCase()) && !(k.toLowerCase() === "set-cookie" && target.forwardCookies))
+          continue;
         out[k] = v;
       }
       if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
@@ -130,7 +132,7 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     protocol: upstream.protocol,
     hostname: upstream.hostname,
     port: requestPort(upstream),
-    path: `${t.forwardPath}${t.search}`,
+    path: `${upstream.pathname.replace(/\/$/, "")}${t.forwardPath}${t.search}`,
     headers,
     honorFramePolicy: true,
   });
@@ -204,6 +206,7 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
 }
 
 export interface UpstreamTarget {
+  forwardCookies?: boolean;
   baseUrl: string;
   path: string;
   search: string;
@@ -228,6 +231,7 @@ export function proxyToUpstream(
     hostname: upstream.hostname,
     port: requestPort(upstream),
     path: `${t.path}${t.search}`,
+    ...(t.forwardCookies ? { forwardCookies: true } : {}),
     headers,
   });
 }

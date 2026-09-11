@@ -15,11 +15,14 @@ COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
 RUN npm ci --omit=dev && rm package-lock.json \
   && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/web-ui/server ./server
+COPY plugins/admin/src /admin/src
+COPY plugins/admin/public /admin/public
 COPY plugins/chassis/src /chassis/src
 COPY --from=build /app/dist-web ./dist-web
 
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
+RUN apk add --no-cache util-linux
 USER node
 CMD ["node", "server/index.ts"]

@@ -32,7 +32,7 @@ isn't tied to any single vendor.
   work with it collaboratively in Slack channels and projects.
 - **Slack and web.** The same identity and configuration carries between Slack and the
   web app.
-- **Admin control.** Set org-level configuration, a security posture, and which
+- **Admin control.** Set org-level configuration, security and sharing postures, and which
   harnesses and models are available.
 - **Web apps.** Spin up custom internal apps and publish them to the right people.
 - **Shared skills.** Skills are scope-owned and shareable by grant, with admin-gated
@@ -78,8 +78,9 @@ Every turn runs through a central core, which can use a variety of models and ha
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is
 `execute`, which runs commands in the scope's own isolated sandbox — its durable computer,
-where installed tools stay installed. The web UI, the admin panel, and the public portal
-are optional plugins over the core's HTTP API;
+where installed tools stay installed. The web UI and admin panel share one service; the portal and optional built-in
+auth broker share another. These modules communicate with core over its HTTP API.
+See [combined services](docs/combined-services.md) for configuration and migration;
 Slack is an optional in-process plugin that core starts
 and supervises through a direct service client.
 
@@ -108,6 +109,27 @@ can only tighten:
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.
+
+Sharing posture is independent:
+
+- **Isolated** (default) — resources stay in their scope unless explicitly shared.
+- **Open** — on a live authenticated internal human turn, the speaker's opted-in personal
+  files, artifacts, skills, and memory may be read in an opted-in shared room. In the
+  speaker's DM, files and skills from up to 25 recent shared contexts where they are still
+  a member are available. Included memories are loaded into the prompt in full with source-scope
+  labels and are also searchable; relevance ranking is not applied.
+  The candidate window is limited to 100 recent sessions and file discovery to 200 files.
+  Binary files still require explicit sharing before entering another conversation's computer.
+  Cross-context memory search is available only through the active turn's memory tool;
+  reusable sandbox API tokens retain their original memory scope.
+
+The organization value is a ceiling, and personal and room scopes can opt out; Isolated
+wins. “Follow organization” removes a personal or room override. Disabled memory recall
+and writable-only recall still apply. Open does not mount a personal workspace into a room, carry credentials or message
+history, widen writes, run in automation or ambient turns, cross organizations, add a
+teammate's entitlement, or weaken screening, command approvals, or egress. It can still
+reveal private information in a shared reply, so cross-context reads are provenance-labelled
+and audited.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.

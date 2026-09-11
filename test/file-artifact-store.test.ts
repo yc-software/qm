@@ -228,3 +228,18 @@ test("document listing keeps unknown hashes separate and picks deterministic rep
     ["unknown-2", "unknown-1", "a"],
   );
 });
+
+test("local stream failure removes partial bytes and publishes nothing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "qm-file-failure-"));
+  try {
+    const bytes = createLocalDurableByteStore(dir);
+    async function* failing() {
+      yield Buffer.alloc(1024);
+      throw new Error("source disconnected");
+    }
+    await assert.rejects(bytes.put(failing()), /source disconnected/);
+    assert.deepEqual(await readdir(join(dir, "files")), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

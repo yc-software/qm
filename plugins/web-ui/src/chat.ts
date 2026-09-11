@@ -81,7 +81,15 @@ import {
   type WorkBlock,
   fileContentUrl,
 } from "./core-bridge";
-import { buildTimeline, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline";
+import {
+  buildTimeline,
+  toolCategory,
+  toolRowKind,
+  toolExecutionOutput,
+  type TimelineItem,
+  type ToolPayload,
+  type ToolRowModel,
+} from "./timeline";
 import { CONNECTOR_NAMES, connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
@@ -128,7 +136,6 @@ import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
 import { tip } from "./tooltip";
 import { workSeconds, workedLabel } from "./work-duration";
-import { markClampedPrompts } from "./prompt-clamp";
 import { decorateTextCodeBlocks, normalizePlainTextFences } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
@@ -151,7 +158,6 @@ interface SettledRowKey {
   speakerLabel: string | undefined;
   edited: boolean;
   deleted: boolean;
-  expanded: boolean;
   tpl: TemplateResult | typeof nothing;
 }
 const settledRowCache = new WeakMap<object, SettledRowKey>();
@@ -221,7 +227,6 @@ export function createChatSurface(
     inheritedLoaded: false,
     pins: [] as SessionPin[],
     pinsExpanded: false,
-    expandedPrompt: null as number | null,
     labelSpeakers: false,
   };
 
@@ -401,7 +406,6 @@ export function createChatSurface(
     chatState.earlierCount = 0;
     chatState.loadingEarlier = false;
     chatState.pins = [];
-    chatState.expandedPrompt = null;
     chatState.host = document.createElement("div");
     chatState.host.className = "custom-chat";
 
@@ -933,7 +937,6 @@ export function createChatSurface(
     if (!sameSession) {
       chatState.inheritedExpanded = false;
       chatState.pins = [];
-      chatState.expandedPrompt = null;
     }
     syncLocation();
 
@@ -1034,7 +1037,6 @@ export function createChatSurface(
       );
       requestAnimationFrame(() => {
         decorateTextCodeBlocks(host);
-        markClampedPrompts(host);
         if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
       });
     };
@@ -1071,12 +1073,6 @@ export function createChatSurface(
 
   function togglePins(): void {
     chatState.pinsExpanded = !chatState.pinsExpanded;
-    if (chatState.agent) drawActiveChat(chatState.agent);
-    else readonlyRedraw?.();
-  }
-
-  function togglePromptExpanded(index: number): void {
-    chatState.expandedPrompt = chatState.expandedPrompt === index ? null : index;
     if (chatState.agent) drawActiveChat(chatState.agent);
     else readonlyRedraw?.();
   }
@@ -1285,23 +1281,20 @@ export function createChatSurface(
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing} ${liveWorkStatus(agent)}
+              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
           <div class="chat-bottom-dock">
             ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
-            ${ctx.composer.composerForm(agent, backgroundActivityStrip())}
+            ${ctx.composer.composerForm(agent, html`${glanceTier ? nothing : liveWorkStatus(agent)} ${backgroundActivityStrip()}`)}
           </div>
         </div>
       `,
       chatState.host,
     );
     decorateStreamingTail();
-    requestAnimationFrame(() => {
-      decorateTextCodeBlocks(chatState.host);
-      markClampedPrompts(chatState.host);
-    });
+    requestAnimationFrame(() => decorateTextCodeBlocks(chatState.host));
     ctx.composer.resizeComposer();
     scrollTranscript(opts.forceScroll);
     postCurrentPaneState();
@@ -1437,7 +1430,6 @@ export function createChatSurface(
     const speakerLabel = speakerLabelFor(message);
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
-    const expanded = chatState.expandedPrompt === index;
     const hit = settledRowCache.get(message as object);
     if (
       hit &&
@@ -1453,8 +1445,7 @@ export function createChatSurface(
       hit.forkable === forkable &&
       hit.speakerLabel === speakerLabel &&
       hit.edited === edited &&
-      hit.deleted === deleted &&
-      hit.expanded === expanded
+      hit.deleted === deleted
     ) {
       return hit.tpl;
     }
@@ -1473,7 +1464,6 @@ export function createChatSurface(
       speakerLabel,
       edited,
       deleted,
-      expanded,
       tpl,
     });
     return tpl;
@@ -1494,22 +1484,14 @@ export function createChatSurface(
         <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
           ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
-          <div
-            class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}"
-            data-expanded=${chatState.expandedPrompt === index ? "true" : "false"}
-          >
-            ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
-            ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
-            ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
-            <button
-              class="prompt-toggle"
-              type="button"
-              aria-expanded=${chatState.expandedPrompt === index ? "true" : "false"}
-              @click=${() => togglePromptExpanded(index)}
-            >
-              ${chatState.expandedPrompt === index ? "Show less" : "Show more"}
-            </button>
+          <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
+            <div class="pin-content">
+              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+              ${attachments.length ? html`<div class="message-files">${attachments.map(userAttachmentBadge)}</div>` : nothing}
+              ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
+            </div>
           </div>
+          <button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>
           ${
             sendFailure
               ? html`<div class="send-failure">
@@ -2410,7 +2392,7 @@ export function createChatSurface(
   }
 
   function toolDetail(tool: string, call: ToolPayload, result: ToolPayload): string {
-    switch (tool) {
+    switch (toolCategory({ ...result, ...call, tool })) {
       case "execute":
         return call.command ? firstLine(call.command) : "";
       case "read":
@@ -2512,8 +2494,9 @@ export function createChatSurface(
     activity: ToolActivity | null,
   ): TemplateResult {
     const input = toolPayloadText(call);
-    const hasExecOutput = tool === "execute" && Boolean(result.stdout || result.stderr);
-    const output = toolPayloadText(result, hasExecOutput ? ["stdout", "stderr", "code", "timedOut"] : []);
+    const hasExecOutput =
+      toolCategory({ ...result, ...call, tool }) === "execute" && toolExecutionOutput(result) !== null;
+    const output = toolPayloadText(result, hasExecOutput ? ["stdout", "stderr", "code", "timedOut", "result"] : []);
     return html`<div class="tool-disclosure">
       ${toolPayloadCard("Input", input)} ${hasExecOutput ? execOutputCard(result, work, activity) : nothing}
       ${toolPayloadCard("Result", output)}
@@ -2534,7 +2517,7 @@ export function createChatSurface(
     const call = (row.call?.payload ?? {}) as ToolPayload;
     const result = (row.result?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? result.tool ?? "unknown";
-    const knownMeta = TOOL_META[tool];
+    const knownMeta = TOOL_META[toolCategory({ ...result, ...call, tool })];
     const meta = knownMeta ?? UNKNOWN_TOOL;
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
@@ -2562,12 +2545,12 @@ export function createChatSurface(
   }
 
   function execOutputCard(result: ToolPayload, work: WorkBlock, activity: ToolActivity | null): TemplateResult {
-    const out = [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
+    const out = toolExecutionOutput(result) ?? "";
     return html`<div class="code-card">
       <div class="code-card-head"><span class="code-card-lang">bash</span></div>
       <pre class="code-card-body">${out}</pre>
       <div class="code-card-foot">
-        exit ${result.code ?? 0}${result.timedOut ? " · timed out" : ""}
+        exit ${result.code ?? "unknown"}${result.timedOut ? " · timed out" : ""}
         ${
           activity?.truncated
             ? html`<button class="show-full-btn" type="button" @click=${() => void loadFullEntry(work, activity)}>

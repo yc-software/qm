@@ -89,7 +89,7 @@ any other way.
 
 ## Hosting the qm surfaces
 
-`porter/apps/` declares the six services (core, auth, web-ui, admin, portal,
+`porter/apps/` declares four services (core, web-ui, portal,
 egress-proxy) as one Porter app per file, built from `deploy/*/Dockerfile` — `porter
 apply` takes exactly one app per invocation and silently ignores extra YAML documents,
 which is why they are separate files:
@@ -101,7 +101,7 @@ for f in porter/apps/*.yaml; do porter apply -f "$f"; done
 Porter runs the services and assigns each **public** web service an `onporter.run`
 hostname with a Let's Encrypt certificate, so this path needs no DNS record, no TLS
 certificate, and no ingress controller. Only the portal is meant to be Internet-facing;
-core, auth, web-ui, and admin carry `private: true` so Porter creates no ingress for them
+core and web-ui carry `private: true` so Porter creates no ingress for them
 and they are reachable only at their in-cluster address.
 
 Two things `porter apply` will not do for you:
@@ -136,6 +136,13 @@ Nothing generates the inter-service wiring for you — `cli/src/services.ts` has
 Core also reads `RESEND_API_KEY` and `AUTH_EMAIL_FROM` when they are set — optional there,
 they let admins email external-user invitations from the admin Users tab or by chatting
 with QM.
+
+The admin module runs in web-ui at `/admin`; its environment belongs to web-ui.
+The auth module runs inside portal: move its environment and secrets to portal,
+set `AUTH_EMBEDDED=1`, and use `http://127.0.0.1:8099` for
+`AUTH_BROKER_UPSTREAM` and the OIDC token, userinfo, and JWKS endpoint base.
+Set `ADMIN_UPSTREAM` to the web-ui service URL followed by `/admin`.
+See [the combined-service migration](combined-services.md) before upgrading existing apps.
 
 `src/deployment/secret-schema.ts` is the authoritative list of what each service
 requires; when a boot refusal names a variable this table doesn't, that file is the place

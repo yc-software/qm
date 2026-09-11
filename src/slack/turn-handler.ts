@@ -181,6 +181,7 @@ export function createTurnHandler(deps: {
   }
 
   async function handleIncoming(inc: Incoming, client: any): Promise<void> {
+    deps.markEvent?.();
     const t0 = inc.recvAt ?? performance.now();
     const slackInflightMs =
       inc.recvWall !== undefined && inc.eventTs !== undefined
@@ -763,7 +764,6 @@ export function createTurnHandler(deps: {
           }
         : {}),
     };
-    deps.markEvent?.();
     const ran = await dedupedRun(
       deduper,
       key,

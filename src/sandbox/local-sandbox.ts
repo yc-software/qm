@@ -475,6 +475,35 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
     exportFiles: execExport.exportFiles,
 
+    async destroyScope(scopeId: string): Promise<void> {
+      return provisionQueue(scopeId, async () => {
+        const name = localContainerName(scopeId);
+        const network = localNetworkName(name);
+        const remove = async (args: string[]) => {
+          const result = await dexec(args);
+          if (
+            result.code !== 0 &&
+            !/no such (container|object|network|volume)|network .* not found/i.test(result.stderr)
+          )
+            throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
+        };
+        await remove(["rm", "-f", name]);
+        if (opts.coreContainer) {
+          const result = await dexec(["network", "disconnect", "-f", network, opts.coreContainer]);
+          if (
+            result.code !== 0 &&
+            !/no such (network|container|object)|is not connected|network .* not found/i.test(result.stderr)
+          )
+            throw new Error(`docker network disconnect ${network}: ${result.stderr.trim()}`);
+        }
+        await remove(["network", "rm", network]);
+        await remove(["volume", "rm", localVolumeName(scopeId)]);
+        activeByContainer.delete(name);
+        scopeByContainer.delete(name);
+        portByName.delete(name);
+      });
+    },
+
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       return provisionQueue(teardownQueueKey(handle), async () => {
         const remaining = (activeByContainer.get(handle.id) ?? 1) - 1;

@@ -9,7 +9,7 @@ export interface WorkspaceLayoutInfo {
 
 export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout: WorkspaceLayoutInfo): string {
   if (!spec) return "";
-  const lines: string[] = ["## This machine"];
+  const lines: string[] = ["## Sandbox environment profile"];
 
   const size: string[] = [];
   if (spec.cpus) size.push(`${spec.cpus} vCPU`);
@@ -26,7 +26,7 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
   const cwd = spec.workdir ?? ".";
   const home = spec.homeDir ?? "~";
   const ws = [
-    `Your workspace is \`${cwd}\` (read-write) and persists across turns — keep your work here, including anything you'll \`publish\` (publish ships files in your workspace, not files elsewhere under \`$HOME\`). \`$HOME\` (\`${home}\`) also persists and holds your logins and config.`,
+    `The workspace path is \`${cwd}\` (read-write). Recovery depends on the sandbox provider; save durable outputs to git or Files. Keep workspace outputs here, including anything you'll \`publish\` (publish ships files in your workspace, not files elsewhere under \`$HOME\`). \`$HOME\` (\`${home}\`) holds native logins and config; its recovery has the same provider limits.`,
   ];
   if (layout.hasGlobal) ws.push("Shared org files are at `./global` (read-only).");
   if (layout.teamCount > 0) {
@@ -51,13 +51,13 @@ export function renderResidentLoginsBlock(
     "## Your logins",
     "Native logins on your computer (resident — each tool authenticates with its own; checked recently):",
     "Logins survive machine replacement automatically: the platform keeps an encrypted copy core-side and restores it onto a fresh machine; they are never written into workspace backups.",
-    "To (re)log in, run the login command with the `background` tool (action=start), not `execute` — a device-flow login prints a URL/code then blocks waiting for the person to approve. Relay the URL/code, then `watch`/`poll` until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
+    "To (re)log in, start the login command as a background process using the available process controls. A device-flow login prints a URL/code then waits for the person to approve. Relay the URL/code, then watch or poll the process until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
   ];
   for (const c of present) {
     if (record.connectors[c.id] === "active") {
       lines.push(`- ${c.label} — ✓ signed in`);
     } else {
-      lines.push(`- ${c.label} — ✗ not signed in; to use it: \`background\` start \`${c.reauth}\``);
+      lines.push(`- ${c.label} — ✗ not signed in; to use it: start \`${c.reauth}\` as a background process`);
     }
   }
   return lines.join("\n");

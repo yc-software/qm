@@ -7,7 +7,7 @@ import { renderTerraformVars } from "../terraform.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "../commands/infra.ts";
 import { awsScaffold, dockerScaffold, flyScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
-import { runnableServices } from "../services.ts";
+import { runnableServices, serviceHost } from "../services.ts";
 import {
   awsCheckLive,
   awsDoctor,
@@ -79,16 +79,16 @@ const buildFromOptions = (
   };
 };
 
-const onlyOptions = (flags: Readonly<Record<string, string | boolean>>): string[] | undefined => {
-  const raw = stringFlag(flags, "only");
+const workloadOptions = (flags: Readonly<Record<string, string | boolean>>, flag = "only"): string[] | undefined => {
+  const raw = stringFlag(flags, flag);
   if (raw === undefined) return undefined;
   const names = raw
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
-  if (names.length === 0) throw new CliError(`--only was given no components (e.g. --only core,web-ui)`);
+  if (names.length === 0) throw new CliError(`--${flag} was given no components (e.g. --${flag} core,web-ui)`);
   const duplicate = names.find((name, index) => names.indexOf(name) !== index);
-  if (duplicate) throw new CliError(`--only lists ${duplicate} more than once`);
+  if (duplicate) throw new CliError(`--${flag} lists ${duplicate} more than once`);
   return names;
 };
 
@@ -152,7 +152,7 @@ const fly: HostingProvider = {
   scaffold: flyScaffold,
   upFlags: ["build-from", "only", "image-label", "image-from", "image-repo-prefix", "build-only"],
   upOptions: (_ctx, flags, dryRun) => {
-    const only = onlyOptions(flags);
+    const only = workloadOptions(flags);
     const imageFrom = stringFlag(flags, "image-from");
     const imageLabel = stringFlag(flags, "image-label");
     const imageRepoPrefix = stringFlag(flags, "image-repo-prefix");
@@ -239,14 +239,27 @@ const aws: HostingProvider = {
     "delete-task-definitions": (ctx) => deleteAwsTaskDefinitions(ctx.config),
   },
   scaffold: awsScaffold,
-  upFlags: ["build-from", "only", "yes", "image-label", "build-only", "candidate", "candidate-out", "inactive"],
+  upFlags: [
+    "build-from",
+    "only",
+    "yes",
+    "image-label",
+    "build-only",
+    "candidate",
+    "candidate-out",
+    "inactive",
+    "restart",
+    "build-concurrency",
+  ],
   upOptions: (ctx, flags, dryRun) => {
-    const only = onlyOptions(flags);
-    const unknown = only?.filter((name) => !ctx.config.aws?.services[name]) ?? [];
+    const only = workloadOptions(flags);
+    const unknown = only?.filter((name) => !ctx.config.aws?.services[serviceHost(name)]) ?? [];
     if (unknown.length) throw new CliError(`--only has unknown AWS workload(s): ${unknown.join(", ")}`);
     const imageLabel = stringFlag(flags, "image-label");
     const candidate = stringFlag(flags, "candidate");
     const candidateOut = stringFlag(flags, "candidate-out");
+    const buildConcurrency = stringFlag(flags, "build-concurrency");
+    const restart = workloadOptions(flags, "restart");
     return {
       dryRun,
       yes: flags["yes"] === true,
@@ -256,6 +269,8 @@ const aws: HostingProvider = {
       ...(imageLabel ? { imageLabel } : {}),
       ...(candidate ? { candidate } : {}),
       ...(candidateOut ? { candidateOut } : {}),
+      ...(buildConcurrency !== undefined ? { buildConcurrency: Number(buildConcurrency) } : {}),
+      ...(restart ? { restart } : {}),
       ...(only ? { only } : {}),
     };
   },
@@ -270,6 +285,8 @@ const aws: HostingProvider = {
         ...(opts.buildOnly ? { buildOnly: true } : {}),
         ...(opts.candidate ? { candidate: opts.candidate } : {}),
         ...(opts.candidateOut ? { candidateOut: opts.candidateOut } : {}),
+        ...(opts.buildConcurrency !== undefined ? { buildConcurrency: opts.buildConcurrency } : {}),
+        ...(opts.restart ? { restart: opts.restart } : {}),
         ...(opts.inactive ? { inactive: true } : {}),
         ...(opts.only ? { only: opts.only } : {}),
         sandboxDir: ctx.sandboxDir,
@@ -312,7 +329,7 @@ const aws: HostingProvider = {
       }
     }
     for (const name of Object.keys(config.aws.services)) {
-      if (!workloads.has(name)) {
+      if (!workloads.has(name) && !workloads.has(serviceHost(name))) {
         errors.push({
           clause: "config.v1",
           message: `contract aws.services.${name}: coordinates do not match an enabled service or discovered plugin`,

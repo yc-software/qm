@@ -1,6 +1,7 @@
 import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
 
 export interface SandboxHandle {
+  resourceId?: string;
   id: string;
   rootDir: string;
   homeDir?: string;
@@ -15,7 +16,7 @@ export function hasParentPathSegment(path: string): boolean {
   return path.split("/").includes("..");
 }
 
-type WritablePersistence = "snapshot_to_workspace" | "resident_disk";
+type WritablePersistence = "snapshot_to_workspace" | "resident_disk" | "provider_managed";
 export type EgressEnforcement = "none" | "ip_port" | "domain";
 
 export interface AgentComputerSpec {
@@ -61,6 +62,7 @@ export function visibleTools(tools: readonly string[]): string[] {
 }
 
 export interface ProvisionOptions {
+  sandboxId?: string;
   env?: Record<string, string>;
   egress?: EgressPolicy;
   egressToken?: string;
@@ -137,6 +139,16 @@ export interface ProcessSession {
 }
 
 export interface ComputerStatus {
+  lifecycleState?: "running" | "paused";
+  expiresAtMs?: number;
+  recovery?: {
+    strategy: "provider_snapshot" | "provider_pause" | "workspace_snapshot";
+    checkpointId?: string;
+    checkpointAtMs?: number;
+    checkpointExpiresAtMs?: number | null;
+    state?: string;
+    error?: string;
+  };
   machine: string;
   listed?: string;
   provisioned?: boolean;
@@ -148,7 +160,7 @@ export interface ComputerStatus {
 export type ComputerVerdict = "ok" | "wedged" | "down";
 
 export function computerVerdict(s: ComputerStatus): ComputerVerdict {
-  if (s.guestResponsive) return "ok";
+  if (s.guestResponsive || s.lifecycleState === "paused") return "ok";
   return s.provisioned ? "wedged" : "down";
 }
 
@@ -177,6 +189,12 @@ export interface Sandbox {
   listDir(handle: SandboxHandle, relDir: string): Promise<string[]>;
   removeDir(handle: SandboxHandle, relDir: string): Promise<void>;
   exportFiles?(handle: SandboxHandle, opts?: AgentComputerExportOptions): Promise<AgentComputerExportEntry[]>;
+  startRegisteredProcess?(
+    handle: SandboxHandle,
+    command: string,
+    register: (processId: string) => Promise<void>,
+    opts?: StartProcessOptions,
+  ): Promise<{ processId: string }>;
   startProcess?(handle: SandboxHandle, command: string, opts?: StartProcessOptions): Promise<{ processId: string }>;
   readProcess?(handle: SandboxHandle, processId: string, opts?: ReadProcessOptions): Promise<ReadProcessResult>;
   writeStdin?(handle: SandboxHandle, processId: string, data: string): Promise<void>;
@@ -187,6 +205,7 @@ export interface Sandbox {
   computerStatus?(scopeId: string): Promise<ComputerStatus>;
   restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
+  destroyScope?(scopeId: string): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
 }
 

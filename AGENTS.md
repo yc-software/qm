@@ -6,6 +6,11 @@ To run and test, see [`README.md`](./README.md).
 
 Two habits that keep task-focused changes from scarring the rest of the repo:
 
+- **Do not add AI authorship attribution to commits or pull requests.** Omit
+  `Co-authored-by` trailers for Codex, Claude, or other AI tools, and omit
+  tool-generated attribution footers such as `Generated with Codex`. Preserve
+  legitimate human coauthors. CI rejects AI coauthor trailers on new PR commits;
+  do not rewrite existing repository history to remove attribution.
 - **Fix every instance, not just the reported one.** When you find a bug or a pattern
   worth changing, grep the whole repo (`src/`, `plugins/`, `test/`, `scripts/`) for the
   same pattern and fix all of it in the same change. One autocorrected call site with

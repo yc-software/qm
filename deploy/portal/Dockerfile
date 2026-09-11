@@ -6,11 +6,14 @@ COPY plugins/portal/package.json plugins/portal/package-lock.json ./
 RUN npm ci --omit=dev && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY plugins/portal/src ./src
+COPY plugins/auth/src /auth/src
+RUN ln -s /app/node_modules /auth/node_modules
 COPY plugins/chassis/src /chassis/src
 COPY plugins/portal/tsconfig.json ./
 
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
+RUN apk add --no-cache util-linux
 USER node
 CMD ["node", "src/index.ts"]

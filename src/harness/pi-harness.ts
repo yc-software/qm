@@ -125,7 +125,7 @@ export interface PiHarnessOptions {
   reachExec?: boolean;
   mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
-  migrateTargets?: readonly string[];
+  sandboxResources?: boolean;
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -999,13 +999,25 @@ export function emptyEndingNote(opts: {
   cancelled: boolean;
   surfaceTools: boolean;
   pollFire: boolean;
-  ref: { silentRequested?: boolean; pausedOnApproval?: boolean; pendingApprovals?: unknown[]; modelCalls?: number };
+  ref: {
+    runtimeHandoff?: unknown;
+    silentRequested?: boolean;
+    pausedOnApproval?: boolean;
+    pendingApprovals?: unknown[];
+    modelCalls?: number;
+  };
   session: AssistantTextSession;
   turnWallClockMs: number;
   elapsedMs: number;
 }): string | null {
   if (opts.wallClock !== "ok" || opts.userAborted || opts.cancelled || opts.surfaceTools) return null;
-  if (opts.ref.silentRequested || opts.ref.pausedOnApproval || opts.ref.pendingApprovals?.length) return null;
+  if (
+    opts.ref.runtimeHandoff ||
+    opts.ref.silentRequested ||
+    opts.ref.pausedOnApproval ||
+    opts.ref.pendingApprovals?.length
+  )
+    return null;
   if (opts.pollFire) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;
@@ -1128,6 +1140,27 @@ async function buildModelRuntime(
   });
   for (const [provider, apiKey] of Object.entries(k)) {
     if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
+  }
+  if (modelGateway) {
+    const providers = new Set(
+      Object.keys(modelGateway.models).flatMap((id) => {
+        const model = resolveModel(id);
+        return model ? [model.provider] : [];
+      }),
+    );
+    const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
+    runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
+    const getAuth = runtime.getAuth.bind(runtime);
+    runtime.getAuth = (async (model, overrides) => {
+      if (typeof model === "string") return getAuth(model, overrides);
+      const request = modelGatewayRequest(modelGateway, model);
+      if (request)
+        return {
+          auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
+          source: "model gateway",
+        };
+      return getAuth(model, overrides);
+    }) as typeof runtime.getAuth;
   }
   const retained = <T extends object | undefined>(options: T): T =>
     cacheRetention ? ({ ...options, cacheRetention } as T) : options;
@@ -1524,7 +1557,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
           ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
           ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
-          ...(opts?.migrateTargets?.length ? { migrateTargets: opts.migrateTargets } : {}),
+          sandboxResources: opts?.sandboxResources,
         }),
         noTools: "builtin",
         sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
@@ -1688,6 +1721,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
           entry.ref.current = turn.tools;
+          entry.ref.runtimeHandoff = undefined;
+          entry.ref.runtimeMutationPending = false;
+          entry.ref.runtimeInFlight = new Set();
+          entry.ref.runtimeRunId = turn.runId;
+          entry.ref.runtimeActorId = turn.runtimeActorId;
           entry.ref.pendingApprovals = [];
           entry.ref.pausedOnApproval = undefined;
           entry.ref.silentRequested = false;
@@ -2100,6 +2138,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 blocked: () =>
                   userAborted ||
                   !!turn.cancel?.aborted ||
+                  !!entry.ref.runtimeHandoff ||
                   !!entry.ref.pausedOnApproval ||
                   !!entry.ref.pendingApprovals?.length,
                 beforePrompt: async (note) => {
@@ -2124,7 +2163,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               wallClock = goalResult.outcome;
               grindWaiverNote = goalResult.waiverNote;
             }
-            if (wallClock === "ok" && !userAborted && !turn.cancel?.aborted) {
+            if (wallClock === "ok" && !entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
               const refusal = providerRefusalError(entry.agentSession, messagesBefore);
               if (refusal) {
                 try {
@@ -2216,6 +2255,23 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               `the turn hit its ${capLabel} wall-clock limit and was stopped` +
                 (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
             );
+          }
+          if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
+            if (entry.ref.goal) {
+              const goalEntry = await turn.emit({
+                type: "system",
+                payload: { kind: "goal", goal: { ...entry.ref.goal } },
+                scopeLabel: turn.scopeLabel,
+              });
+              await tapeEntryMirror(goalEntry);
+            }
+            return {
+              reply: "",
+              runtimeHandoff: entry.ref.runtimeHandoff,
+              modelCalls: entry.ref.modelCalls ?? 0,
+              compileMs,
+              cacheUsage: sumCacheUsage(callStats) ?? undefined,
+            };
           }
           const freshStopReason = freshAssistantStopReason();
           const cancelStoppedCleanly =

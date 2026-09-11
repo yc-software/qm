@@ -1,7 +1,8 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
+  FileArtifactDeletedError,
   clampLimit,
   decodeCursor,
   encodeCursor,
@@ -65,7 +66,15 @@ export function createPostgresFileArtifactStore(
   connectionString: string,
   byteStore: DurableByteStore,
 ): FileArtifactStore {
-  const { q, query } = createPgPool(connectionString, "files/artifacts/0001", SCHEMA);
+  const { q, query, pool } = createPgPool(connectionString, [
+    { id: "files/artifacts/0001", statements: SCHEMA },
+    {
+      id: "files/artifacts/0002",
+      statements: [
+        "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
+      ],
+    },
+  ]);
 
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
@@ -134,30 +143,50 @@ export function createPostgresFileArtifactStore(
         input.data,
         input.maxBytes != null ? { maxBytes: input.maxBytes } : {},
       );
+      return this.publish({ ...input, blobKey, sizeBytes, sha256 });
+    },
+
+    async publish(input) {
+      const { blobKey, sizeBytes, sha256 } = input;
       const at = input.createdAt ?? Date.now();
-      const ins = await query(
-        `INSERT INTO file_artifacts
+      return withPgTransaction(await pool(), async (client) => {
+        if (input.reuseExistingPath) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+            `file-path:${input.ownerScopeId}:${input.path}`,
+          ]);
+          const existing = await client.query(
+            "SELECT * FROM file_artifacts WHERE owner_scope_id=$1 AND path=$2 AND enabled=TRUE ORDER BY created_at DESC,id DESC LIMIT 1",
+            [input.ownerScopeId, input.path],
+          );
+          if (existing.rows[0]) return { artifact: rowToArtifact(existing.rows[0]), created: false };
+        }
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${input.id}`]);
+        const deleted = await client.query("SELECT id FROM file_artifact_deletions WHERE id=$1", [input.id]);
+        if (deleted.rows.length) throw new FileArtifactDeletedError();
+        const ins = await client.query(
+          `INSERT INTO file_artifacts
            (id, kind, owner_scope_id, path, name, mimetype, size_bytes, blob_key, sha256,
             direction, created_by, created_in_scope, created_at, updated_at, enabled, source)
          VALUES ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,TRUE,'live')
          ON CONFLICT (id) DO NOTHING`,
-        [
-          input.id,
-          input.ownerScopeId,
-          input.path,
-          input.name,
-          input.mimetype,
-          sizeBytes,
-          blobKey,
-          sha256,
-          input.direction,
-          input.createdBy,
-          input.createdInScope ?? null,
-          at,
-        ],
-      );
-      const row = (await getRow(input.id))!;
-      return { artifact: row, created: ins.rowCount > 0 };
+          [
+            input.id,
+            input.ownerScopeId,
+            input.path,
+            input.name,
+            input.mimetype,
+            sizeBytes,
+            blobKey,
+            sha256,
+            input.direction,
+            input.createdBy,
+            input.createdInScope ?? null,
+            at,
+          ],
+        );
+        const result = await client.query("SELECT * FROM file_artifacts WHERE id=$1", [input.id]);
+        return { artifact: rowToArtifact(result.rows[0]), created: (ins.rowCount ?? 0) > 0 };
+      });
     },
 
     async get(id, opts) {
@@ -197,7 +226,14 @@ export function createPostgresFileArtifactStore(
     },
 
     async delete(id) {
-      await query("DELETE FROM file_artifacts WHERE id = $1", [id]);
+      await withPgTransaction(await pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${id}`]);
+        await client.query(
+          "INSERT INTO file_artifact_deletions(id,deleted_at) VALUES($1,$2) ON CONFLICT(id) DO NOTHING",
+          [id, Date.now()],
+        );
+        await client.query("DELETE FROM file_artifacts WHERE id=$1", [id]);
+      });
     },
   };
 }

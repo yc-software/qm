@@ -13,6 +13,7 @@ import { keychainRoutes } from "./keychain.ts";
 import { secretDropRoutes } from "./secret-drop.ts";
 import { adminRoutes } from "./admin.ts";
 import { skillPackRoutes } from "./skill-packs.ts";
+import { fileUploadRoutes } from "./file-uploads.ts";
 import { surfaceRoutes } from "./surface.ts";
 import { cronRoutes } from "./crons.ts";
 import { loopRoutes } from "./loops.ts";
@@ -61,6 +62,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...adminRoutes,
   ...skillPackRoutes,
   ...surfaceRoutes,
+  ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,
   ...cronRoutes,

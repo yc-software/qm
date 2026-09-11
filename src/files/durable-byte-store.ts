@@ -1,12 +1,21 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
-import { once } from "node:events";
+import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
+import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { join } from "node:path";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  UploadPartCommand,
+} from "@aws-sdk/client-s3";
 import { swallowAs } from "../util/errors.ts";
-import { collectBytes, type ByteSource } from "../util/bytes.ts";
+import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 
 export type { ByteSource } from "../util/bytes.ts";
@@ -39,7 +48,7 @@ export class ByteSourceTooLargeError extends Error {
   }
 }
 
-const BLOB_KEY = /^files\/[0-9a-f]{64}$/;
+const BLOB_KEY = /^files\/(?:[0-9a-f]{64}|uploads\/[0-9a-f]{32})$/;
 const keyFor = (sha256: string): string => `files/${sha256}`;
 
 function collect(source: ByteSource, maxBytes?: number): Promise<{ data: Buffer; sha256: string }> {
@@ -76,33 +85,15 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
 
   return {
     async put(source, opts) {
-      const { data, sha256 } = await collect(source, opts?.maxBytes);
-      const blobKey = keyFor(sha256);
       await ensureDir();
-      const finalPath = join(base, sha256);
+      const partPath = join(base, `${randomUUID()}.part`);
       try {
-        if ((await stat(finalPath)).isFile()) return { blobKey, sizeBytes: data.length, sha256 };
-      } catch (error) {
-        void error;
+        const { sha256, sizeBytes } = await spoolBytes(source, partPath, opts?.maxBytes);
+        await rename(partPath, join(base, sha256));
+        return { blobKey: keyFor(sha256), sizeBytes, sha256 };
+      } finally {
+        await rm(partPath, { force: true });
       }
-      const partPath = join(base, `${sha256}.${randomUUID()}.part`);
-      const out = createWriteStream(partPath);
-      try {
-        if (!out.write(data)) await once(out, "drain");
-        await new Promise<void>((res, rej) => out.end((err?: Error | null) => (err ? rej(err) : res())));
-      } catch (err) {
-        out.destroy();
-        await once(out, "close").catch(swallowAs("files: write-stream close", undefined));
-        await rm(partPath, { force: true }).catch(swallowAs("files: partial-file cleanup", undefined));
-        throw err;
-      }
-      try {
-        await rename(partPath, finalPath);
-      } catch (err) {
-        await rm(partPath, { force: true }).catch(swallowAs("files: partial-file cleanup", undefined));
-        throw err;
-      }
-      return { blobKey, sizeBytes: data.length, sha256 };
     },
 
     async open(blobKey) {
@@ -143,10 +134,63 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
 
   return {
     async put(source, opts) {
-      const { data, sha256 } = await collect(source, opts?.maxBytes);
-      const blobKey = keyFor(sha256);
-      await client.send(new PutObjectCommand({ Bucket: bucket, Key: s3Key(blobKey), Body: data }));
-      return { blobKey, sizeBytes: data.length, sha256 };
+      const dir = await mkdtemp(join(tmpdir(), "qm-files-"));
+      const path = join(dir, "upload");
+      let uploadId: string | undefined;
+      let Key: string | undefined;
+      try {
+        const { sha256, sizeBytes } = await spoolBytes(source, path, opts?.maxBytes);
+        const blobKey = keyFor(sha256);
+        Key = s3Key(blobKey);
+        if (sizeBytes === 0) {
+          await client.send(new PutObjectCommand({ Bucket: bucket, Key, Body: Buffer.alloc(0) }));
+        } else {
+          const started = (await client.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key }))) as {
+            UploadId?: string;
+          };
+          if (!started.UploadId) throw new Error("S3 did not return an upload ID");
+          uploadId = started.UploadId;
+          const parts: Array<{ ETag: string; PartNumber: number }> = [];
+          const partSize = Math.max(16 * 1024 * 1024, Math.ceil(sizeBytes / 10000));
+          for (let offset = 0; offset < sizeBytes; offset += partSize) {
+            const length = Math.min(partSize, sizeBytes - offset);
+            const body = createReadStream(path, { start: offset, end: offset + length - 1 });
+            try {
+              const done = (await client.send(
+                new UploadPartCommand({
+                  Bucket: bucket,
+                  Key,
+                  UploadId: uploadId,
+                  PartNumber: parts.length + 1,
+                  Body: body,
+                  ContentLength: length,
+                }),
+              )) as { ETag?: string };
+              if (!done.ETag) throw new Error("S3 did not return a part ETag");
+              parts.push({ ETag: done.ETag, PartNumber: parts.length + 1 });
+            } finally {
+              body.destroy();
+            }
+          }
+          await client.send(
+            new CompleteMultipartUploadCommand({
+              Bucket: bucket,
+              Key,
+              UploadId: uploadId,
+              MultipartUpload: { Parts: parts },
+            }),
+          );
+        }
+        return { blobKey, sizeBytes, sha256 };
+      } catch (error) {
+        if (uploadId && Key)
+          await client
+            .send(new AbortMultipartUploadCommand({ Bucket: bucket, Key, UploadId: uploadId }))
+            .catch(swallowAs("files: abort upload", undefined));
+        throw error;
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     },
 
     async open(blobKey) {
@@ -170,4 +214,23 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: s3Key(blobKey) }));
     },
   };
+}
+
+async function spoolBytes(
+  source: ByteSource,
+  path: string,
+  maxBytes?: number,
+): Promise<{ sha256: string; sizeBytes: number }> {
+  const hash = createHash("sha256");
+  let sizeBytes = 0;
+  async function* checked(): AsyncIterable<Uint8Array> {
+    for await (const chunk of asChunks(source)) {
+      sizeBytes += chunk.byteLength;
+      if (maxBytes != null && sizeBytes > maxBytes) throw new ByteSourceTooLargeError();
+      hash.update(chunk);
+      yield chunk;
+    }
+  }
+  await pipeline(Readable.from(checked()), createWriteStream(path, { flags: "wx", mode: 0o600 }));
+  return { sha256: hash.digest("hex"), sizeBytes };
 }

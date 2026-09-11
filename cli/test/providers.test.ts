@@ -28,6 +28,8 @@ test("the hosting provider registry owns target discovery and lifecycle capabili
     "candidate",
     "candidate-out",
     "inactive",
+    "restart",
+    "build-concurrency",
   ]);
 });
 

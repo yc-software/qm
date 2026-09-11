@@ -7,7 +7,7 @@ import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.t
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { mockHarnessWarning, type QmConfig } from "../config.ts";
 import { computedSecrets, runtimeSecretNames, type ComputedSecret } from "../secrets.ts";
-import { isVirtualService, runnableServices } from "../services.ts";
+import { hostedServiceEnv, isVirtualService, runnableServices } from "../services.ts";
 import { serviceEnvironment } from "../backends/aws.ts";
 import { hostingProvider } from "../backends/registry.ts";
 
@@ -64,7 +64,7 @@ export function runChecks(
   if (config.target === "aws" && config.aws) {
     for (const workload of runnableServices(config.services)) {
       if (!config.aws.services[workload]) continue;
-      const configured = new Set(Object.keys(config.env[workload] ?? {}));
+      const configured = new Set(Object.keys(hostedServiceEnv(config.services, config.env, workload)));
       if (workload === "core") {
         for (const service of config.services.filter(isVirtualService)) {
           for (const name of Object.keys(config.env[service] ?? {})) configured.add(name);

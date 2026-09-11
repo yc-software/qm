@@ -7,6 +7,7 @@ import { type QmConfig } from "../src/config.ts";
 import { FLY_TEMPLATE_ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
   computedSecrets,
+  serviceSecretValue,
   renderEnvExample,
   runtimeSecretNames,
   secretDestinations,
@@ -331,7 +332,7 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
   const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.deepEqual(
     [...secretDestinations(secret).keys()].sort(),
-    ["admin", "core", "portal", "web-ui"],
+    ["core", "portal", "web-ui"],
     "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
   );
 });
@@ -350,7 +351,7 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
     });
     const shared = secretByName(broker, name);
     assert.equal(shared.required, false);
-    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["auth", "core"]);
+    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["core", "portal"]);
   }
 });
 
@@ -373,4 +374,18 @@ test("runtime model provider override controls the required billing key", () => 
   });
   assert.equal(secretByName(config, "OPENROUTER_API_KEY").required, true);
   assert.equal(secretByName(config, "ANTHROPIC_API_KEY").required, false);
+});
+
+test("combined auth rejects two source secrets for the same environment name", () => {
+  const config = makeConfig({
+    services: ["portal", "auth"],
+    secretEnv: {
+      portal: { RESEND_API_KEY: "PORTAL_RESEND" },
+      auth: { RESEND_API_KEY: "AUTH_RESEND" },
+    },
+  });
+  assert.throws(
+    () => serviceSecretValue(config, "auth", "RESEND_API_KEY", new Map()),
+    /would receive env RESEND_API_KEY from both/,
+  );
 });

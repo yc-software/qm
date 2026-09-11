@@ -160,6 +160,16 @@ test("harness security posture defaults to auto and validates named modes", () =
   );
 });
 
+test("sharing posture defaults to isolated and accepts only isolated or open", () => {
+  assert.equal(loadConfig({}).sharingPosture, "isolated");
+  assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "Open" }).sharingPosture, "open");
+  assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "isolated" }).sharingPosture, "isolated");
+  assert.throws(
+    () => loadConfig({ HARNESS_SHARING_POSTURE: "dangerous" }),
+    /HARNESS_SHARING_POSTURE="dangerous" is not recognized/,
+  );
+});
+
 test("production names a mock harness rather than letting it pass as a real deployment", () => {
   const warnings: string[] = [];
   const original = console.warn;
@@ -656,4 +666,39 @@ test("retired brain environment does not configure a runtime integration and war
   assert.equal(retired.length, 1);
   assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
   assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
+});
+
+test("Modal native retention and interval configuration are independent of legacy portable checkpoint throttling", () => {
+  const config = loadConfig({
+    MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
+    MODAL_SNAPSHOT_RETENTION_SEC: "86400",
+    MODAL_SNAPSHOT_INTERVAL_SEC: "315360000",
+  });
+  assert.equal(config.modalSandbox.nativeSnapshotIntervalSec, 60);
+  assert.equal(config.modalSandbox.snapshotRetentionSec, 86400);
+  assert.equal(config.modalSandbox.snapshotIntervalSec, 315360000);
+});
+
+test("Modal native activation is default-off and uses strict boolean configuration", () => {
+  assert.equal(loadConfig({}).modalSandbox.nativeSnapshotsEnabled, false);
+  for (const value of ["true", "on", "1"])
+    assert.equal(loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: value }).modalSandbox.nativeSnapshotsEnabled, true);
+  assert.throws(() => loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: "enable" }), /not a recognized boolean/);
+});
+
+test("direct Files initiation defaults off and requires explicit activation", () => {
+  assert.equal(loadConfig({}).filesDirectUploadsEnabled, false);
+  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "true" }).filesDirectUploadsEnabled, true);
+  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "false" }).filesDirectUploadsEnabled, false);
+  assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
+});
+
+test("sandbox resource rollout requires explicit activation", () => {
+  assert.equal(loadConfig({ ...productionEnv }).sandboxResourcesEnabled, false);
+  for (const value of ["true", "on", "1"])
+    assert.equal(loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: value }).sandboxResourcesEnabled, true);
+  assert.throws(
+    () => loadConfig({ ...productionEnv, SANDBOX_RESOURCES_ENABLED: "enable" }),
+    /not a recognized boolean/,
+  );
 });

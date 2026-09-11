@@ -1,3 +1,4 @@
+import type { SandboxResources } from "./sandbox-resources.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
@@ -30,6 +31,7 @@ export interface RoutingSandboxOptions {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   routes: DurableMap<SandboxRoute>;
   defaultBackend: SandboxBackendName;
+  resources?: SandboxResources;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -60,14 +62,32 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     opts.onError?.({
       category: "sandbox_routing",
       code: "backend_unavailable",
-      message: `scope routed to ${name} but that backend is not constructed here; using ${defaultBackend}`,
+      message: `scope routed to ${name} but that backend is not constructed here; refusing a substitute computer`,
       scopeLabel: scopeId,
     });
-    return { name: defaultBackend, sandbox: fallback };
+    throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
   }
 
-  const forHandle = (handle: SandboxHandle): Sandbox =>
-    (handle.backend && backends[handle.backend as SandboxBackendName]) || fallback;
+  const forHandle = (handle: SandboxHandle): Sandbox => {
+    if (!handle.backend) return fallback;
+    const sandbox = backends[handle.backend as SandboxBackendName];
+    if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);
+    return sandbox;
+  };
+
+  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
+    handle.resourceId && opts.resources ? opts.resources.use(handle.resourceId, action) : action();
+
+  async function computerTarget(scopeId: string): Promise<{ sandbox: Sandbox; scopeId: string; resourceId?: string }> {
+    const resource = await opts.resources?.resolve(scopeId);
+    if (resource === null) throw new Error("this scope has no default sandbox");
+    if (resource) {
+      const sandbox = backends[resource.backend];
+      if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
+      return { sandbox, scopeId: resource.backingScopeId, resourceId: resource.id };
+    }
+    return { sandbox: await pickStrict(scopeId), scopeId };
+  }
 
   async function pickStrict(scopeId: string): Promise<Sandbox> {
     const route = await routeFor(scopeId);
@@ -113,81 +133,155 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     profile: fallback.profile,
 
     async profileFor(scopeId: string): Promise<AgentComputerProfile> {
+      const resource = await opts.resources?.resolve(scopeId);
+      if (resource) {
+        const sandbox = backends[resource.backend];
+        if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
+        return sandbox.profile;
+      }
+      if (resource === null) return fallback.profile;
       return (await pick(scopeId)).sandbox.profile;
     },
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scope = provOpts?.routeScopeId ?? writableScope(layers);
+      let resource;
+      if (provOpts?.sandboxId) resource = await opts.resources?.get(provOpts.sandboxId);
+      else if (!provOpts?.scratch) resource = await opts.resources?.resolve(scope);
+      if (provOpts?.sandboxId && !resource) throw new Error("sandbox inventory unavailable");
+      if (resource === null) throw new Error("this scope has no default sandbox; create one or specify sandbox_id");
+      if (resource) {
+        const sandbox = backends[resource.backend];
+        if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);
+        const routedLayers = layers.map((layer) =>
+          layer.mode === "rw" ? { ...layer, scopeId: resource.backingScopeId } : layer,
+        );
+        const handle = await opts.resources!.use(resource.id, () => sandbox.provision(routedLayers, provOpts));
+        return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
+      }
       const { name, sandbox } = await pick(scope);
       const handle = await sandbox.provision(layers, provOpts);
-      return { ...handle, backend: name, ...(scope ? { scopeId: scope } : {}) };
+      const resourceId =
+        !provOpts?.scratch && scope ? await opts.resources?.recordLegacy(scope, name, handle) : undefined;
+      return { ...handle, backend: name, ...(scope ? { scopeId: scope } : {}), ...(resourceId ? { resourceId } : {}) };
     },
 
     run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      return forHandle(handle).run(handle, command, execOpts);
+      const run = () => forHandle(handle).run(handle, command, execOpts);
+      return useHandle(handle, run);
     },
     readFile(handle, relPath) {
-      return forHandle(handle).readFile(handle, relPath);
+      return useHandle(handle, () => forHandle(handle).readFile(handle, relPath));
     },
     writeFile(handle, relPath, data) {
-      return forHandle(handle).writeFile(handle, relPath, data);
+      const write = () => forHandle(handle).writeFile(handle, relPath, data);
+      return useHandle(handle, write);
     },
     writeFileBytes(handle, relPath, data) {
-      return forHandle(handle).writeFileBytes(handle, relPath, data);
+      const write = () => forHandle(handle).writeFileBytes(handle, relPath, data);
+      return useHandle(handle, write);
     },
     readFileBytes(handle, relPath) {
-      return forHandle(handle).readFileBytes(handle, relPath);
+      return useHandle(handle, () => forHandle(handle).readFileBytes(handle, relPath));
     },
     listDir(handle, relDir) {
-      return forHandle(handle).listDir(handle, relDir);
+      return useHandle(handle, () => forHandle(handle).listDir(handle, relDir));
     },
     removeDir(handle, relDir) {
-      return forHandle(handle).removeDir(handle, relDir);
+      const remove = () => forHandle(handle).removeDir(handle, relDir);
+      return useHandle(handle, remove);
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      return forHandle(handle).teardown(handle, tdOpts);
+      return useHandle(handle, () => forHandle(handle).teardown(handle, tdOpts));
     },
 
     ...(some(supportsProcessSessions)
       ? {
-          startProcess: (handle: SandboxHandle, command: string, o?) =>
-            requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o),
+          startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
+            useHandle(handle, async () => {
+              const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
+              const started = await sandbox.startProcess(handle, command, o);
+              try {
+                await register(started.processId);
+              } catch (error) {
+                try {
+                  await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
+                    handle,
+                    started.processId,
+                    "KILL",
+                  );
+                } catch (cleanupError) {
+                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
+                    cause: cleanupError,
+                  });
+                }
+                throw error;
+              }
+              return started;
+            }),
+          startProcess: (handle: SandboxHandle, command: string, o?) => {
+            const start = () =>
+              requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);
+            return useHandle(handle, start);
+          },
           readProcess: (handle: SandboxHandle, id: string, o?) =>
-            requireCap(forHandle(handle), "readProcess", handle.scopeId).readProcess(handle, id, o),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "readProcess", handle.scopeId).readProcess(handle, id, o),
+            ),
           writeStdin: (handle: SandboxHandle, id: string, data: string) =>
-            requireCap(forHandle(handle), "writeStdin", handle.scopeId).writeStdin(handle, id, data),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "writeStdin", handle.scopeId).writeStdin(handle, id, data),
+            ),
           signalProcess: (handle: SandboxHandle, id: string, sig: string) =>
-            requireCap(forHandle(handle), "signalProcess", handle.scopeId).signalProcess(handle, id, sig),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "signalProcess", handle.scopeId).signalProcess(handle, id, sig),
+            ),
           listProcesses: (handle: SandboxHandle) =>
-            requireCap(forHandle(handle), "listProcesses", handle.scopeId).listProcesses(handle),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "listProcesses", handle.scopeId).listProcesses(handle),
+            ),
         }
       : {}),
     ...(some((s) => typeof s.exportFiles === "function")
       ? {
           exportFiles: (handle: SandboxHandle, o?) =>
-            requireCap(forHandle(handle), "exportFiles", handle.scopeId).exportFiles(handle, o),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "exportFiles", handle.scopeId).exportFiles(handle, o),
+            ),
         }
       : {}),
     ...(some((s) => typeof s.computerStatus === "function")
       ? {
-          computerStatus: async (scopeId: string) =>
-            requireCap(await pickStrict(scopeId), "computerStatus", scopeId).computerStatus(scopeId),
+          computerStatus: async (scopeId: string) => {
+            const target = await computerTarget(scopeId);
+            const action = () => requireCap(target.sandbox, "computerStatus", scopeId).computerStatus(target.scopeId);
+            return target.resourceId && opts.resources ? opts.resources.use(target.resourceId, action) : action();
+          },
         }
       : {}),
     ...(some((s) => typeof s.restartComputer === "function")
       ? {
-          restartComputer: async (scopeId: string) =>
-            requireCap(await pickStrict(scopeId), "restartComputer", scopeId).restartComputer(scopeId),
+          restartComputer: async (scopeId: string) => {
+            const target = await computerTarget(scopeId);
+            const action = () => requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId);
+            return target.resourceId && opts.resources ? opts.resources.use(target.resourceId, action) : action();
+          },
         }
       : {}),
     ...(some(supportsBlobStaging)
       ? {
           stageIn: (handle: SandboxHandle, dest: string, blobId: string, opts?: StageOptions) =>
-            requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
+            ),
           stageOut: (handle: SandboxHandle, src: string, opts?: StageOptions) =>
-            requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src, opts),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src, opts),
+            ),
           importFiles: (handle: SandboxHandle, entries) =>
-            requireCap(forHandle(handle), "importFiles", handle.scopeId).importFiles(handle, entries),
+            useHandle(handle, () =>
+              requireCap(forHandle(handle), "importFiles", handle.scopeId).importFiles(handle, entries),
+            ),
         }
       : {}),
 

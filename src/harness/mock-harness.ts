@@ -527,6 +527,16 @@ export function createMockHarness(): Harness {
           });
           usedTool = true;
           reply = content ?? `(no file: ${path})`;
+        } else if (command0.startsWith("!memorysearch ")) {
+          const query = command0.slice("!memorysearch ".length).trim();
+          const hits = await turn.tools.memorySearch(query);
+          usedTool = true;
+          reply = hits?.join("\n") ?? "(memory unavailable)";
+        } else if (command0.startsWith("!memoryremember ")) {
+          const fact = command0.slice("!memoryremember ".length).trim();
+          const added = await turn.tools.memoryRemember([fact]);
+          usedTool = true;
+          reply = added === null ? "(memory unavailable)" : `remembered ${added}`;
         } else if (command0.startsWith("!write ")) {
           const rest = command0.slice(7);
           const sp = rest.indexOf(" ");

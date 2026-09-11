@@ -1618,7 +1618,7 @@ a.chat-row-open {
 .deleted-bubble {
   opacity: 0.6;
 }
-.deleted-bubble > :not(.revision-badge) {
+.deleted-bubble > .pin-content > :not(.revision-badge) {
   text-decoration: line-through;
 }
 
@@ -1772,51 +1772,32 @@ a.chat-row-open {
   color: var(--foreground);
   overflow-wrap: anywhere;
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble {
-  display: flex;
-  flex-direction: column;
-  max-height: 40cqh;
+.user-bubble > .pin-content {
+  display: flow-root;
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] {
-  max-height: none;
-}
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble > markdown-block,
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble > .slack-wire-text {
-  flex-shrink: 1000;
-  min-height: 0;
+.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble {
+  max-height: var(--pin-clamp, 320px);
   overflow: hidden;
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > markdown-block,
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > .slack-wire-text {
-  overflow: visible;
-}
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble > .message-files {
-  min-height: 0;
-  max-height: 20cqh;
-  overflow-y: auto;
-}
-.prompt-toggle {
+.pin-toggle {
   display: none;
-  align-self: flex-start;
-  flex-shrink: 0;
-  margin-top: 6px;
-  padding: 0;
+  pointer-events: auto;
   border: 0;
-  background: transparent;
+  border-radius: 6px;
+  background: var(--background);
   color: var(--muted-foreground);
   font: inherit;
   font-size: 12px;
+  padding: 6px 8px;
   cursor: pointer;
 }
-.prompt-toggle:hover {
+.message-stack .user-row:not(:has(~ .user-row)) > .pin-toggle:not([hidden]) {
+  display: inline-flex;
+}
+.pin-toggle:hover {
   color: var(--foreground);
-  text-decoration: underline;
+  background: var(--secondary);
 }
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-clamped="true"] > .prompt-toggle,
-.message-stack .user-row:not(:has(~ .user-row)) .user-bubble[data-expanded="true"] > .prompt-toggle {
-  display: block;
-}
-
 .message-files,
 .attachment-strip {
   display: flex;
@@ -2527,6 +2508,7 @@ a.chat-row-open {
   color: var(--muted-foreground);
   font-size: 12.5px;
 }
+.composer-wrap > .live-work-status,
 .composer-wrap > .bg-activity {
   flex: 0 0 calc(100% + var(--composer-pad-inline) + var(--composer-pad-end));
   width: auto;
@@ -2539,6 +2521,13 @@ a.chat-row-open {
   border-bottom-right-radius: 0;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--secondary) 40%, var(--background));
+}
+.composer-wrap > .live-work-status:has(+ .bg-activity) {
+  margin-bottom: 0;
+}
+.composer-wrap > .live-work-status + .bg-activity {
+  margin-top: 0;
+  border-radius: 0;
 }
 .readonly-chat .bg-activity {
   margin-top: 8px;
@@ -2668,9 +2657,7 @@ a.chat-row-open {
 }
 
 .live-work-status {
-  width: 100%;
   min-width: 0;
-  margin: 8px 0 0;
   color: var(--muted-foreground);
 }
 .live-work-line {
@@ -6995,7 +6982,6 @@ h3.ambient-field-label {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding-left: 10px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--background) 96%, transparent);
   opacity: 0;
@@ -7502,6 +7488,16 @@ h3.ambient-field-label {
   border-color: var(--primary, #6366f1);
   color: var(--primary, #6366f1);
   background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--background));
+}
+
+.settings-fast-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.settings-fast-toggle.active .icon {
+  fill: currentColor;
 }
 
 [data-qm-tooltip-anchor] {
@@ -8956,7 +8952,7 @@ h3.ambient-field-label {
 .mini-convo-body .message-stack {
   width: 100%;
 }
-.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)) .user-bubble {
+.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble {
   max-height: 100px;
 }
 .mini-convo-missing {

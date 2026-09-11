@@ -48,6 +48,7 @@ import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
+import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 
 export interface AutoFlaggerDraft {
   harnessId: HarnessId;
@@ -225,6 +226,27 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           : { error: `security-posture requires { posture: ${SECURITY_POSTURES.join(" | ")} }` };
       },
       (deps, scope, posture) => deps.config!.setSecurityPosture(scope, posture),
+    ),
+  },
+  {
+    id: "sharing-posture",
+    kind: "enum",
+    target: "any",
+    label:
+      "Cross-context read posture. The organization is a ceiling; personal and room scopes may opt out. Isolated wins.",
+    readKey: "sharingPosture",
+    enumValues: SHARING_POSTURES,
+    get: (deps, scope) => deps.config!.getSharingPostureDurable(scope),
+    apply: generic<SharingPosture | null>(
+      (body) => {
+        if ((body as { inherit?: unknown }).inherit === true) return { value: null };
+        const posture = parseSharingPosture((body as { posture?: unknown }).posture);
+        return posture
+          ? { value: posture }
+          : { error: `sharing-posture requires { posture: ${SHARING_POSTURES.join(" | ")} }` };
+      },
+      (deps, scope, posture) =>
+        posture === null ? deps.config!.clearSharingPosture(scope) : deps.config!.setSharingPosture(scope, posture),
     ),
   },
   {
@@ -684,12 +706,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harnessId} harness`,
         };
-      await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+      const choice = {
         harnessId,
         modelId,
         effortLevel,
         fastMode: fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId),
-      });
+      };
+      await ctx.deps.config!.setRuntimeSelectionLatest(scope, choice);
       return { ok: true };
     },
   },

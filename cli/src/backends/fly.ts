@@ -22,6 +22,8 @@ import {
   brandEnvOf,
   orgEnv,
   runnableServices,
+  hostedServiceEnv,
+  serviceHost,
   serviceDef,
   virtualServiceEnv,
   type ServiceCtx,
@@ -37,7 +39,13 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
-import { computedSecrets, runtimeSecretNames, secretDestinations, secretsForService } from "../secrets.ts";
+import {
+  computedSecrets,
+  validatedSecrets,
+  runtimeSecretNames,
+  secretDestinations,
+  secretsForService,
+} from "../secrets.ts";
 import { manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
@@ -272,7 +280,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
           ...(ctx.config.modelProvider ? { MODEL_PROVIDER: ctx.config.modelProvider } : {}),
         }
       : {};
-  const configuredEnv = { ...ctx.config.env[service] };
+  const configuredEnv = hostedServiceEnv(ctx.config.services, ctx.config.env, service);
   if (service === "core") delete configuredEnv.FLY_ORG;
   const deploymentEnv: Record<string, string> = service === "core" && ctx.flyOrg ? { FLY_ORG: ctx.flyOrg } : {};
   const overrides: Record<string, string> = {
@@ -675,7 +683,7 @@ function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
   return { kind: "manifest" };
 }
 
-const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "admin", "portal", "auth"]);
+const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "admin", "auth"]);
 
 export function flyDeployPhases(services: ServiceName[]): ServiceName[][] {
   const phases: ServiceName[][] = [];
@@ -1060,7 +1068,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
             `--only "${name}": ${name} is a virtual service — it runs in-process on the core, so deploy it with --only core`,
           );
         }
-        svc.push(name as ServiceName);
+        svc.push(serviceHost(name) as ServiceName);
       } else if (pluginSet.has(name)) plg.add(name);
       else {
         throw new CliError(
@@ -1328,8 +1336,8 @@ export function flyLogs(
   const logArgs = (app: string): string[] => ["logs", "-a", app, ...(opts.follow ? [] : ["--no-tail"])];
 
   if (service) {
-    const resolved = service === "slack" ? "core" : service;
-    if (service === "slack") note("slack is a virtual service; showing core logs");
+    const resolved = serviceHost(service);
+    if (resolved !== service) note(`${service} runs in ${resolved}; showing ${resolved} logs`);
     const app = `${appPrefix}-${resolved}`;
     if (!which(flyBin())) {
       note(`flyctl not found — run:\n  ${flyBin()} ${logArgs(app).join(" ")}`);
@@ -1661,6 +1669,7 @@ export async function flyCheckLive(
 }
 
 export async function flySecretsPush(config: QmConfig, configDir: string, envFile?: string): Promise<void> {
+  validatedSecrets(config);
   const path = resolve(envFile ?? join(configDir, ".env"));
   const values = existsSync(path) ? readEnvFile(path) : new Map<string, string>();
   const prefix = appPrefixOf(config);

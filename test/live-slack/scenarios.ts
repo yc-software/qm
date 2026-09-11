@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { assert, isLiveStatusText, type Scenario } from "./harness.ts";
 import { sleep } from "./slack.ts";
+import { assertRuntimeHandoff } from "./runtime-handoff.ts";
 import { multiUserScenarios } from "./scenarios-multiuser.ts";
 import { twinScenarios } from "./scenarios-twin.ts";
 
@@ -19,6 +20,39 @@ const PROVISION_BUDGET_MS = 4_000;
 const AUTH_PROBE_BUDGET_MS = 500;
 
 export const scenarios: Scenario[] = [
+  {
+    name: "runtime-model-handoff",
+    lane: "parallel",
+    tags: ["core", "release"],
+    timeoutMs: 5 * 60_000,
+    async run(ctx) {
+      const ch = await ctx.freshChannel();
+      const marker = ctx.marker();
+      const root = await ch.mention(
+        `Use runtime action=get to inspect the available models, then runtime action=set to switch to a different available Anthropic model for this request. Keep using pi with automatic reasoning effort and fast mode off. After the handoff, call runtime action=get again to verify which model you are actually running on, then calculate 17 × 23. Include ${marker}, that model and the answer in your final reply.`,
+      );
+      const reply = await ch.waitForBotReply(root, { match: new RegExp(marker), timeoutMs: 4 * 60_000 });
+      assert.match(reply.text ?? "", /\b391\b/);
+      const session = await ctx.core.findSessionByThread(ch.id, root);
+      assert.ok(session, "no core session found for runtime handoff");
+      const choice = assertRuntimeHandoff(session.entries);
+      type ModelCall = { step: number; model: string; createdAt: number; usage: { output: number } | null };
+      let modelCalls: ModelCall[];
+      const deadline = Date.now() + 30_000;
+      do {
+        const { requests } = (await ctx.core.getSessionLlm(session.id)) as { requests: ModelCall[] };
+        modelCalls = requests.filter((request) => request.step >= 0).toSorted((a, b) => a.createdAt - b.createdAt);
+        if (modelCalls.some((request) => request.model === choice.modelId && (request.usage?.output ?? 0) > 0)) break;
+        await sleep(500);
+      } while (Date.now() < deadline);
+      assert.ok(modelCalls.length >= 2, "runtime handoff did not produce multiple model calls");
+      assert.notEqual(modelCalls[0]!.model, choice.modelId, "runtime tool selected the already active model");
+      assert.ok(
+        modelCalls.slice(1).some((request) => request.model === choice.modelId && (request.usage?.output ?? 0) > 0),
+        `no real model call used the selected runtime ${choice.modelId}`,
+      );
+    },
+  },
   {
     name: "mention-reply",
     lane: "parallel",

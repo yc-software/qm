@@ -94,6 +94,7 @@ test("tab actions overlay the title instead of reserving title space", () => {
   assert.match(actions, /right: 0;/);
   assert.match(actions, /background: color-mix\(in srgb, var\(--background\) 96%, transparent\);/);
   assert.doesNotMatch(actions, /gradient|blur/);
+  assert.doesNotMatch(actions, /padding(?:-[\w-]+)?\s*:/, "the overlay must hug its action buttons");
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*position: relative;/);
   assert.match(css, /\.dv-tab \.split-pane-title \{[^}]*flex: 1 1 auto;/);
   const draw = split.slice(split.indexOf("class PaneTab"), split.indexOf("class StripDrop"));

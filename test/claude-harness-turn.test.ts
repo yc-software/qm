@@ -8,6 +8,8 @@ import type { ScopeId, SessionEntry } from "../src/types.ts";
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
 
+const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
+
 let currentScript: Script = async function* () {};
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
@@ -29,12 +31,10 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
         },
       };
     },
-    tool: (name: string, description: string, schema: unknown, handler: unknown) => ({
-      name,
-      description,
-      schema,
-      handler,
-    }),
+    tool: (name: string, description: string, schema: unknown, handler: (args: unknown) => Promise<unknown>) => {
+      toolHandlers.set(name, handler);
+      return { name, description, schema, handler };
+    },
     createSdkMcpServer: (config: unknown) => config,
   },
 });
@@ -80,7 +80,7 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
     input: "what is the capital of france?",
     systemPrompt: "be brief",
     history: [],
-    tools: {} as HarnessTurnInput["tools"],
+    tools: {} as unknown as HarnessTurnInput["tools"],
     scopeLabel: scope,
     orgScopeId: scope,
     readOnly: true,
@@ -327,4 +327,25 @@ test("the claude harness offers compaction and detection so a utility role canno
     recordModelCall: () => {},
   });
   assert.equal(verdict.respond, true);
+});
+
+test("Claude preserves a committed runtime handoff when SDK interruption returns an error", async () => {
+  const choice = { harnessId: "codex" as const, modelId: "gpt-6-astra" };
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    await toolHandlers.get("runtime")!({ action: "set", model: "Astra" });
+    yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
+  };
+  const harness = createClaudeHarness({});
+  const { turn, entries } = harnessTurn({
+    readOnly: false,
+    tools: {
+      runtime: async () => ({ ok: true, handoff: { choice, lifetime: "task" } }),
+    } as unknown as HarnessTurnInput["tools"],
+  });
+  const result = await harness.turns.runTurn(turn);
+  assert.deepEqual(result.runtimeHandoff, { choice, lifetime: "task" });
+  assert.equal(result.stopped, undefined);
+  assert.equal(entries.filter((entry) => entry.type === "assistant").length, 0);
+  assert.ok(entries.some((entry) => entry.type === "tool_result"));
 });

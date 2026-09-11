@@ -1,3 +1,4 @@
+import type { RuntimeControl, RuntimeHandoff } from "./runtime-types.ts";
 import type { AttachmentMeta, ConversationTurn, ScopeId, Session, SessionEntry } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
 import type {
@@ -82,6 +83,8 @@ export interface HarnessTurnInput {
   attachments?: AttachmentMeta[];
   images?: HarnessImage[];
   runtime?: Partial<RuntimeChoice>;
+  runtimeControl?: RuntimeControl;
+  runtimeActorId?: string;
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
@@ -114,6 +117,7 @@ export interface HarnessTurnInput {
 }
 
 export interface HarnessTurnResult {
+  runtimeHandoff?: RuntimeHandoff;
   reply: string;
   silent?: boolean;
   stopped?: true;

@@ -25,6 +25,8 @@ export interface AuthConfig {
   transport: EmailTransportKind;
   resendApiKey: string;
   smtp: SmtpSettings;
+  sessionIdleS: number;
+  sessionAbsoluteS: number;
   linkTtlS: number;
   codeTtlS: number;
   accessTtlS: number;
@@ -105,6 +107,8 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
       password: env.SMTP_PASSWORD ?? "",
       tls: smtpTlsFrom(env.SMTP_TLS, env.SMTP_PORT),
     },
+    sessionIdleS: numberFrom(env.AUTH_SESSION_IDLE_S, 30 * 86400),
+    sessionAbsoluteS: numberFrom(env.AUTH_SESSION_ABSOLUTE_S, 90 * 86400),
     linkTtlS: numberFrom(env.AUTH_LINK_TTL_S, 900),
     codeTtlS: numberFrom(env.AUTH_CODE_TTL_S, 120),
     accessTtlS: numberFrom(env.AUTH_ACCESS_TTL_S, 120),
@@ -233,6 +237,15 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
       );
     }
   }
+  if (
+    !Number.isInteger(cfg.sessionIdleS) ||
+    !Number.isInteger(cfg.sessionAbsoluteS) ||
+    cfg.sessionIdleS > cfg.sessionAbsoluteS ||
+    cfg.sessionAbsoluteS > 90 * 86400
+  )
+    problems.push(
+      "AUTH_SESSION_IDLE_S and AUTH_SESSION_ABSOLUTE_S must be whole seconds with idle <= absolute <= 90 days",
+    );
   return problems;
 }
 

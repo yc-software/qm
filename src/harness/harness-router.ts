@@ -149,7 +149,13 @@ export function createHarnessRouter(
           await adapter.turns.resetSession?.(input.session.id);
         }
         lastHarness.set(input.session.id, choice.harnessId);
-        const dispatched: HarnessTurnInput = { ...input, runtime: choice };
+        const dispatched: HarnessTurnInput = {
+          ...input,
+          runtime: choice,
+          tools: input.runtimeControl
+            ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
+            : input.tools,
+        };
         return adapter.turns.runTurn(
           adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched),
         );

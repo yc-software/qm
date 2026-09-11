@@ -48,7 +48,7 @@ test("admin shell uses the QM identity with org-injectable branding", () => {
 test("admin shell groups control, logs, and artifacts like the reorganization", () => {
   assert.match(
     html,
-    /const SECTIONS = \[\s*\{ views: \["governance", "models", "credentials", "connectors", "customize", "users"\] \},\s*\{ label: "Logs", views: \["history", "slack", "judgments", "audit", "egress", "metrics"\] \},\s*\{ label: "Artifacts", views: \["files", "skills", "memory", "deployments", "crons", "retention"\] \},\s*\];/,
+    /const SECTIONS = \[\s*\{ views: \["governance", "models", "credentials", "connectors", "customize", "users"\] \},\s*\{ label: "Logs", views: \["history", "slack", "judgments", "errors", "audit", "egress", "metrics"\] \},\s*\{ label: "Artifacts", views: \["files", "skills", "memory", "deployments", "crons", "retention"\] \},\s*\];/,
   );
   assert.match(html, /history: "Sessions"/);
   assert.match(
@@ -168,7 +168,7 @@ test("transcript filters hide diagnostics without hiding folded delivery evidenc
 test("governance posture saves refresh only the saved card", () => {
   const reloads = html.match(/const SAVE_RELOADS = new Set\(\[[^\n]+/)?.[0] ?? "";
   assert.doesNotMatch(reloads, /security-posture|ambient-policy/);
-  assert.match(html, /if \(key === "security-posture" \|\| key === "ambient-policy"\)/);
+  assert.match(html, /if \(key === "security-posture" \|\| key === "sharing-posture" \|\| key === "ambient-policy"\)/);
 });
 
 test("compact ambient reply policy tracks the value after each save", () => {
@@ -196,6 +196,7 @@ test("governance retains scoped effective-state data behind the compact referenc
   }
   assert.match(html, /function renderGovernanceOverview\(data\)/);
   assert.match(html, /Effective security posture/);
+  assert.match(html, /Effective sharing posture/);
   assert.match(html, /Resolved at organization scope/);
   assert.match(
     html,
@@ -213,6 +214,7 @@ test("control-plane pages use the shared web UI canvas without redundant page in
   );
   assert.match(html, /--cta: oklch\(0\.27 0\.062 250\)/);
   assert.match(html, /data-choice-for="security-posture"/);
+  assert.match(html, /data-choice-for="sharing-posture"/);
   assert.match(html, /data-checkbox-for="external-slack-participants"/);
   assert.match(html, /governanceAmbient\.id = "card-governance-org-ambient"/);
   assert.match(html, /id="sc-editor"/);
@@ -231,6 +233,7 @@ test("control-plane pages use the shared web UI canvas without redundant page in
 test("governance renders simple settings as compact rows with contextual actions", () => {
   for (const id of [
     "card-security-posture",
+    "card-sharing-posture",
     "card-external-slack",
     "card-base-model",
     "card-people-directory",
@@ -273,6 +276,7 @@ test("compact governance rows preserve policy detail and collapse before they ov
 test("governance reviews high-impact changes in product and preserves drafts", () => {
   assert.match(html, /<dialog class="review-dialog" id="governance-review"/);
   assert.match(html, /key === "security-posture"/);
+  assert.match(html, /key === "sharing-posture"/);
   assert.match(html, /key === "external-slack-participants"/);
   assert.match(html, /Review the immutable change below/);
   assert.match(html, /function hasGovernanceDraft\(\)/);
@@ -433,6 +437,7 @@ test("the hidden utility hides an element whose component rule is declared later
 test("admin parity views expose the requested card groups and real navigation actions", () => {
   for (const text of [
     "Security posture",
+    "Sharing posture",
     "Command policy",
     "Ambient reply policy",
     "Egress policy",
@@ -535,4 +540,14 @@ test("governance follows the neutral web UI interaction palette", () => {
     html,
     /\.posture-choice:has\(input:checked\) \{\s*border-color: var\(--border\);\s*background: var\(--subtle\)/,
   );
+});
+
+test("Open sharing explains the benefit and privacy risk in plain language", () => {
+  const card = html.slice(html.indexOf('id="card-sharing-posture"'), html.indexOf('id="card-egress"'));
+  assert.match(
+    card,
+    /QM can use your saved memories, files, and skills across conversations when you ask it for\s+help/,
+  );
+  assert.match(card, /In a group conversation, this could risk revealing private information to\s+others/);
+  assert.doesNotMatch(card, /live internal speaker|entitled resources|opted-in contexts/);
 });

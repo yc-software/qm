@@ -645,7 +645,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           result = message;
           await recordStep(message);
           await flushThinking();
-          const terminal = ref.silentRequested || ref.pausedOnApproval;
+          const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
             const finalEntry = await turn.emit({
@@ -681,7 +681,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         if (!controller.signal.aborted || error instanceof NonRetryableTurnError) throw error;
         const reply = streamedText.trim();
         await flushThinking();
-        if (reply && !ref.silentRequested && !ref.pausedOnApproval) {
+        if (reply && !ref.runtimeHandoff && !ref.silentRequested && !ref.pausedOnApproval) {
           const finalEntry = await turn.emit({
             type: "assistant",
             payload: { text: reply, stopped: true },
@@ -690,8 +690,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           await tapeReplyCheckpoint(turn, finalEntry);
         }
         return {
-          reply: ref.silentRequested || ref.pausedOnApproval ? "" : reply,
-          stopped: true,
+          reply: ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval ? "" : reply,
+          ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
+          ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
           ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
@@ -700,7 +701,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       }
       const finalResult = result as SDKResultMessage | null;
       const stoppedPartial = async (): Promise<HarnessTurnResult> => {
-        const terminal = ref.silentRequested || ref.pausedOnApproval;
+        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (reply && !terminal) {
@@ -713,7 +714,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         }
         return {
           reply,
-          stopped: true,
+          ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
+          ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
           ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
@@ -724,10 +726,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         throw new Error("Claude Agent SDK ended without a result");
       }
       if (finalResult.subtype !== "success") {
-        if (stopped) return stoppedPartial();
+        if (stopped || ref.runtimeHandoff) return stoppedPartial();
         throw new Error(finalResult.errors.join("; ") || `Claude Agent SDK failed: ${finalResult.subtype}`);
       }
-      const terminal = ref.silentRequested || ref.pausedOnApproval;
+      const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
       const reply = terminal ? "" : finalResult.result.trim();
       const usageTotals = [...callUsage.values()].reduce(
         (acc, usage) => {
@@ -741,6 +743,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       return {
         reply,
         ...(stopped ? { stopped: true as const } : {}),
+        ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
         ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),

@@ -2,6 +2,8 @@ app = "qm-web-ui"
 primary_region = "sjc"
 
 [env]
+  ADMIN_BASE_PATH = "/admin"
+  ADMIN_ENABLED = "1"
   QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
   PORT = "8080"
   CORE_API_URL = "http://qm-core.internal:8080"

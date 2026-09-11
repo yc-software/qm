@@ -2,7 +2,7 @@ import test from "node:test";
 import https from "node:https";
 import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,8 @@ import {
   awsMigrateCandidate,
   awsRollback,
   awsSecretsPush,
+  awsSetBackgroundWork,
+  taskDefinitionForBackgroundWork,
   awsStatus,
   awsUp,
   githubTrustSubject,
@@ -31,10 +33,12 @@ import {
   taskDefinitionDiff,
 } from "../src/backends/aws.ts";
 import type { QmConfig } from "../src/config.ts";
+import { runnableServices } from "../src/services.ts";
 import { computedSecrets } from "../src/secrets.ts";
 import { awsObjectStoreBucket } from "../src/terraform.ts";
 import { withAwsLease } from "../src/aws-lease.ts";
 import { manifestRef } from "../src/manifest.ts";
+import { hostingProvider } from "../src/backends/registry.ts";
 
 process.env.QM_AWS_ROLLOUT_POLL_MS = "5";
 process.env.QM_AWS_LIVE_PROBE_POLL_MS = "5";
@@ -130,6 +134,7 @@ else if (a.includes("lambda-microvms get-microvm-image")) {
   console.log(JSON.stringify({ imageArn }));
 }
 else if (a.includes("lambda-microvms list-microvm-image-versions")) console.log(JSON.stringify({ items: [{ imageVersion: process.env.AWS_FAKE_IMAGE_VERSION || "1", state: process.env.AWS_FAKE_IMAGE_STATE || "SUCCESSFUL", status: process.env.AWS_FAKE_IMAGE_STATUS || "ACTIVE" }] }));
+else if (a.includes("cloudfront list-distributions")) console.log(process.env.AWS_FAKE_CLOUDFRONT || "{}");
 else if (a.includes("elbv2 describe-load-balancers")) console.log(JSON.stringify({ LoadBalancers: [{ LoadBalancerArn: "arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/test/1", DNSName: process.env.AWS_FAKE_ALB_DNS || "agent.acme.example", State: { Code: "active" } }] }));
 else if (a.includes("elbv2 describe-listeners")) {
   const protocol = process.env.AWS_FAKE_LISTENER_PROTOCOL || "HTTPS";
@@ -213,6 +218,7 @@ function statefulAws(
     failPromotion?: boolean;
     promotionAlreadyCurrent?: boolean;
     drainRollout?: boolean;
+    drainPolls?: number;
     primaryFailedTasks?: boolean;
     rolloutFailed?: boolean;
     transientFailedTaskPolls?: number;
@@ -301,6 +307,9 @@ else if (a.includes("ecs describe-services")) {
   const start = args.indexOf("--services") + 1;
   const end = Math.min(...[args.indexOf("--output", start), args.indexOf("--region", start)].filter((index) => index >= 0));
   const names = args.slice(start, end);
+  const blocked = s.blockDisabledDrain && names.some((name) => s.definitions[s.services[name]?.taskDefinition]?.containerDefinitions?.some((container) => container.name === "core" && container.environment?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED" && entry.value === "0")));
+  const draining = ${JSON.stringify(opts.drainRollout ?? false)} || (s.drainPolls || 0) > 0 || blocked;
+  if (s.drainPolls > 0) { s.drainPolls--; save(); }
   const transientFailedTaskPolls = ${JSON.stringify(opts.transientFailedTaskPolls ?? 0)};
   let transientlyFailing = false;
   if (transientFailedTaskPolls && s.updated) {
@@ -328,7 +337,7 @@ else if (a.includes("ecs describe-services")) {
     if (name === staleName && service.previousTaskDefinition) {
       return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: service.desiredCount, taskDefinition: service.previousTaskDefinition, deployments: [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.previousTaskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }], tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
     }
-    const deployments = ${JSON.stringify(opts.drainRollout ?? false)}
+    const deployments = draining
       ? [
           { id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: service.desiredCount, failedTasks: 1 },
           { id: "old-protected", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: 1, failedTasks: 0 },
@@ -340,7 +349,7 @@ else if (a.includes("ecs describe-services")) {
         : blueGreenBakePolls
           ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }]
         : [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: transientFailedTaskPolls && s.updated ? 1 : 0 }];
-    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: ${JSON.stringify(opts.drainRollout ?? false)} ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
+    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }] }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
 else if (a.includes("ecs list-service-deployments") && ${JSON.stringify(opts.failNativeStatusOnceAfterUpdate ?? false)} && s.updated && !s.nativeStatusFailedOnce) {
@@ -354,7 +363,9 @@ else if (a.includes("ecs list-service-deployments")) {
   const service = s.services[name];
   const revision = "service-revision-for-" + String(service?.deploymentId || "").replace(/^ecs-svc\\//, "");
   const status = (s.blueGreenPolls || 0) === 1 ? "PENDING" : (s.blueGreenPolls || 0) <= ${JSON.stringify(opts.blueGreenBakePolls ?? 0)} ? "IN_PROGRESS" : "SUCCESSFUL";
-  console.log(JSON.stringify({ serviceDeployments: service ? [{ targetServiceRevisionArn: "arn:aws:ecs:us-west-2:123456789012:service-revision/acme-qm/" + name + "/" + revision, status, createdAt: 1700000000000 + s.revision }] : [] }));
+  const prior = service?.previousTaskDefinition ? [{ targetServiceRevisionArn: "arn:aws:ecs:us-west-2:123456789012:service-revision/acme-qm/" + name + "/previous", status: "SUCCESSFUL", createdAt: 1700000000000 }] : [];
+  const current = service && (s.blueGreenPolls || 0) !== 1 ? [{ targetServiceRevisionArn: "arn:aws:ecs:us-west-2:123456789012:service-revision/acme-qm/" + name + "/" + revision, status, createdAt: 1700000000000 + s.revision }] : [];
+  console.log(JSON.stringify({ serviceDeployments: [...prior, ...current] }));
 }
 else if (a.includes("ecs describe-service-revisions")) {
   const start = args.indexOf("--service-revision-arns") + 1;
@@ -363,7 +374,7 @@ else if (a.includes("ecs describe-service-revisions")) {
   console.log(JSON.stringify({ serviceRevisions: arns.flatMap((arn) => {
     const name = arn.split("/").at(-2);
     const service = name ? s.services[name] : undefined;
-    return service ? [{ serviceRevisionArn: arn, taskDefinition: service.taskDefinition }] : [];
+    return service ? [{ serviceRevisionArn: arn, taskDefinition: arn.endsWith("/previous") ? service.previousTaskDefinition : service.taskDefinition }] : [];
   }) }));
 }
 else if (a.includes("ecs list-tasks")) console.log(JSON.stringify({ taskArns: process.env.AWS_FAKE_NO_RUNNING_TASK ? [] : [...(process.env.AWS_FAKE_LARGE_ROLLOUT ? Array.from({ length: 100 }, (_, i) => "arn:aws:ecs:us-west-2:123456789012:task/old-core-" + i) : []), "arn:aws:ecs:us-west-2:123456789012:task/live-core"] }));
@@ -395,7 +406,10 @@ else if (a.includes("ecs update-service")) {
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--desired-count")) service.desiredCount = Number(after("--desired-count"));
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)}) service.deploymentId = "ecs-svc/" + name + "-" + (++s.revision);
   s.updated = true;
-  if (${JSON.stringify(opts.failFirstUpdateAfterMutation ?? false)} && !s.failedFirstUpdate) {
+  s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
+  s.blueGreenPolls = 0;
+  if (s.failNextUpdatesAfterMutation > 0 || (${JSON.stringify(opts.failFirstUpdateAfterMutation ?? false)} && !s.failedFirstUpdate)) {
+    if (s.failNextUpdatesAfterMutation > 0) s.failNextUpdatesAfterMutation--;
     s.failedFirstUpdate = true;
     save();
     console.error("UpdateServiceResponseLost");
@@ -413,6 +427,7 @@ else if (a.includes("dynamodb get-item")) {
   console.log(JSON.stringify(s.dynamo[key] ? { Item: s.dynamo[key] } : {}));
 }
 else if (a.includes("dynamodb transact-write-items")) {
+  if (s.failNextTransactions > 0) { s.failNextTransactions--; save(); console.error("TransactionRejected"); process.exit(1); }
   if (${JSON.stringify(opts.failTransactions ?? false)}) { console.error("TransactionRejected"); process.exit(1); }
   const failTransactionPuts = ${JSON.stringify(opts.failTransactionPuts ?? 0)};
   if (failTransactionPuts) {
@@ -507,6 +522,8 @@ const config: QmConfig = {
 
 test("AWS environment derives identity, public URLs, private wiring, and MicroVM coordinates", () => {
   assert.deepEqual(serviceEnvironment(config, "web-ui"), {
+    ADMIN_BASE_PATH: "/admin",
+    ADMIN_ENABLED: "1",
     CORE_API_URL: "http://core.acme.internal:8080",
     CORE_ORG_ID: "acme",
     PORT: "8080",
@@ -1347,6 +1364,188 @@ test("a no-op re-deploy records no manifest", async () => {
     await awsUp(single, dir, { yes: true });
     const second = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.equal(second.dynamo["deployment/current"].manifestId.S, firstManifestId);
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS up coalesces a requested restart into one deployment even when the task is unchanged", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-restart-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const single = oneServiceConfig();
+  const fake = statefulAws(dir, single, {}, { blueGreenBakePolls: 3 });
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(single, dir, { yes: true });
+    const first = JSON.parse(readFileSync(fake.state, "utf8"));
+    const firstId = first.dynamo["deployment/current"].manifestId.S;
+    const previous = JSON.parse(first.dynamo[`deployment/manifest/${firstId}`].manifest.S);
+    writeFileSync(fake.log, "");
+    await awsUp(single, dir, { dryRun: true, restart: ["core"] });
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
+    writeFileSync(fake.log, "");
+    await awsUp(single, dir, { yes: true, restart: ["core"] });
+    const second = JSON.parse(readFileSync(fake.state, "utf8"));
+    const nextId = second.dynamo["deployment/current"].manifestId.S;
+    const next = JSON.parse(second.dynamo[`deployment/manifest/${nextId}`].manifest.S);
+    assert.notEqual(nextId, firstId);
+    assert.notEqual(next.tasks.core, previous.tasks.core);
+    assert.deepEqual(next.imageProvenance, previous.imageProvenance);
+    const calls = readFileSync(fake.log, "utf8");
+    assert.equal(calls.match(/ecs register-task-definition/g)?.length, 1);
+    assert.equal(calls.match(/ecs update-service/g)?.length, 1);
+    assert.ok((calls.match(/ecs list-service-deployments/g)?.length ?? 0) >= 4);
+    assert.ok(calls.lastIndexOf("ecs list-service-deployments") < calls.lastIndexOf("dynamodb transact-write-items"));
+    await assert.rejects(() => awsUp(single, dir, { yes: true, restart: ["missing"] }), /not selected/);
+    await assert.rejects(() => awsUp(single, dir, { buildOnly: true, restart: ["core"] }), /cannot be used/);
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("background mode changes preserve task settings and reject secret-controlled modes", () => {
+  const task = {
+    family: "core",
+    taskDefinitionArn: "read-only",
+    status: "ACTIVE",
+    cpu: "1024",
+    volumes: [{ name: "scratch" }],
+    containerDefinitions: [
+      {
+        name: "core",
+        image: "pinned",
+        environment: [{ name: "OTHER", value: "kept" }],
+        secrets: [{ name: "TOKEN", valueFrom: "secret" }],
+      },
+      { name: "sidecar", image: "unchanged" },
+    ],
+  };
+  const changed = taskDefinitionForBackgroundWork(task, false);
+  assert.equal(changed.taskDefinitionArn, undefined);
+  assert.equal(changed.status, undefined);
+  assert.deepEqual(changed.volumes, task.volumes);
+  const containers = changed.containerDefinitions as typeof task.containerDefinitions;
+  assert.deepEqual(containers[1], task.containerDefinitions[1]);
+  assert.deepEqual(containers[0]!.secrets, task.containerDefinitions[0]!.secrets);
+  assert.deepEqual(containers[0]!.environment, [
+    { name: "OTHER", value: "kept" },
+    { name: "BACKGROUND_WORK_ENABLED", value: "0" },
+  ]);
+  assert.equal(task.containerDefinitions[0]!.environment!.length, 1);
+  assert.throws(
+    () =>
+      taskDefinitionForBackgroundWork(
+        { containerDefinitions: [{ name: "core", secrets: [{ name: "BACKGROUND_WORK_ENABLED" }] }] },
+        true,
+      ),
+    /supplied as a secret/,
+  );
+});
+
+test("background activation preserves candidate and manifest without another migration; demotion drains old tasks", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-background-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const base = oneServiceConfig();
+  const single = { ...base, env: { ...base.env, core: { ...base.env.core, BACKGROUND_WORK_ENABLED: "false" } } };
+  const fake = statefulAws(dir, single, {}, { drainPolls: 6 });
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(single, dir, { yes: true });
+    const readState = () => JSON.parse(readFileSync(fake.state, "utf8"));
+    const manifest = () => {
+      const state = readState();
+      return JSON.parse(
+        state.dynamo[`deployment/manifest/${state.dynamo["deployment/current"].manifestId.S}`].manifest.S,
+      );
+    };
+    const initial = manifest();
+    const candidate = {
+      contract: 1,
+      accountId: single.aws!.accountId,
+      region: single.aws!.region,
+      label: "verified",
+      images: { core: readState().definitions[initial.tasks.core].containerDefinitions[0].image },
+      imageProvenance: initial.imageProvenance,
+    };
+    const candidatePath = join(dir, "candidate.json");
+    writeFileSync(candidatePath, JSON.stringify(candidate));
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, true, candidatePath);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs register-task-definition/);
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, false);
+    const disabled = manifest();
+    assert.notEqual(disabled.tasks.core, initial.tasks.core);
+    assert.deepEqual(disabled.imageProvenance, initial.imageProvenance);
+    assert.deepEqual(disabled.layer, initial.layer);
+    assert.equal(disabled.dbRestorePoint, initial.dbRestorePoint);
+    const disableCalls = readFileSync(fake.log, "utf8");
+    assert.ok(
+      (disableCalls.slice(disableCalls.indexOf("ecs update-service")).match(/ecs describe-services/g)?.length ?? 0) >=
+        6,
+    );
+    const lostResponse = readState();
+    lostResponse.failNextUpdatesAfterMutation = 1;
+    writeFileSync(fake.state, JSON.stringify(lostResponse));
+    writeFileSync(fake.log, "");
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, true, candidatePath), /UpdateServiceResponseLost/);
+    assert.equal(manifest().id, disabled.id);
+    const compensationCalls = readFileSync(fake.log, "utf8");
+    assert.ok(
+      (compensationCalls.slice(compensationCalls.lastIndexOf("ecs update-service")).match(/ecs describe-services/g)
+        ?.length ?? 0) >= 6,
+    );
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, true, candidatePath);
+    const active = manifest();
+    assert.notEqual(active.tasks.core, disabled.tasks.core);
+    assert.deepEqual(active.imageProvenance, initial.imageProvenance);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs run-task|rds |ecr /);
+    const core = readState().definitions[active.tasks.core].containerDefinitions[0];
+    assert.equal(core.image, candidate.images.core);
+    assert.equal(
+      core.environment.find((entry: { name: string }) => entry.name === "BACKGROUND_WORK_ENABLED").value,
+      "1",
+    );
+    writeFileSync(fake.log, "");
+    await awsSetBackgroundWork(single, dir, true, candidatePath);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|ecs register-task-definition/);
+    candidate.images.core = candidate.images.core.replace(/sha256:.+$/, "sha256:" + "b".repeat(64));
+    writeFileSync(candidatePath, JSON.stringify(candidate));
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, true, candidatePath), /expected release candidate/);
+    const faulted = readState();
+    faulted.failNextTransactions = 3;
+    writeFileSync(fake.state, JSON.stringify(faulted));
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /manifest write failed/);
+    assert.equal(manifest().id, active.id);
+    assert.equal(readState().services["acme-core"].taskDefinition, active.tasks.core);
+    const busy = readState();
+    busy.blockDisabledDrain = true;
+    writeFileSync(fake.state, JSON.stringify(busy));
+    const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+    process.env.QM_AWS_ROLLOUT_DEADLINE_MS = "1500";
+    try {
+      await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /timed out/);
+      assert.equal(manifest().id, active.id);
+      assert.equal(readState().services["acme-core"].taskDefinition, active.tasks.core);
+    } finally {
+      if (priorDeadline === undefined) delete process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+      else process.env.QM_AWS_ROLLOUT_DEADLINE_MS = priorDeadline;
+    }
+    const drifted = readState();
+    drifted.services["acme-core"].desiredCount++;
+    writeFileSync(fake.state, JSON.stringify(drifted));
+    await assert.rejects(() => awsSetBackgroundWork(single, dir, false), /differs from the deployment manifest/);
   } finally {
     process.env.PATH = priorPath;
     fake.restore();
@@ -2483,6 +2682,176 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("AWS candidate builds honor their concurrency bound and join failures before publishing", async () => {
+  for (const mode of ["serial", "parallel", "failure"]) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-parallel-"));
+    const candidatePath = join(dir, "candidate.json");
+    const events = join(dir, "events");
+    writeFileSync(events, "");
+    const fake = statefulAws(dir, config);
+    const docker = join(dir, "docker");
+    writeFileSync(
+      docker,
+      `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "login") process.exit(0);
+const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
+const dir = ${JSON.stringify(dir)};
+const events = ${JSON.stringify(events)};
+const mode = ${JSON.stringify(mode)};
+const log = (event) => fs.appendFileSync(events, event + ":" + name + "\\n");
+log("start");
+fs.writeFileSync(path.join(dir, "started-" + name), "");
+(async () => {
+  if (mode !== "serial" && ["core", "web-ui"].includes(name)) {
+    const deadline = Date.now() + 10000;
+    while (!["core", "web-ui"].every((peer) => fs.existsSync(path.join(dir, "started-" + peer)))) {
+      if (Date.now() > deadline) process.exit(9);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  if (mode === "failure" && name === "core") { log("fail"); process.exit(7); }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  log("end");
+})();
+`,
+    );
+    chmodSync(docker, 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${dir}:${priorPath}`;
+    try {
+      const provider = hostingProvider("aws");
+      const context = {
+        config,
+        configDir: dir,
+        configPath: join(dir, "qm.config.json"),
+        sandboxDir: dir,
+        target: "aws" as const,
+      };
+      const options = provider.upOptions(
+        context,
+        {
+          "build-only": true,
+          "build-from": true,
+          ...(mode === "serial" ? {} : { "build-concurrency": "2" }),
+          "image-label": "parallel-candidate",
+          "candidate-out": candidatePath,
+        },
+        false,
+      );
+      const result = provider.createBackend(context).up(options);
+      if (mode === "failure") {
+        await assert.rejects(result, /docker exited with 7/);
+        assert.equal(existsSync(candidatePath), false);
+      } else {
+        await result;
+        const candidate = JSON.parse(readFileSync(candidatePath, "utf8"));
+        assert.deepEqual(Object.keys(candidate.images).sort(), runnableServices(config.services).sort());
+        assert.deepEqual(Object.keys(candidate.imageProvenance).sort(), runnableServices(config.services).sort());
+        assert.ok(Object.values(candidate.images).every((image) => /@sha256:[a-f0-9]{64}$/.test(String(image))));
+      }
+      const lines = readFileSync(events, "utf8").trim().split("\n");
+      let active = 0;
+      let peak = 0;
+      for (const line of lines) {
+        active += line.startsWith("start:") ? 1 : -1;
+        peak = Math.max(peak, active);
+      }
+      assert.equal(active, 0);
+      assert.equal(peak, mode === "serial" ? 1 : 2);
+      if (mode === "failure") {
+        assert.ok(lines.includes("end:web-ui"));
+        assert.equal(lines.filter((line) => line.startsWith("start:")).length, 2);
+      }
+      assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
+    } finally {
+      process.env.PATH = priorPath;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("cancelling candidate builds terminates and joins every Docker child without a manifest", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cancel-"));
+  const candidatePath = join(dir, "candidate.json");
+  const fake = statefulAws(dir, config);
+  const docker = join(dir, "docker");
+  writeFileSync(
+    docker,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "login") process.exit(0);
+const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
+const dir = ${JSON.stringify(dir)};
+if (name === "core") process.on("SIGTERM", () => {});
+if (name === "web-ui") {
+  const plugin = 'process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(' + JSON.stringify(path.join(dir, "pid-web-ui-plugin")) + ', String(process.pid)); setTimeout(() => {}, 20000);';
+  require("node:child_process").spawn(process.execPath, ["-e", plugin], { stdio: "inherit" });
+}
+fs.writeFileSync(path.join(dir, "pid-" + name), String(process.pid));
+setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 20000);
+`,
+  );
+  chmodSync(docker, 0o755);
+  const moduleUrl = new URL("../src/backends/aws.ts", import.meta.url).href;
+  const code = `const { awsUp } = await import(${JSON.stringify(moduleUrl)}); await awsUp(${JSON.stringify(config)}, ${JSON.stringify(dir)}, ${JSON.stringify({ buildOnly: true, buildFrom: true, buildConcurrency: 2, imageLabel: "cancelled-candidate", candidateOut: candidatePath })});`;
+  const parent = spawn(process.execPath, ["--input-type=module", "-e", code], {
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    stdio: "ignore",
+  });
+  const exited = new Promise<number | null>((resolve, reject) => {
+    parent.once("error", reject);
+    parent.once("exit", resolve);
+  });
+  try {
+    const deadline = Date.now() + 10000;
+    while (!["core", "web-ui", "web-ui-plugin"].every((name) => existsSync(join(dir, "pid-" + name)))) {
+      assert.ok(Date.now() < deadline, "Docker children and nested buildx plugin must start");
+      assert.equal(parent.exitCode, null);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    parent.kill("SIGTERM");
+    assert.notEqual(await exited, 0);
+    assert.equal(existsSync(candidatePath), false);
+    for (const name of ["core", "web-ui", "web-ui-plugin"]) {
+      const pid = Number(readFileSync(join(dir, "pid-" + name), "utf8"));
+      assert.throws(() => process.kill(pid, 0), /ESRCH/);
+      assert.equal(existsSync(join(dir, "completed-" + name)), false);
+    }
+    assert.equal(existsSync(join(dir, "pid-admin")), false);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
+  } finally {
+    parent.kill("SIGKILL");
+    for (const name of ["core", "web-ui", "web-ui-plugin"]) {
+      const path = join(dir, "pid-" + name);
+      if (existsSync(path)) {
+        try {
+          process.kill(Number(readFileSync(path, "utf8")), "SIGKILL");
+        } catch {
+          void 0;
+        }
+      }
+    }
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS rejects invalid or misplaced candidate build concurrency before mutation", async () => {
+  for (const value of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(awsUp(config, ".", { buildOnly: true, buildConcurrency: value }), /positive integer/);
+  }
+  await assert.rejects(awsUp(config, ".", { buildConcurrency: 2 }), /requires --build-only/);
+  const shared = structuredClone(config);
+  shared.aws!.services["web-ui"]!.ecrRepository = shared.aws!.services.core!.ecrRepository;
+  await assert.rejects(awsUp(shared, ".", { buildOnly: true, buildConcurrency: 2 }), /distinct ECR repositories/);
 });
 
 test("AWS candidate deploy fails closed on account, repository, or missing-workload drift", async () => {
@@ -4274,6 +4643,11 @@ test("AWS private canary reaches core without a core ingress target and refuses 
   process.env.PATH = `${dir}:${priorPath}`;
   try {
     await awsUp(config, dir, { yes: true });
+    const rolloutCalls = readFileSync(fake.log, "utf8");
+    const webUpdate = rolloutCalls.indexOf("ecs update-service --cluster acme-qm --service acme-web-ui");
+    const portalUpdate = rolloutCalls.indexOf("ecs update-service --cluster acme-qm --service acme-portal");
+    const webPoll = rolloutCalls.indexOf("ecs describe-services", webUpdate);
+    assert.ok(webUpdate >= 0 && webUpdate < webPoll && webPoll < portalUpdate);
     await awsCheckLive(config, { report: false });
     assert.match(
       readFileSync(fake.log, "utf8"),
@@ -4368,6 +4742,113 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
   }
 });
 
+test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is configured", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-proxy-"));
+  const fake = fakeAws(dir, "console.log('')");
+  const priorSecret = process.env.CORE_SIGNING_SECRET;
+  const priorProtocol = process.env.AWS_FAKE_LISTENER_PROTOCOL;
+  const priorCloudFront = process.env.AWS_FAKE_CLOUDFRONT;
+  const distribution = {
+    DomainName: "test.cloudfront.net",
+    Status: "Deployed",
+    Enabled: true,
+    CacheBehaviors: { Quantity: 0 },
+    DefaultCacheBehavior: { TargetOriginId: "alb", MaxTTL: 0 },
+    Origins: {
+      Items: [
+        {
+          Id: "alb",
+          DomainName: "agent.acme.example",
+          OriginPath: "",
+          CustomOriginConfig: { OriginProtocolPolicy: "http-only", HTTPPort: 80 },
+        },
+      ],
+    },
+  };
+  const setDistribution = (value: unknown) => {
+    process.env.AWS_FAKE_CLOUDFRONT = JSON.stringify({ DistributionList: { Items: [value] } });
+  };
+  setDistribution(distribution);
+  process.env.AWS_FAKE_LISTENER_PROTOCOL = "HTTP";
+  process.env.CORE_SIGNING_SECRET = TEST_SECRET_VALUE;
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(https, "request", () => {
+    throw new Error("must not dial the HTTP origin with TLS");
+  });
+  t.mock.method(globalThis, "fetch", async (url: URL, init: RequestInit) => {
+    calls.push({ url: url.href, init });
+    return new Response("applied", { status: 200 });
+  });
+  try {
+    const configured = {
+      ...config,
+      publicUrl: "https://test.cloudfront.net",
+      env: { ...config.env, core: { ...config.env.core, AWS_PUBLIC_ORIGIN_URL: "http://acme-qm.elb.example" } },
+    };
+    for (const method of ["GET", "PUT"] as const) {
+      const body = method === "PUT" ? '{"contract":1}' : "";
+      assert.equal(
+        (await awsDeploymentLayerTransport({ config: configured, configDir: dir, method, body })).status,
+        200,
+      );
+    }
+    assert.equal(calls.length, 2);
+    for (const { url, init } of calls) {
+      assert.equal(url, "https://test.cloudfront.net/v1/deployment-layer");
+      assert.equal(init.redirect, "error");
+      assert.ok(init.signal instanceof AbortSignal);
+      const headers = init.headers as Record<string, string>;
+      assert.equal(
+        headers["x-signature"],
+        `v0=${createHmac("sha256", TEST_SECRET_VALUE)
+          .update(`v0:${headers["x-timestamp"]}:${init.method}\n/v1/deployment-layer\n${init.body ?? ""}`)
+          .digest("hex")}`,
+      );
+    }
+    for (const invalid of [
+      { ...distribution, DomainName: "another.cloudfront.net" },
+      { ...distribution, Enabled: false },
+      { ...distribution, Status: "InProgress" },
+      { ...distribution, ContinuousDeploymentPolicyId: "staging-policy" },
+      { ...distribution, DomainName: "other.cloudfront.net", Aliases: { Items: ["test.cloudfront.net"] } },
+      { ...distribution, DefaultCacheBehavior: { TargetOriginId: "alb", MaxTTL: 60 } },
+      { ...distribution, DefaultCacheBehavior: { TargetOriginId: "alb", MaxTTL: 0, CachePolicyId: "managed" } },
+      { ...distribution, CacheBehaviors: { Quantity: 1 } },
+      { ...distribution, DefaultCacheBehavior: { TargetOriginId: "other", MaxTTL: 0 } },
+      {
+        ...distribution,
+        DefaultCacheBehavior: { TargetOriginId: "alb", MaxTTL: 0, FunctionAssociations: { Quantity: 1 } },
+      },
+      {
+        ...distribution,
+        DefaultCacheBehavior: { TargetOriginId: "alb", MaxTTL: 0, LambdaFunctionAssociations: { Quantity: 1 } },
+      },
+      ...[
+        { DomainName: "other-stack.elb.example" },
+        { OriginPath: "/prefix" },
+        { CustomOriginConfig: { OriginProtocolPolicy: "match-viewer", HTTPPort: 80 } },
+      ].map((change) => ({ ...distribution, Origins: { Items: [{ ...distribution.Origins.Items[0], ...change }] } })),
+    ]) {
+      setDistribution(invalid);
+      await assert.rejects(
+        () => awsDeploymentLayerTransport({ config: configured, configDir: dir, method: "PUT", body: "{}" }),
+        /routing directly to the selected ALB/,
+      );
+    }
+    assert.equal(calls.length, 2);
+  } finally {
+    if (priorCloudFront === undefined) delete process.env.AWS_FAKE_CLOUDFRONT;
+    else process.env.AWS_FAKE_CLOUDFRONT = priorCloudFront;
+    t.mock.restoreAll();
+    fake.restore();
+    if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+    else process.env.CORE_SIGNING_SECRET = priorSecret;
+    if (priorProtocol === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
+    else process.env.AWS_FAKE_LISTENER_PROTOCOL = priorProtocol;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS layer transport rejects invalid targets and propagates TLS and body failures without fallback", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-layer-failure-"));
   const fake = fakeAws(dir, "console.log('')");
@@ -4458,6 +4939,45 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS secrets push defers activation against pre-consolidation images", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-combined-"));
+  const operator = computedSecrets(config).filter((secret) => secret.managedBy === "operator" && secret.required);
+  writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
+  const fake = statefulAws(dir, config);
+  const state = JSON.parse(readFileSync(fake.state, "utf8"));
+  const tasks = Object.fromEntries(
+    runnableServices(config.services).map((name) => [name, state.services[`acme-${name}`].taskDefinition]),
+  );
+  state.definitions[tasks["web-ui"]] = {
+    containerDefinitions: [{ name: "web-ui", image: "old-web-image", environment: [] }],
+  };
+  state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks }], "current");
+  writeFileSync(fake.state, JSON.stringify(state));
+  try {
+    await awsSecretsPush(config, dir);
+    const calls = readFileSync(fake.log, "utf8");
+    assert.match(calls, /secretsmanager put-secret-value/);
+    assert.doesNotMatch(calls, /ecs (?:register-task-definition|update-service)/);
+    state.definitions[tasks["web-ui"]].containerDefinitions[0].environment = [{ name: "ADMIN_ENABLED", value: "1" }];
+    state.definitions[tasks.portal] = {
+      containerDefinitions: [
+        {
+          name: "portal",
+          image: "old-portal-image",
+          environment: [{ name: "ADMIN_UPSTREAM", value: "http://admin.acme.internal:8080" }],
+        },
+      ],
+    };
+    writeFileSync(fake.state, JSON.stringify(state));
+    writeFileSync(fake.log, "");
+    await awsSecretsPush(config, dir);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
+  } finally {
+    fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });

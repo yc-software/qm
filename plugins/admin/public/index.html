@@ -1066,6 +1066,53 @@
         color: var(--warn);
         font-size: 12px;
       }
+      .errors-table table {
+        table-layout: fixed;
+        min-width: 860px;
+      }
+      .errors-table th:nth-child(1) {
+        width: 10%;
+      }
+      .errors-table th:nth-child(2) {
+        width: 12%;
+      }
+      .errors-table th:nth-child(3) {
+        width: 16%;
+      }
+      .errors-table th:nth-child(4) {
+        width: 34%;
+      }
+      .errors-all th:nth-child(5) {
+        width: 18%;
+      }
+      .errors-scoped th:nth-child(4) {
+        width: 52%;
+      }
+      .errors-table th:last-child {
+        width: 10%;
+      }
+      .errors-table td {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .error-message {
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .error-message summary {
+        cursor: pointer;
+      }
+      .error-message .error-full {
+        display: none;
+        white-space: pre-wrap;
+      }
+      .error-message[open] .error-preview {
+        display: none;
+      }
+      .error-message[open] .error-full {
+        display: inline;
+      }
       .error-strip {
         margin: 0 0 14px;
         padding: 10px 12px;
@@ -5158,6 +5205,10 @@
                   <span class="k">Autonomy</span><span class="v">Loading</span
                   ><span class="detail">Security posture</span>
                 </div>
+                <div class="governance-status" id="governance-status-sharing">
+                  <span class="k">Sharing</span><span class="v">Loading</span
+                  ><span class="detail">Cross-context reads</span>
+                </div>
                 <div class="governance-status" id="governance-status-egress">
                   <span class="k">Network</span><span class="v">Loading</span
                   ><span class="detail">Outbound enforcement</span>
@@ -5232,6 +5283,52 @@
                   <div class="foot">
                     <button class="primary" data-save="security-posture">Apply</button
                     ><span class="status" id="st-security-posture"></span>
+                  </div>
+                </section>
+                <section class="card sv-governance hidden" id="card-auto-flagger">
+                  <div class="head">
+                    <h2>Auto flagger</h2>
+                    <p>
+                      Model and prompt that decide whether external context and tool results are quarantined in Auto
+                      mode. The security boundary and required verdict format remain fixed.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label for="auto-flagger-harness">Harness</label>
+                    <select id="auto-flagger-harness" style="max-width: 360px"></select>
+                    <label for="auto-flagger-model">Model</label>
+                    <select id="auto-flagger-model" style="max-width: 440px"></select>
+                    <label for="auto-flagger-rubric">Quarantine prompt (classification rubric)</label>
+                    <textarea id="auto-flagger-rubric" rows="10" maxlength="20000" style="width: 100%"></textarea>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="auto-flagger">Apply</button>
+                    <button id="auto-flagger-test" type="button">Test</button>
+                    <label
+                      for="auto-flagger-window"
+                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
+                      >on the last
+                      <input
+                        id="auto-flagger-window"
+                        type="number"
+                        min="1"
+                        max="500"
+                        step="1"
+                        value="100"
+                        style="width: 78px"
+                      />
+                      screenings</label
+                    >
+                    <label
+                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
+                      title="Also replay the configuration in effect today, so the flag rates are comparable"
+                      ><input type="checkbox" id="auto-flagger-compare" /> compare with current</label
+                    >
+                    <button id="auto-flagger-reset" type="button">Restore default</button>
+                    <span class="status" id="st-auto-flagger"></span>
+                  </div>
+                  <div class="foot" id="auto-flagger-test-result" hidden>
+                    <span class="status" id="st-auto-flagger-test"></span>
                   </div>
                 </section>
                 <section class="card sv-governance setting-row hidden" id="card-approval-grant-modes">
@@ -5363,6 +5460,54 @@
                   <h2>Data boundaries</h2>
                   <p>What can leave a scope, which audiences can see it, and how deployment authority is carried.</p>
                 </div>
+                <section class="card sv-governance setting-row hidden" id="card-sharing-posture">
+                  <div class="head">
+                    <h2>Sharing posture</h2>
+                    <p>
+                      The organization is a ceiling. Personal and room scopes can opt out, and Isolated always wins.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <p id="sharing-posture-effective"></p>
+                    <select id="sharing-posture" data-choice-state hidden>
+                      <option value="isolated">Isolated</option>
+                      <option value="open">Open</option>
+                    </select>
+                    <div class="choice-stack">
+                      <label class="posture-choice"
+                        ><input
+                          type="radio"
+                          name="sharing-posture-choice"
+                          value="isolated"
+                          data-choice-for="sharing-posture"
+                        /><span
+                          ><strong>Isolated</strong
+                          ><small>Resources stay in their own scope unless explicitly shared.</small></span
+                        ></label
+                      >
+                      <label class="posture-choice"
+                        ><input
+                          type="radio"
+                          name="sharing-posture-choice"
+                          value="open"
+                          data-choice-for="sharing-posture"
+                        /><span
+                          ><strong>Open</strong
+                          ><small
+                            >QM can use your saved memories, files, and skills across conversations when you ask it for
+                            help. In a group conversation, this could risk revealing private information to
+                            others.</small
+                          ></span
+                        ></label
+                      >
+                    </div>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="sharing-posture">Apply</button>
+                    <button type="button" id="sharing-posture-inherit" hidden>Follow organization</button>
+                    <span class="status" id="st-sharing-posture"></span>
+                  </div>
+                </section>
                 <section class="card sv-governance" id="card-egress">
                   <div class="head">
                     <h2>Egress policy</h2>
@@ -6178,7 +6323,7 @@
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
         { views: ["governance", "models", "credentials", "connectors", "customize", "users"] },
-        { label: "Logs", views: ["history", "slack", "judgments", "audit", "egress", "metrics"] },
+        { label: "Logs", views: ["history", "slack", "judgments", "errors", "audit", "egress", "metrics"] },
         { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons", "retention"] },
       ];
 
@@ -6255,6 +6400,8 @@
         content.insertBefore(anchor, $("card-service-credentials"));
         [
           $("card-security-posture"),
+          $("card-auto-flagger"),
+          $("card-sharing-posture"),
           governanceAmbient,
           $("card-external-slack"),
           $("card-command-policy"),
@@ -6334,6 +6481,7 @@
         files: "Files",
         memory: "Memory",
         live: "Live",
+        errors: "Errors",
         audit: "Audit",
         skills: "Skills",
         crons: "Crons",
@@ -6353,6 +6501,7 @@
         "memory",
         "live",
         "audit",
+        "errors",
         "skills",
         "crons",
         "deployments",
@@ -6370,6 +6519,7 @@
       ]);
       const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
       const HISTORY_PAGE_SIZE = 50;
+      const ERRORS_PAGE_SIZE = 50;
 
       const TRANSCRIPT_PAGE_SIZE = 500;
       const DEFAULT_VIEW = "history";
@@ -7007,6 +7157,7 @@
           return q ? path + "?" + q : path;
         }
         if (st.scope && SCOPED.has(st.view)) p.set("scope", st.scope);
+        if (st.view === "errors" && st.page > 1) p.set("page", st.page);
         if (st.principal) p.set("principal", st.principal);
         if (st.view === "crons" && st.cron) p.set("cron", st.cron);
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
@@ -7062,7 +7213,10 @@
         else if (session) resolvedView = "history";
         return {
           view: resolvedView,
-          scope: pathScope || p.get("scope") || (resolvedView === "history" ? "org:" + orgId : scope),
+          scope:
+            pathScope ||
+            p.get("scope") ||
+            (resolvedView === "history" || resolvedView === "errors" ? "org:" + orgId : scope),
           session,
           turn: turnRaw == null || turnRaw === "" ? null : turnRaw,
           principal: p.get("principal") || null,
@@ -7178,7 +7332,12 @@
         });
       }
       function setView(v) {
-        go({ view: v, scope: v === "history" ? "org:" + orgId : scope, session: null, historyKind: "conversation" });
+        go({
+          view: v,
+          scope: v === "history" || v === "errors" ? "org:" + orgId : scope,
+          session: null,
+          historyKind: "conversation",
+        });
       }
       document.querySelectorAll("[data-viewlink]").forEach((button) => {
         button.onclick = () => setView(button.dataset.viewlink);
@@ -7713,6 +7872,13 @@
         if (posture === "dangerous") postureTone = "danger";
         else if (posture === "auto") postureTone = "warn";
         setGovernanceStatus("governance-status-posture", titleCase(posture), "Effective security posture", postureTone);
+        const sharingPosture = data.sharingPosture || "isolated";
+        setGovernanceStatus(
+          "governance-status-sharing",
+          titleCase(sharingPosture),
+          "Effective sharing posture",
+          sharingPosture === "open" ? "danger" : "ok",
+        );
         const allowCount = (data.egress?.allowedHosts || []).length;
         const denyCount = (data.egress?.deniedHosts || []).length;
         const enforcement = data.egressEnforcement || {
@@ -7836,6 +8002,47 @@
             .querySelectorAll('[data-choice-for="security-posture"]')
             .forEach((input) => (input.checked = input.value === $("security-posture").value));
         }
+        const showAutoFlagger = scope.startsWith("org:") && "autoFlagger" in (r.data || {});
+        $("card-auto-flagger").classList.toggle("hidden", !showAutoFlagger);
+        if (scopeChanged) $("auto-flagger-test-result").hidden = true;
+        if (showAutoFlagger) {
+          const current = r.data.autoFlagger || r.data.autoFlaggerDefault;
+          const harness = $("auto-flagger-harness");
+          const model = $("auto-flagger-model");
+          const harnessOptions = [...(r.data.harnessOptions || [])];
+          if (!harnessOptions.includes(current.harnessId)) harnessOptions.push(current.harnessId);
+          const modelsByHarness = r.data.modelsByHarness || {};
+          harness.textContent = "";
+          harnessOptions.forEach((id) => {
+            const option = document.createElement("option");
+            option.value = id;
+            option.textContent = { pi: "Pi", opencode: "OpenCode", codex: "Codex", claude: "Claude Code" }[id] || id;
+            harness.appendChild(option);
+          });
+          harness.value = current.harnessId;
+          model.textContent = "";
+          const syncAutoFlaggerModels = () => {
+            const options = [...(modelsByHarness[harness.value] || [])];
+            const prior = model.value || current.modelId;
+            if (harness.value === current.harnessId && !options.some((entry) => entry.id === current.modelId)) {
+              options.push({ id: current.modelId, name: current.modelId + " (configured; unavailable)" });
+            }
+            model.textContent = "";
+            options.forEach((entry) => {
+              const option = document.createElement("option");
+              option.value = entry.id;
+              option.textContent = entry.name + " (" + entry.id + ")";
+              model.appendChild(option);
+            });
+            model.value = options.some((entry) => entry.id === prior) ? prior : (options[0] || {}).id || "";
+          };
+          harness.oninput = syncAutoFlaggerModels;
+          syncAutoFlaggerModels();
+          $("auto-flagger-rubric").value = current.rubric;
+        }
+        const showSharingPosture = "sharingPosture" in (r.data || {});
+        $("card-sharing-posture").classList.toggle("hidden", !showSharingPosture);
+        if (showSharingPosture) renderSharingPosture(r.data);
         const showGrantModes = "approvalGrantModes" in (r.data || {});
         $("card-approval-grant-modes").classList.toggle("hidden", !showGrantModes);
         if (showGrantModes) {
@@ -10489,6 +10696,13 @@
       };
       const SAVE = {
         "security-posture": () => ({ posture: $("security-posture").value }),
+        "auto-flagger": () => ({
+          harnessId: $("auto-flagger-harness").value,
+          modelId: $("auto-flagger-model").value,
+          rubric: $("auto-flagger-rubric").value,
+        }),
+
+        "sharing-posture": () => ({ posture: $("sharing-posture").value }),
         "approval-grant-modes": () => ({
           session: $("approval-grant-session").checked,
           always: $("approval-grant-always").checked,
@@ -10544,6 +10758,8 @@
       };
       const SAVE_ST = {
         "security-posture": "st-security-posture",
+        "auto-flagger": "st-auto-flagger",
+        "sharing-posture": "st-sharing-posture",
         "approval-grant-modes": "st-approval-grant-modes",
         "command-policy": "st-policy",
         soul: "st-soul",
@@ -10561,6 +10777,7 @@
         branding: "st-branding",
       };
       const SAVE_RELOADS = new Set([
+        "auto-flagger",
         "soul",
         "external-slack-participants",
         "runtime",
@@ -10572,6 +10789,25 @@
         "branding",
       ]);
       const sectionSnapshots = new Map();
+      function autoFlaggerTestSummary(data) {
+        if (!data.sampled) return data.message || "No past screenings to replay yet.";
+        const pct = (value) => (value == null ? "n/a" : (value * 100).toFixed(1) + "%");
+        const parts = ["Flagged " + data.flagged + " of " + data.scored + " scored (" + pct(data.flagRate) + ")"];
+        if (data.baseline) {
+          parts.push(
+            "current rubric flags " +
+              pct(data.baseline.flagRate) +
+              " · " +
+              plural(data.baseline.changed, "verdict") +
+              " changed",
+          );
+        }
+        if (data.unscreened) parts.push(plural(data.unscreened, "sample") + " came back unscreened");
+        if (data.errors) parts.push(plural(data.errors, "sample") + " errored");
+        if (data.partial) parts.push("stopped at the time limit — partial result");
+        parts.push("sampled " + data.sampled + " · " + Math.round(data.durationMs / 100) / 10 + "s");
+        return parts.join(" · ");
+      }
       function sectionButton(key) {
         return document.querySelector('[data-save="' + key + '"]');
       }
@@ -10632,6 +10868,24 @@
             danger: dangerous,
           });
         }
+        if (key === "sharing-posture") {
+          const before = JSON.parse(sectionSnapshots.get(key) || "{}").posture || "isolated";
+          const open = body.posture === "open";
+          return reviewGovernanceChange({
+            title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
+            subtitle: "This applies to future live human turns in the selected scope.",
+            facts: [
+              ["Scope", governanceScopeName()],
+              ["Current", titleCase(before)],
+              ["Proposed", titleCase(body.posture)],
+            ],
+            warning: open
+              ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
+              : "Cross-context resources will again require explicit shares or grants.",
+            confirmLabel: open ? "Enable Open" : "Use Isolated",
+            danger: open,
+          });
+        }
         if (key === "external-slack-participants") {
           const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
           return reviewGovernanceChange({
@@ -10651,7 +10905,88 @@
         }
         return Promise.resolve(true);
       }
+      function renderSharingPosture(data) {
+        const effective = data.sharingPosture || "isolated";
+        $("sharing-posture").value = effective;
+        $("sharing-posture-inherit").hidden = scope.startsWith("org:") || data.sharingPostureOverride == null;
+        $("sharing-posture-effective").textContent =
+          (data.sharingPostureOverride == null
+            ? scope.startsWith("org:")
+              ? "Default"
+              : "Following organization"
+            : "Configured: " + titleCase(data.sharingPostureOverride)) +
+          " · Effective: " +
+          titleCase(effective);
+        document
+          .querySelectorAll('[data-choice-for="sharing-posture"]')
+          .forEach((input) => (input.checked = input.value === effective));
+      }
+      $("sharing-posture-inherit").onclick = async () => {
+        const requestedScope = scope;
+        if (
+          !(await reviewGovernanceChange({
+            title: "Follow organization sharing?",
+            subtitle: "Remove this scope's sharing override.",
+            facts: [["Scope", governanceScopeName()]],
+            warning:
+              "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
+            confirmLabel: "Follow organization",
+          })) ||
+          requestedScope !== scope
+        )
+          return;
+        const result = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/sharing-posture", {
+          inherit: true,
+        });
+        if (requestedScope !== scope) return;
+        if (result.ok) await loadScope();
+        setStatus("st-sharing-posture", result.ok ? "Saved" : "Could not reset sharing.", result.ok ? "ok" : "err");
+      };
       let governanceSaveSeq = 0;
+      $("auto-flagger-test").onclick = async () => {
+        const requestedScope = scope;
+        const button = $("auto-flagger-test");
+        $("auto-flagger-test-result").hidden = false;
+        const windowField = $("auto-flagger-window");
+        const requested = Number(windowField.value);
+        if (!Number.isInteger(requested) || requested < 1 || requested > 500) {
+          return setStatus("st-auto-flagger-test", "Window must be a whole number between 1 and 500.", "err", true);
+        }
+        setStatus(
+          "st-auto-flagger-test",
+          "Replaying the last " + requested + " screenings through this rubric…",
+          "",
+          true,
+        );
+        button.disabled = true;
+        try {
+          const r = await api("POST", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger/test", {
+            window: requested,
+            compare: $("auto-flagger-compare").checked,
+            harnessId: $("auto-flagger-harness").value,
+            modelId: $("auto-flagger-model").value,
+            rubric: $("auto-flagger-rubric").value,
+          });
+          if (requestedScope !== scope) return;
+          if (!r.ok) {
+            return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
+          }
+          setStatus("st-auto-flagger-test", autoFlaggerTestSummary(r.data), r.data.errors ? "warn" : "ok", true);
+        } finally {
+          button.disabled = false;
+        }
+      };
+      $("auto-flagger-reset").onclick = async () => {
+        const requestedScope = scope;
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger", {
+          reset: true,
+        });
+        if (requestedScope !== scope) return;
+        if (!r.ok) return setStatus("st-auto-flagger", r.data?.message || "Reset failed.", "err");
+        await loadScope();
+        if (requestedScope === scope) setStatus("st-auto-flagger", "Default restored", "ok");
+      };
+
       document.querySelectorAll("[data-save]").forEach((btn) => {
         btn.onclick = async () => {
           const key = btn.dataset.save;
@@ -10679,7 +11014,7 @@
           }
           if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
           if (r.ok) {
-            if (key === "security-posture" || key === "ambient-policy") {
+            if (key === "security-posture" || key === "sharing-posture" || key === "ambient-policy") {
               const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
               if (!fresh.ok) {
                 updateSectionDirty(key);
@@ -10688,6 +11023,7 @@
               }
               renderGovernanceOverview(fresh.data);
               if (key === "security-posture") $("security-posture").value = fresh.data.securityPosture || "auto";
+              else if (key === "sharing-posture") renderSharingPosture(fresh.data);
               else renderAmbientPolicy(fresh.data.ambientPolicy);
               captureSection(key);
             } else if (key === "branding") {
@@ -11000,6 +11336,7 @@
           files: renderFiles,
           memory: renderMemory,
           live: renderLive,
+          errors: renderErrors,
           audit: renderAudit,
           skills: renderSkills,
           crons: renderCrons,
@@ -11026,6 +11363,7 @@
           }
           if (historyKind === "background") path += "&origin=other_background";
         }
+        if (view === "errors") path += `&limit=${ERRORS_PAGE_SIZE}&offset=${(page - 1) * ERRORS_PAGE_SIZE}`;
         const cacheable = view !== "memory";
         const cached = cacheable ? dataCache.get(path) : undefined;
         if (cached !== undefined) {
@@ -11347,6 +11685,64 @@
           ),
         );
       }
+      function renderErrors(root, d) {
+        const all = orgWideView();
+        const errors = d.errors || [];
+        const total = d.total ?? errors.length;
+        const limit = d.limit || ERRORS_PAGE_SIZE;
+        const offset = d.offset || 0;
+        defaultShell({ count: plural(total, "error"), context: "Newest first" });
+        const rows = errors.map((e) => {
+          const scopeTarget = /^(personal|channel|team|org|group):.+/.test(e.scopeLabel || "") ? e.scopeLabel : null;
+          const fullText = e.message || "(no message)";
+          const previewText = firstLine(fullText, 160);
+          const expandable = previewText !== fullText;
+          const message = document.createElement(expandable ? "details" : "div");
+          message.className = "error-message";
+          if (expandable) {
+            const summary = document.createElement("summary");
+            const preview = document.createElement("span");
+            preview.className = "error-preview";
+            preview.textContent = previewText;
+            const full = document.createElement("span");
+            full.className = "error-full";
+            full.textContent = fullText;
+            summary.append(preview, full);
+            message.append(summary);
+          } else {
+            message.textContent = fullText;
+          }
+          return [
+            timeCell(e.ts),
+            { text: e.category || "uncategorized" },
+            { text: e.code || "—", cls: "mono" },
+            nodeCell(message),
+            ...(all
+              ? [
+                  scopeTarget
+                    ? nodeCell(navLink(shortName(scopeTarget), { view: "errors", scope: scopeTarget }))
+                    : { text: e.scopeLabel || "System" },
+                ]
+              : []),
+            e.sessionId
+              ? nodeCell(
+                  navLink("View session", { view: "history", scope: scopeTarget || scope, session: e.sessionId }),
+                )
+              : { text: "—" },
+          ];
+        });
+        const content = table(
+          ["Time", "Category", "Code", "Message", ...(all ? ["Scope"] : []), "Session"],
+          rows,
+          all ? "No errors recorded." : "No errors recorded for this scope.",
+        );
+        content.classList.add("errors-table", all ? "errors-all" : "errors-scoped");
+        const navigate = (n) => go({ view: "errors", scope, page: n });
+        root.appendChild(pager(total, limit, offset, navigate));
+        root.appendChild(bareDataCard(content));
+        root.appendChild(pager(total, limit, offset, navigate));
+      }
+
       function renderAudit(root, d) {
         const all = orgWideView();
         const events = d.events || [];
@@ -14297,7 +14693,7 @@
           drow.className = "who";
           const dlabel = document.createElement("span");
           dlabel.className = "entry-label important";
-          dlabel.textContent = delivery.shadow ? "Shadow delivery" : "Slack delivery";
+          dlabel.textContent = deliveryLabel(delivery);
           drow.appendChild(dlabel);
           if (delivery.shadow) {
             const sb = document.createElement("span");
@@ -14306,7 +14702,7 @@
             sb.textContent = "not sent";
             drow.appendChild(sb);
           }
-          drow.appendChild(badge(delivery.destination?.type === "principal" ? "Slack DM" : "Slack", "info"));
+          drow.appendChild(badge(deliverySurfaceLabel(delivery), "info"));
           const mirror = slackMirrorRef(delivery);
           if (mirror) {
             const ml = navLink("View in Slack mirror ↗", { view: "slack", container: mirror.container, ts: mirror.ts });
@@ -15052,6 +15448,7 @@
                     : "default",
                 ],
                 ["Security posture", cfg.securityPosture || "auto"],
+                ["Sharing posture", cfg.sharingPosture || "isolated"],
                 ["Egress overrides", allowN || denyN ? allowN + " allow · " + denyN + " deny" : "none"],
                 ["Base model", cfg.baseModel || "org default"],
                 ["Connectors linked", String((cfg.connectors || []).length)],
@@ -15853,6 +16250,19 @@
         } else {
           requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight }));
         }
+      }
+
+      function deliverySurfaceLabel(event) {
+        const type = event?.destination?.type;
+        if (type === "principal") return "Slack DM";
+        if (type === "slack") return "Slack";
+        if (type === "web") return "Web";
+        return type || "Unknown surface";
+      }
+
+      function deliveryLabel(event) {
+        if (event.shadow) return "Shadow delivery";
+        return `${deliverySurfaceLabel(event)} delivery`;
       }
 
       function slackMirrorRef(event) {
@@ -16746,19 +17156,16 @@
             const who = document.createElement("div");
             who.className = "who";
             const outbound = event.type === "outbound_delivery";
-            const slackDelivery = outbound || event.type === "principal_delivery";
+            const isDelivery = outbound || event.type === "principal_delivery";
             const label = document.createElement("span");
             label.className = "entry-label important";
-            let deliveryLabel = "Delivery event";
-            if (event.shadow) deliveryLabel = "Shadow delivery";
-            else if (slackDelivery) deliveryLabel = "Slack delivery";
-            label.textContent = deliveryLabel;
+            label.textContent = event.shadow || isDelivery ? deliveryLabel(event) : "Delivery event";
             const when = document.createElement("span");
             when.className = "when";
             let deliveryState = "delivery";
             if (event.shadow) deliveryState = "shadow";
             else if (event.expiredAt) deliveryState = "dropped";
-            else if (slackDelivery) deliveryState = "delivered";
+            else if (isDelivery) deliveryState = "delivered";
             when.textContent = `${deliveryState} · ${fmtTime(event.createdAt)}`;
             const text = event.text || "";
             who.append(label);
@@ -16775,8 +17182,7 @@
               xb.textContent = "never sent";
               who.append(xb);
             }
-            if (slackDelivery)
-              who.appendChild(badge(event.destination?.type === "principal" ? "Slack DM" : "Slack", "info"));
+            if (isDelivery) who.appendChild(badge(deliverySurfaceLabel(event), "info"));
             const provenanceLink = originNodeForDeliveryEvent(event);
             if (!outbound && provenanceLink) who.appendChild(provenanceLink);
             const originLink = cronLinkForDeliveryEvent(event);

@@ -78,6 +78,7 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
       const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope));
+      const sharingPosture = await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
 
       const egress = {
@@ -98,6 +99,7 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
         egress,
         commandPolicy,
         securityPolicy,
+        sharingPosture,
         approvalGrantModes,
         orgScopeId: orgScope,
         grantedHandles,

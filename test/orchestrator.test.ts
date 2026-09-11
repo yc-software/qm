@@ -104,7 +104,8 @@ test("the persisted assistant entry carries authoritative turn timing for transc
   assert.ok(p.workStartedAt! >= before && p.workFinishedAt! >= p.workStartedAt!);
 });
 
-test("org turn wall-clock governance reaches the harness and a per-turn cap only tightens", async () => {
+test("org turn wall-clock governance reaches the harness and a per-turn cap only tightens", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app, config } = freshApp();
   await config.setTurnWallClockSec(scopeId("org", "default-org"), 120);
   assert.equal((await app.turn(dm("!wallclock"))).reply, "wallclock:120000");
@@ -3821,4 +3822,25 @@ test("Auto screens oversize external output in chunks, so an injection buried pa
     (rec) => rec.model === "mock-security",
   );
   assert.ok(screens.length >= 3, `the whole payload is classified across chunks (saw ${screens.length})`);
+});
+
+test("activated resource defaults preserve an existing computer and stop eager provisioning after unset", async () => {
+  const built = freshApp({ sandboxResourcesEnabled: true, eagerProvisionEnabled: true });
+  await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
+  await built.sandboxResources.initialize();
+  const boxes = spyProvisioning(built.sandbox);
+  const warm = await built.app.turn(dm("!run echo warm"));
+  assert.equal(warm.status, "ok", warm.reason);
+  assert.equal(boxes.provisioned, 1);
+  await built.sandboxResources.setDefault("U1", "personal:U1", null);
+  const next = await built.app.turn(dm("hello after unset"));
+  assert.equal(next.status, "ok", next.reason);
+  assert.equal(boxes.provisioned, 1);
+  assert.equal(boxes.live, 0);
+  const newSession = await built.app.turn(
+    dm("hello", { actor: { externalId: "new-user" }, conversation: { kind: "dm", threadRef: "dm:new:t1" } }),
+  );
+  assert.equal(newSession.status, "ok", newSession.reason);
+  assert.equal(await built.sandboxResources.resolve("personal:new-user"), null);
+  assert.equal(boxes.provisioned, 1);
 });

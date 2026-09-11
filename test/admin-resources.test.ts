@@ -137,6 +137,7 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.equal(byId.get("base-model")?.target, "any");
     assert.ok((byId.get("base-model")?.enumValues?.length ?? 0) > 0);
     assert.deepEqual(byId.get("security-posture")?.enumValues, ["dangerous", "auto", "strict"]);
+    assert.deepEqual(byId.get("sharing-posture")?.enumValues, ["isolated", "open"]);
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
     assert.equal(byId.get("factory-config")?.kind, "custom");
@@ -525,6 +526,49 @@ test("security posture round-trips through durable scoped governance", async () 
       body: JSON.stringify({ posture: "YOLO" }),
     });
     assert.equal(invalid.status, 400);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("sharing posture round-trips through scoped governance with organization and room vetoes", async () => {
+  const srv = start();
+  try {
+    const org = "org:default-org";
+    const personal = "personal:U1";
+    const room = "channel:C1";
+    const read = async (scope: string) => {
+      const response = await fetch(`${srv.base}/v1/admin/scopes/${scope}`, { headers: ADMIN });
+      assert.equal(response.status, 200);
+      return (await response.json()) as { sharingPosture: string };
+    };
+    const put = async (scope: string, posture: string) =>
+      fetch(`${srv.base}/v1/admin/scopes/${scope}/sharing-posture`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ posture }),
+      });
+
+    assert.equal((await read(org)).sharingPosture, "isolated");
+    assert.equal((await put(org, "open")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "open");
+    assert.equal((await put(personal, "isolated")).status, 200);
+    assert.equal((await read(personal)).sharingPosture, "isolated");
+    assert.equal((await put(room, "isolated")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "isolated");
+    assert.equal((await put(org, "isolated")).status, 200);
+    assert.equal((await put(room, "open")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "isolated");
+    assert.equal((await put(org, "invalid")).status, 400);
+    const reset = await fetch(`${srv.base}/v1/admin/scopes/${room}/sharing-posture`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ inherit: true }),
+    });
+    assert.equal(reset.status, 200);
+    assert.equal(await srv.built.config.getSharingPostureOwnDurable(room), null);
+    assert.equal((await put(org, "open")).status, 200);
+    assert.equal((await read(room)).sharingPosture, "open");
   } finally {
     await srv.close();
   }

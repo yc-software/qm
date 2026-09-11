@@ -7,6 +7,9 @@ interface Canvas {
   panes: () => number;
   tiles: () => number;
   newChat: () => boolean;
+  tabCounts: () => number[];
+  focusTile: (index: number) => void;
+  splitTile: (index: number) => void;
   seededChat: (threadRef?: string) => { state: { threadRef: string | null; agent: unknown } } | null;
   split: () => void;
   switchAway: () => void;
@@ -112,6 +115,22 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
     }
     await run({
       panes: () => document.querySelectorAll(".dv-tab").length,
+      tabCounts: () =>
+        Array.from(document.querySelectorAll(".dv-groupview"), (g) => g.querySelectorAll(".dv-tab").length),
+      focusTile: (index) => {
+        document
+          .querySelectorAll(".dv-groupview")
+          .item(index)!
+          .querySelector(".dv-tab")!
+          .dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
+      },
+      splitTile: (index) => {
+        document
+          .querySelectorAll(".dv-groupview")
+          .item(index)!
+          .querySelector<HTMLButtonElement>('[aria-label="Split this pane with a new session"]')!
+          .click();
+      },
       tiles: () => document.querySelectorAll(".dv-groupview").length,
       newChat: () => sessions.startNewChat() !== null,
       seededChat: (threadRef) => sessions.startNewChat(null, null, threadRef),
@@ -132,7 +151,7 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
   }
 }
 
-test("New chat replaces one pane, then joins the arrangement the viewer built", async () => {
+test("New chat stops splitting after three tiles and adds tabs to the selected pane", async () => {
   await withCanvas((canvas) => {
     assert.deepEqual([canvas.panes(), canvas.tiles()], [0, 0]);
 
@@ -146,10 +165,18 @@ test("New chat replaces one pane, then joins the arrangement the viewer built", 
     assert.deepEqual([canvas.panes(), canvas.tiles()], [3, 3], "split screen: New chat adds a window");
 
     assert.equal(canvas.newChat(), true);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [4, 4]);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [4, 3], "three tiles: New chat adds a tab");
 
     assert.equal(canvas.newChat(), true);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [5, 4], "at the window limit: New chat adds a tab");
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [5, 3], "further sessions also add tabs");
+    assert.deepEqual(canvas.tabCounts(), [1, 1, 3]);
+    canvas.focusTile(0);
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual(canvas.tabCounts(), [2, 1, 3], "the new tab follows the selected pane");
+    canvas.splitTile(2);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [7, 4], "explicit splitting still creates a fourth tile");
+    assert.equal(canvas.newChat(), true);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [8, 4], "four tiles: New chat still adds a tab");
   });
 });
 
@@ -185,9 +212,9 @@ test("new chat replaces the focused conversation at capacity without dropping th
   await withCanvas((canvas) => {
     canvas.split();
     for (let i = 2; i < 12; i++) assert.equal(canvas.newChat(), true);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 4]);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 3]);
     assert.ok(canvas.seededChat()?.state.agent);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 4]);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [12, 3]);
   });
 });
 
