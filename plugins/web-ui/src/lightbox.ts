@@ -29,7 +29,7 @@ function closeLightbox(): void {
   if (!images.length) return;
   images = [];
   draw();
-  restoreDialogFocus(opener, () => null);
+  restoreDialogFocus(opener, () => document.querySelector<HTMLElement>(".composer-input"));
   opener = null;
 }
 
@@ -70,7 +70,8 @@ function lightboxTpl(): TemplateResult {
   return html`
     <dialog
       class="lightbox"
-      aria-label="Image viewer"
+      tabindex="-1"
+      aria-label=${images.length > 1 ? `Image ${index + 1} of ${images.length}` : "Image viewer"}
       @close=${closeLightbox}
       @keydown=${onKeydown}
       @click=${(e: MouseEvent) => e.target === e.currentTarget && closeLightbox()}

@@ -1630,10 +1630,11 @@ a.chat-row-open {
   max-width: none;
   max-height: none;
   margin: 0;
-  padding: 56px 64px 16px;
+  padding: 56px clamp(16px, 8vw, 64px) 16px;
   border: 0;
   background: rgba(8, 8, 10, 0.94);
   color: #f4f4f5;
+  outline: 0;
 }
 .lightbox[open] {
   display: flex;

@@ -97,6 +97,11 @@ test("Escape closes without reaching page-level handlers and returns focus", () 
 
 test("clicking the backdrop closes, clicking the image does not", () => {
   openLightbox(images, 0);
+  assert.equal(
+    dialog()!.getAttribute("tabindex"),
+    "-1",
+    "clicks inside keep focus on the dialog so keys still route to it",
+  );
   dialog()!.querySelector<HTMLImageElement>("img")!.click();
   assert.ok(dialog());
   dialog()!.click();

@@ -2289,7 +2289,7 @@ export function createChatSurface(
   }
 
   function attachmentImage(a: UserAttachmentView): LightboxImage | undefined {
-    if (!browserRenderableImage(a.mimeType)) return undefined;
+    if (!a.mimeType || !browserRenderableImage(a.mimeType)) return undefined;
     const href = artifactHref(a.artifactId);
     const src = href ?? (a.content ? inlineImageSrc(a.mimeType, a.content) : undefined);
     return src ? { src, name: a.fileName, href } : undefined;
