@@ -56,6 +56,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   const dexec = opts.dockerExec ?? spawnDockerExec(docker);
 
   const name = (d: Deployment) => `agent-deploy-${d.id.slice(0, 12)}`;
+  const appVolume = (d: Deployment) => `qm-app-${d.id.slice(0, 12)}`;
   const network = (d: Deployment) => `${name(d)}-net`;
   const ensureNetwork = async (net: string): Promise<string> => {
     if ((await dexec(["network", "inspect", net])).code !== 0) {
@@ -65,6 +66,24 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       }
     }
     return net;
+  };
+  const removeContainerIfPresent = async (container: string): Promise<void> => {
+    const r = await dexec(["rm", "-f", container]);
+    if (r.code !== 0 && !/no such (?:object|container)|not found/i.test(r.stderr)) {
+      throw new Error(`docker rm ${container} failed: ${r.stderr.trim()}`);
+    }
+  };
+  const removeVolumeIfPresent = async (volume: string): Promise<void> => {
+    const r = await dexec(["volume", "rm", volume]);
+    if (r.code !== 0 && !/no such volume|not found/i.test(r.stderr)) {
+      throw new Error(`docker volume rm ${volume} failed: ${r.stderr.trim()}`);
+    }
+  };
+  const cleanupFailedApply = async (d: Deployment, net: string): Promise<void> => {
+    await removeContainerIfPresent(name(d)).catch(() => undefined);
+    await removeVolumeIfPresent(appVolume(d)).catch(() => undefined);
+    await dexec(["network", "rm", net]).catch(() => undefined);
+    freePort(name(d));
   };
 
   const migrateContainer = async (container: string): Promise<boolean> => {
@@ -105,12 +124,17 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
       const net = await ensureNetwork(network(d));
-      await dexec(["rm", "-f", name(d)]);
+      await removeContainerIfPresent(name(d));
+      await removeVolumeIfPresent(appVolume(d));
+      const volume = await dexec(["volume", "create", appVolume(d)]);
+      if (volume.code !== 0) {
+        await cleanupFailedApply(d, net);
+        throw new Error(`docker volume create ${appVolume(d)} failed: ${volume.stderr.trim()}`);
+      }
       const hostPort = allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-      const r = await dexec([
-        "run",
-        "-d",
+      const created = await dexec([
+        "create",
         "--name",
         name(d),
         "--network",
@@ -124,7 +148,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         "-p",
         `127.0.0.1:${hostPort}:${APP_PORT}`,
         "-v",
-        `${version.snapshotDir}:/app:ro`,
+        `${appVolume(d)}:/app`,
         "-w",
         "/app",
         "-e",
@@ -135,11 +159,19 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         "-c",
         version.entrypoint,
       ]);
-      if (r.code !== 0) {
-        await dexec(["rm", "-f", name(d)]);
-        await dexec(["network", "rm", net]);
-        freePort(name(d));
-        throw new Error(`deploy run failed: ${r.stderr.trim()}`);
+      if (created.code !== 0) {
+        await cleanupFailedApply(d, net);
+        throw new Error(`deploy create failed: ${created.stderr.trim()}`);
+      }
+      const copied = await dexec(["cp", `${version.snapshotDir}/.`, `${name(d)}:/app`]);
+      if (copied.code !== 0) {
+        await cleanupFailedApply(d, net);
+        throw new Error(`deploy snapshot copy failed: ${copied.stderr.trim()}`);
+      }
+      const started = await dexec(["start", name(d)]);
+      if (started.code !== 0) {
+        await cleanupFailedApply(d, net);
+        throw new Error(`deploy start failed: ${started.stderr.trim()}`);
       }
       return { host: "127.0.0.1", port: hostPort };
     },
@@ -153,9 +185,26 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     },
 
     async destroy(d: Deployment): Promise<void> {
-      await dexec(["rm", "-f", name(d)]);
-      await dexec(["network", "rm", network(d)]);
-      freePort(name(d));
+      let failure: unknown;
+      try {
+        await removeContainerIfPresent(name(d));
+      } catch (e) {
+        failure = e;
+      }
+      try {
+        await removeVolumeIfPresent(appVolume(d));
+      } catch (e) {
+        failure ??= e;
+      }
+      try {
+        const removed = await dexec(["network", "rm", network(d)]);
+        if (removed.code !== 0 && !/no such network|not found/i.test(removed.stderr)) {
+          failure ??= new Error(`docker network rm ${network(d)} failed: ${removed.stderr.trim()}`);
+        }
+      } finally {
+        freePort(name(d));
+      }
+      if (failure) throw failure;
     },
 
     async resolveEndpoint(d): Promise<DeployEndpoint | null> {
