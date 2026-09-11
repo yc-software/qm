@@ -84,6 +84,7 @@ export interface ToolContextRef {
   abortSignal?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
+  attachmentsStaged?: boolean;
 
   goal?: GoalRecord | null;
 
@@ -3129,6 +3130,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, { tool: "attach", files });
       const r = await tc.attach(files);
       if (!r.ok) return recordResult(callId, { tool: "attach", ok: false }, text(`[not attached] ${r.message}`), true);
+      if (r.staged > 0) ref.attachmentsStaged = true;
       const list = r.files.map((f) => `${f.name} (${f.sizeBytes} bytes, ${f.mimetype})`).join("; ");
       const total = r.staged > r.files.length ? ` ${r.staged} file(s) are now staged for this reply.` : "";
       return recordResult(
