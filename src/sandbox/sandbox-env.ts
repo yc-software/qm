@@ -25,6 +25,7 @@ export const DROPPED_PROXY_ENV = new Set([
   "all_proxy",
   "no_proxy",
   "NO_PROXY",
+  "GIT_HTTP_PROXY_AUTHMETHOD",
 ]);
 
 export function forceThroughProxyEnv(egressProxyUrl: string, token: string): Record<string, string> {
@@ -38,6 +39,10 @@ export function forceThroughProxyEnv(egressProxyUrl: string, token: string): Rec
     https_proxy: url,
     http_proxy: url,
     no_proxy: noProxy,
+    // git defaults http.proxyAuthMethod to "anyauth", which on many libcurl builds waits for a
+    // 407 challenge before sending the proxy credential. Force preemptive Basic so git works
+    // even against proxies that answer unauthenticated CONNECTs with a bare 403.
+    GIT_HTTP_PROXY_AUTHMETHOD: "basic",
   };
 }
 
