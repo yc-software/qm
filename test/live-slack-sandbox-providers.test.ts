@@ -38,6 +38,28 @@ test("provider execution requires correlated success on the exact sandbox", () =
   assert.throws(() => assertSandboxExecution([{ type: "assistant", payload: { text: "nonce" } }], "box", "nonce\n"));
 });
 
+test("projected sandbox results require exact successful execution evidence", () => {
+  const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
+  entries[1]!.payload = { tool: "sandbox", callId: "call", isError: false, result: "nonce\n\n[exit 0]" };
+  assert.doesNotThrow(() => assertSandboxExecution(entries, "box", "nonce\n"));
+  for (const patch of [
+    { result: "nonce\n" },
+    { result: "nonce\n\n[exit 1]" },
+    { result: "nonce\n\n[exit 0 timed-out]" },
+    { result: "wrong\n\n[exit 0]" },
+    { result: "nonce\n\n[stderr]\nfailed\n[exit 0]" },
+    { isError: true },
+    { callId: "unrelated" },
+    { code: 1 },
+    { timedOut: true },
+    { action: "start_process" },
+  ]) {
+    const changed = [entries[0], { ...entries[1], payload: { ...entries[1]!.payload, ...patch } }];
+    assert.throws(() => assertSandboxExecution(changed, "box", "nonce\n"));
+  }
+  assert.throws(() => assertSandboxExecution(entries.toReversed(), "box", "nonce\n"));
+});
+
 test("every provider has its own parallel execution scenario", () => {
   assert.deepEqual(sandboxProviders.toSorted(), [
     "agent37",

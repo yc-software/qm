@@ -18,33 +18,26 @@ const providerCoverage: Record<SandboxBackendName, true> = {
 export const sandboxProviders = Object.keys(providerCoverage) as SandboxBackendName[];
 
 export function assertSandboxExecution(entries: readonly unknown[], sandboxId: string, stdout: string): void {
-  const calls = new Set(
-    entries.flatMap((entry) => {
-      if (!isObj(entry) || entry.type !== "tool_call" || !isObj(entry.payload)) return [];
-      const p = entry.payload;
-      return p.tool === "sandbox" && p.action === "exec" && p.sandbox_id === sandboxId && typeof p.callId === "string"
-        ? [p.callId]
-        : [];
-    }),
-  );
+  const calls = new Set<string>();
+  let executed = false;
+  for (const entry of entries) {
+    if (!isObj(entry) || !isObj(entry.payload)) continue;
+    const p = entry.payload;
+    if (p.tool !== "sandbox" || typeof p.callId !== "string") continue;
+    if (entry.type === "tool_call" && p.action === "exec" && p.sandbox_id === sandboxId) {
+      calls.add(p.callId);
+      continue;
+    }
+    if (entry.type !== "tool_result" || !calls.has(p.callId) || p.isError !== false) continue;
+    const structured = "code" in p || "timedOut" in p || "stdout" in p || "action" in p;
+    if (
+      structured
+        ? p.action === "exec" && p.code === 0 && p.timedOut === false && p.stdout === stdout
+        : p.result === `${stdout}\n[exit 0]`
+    ) executed = true;
+  }
   assert.ok(calls.size, `no sandbox exec call targeted ${sandboxId}`);
-  assert.ok(
-    entries.some((entry) => {
-      if (!isObj(entry) || entry.type !== "tool_result" || !isObj(entry.payload)) return false;
-      const p = entry.payload;
-      return (
-        p.tool === "sandbox" &&
-        p.action === "exec" &&
-        typeof p.callId === "string" &&
-        calls.has(p.callId) &&
-        p.isError === false &&
-        p.code === 0 &&
-        p.timedOut === false &&
-        p.stdout === stdout
-      );
-    }),
-    `no successful sandbox exec result with exact stdout on ${sandboxId}`,
-  );
+  assert.ok(executed, `no successful sandbox exec result with exact stdout on ${sandboxId}`);
 }
 
 export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backend) => ({
