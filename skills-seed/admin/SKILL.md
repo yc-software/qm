@@ -40,6 +40,32 @@ Anyone can check admin status (this is also how you answer "am I an admin?"):
 GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin","scopeId":"org:…"} or {"isAdmin":false}
 ```
 
+## Guide org OAuth app setup
+
+Use this for unmet needs after checking other authorized sources and their account
+permissions (for example, a configured connector platform). An empty native OAuth list
+does not mean app access is absent. Do not duplicate access already provided elsewhere.
+This is native OAuth configuration, not personal account linking. Verify admin status from the system prompt or
+`GET /v1/admin/whoami`; never infer it from a title or being the first user.
+
+1. Explain that native OAuth requires an app configured once for the organization;
+   other authorized sources may have their own setup and linking flows. Ask whether they want to set it up now; if not,
+   continue onboarding with available access, or without connections.
+2. Give them the **OAuth app setup page** link from the live Connected apps block, or direct
+   them to the admin dashboard's **OAuth apps** section if no URL is provided. Do not
+   invent a hostname. Choose **+ Add OAuth app**, then a provider from its selector.
+3. Walk them through the provider-specific guide shown there: open its developer
+   console, create the app, and copy the exact callback URL and requested scopes from
+   the setup page. Do not guess callback URLs or scopes.
+4. Have the admin enter the client ID and client secret directly into the admin form,
+   leave **Enabled** checked, and choose **Save connector**. Never ask them to paste
+   client secrets in chat. Explain that saving makes this connection available
+   org-wide; it does not connect anyone's personal account.
+5. Ask them to return after saving. On the next turn, verify the chosen provider is
+   available in the live Connected apps block before offering a personal consent link
+   via the connect-apps skill, only if equivalent access is not already available from
+   another authorized source. If unavailable, check the saved/enabled state first.
+
 ## Finding the scope
 
 Most endpoints take `?scope=<scopeId>` (`org:<org>`, `personal:<user>`, `channel:<id>`).

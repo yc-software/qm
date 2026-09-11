@@ -89,8 +89,8 @@ test("logins block: shows active with a check, inactive with its exact reauth co
 test("connected-apps block: lists only admin-configured providers and the exact connection URL", () => {
   const url = "https://qm.example/keychain";
   const unavailable = renderConnectedAppsBlock(null, [], url);
-  assert.match(unavailable, /No app connections are enabled by the admin/);
-  assert.match(unavailable, /Do not suggest or offer any app connection/);
+  assert.match(unavailable, /No native OAuth apps are enabled by the admin/);
+  assert.match(unavailable, /Do not mint native OAuth consent links for unconfigured providers/);
 
   const none: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { google: { connected: false } } };
   const available = renderConnectedAppsBlock(none, ["google"], url);
@@ -127,5 +127,40 @@ test("connected-apps block: reconnect-needed apps are named separately", () => {
   const out = renderConnectedAppsBlock(rec, ["google", "github"]);
   assert.match(out, /Connected: Google/);
   assert.match(out, /Needs reconnect: GitHub \(refresh failed: revoked by provider\)/);
-  assert.match(out, /Do not use these apps until the user reconnects them/);
+  assert.match(out, /Do not use these native credentials until reconnected/);
+});
+
+test("connected-apps block: org setup is admin-only and separate from account linking", () => {
+  const url = "https://qm.example/admin/connectors";
+  const admin = renderConnectedAppsBlock(null, [], undefined, { isOrgAdmin: true, url });
+  assert.match(admin, /offer to walk.*OAuth app setup/);
+  assert.match(admin, /does not link their personal account/);
+  assert.match(admin, /Do not mint native consent links until/);
+  assert.match(admin, /https:\/\/qm\.example\/admin\/connectors/);
+  const noUrl = renderConnectedAppsBlock(null, [], undefined, { isOrgAdmin: true });
+  assert.match(noUrl, /offer to walk/);
+  assert.doesNotMatch(noUrl, /OAuth app setup page:|undefined/);
+  const member = renderConnectedAppsBlock(null, [], undefined, { isOrgAdmin: false, url });
+  assert.match(member, /an org admin needs to configure/);
+  assert.doesNotMatch(member, /offer to walk|OAuth app setup page:/);
+  const configured = renderConnectedAppsBlock(null, ["google"], undefined, { isOrgAdmin: true, url });
+  assert.match(configured, /Available to connect: Google/);
+  assert.doesNotMatch(configured, /offer to walk|OAuth app setup page:/);
+});
+
+test("native OAuth availability never acts as a global capability allowlist", () => {
+  const records: Array<ConnectorStatusRecord | null> = [
+    null,
+    { principalId: "U1", checkedAt: 1, providers: { google: { connected: true } } },
+    { principalId: "U1", checkedAt: 1, providers: { google: { connected: true, needsReconnect: true } } },
+  ];
+  for (const record of records) {
+    for (const providers of [[], ["google"]]) {
+      const out = renderConnectedAppsBlock(record, providers, undefined, { isOrgAdmin: true });
+      assert.match(out, /native OAuth connections only/);
+      assert.match(out, /other authorized sources/);
+      assert.match(out, /account.*permissions/);
+      assert.doesNotMatch(out, /Do not suggest or offer any app connection|Do not use these apps until/);
+    }
+  }
 });
