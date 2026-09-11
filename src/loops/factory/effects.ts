@@ -87,17 +87,41 @@ export type FactoryWorkEffects = Pick<LoopRunnerEffects, "enumerate" | "work" | 
 interface FactoryRun {
   result: FactoryProcessResult;
   config: FactoryConfig;
+  redact: (text: string) => string;
 }
+
+// Only the wrapper's own diagnostics are worth surfacing; build noise and agent chatter are not.
+const DIAGNOSTIC_LINE = /^\[(?:io-coding-agent(?:-js)?|claude-stderr|claude-exit|converge)\]|^error=|FAIL/;
+const NO_PR_TAIL_LINES = 3;
+const NO_PR_LINE_CHARS = 200;
+
+const redactor =
+  (secrets: string[]) =>
+  (text: string): string =>
+    secrets.filter((secret) => secret !== "").reduce((acc, secret) => acc.split(secret).join("***"), text);
 
 const preflightDetail = (result: Extract<PreflightResult, { ok: false }>): string =>
   result.reason === "missing_tools" ? `missing_tools: ${result.missing.join(", ")}` : result.reason;
 
-const noPrVerdict = (): SuccessVerdict => ({
-  outcome: "continue",
-  reason: "no pull request",
-  checks: [],
-  judged: false,
-});
+// A run that ends without a pull request leaves its only explanation in the wrapper's stdout, which
+// otherwise stays inside the sandbox; the redacted diagnostic tail rides on the item's reason.
+const noPrVerdict = (run?: FactoryRun): SuccessVerdict => {
+  const tail = run
+    ? run
+        .redact(run.result.stdout)
+        .split(/\r?\n/)
+        .filter((line) => DIAGNOSTIC_LINE.test(line))
+        .slice(-NO_PR_TAIL_LINES)
+        .map((line) => line.slice(0, NO_PR_LINE_CHARS))
+        .join(" | ")
+    : "";
+  return {
+    outcome: "continue",
+    reason: tail === "" ? "no pull request" : `no pull request — ${tail}`,
+    checks: [],
+    judged: false,
+  };
+};
 
 const prTarget = (artifacts: CapturedArtifact[], config: FactoryConfig): { ref: ForgeRef; branch: string } | null => {
   const pr = artifacts.find((artifact) => artifact.shipAction === "open_pr");
@@ -229,7 +253,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
       if (result.aborted) throw new Error("factory_run_aborted");
 
       for (const key of runs.keys()) if (key.startsWith(itemPrefix)) runs.delete(key);
-      runs.set(runId, { result, config });
+      runs.set(runId, { result, config, redact: redactor([linearApiKey, githubToken, anthropicApiKey]) });
       return { runId };
     },
 
@@ -245,7 +269,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
         const run = runs.get(runId);
         if (!run) return noPrVerdict();
         const target = prTarget(artifacts, run.config);
-        if (!target) return noPrVerdict();
+        if (!target) return noPrVerdict(run);
         const { githubToken } = await loadFactoryContext(deps);
         return await evaluateFactoryForge({
           fetch: deps.fetch,
