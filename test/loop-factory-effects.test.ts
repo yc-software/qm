@@ -550,6 +550,22 @@ test("work omits IO_FEEDBACK without guidance, honours repoDir, and numbers the 
   assert.equal(runId, "factory:loop-1:item-1:3");
 });
 
+test("a run with no pull request carries the wrapper's redacted diagnostics in its reason", async () => {
+  const stdout = `npm warn noise\n[io-coding-agent] git configured to reach github.com with IO_GITHUB_TOKEN\n[claude-stderr] token ${GITHUB_TOKEN} rejected\n[io-coding-agent-js] FAIL: normal factory runs require a numeric CODING_AGENT_SESSION_URL\n`;
+  const fake = fakeSandbox({ stdout });
+  const effects = createFactoryLoopEffects(deps({ sandbox: fake.sandbox }));
+
+  const runId = await workedRunId(effects);
+  const verdict = await effects.evaluate({ loop: LOOP, item: ITEM, attempt: 1, runId });
+
+  assert.equal(verdict.outcome, "continue");
+  assert.match(verdict.reason, /^no pull request — /);
+  assert.match(verdict.reason, /FAIL: normal factory runs require a numeric CODING_AGENT_SESSION_URL/);
+  assert.match(verdict.reason, /\[claude-stderr\] token \*\*\* rejected/);
+  assert.equal(verdict.reason.includes(GITHUB_TOKEN), false);
+  assert.equal(verdict.reason.includes("npm warn"), false);
+});
+
 test("factorySessionIdFor is a stable positive integer that differs across runs", () => {
   const a = factorySessionIdFor("factory:loop-1:item-1:1");
   assert.equal(a, factorySessionIdFor("factory:loop-1:item-1:1"));
