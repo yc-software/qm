@@ -127,7 +127,7 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
   async function checkStatus(
     req: IncomingMessage,
     authority: string,
-  ): Promise<{ status: 200 | 403; upstream?: string }> {
+  ): Promise<{ status: 200 | 403 | 407; upstream?: string }> {
     const host = hostFromAuthority(authority);
     if (!host) return { status: 403 };
     const portText = authority.match(/:(\d+)$/)?.[1];
@@ -153,16 +153,27 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
     } catch (error) {
       void error;
     }
-    if (!d.allow || !d.address) return { status: 403 };
+    if (!d.allow || !d.address) {
+      // A missing or unverifiable credential is an authentication failure, not a policy verdict.
+      // Answer 407 so challenge-based clients retry with Basic: git's default http.proxyAuthMethod
+      // ("anyauth") makes libcurl wait for a Proxy-Authenticate challenge before it sends the
+      // credential at all; a bare 403 strands it with "CONNECT tunnel failed, response 403" while
+      // curl (preemptive Basic) sails through. Hosts denied unconditionally stay a hard 403 —
+      // no credential would change the answer.
+      const unauthenticated = !claims && !(deps.tokenless === "open" && !token);
+      if (unauthenticated && !isAlwaysBlockedHost(host)) return { status: 407 };
+      return { status: 403 };
+    }
     return { status: 200, upstream: isIP(d.address) === 6 ? `[${d.address}]:${port}` : `${d.address}:${port}` };
   }
   async function onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const authority = (req.headers["x-egress-authority"] as string | undefined) ?? req.headers.host ?? "";
       const result = await checkStatus(req, authority);
-      res
-        .writeHead(result.status, result.upstream ? { "x-egress-upstream-address": result.upstream } : undefined)
-        .end();
+      const headers: Record<string, string> = {};
+      if (result.upstream) headers["x-egress-upstream-address"] = result.upstream;
+      if (result.status === 407) headers["proxy-authenticate"] = 'Basic realm="egress"';
+      res.writeHead(result.status, headers).end();
     } catch {
       if (!res.headersSent) res.writeHead(403);
       res.end();
