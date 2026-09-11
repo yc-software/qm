@@ -23,8 +23,7 @@ function record(slug: string, over: Partial<DecryptedServiceCredential> = {}): D
   return {
     slug,
     name: slug,
-    secret:
-      slug === FACTORY_LINEAR_SLUG ? LINEAR_SECRET : slug === FACTORY_GITHUB_SLUG ? GITHUB_SECRET : ANTHROPIC_SECRET,
+    secret: SECRET_BY_SLUG[slug] ?? "",
     delivery: "broker",
     host: "api.example.com",
     deployments: false,

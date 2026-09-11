@@ -35,6 +35,11 @@ const ORG_SCOPE = "org:acme";
 const LINEAR_KEY = "lin_FAKE_KEY";
 const GITHUB_TOKEN = "ghp_FAKE_TOKEN";
 const ANTHROPIC_KEY = "sk-ant-FAKE_KEY";
+const SECRET_BY_SLUG: Record<string, string> = {
+  [FACTORY_LINEAR_SLUG]: LINEAR_KEY,
+  [FACTORY_GITHUB_SLUG]: GITHUB_TOKEN,
+  [FACTORY_ANTHROPIC_SLUG]: ANTHROPIC_KEY,
+};
 const REPO_DIR = "/workspace/repo";
 const CLONE_DIR = "/workspace/qm-yc";
 const CLONE_URL = "https://github.com/yc-software/qm-yc.git";
@@ -273,7 +278,7 @@ const credentialRecord = (
 ): DecryptedServiceCredential => ({
   slug,
   name: slug,
-  secret: slug === FACTORY_LINEAR_SLUG ? LINEAR_KEY : slug === FACTORY_GITHUB_SLUG ? GITHUB_TOKEN : ANTHROPIC_KEY,
+  secret: SECRET_BY_SLUG[slug] ?? "",
   delivery: "broker",
   host: "api.example.com",
   deployments: false,
