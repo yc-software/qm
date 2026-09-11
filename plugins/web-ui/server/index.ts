@@ -444,12 +444,14 @@ async function drainWebDeliveries(): Promise<void> {
     const now = Date.now();
     for (const d of pending) {
       const target = d.destination?.target ?? "";
-      const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-      if (conns && conns.size) {
+      let notified = false;
+      for (const user of deliveryTargets(target)) {
+        const conns = deliveryClients.get(user);
+        if (!conns?.size) continue;
+        notified = true;
         for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-      } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-        continue;
       }
+      if (!notified && now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) continue;
       await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`).catch(() => {});
     }
   } catch {
@@ -468,12 +470,34 @@ interface SessionStateFrame {
   [k: string]: unknown;
 }
 
+// threadRef → last-seen participants, fed by the core session-state feed. Delivery records do
+// not name participants, so without this a mid-turn post into a SHARED web thread (a project
+// channel) only ever nudged the thread CREATOR's connections — every other participant's view
+// went stale until a manual reload, and the delivery was acked away after 60s regardless.
+const THREAD_PARTICIPANTS_MAX = 2_000;
+const threadParticipants = new Map<string, string[]>();
+function rememberParticipants(threadRef: string, participants: string[]): void {
+  if (threadParticipants.has(threadRef)) threadParticipants.delete(threadRef);
+  threadParticipants.set(threadRef, participants);
+  if (threadParticipants.size > THREAD_PARTICIPANTS_MAX)
+    threadParticipants.delete(threadParticipants.keys().next().value as string);
+}
+
+function deliveryTargets(threadRef: string): Set<string> {
+  const targets = new Set<string>(threadParticipants.get(threadRef) ?? []);
+  const owner = ownerOfWebThread(threadRef);
+  if (owner) targets.add(owner);
+  return targets;
+}
+
 function forwardSessionState(frame: SessionStateFrame): void {
   const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
   if (!threadRef) return;
-  const targets = new Set<string>(
-    Array.isArray(frame.participants) ? frame.participants.filter((p): p is string => typeof p === "string") : [],
-  );
+  const participants = Array.isArray(frame.participants)
+    ? frame.participants.filter((p): p is string => typeof p === "string")
+    : [];
+  if (participants.length) rememberParticipants(threadRef, participants);
+  const targets = new Set<string>(participants);
   if (targets.size === 0) {
     const owner = ownerOfWebThread(threadRef);
     if (owner) targets.add(owner);

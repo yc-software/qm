@@ -2035,6 +2035,15 @@ a.chat-row-open {
   line-height: 1.6;
   margin: 10px 0;
 }
+.work-posted {
+  color: var(--foreground);
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 10px 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--primary);
+  border-radius: 4px;
+}
 .work-fold {
   margin: 2px 0;
 }

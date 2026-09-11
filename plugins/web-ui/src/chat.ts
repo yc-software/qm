@@ -606,7 +606,9 @@ export function createChatSurface(
     const agent = chatState.agent;
     if (!agent || agent.state.isStreaming || !chatState.threadRef || !chatState.normalStreamFn || !chatState.onWork)
       return;
-    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork);
+    void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork, {
+      refetchWhenSettled: true,
+    });
   }
 
   function syncLocation(): void {
@@ -794,6 +796,7 @@ export function createChatSurface(
     threadRef: string,
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
+    opts: { refetchWhenSettled?: boolean } = {},
   ): Promise<boolean> {
     let activeRun: Awaited<ReturnType<typeof activeRunForThread>>;
     try {
@@ -803,7 +806,20 @@ export function createChatSurface(
     }
     if (agent === chatState.agent && threadRef === chatState.threadRef)
       ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
-    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) return false;
+    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) {
+      // No live run to attach. A turn may have ENDED while this tab was detached (a locked
+      // phone kills the SSE): its agent_end refetch never ran and its delivery nudges were
+      // dropped or acked while nobody listened — mid-turn posts would stay invisible until a
+      // full reload. Pull the transcript tail now so the view catches up.
+      if (
+        opts.refetchWhenSettled &&
+        agent === chatState.agent &&
+        threadRef === chatState.threadRef &&
+        !agent.state.isStreaming
+      )
+        void refreshTranscriptFromEntries(agent);
+      return false;
+    }
     return resumeRun(agent, threadRef, normalStreamFn, onWork, activeRun.runId, activeRun.run);
   }
 
@@ -2264,6 +2280,9 @@ export function createChatSurface(
         flushSeg();
         const text = ((it.activity.payload as { text?: string } | null)?.text ?? "").trim();
         if (text) parts.push(html`<div class="work-said">${markdown(text)}</div>`);
+      } else if (it.kind === "posted") {
+        flushSeg();
+        parts.push(html`<div class="work-posted">${markdown(it.text)}</div>`);
       } else {
         seg.push(it);
       }
@@ -2331,6 +2350,7 @@ export function createChatSurface(
     const stale = work.stale === true;
     if (item.kind === "thinking") return thinkingRow(item.activity);
     if (item.kind === "text") return messageRow(item.activity);
+    if (item.kind === "posted") return html`<div class="work-posted">${markdown(item.text)}</div>`;
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
