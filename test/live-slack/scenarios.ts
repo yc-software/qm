@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { assert, isLiveStatusText, type Scenario } from "./harness.ts";
 import { sleep } from "./slack.ts";
+import { assertRuntimeHandoff } from "./runtime-handoff.ts";
 import { multiUserScenarios } from "./scenarios-multiuser.ts";
 import { twinScenarios } from "./scenarios-twin.ts";
 
@@ -28,34 +29,13 @@ export const scenarios: Scenario[] = [
       const ch = await ctx.freshChannel();
       const marker = ctx.marker();
       const root = await ch.mention(
-        `Can you switch your model to a different available Anthropic model for this request and then calculate 17 × 23? Keep using pi with automatic reasoning effort and fast mode off. Once you have switched, verify which model you are actually running on. Include ${marker}, that model and the answer in your final reply.`,
+        `Use runtime action=get to inspect the available models, then runtime action=set to switch to a different available Anthropic model for this request. Keep using pi with automatic reasoning effort and fast mode off. After the handoff, call runtime action=get again to verify which model you are actually running on, then calculate 17 × 23. Include ${marker}, that model and the answer in your final reply.`,
       );
       const reply = await ch.waitForBotReply(root, { match: new RegExp(marker), timeoutMs: 4 * 60_000 });
       assert.match(reply.text ?? "", /\b391\b/);
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for runtime handoff");
-      const handoffEntry = session.entries.find(
-        (entry: any) => entry.type === "tool_result" && entry.payload?.runtimeHandoff,
-      ) as
-        | { payload: { runtimeHandoff: { lifetime: string; choice: { harnessId: string; modelId: string } } } }
-        | undefined;
-      assert.ok(handoffEntry, "no durable runtime handoff recorded");
-      const { lifetime, choice } = handoffEntry.payload.runtimeHandoff;
-      assert.equal(lifetime, "task");
-      assert.equal(choice.harnessId, "pi");
-      const handoffIndex = session.entries.indexOf(handoffEntry);
-      const verification = session.entries
-        .slice(handoffIndex + 1)
-        .find(
-          (entry: any) =>
-            entry.type === "tool_result" &&
-            entry.payload?.tool === "runtime" &&
-            entry.payload?.action === "get" &&
-            entry.payload?.ok === true,
-        ) as { payload: { result: string } } | undefined;
-      assert.ok(verification, "no successful runtime inspection after handoff");
-      const inspected = JSON.parse(verification.payload.result) as { active: { modelId: string } };
-      assert.equal(inspected.active.modelId, choice.modelId);
+      const choice = assertRuntimeHandoff(session.entries);
       type ModelCall = { step: number; model: string; createdAt: number; usage: { output: number } | null };
       let modelCalls: ModelCall[];
       const deadline = Date.now() + 30_000;
