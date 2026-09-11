@@ -43,6 +43,8 @@ export function renderFactoryEnv(input: FactoryEnvInput): Record<string, string>
     IO_REPO_DIR: repoDir,
     IO_FACTORY_SOURCE_DIR: factorySourceDir,
     IO_FACTORY_SESSION_ID: String(factorySessionId),
+    // The sandbox runs the wrapper as root, and claude refuses --dangerously-skip-permissions as root unless this is set.
+    IS_SANDBOX: "1",
     IO_REPO_CLONE_URL: config.repoCloneUrl,
     ...(config.repoSetupCmd !== undefined ? { IO_REPO_SETUP_CMD: config.repoSetupCmd } : {}),
     ...(config.proofStartCmd !== undefined ? { IO_PROOF_START_CMD: config.proofStartCmd } : {}),
