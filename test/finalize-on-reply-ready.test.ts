@@ -160,6 +160,50 @@ test("background: the run finishes as soon as the reply is ready; backup/teardow
   assert.equal(g.teardownFinished, 1, "the detached tail completed once unblocked");
 });
 
+test("background: title persistence finishes before the run while teardown stays detached", async () => {
+  const g = gatedSandbox();
+  const base = createMockHarness();
+  const harness = { ...base, models: { ...base.models, generateTitle: () => new Promise<string>(() => {}) } };
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, harness);
+  const result = await orch.handleTurn({
+    ...dm("dm:U1:title-background", "!run echo hi"),
+    displayText: "Simulate four-way title outage from the visible message",
+    runId: "title-background",
+    background: true,
+  });
+
+  assert.equal(result.status, "ok");
+  assert.equal(
+    (await sessions.get(result.sessionId!))?.title,
+    "Simulate four-way title outage from the visible message",
+  );
+  assert.equal(g.teardownFinished, 0);
+  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  g.release();
+});
+
+test("spine-routed titles use visible text instead of the internal wake envelope", async () => {
+  const { orch, sessions } = buildOrchestrator(gatedSandbox().sandbox);
+  const result = await orch.handleTurn({
+    ...dm(
+      "dm:U1:title-spine",
+      '<wake reason="addressed">Simulate four-way title outage from the internal envelope</wake>',
+    ),
+    displayText: "Simulate four-way title outage from the visible message",
+    runId: "title-spine",
+    background: true,
+  });
+
+  assert.equal(
+    (await sessions.get(result.sessionId!))?.title,
+    "Simulate four-way title outage from the visible message",
+  );
+  assert.equal(
+    (await orch.regenerateTitle(result.sessionId!, actor.id))?.title,
+    "Simulate four-way title outage from the visible message",
+  );
+});
+
 test("background: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
   const g = gatedSandbox();
   const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), true);

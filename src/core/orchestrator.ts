@@ -180,6 +180,7 @@ import {
   stripAckPrefix,
   stripTurnBoilerplate,
   turnPostKeys,
+  visibleTitleEntryText,
 } from "./orchestrator/turn-helpers.ts";
 import {
   currentTimeBlock,
@@ -311,6 +312,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   const classifySecurityData = createSecurityClassifier(deps);
 
+  function fallbackSessionTitle(text: string): string | undefined {
+    const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();
+    if (!clean) return undefined;
+    return clean.length > 60 ? `${headSlice(clean, 59).trimEnd()}…` : clean;
+  }
+
   async function generateAndStoreTitle(
     sessionId: string,
     scopeId: ScopeId,
@@ -331,10 +338,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         sessionId,
       });
     }
-    if (!title && fallbackText) {
-      const text = stripTurnBoilerplate(fallbackText).replace(/\s+/g, " ").trim();
-      title = text.length > 60 ? `${headSlice(text, 59).trimEnd()}…` : text;
-    }
+    title ??= fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
     if (title) {
       if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
       else await deps.sessions.updateTitle(sessionId, title);
@@ -495,13 +499,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       if (entries.length === 0) return null;
       const transcript = renderTitleTranscript(entries);
-      const fallbackPayload = entries.find((entry) => entry.type === "user" && !isOverheardEntry(entry))?.payload;
+      const fallbackEntry = entries.find((entry) => entry.type === "user" && !isOverheardEntry(entry));
       const title = await generateAndStoreTitle(
         session.id,
         session.scopeId,
         transcript,
         participantIds?.length ? principalId : undefined,
-        isObj(fallbackPayload) && typeof fallbackPayload.text === "string" ? fallbackPayload.text : undefined,
+        fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
       );
       return { title: title ?? (participantIds ? null : (session.title ?? null)) };
     },
@@ -2648,16 +2652,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
               }
             : undefined;
+        const titleText = input.displayText?.trim() || input.text;
+        const fallbackTitle = !session.title && !syntheticPrompt ? fallbackSessionTitle(titleText) : undefined;
+        const fallbackTitleWrite = fallbackTitle
+          ? deps.sessions.updateTitle(session.id, fallbackTitle).then(() => fallbackTitle)
+          : undefined;
         const earlyTitleGen: Promise<string | undefined> | undefined =
-          humanTurn && !session.title && !syntheticPrompt && input.text.trim()
-            ? generateAndStoreTitle(
-                session.id,
-                scopeId,
-                `User:\n${stripTurnBoilerplate(input.text)}`,
-                undefined,
-                input.text,
+          fallbackTitleWrite && deps.harness.models.generateTitle
+            ? fallbackTitleWrite.then(() =>
+                generateAndStoreTitle(session.id, scopeId, `User:\n${stripTurnBoilerplate(titleText)}`),
               )
             : undefined;
+        if (earlyTitleGen) {
+          void earlyTitleGen
+            .finally(() => deps.errors?.flush())
+            .catch(swallowAs("orchestrator: session title", undefined));
+        }
         const requestedTurnWallClockMs =
           typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 ? input.turnWallClockMs : undefined;
         const configuredTurnWallClockSec = await deps.config?.getTurnWallClockSecDurable(resolution.orgScopeId);
@@ -3468,14 +3478,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             }
-            if (!pausing && turnCompleted && !session.title && !(earlyTitleGen && (await earlyTitleGen))) {
-              await generateAndStoreTitle(
-                session.id,
-                scopeId,
-                `User:\n${input.text}\n\nAssistant:\n${result.reply}`,
-                undefined,
-                input.text,
-              );
+            if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite && !earlyTitleGen) {
+              await generateAndStoreTitle(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
             }
           } finally {
             await reclaimBox();
@@ -3574,6 +3578,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
           };
         }
+
+        await fallbackTitleWrite;
 
         if (input.background && finalResult.status !== "pending_approval") {
           tailOwnsCleanup = true;
