@@ -288,3 +288,11 @@ test("createInFlightThreadMap: clear is runId-guarded so a finished run can't un
   runs.clear("dm:C1", "run-2");
   assert.equal(runs.get("dm:C1"), undefined);
 });
+
+test("mentionsBot recognizes the bot-ID form like the bot-user-ID form, but history stake never trusts bot-ID text", () => {
+  for (const text of ["<@UBOT>", "<@BBOT>", "<@BBOT|qm>"]) assert.equal(mentionsBot(text, "UBOT", "BBOT"), true, text);
+  for (const text of ["<@BBOT2>", "<@BOTHER|qm>", "&lt;@BBOT&gt;"])
+    assert.equal(mentionsBot(text, "UBOT", "BBOT"), false, text);
+  assert.equal(threadHasBotStake([{ user: "U1", text: "<@BBOT>" }], "UBOT", "BBOT"), false);
+  assert.equal(threadHasBotStake([{ user: "U1", text: "<@UBOT>" }], "UBOT", "BBOT"), true);
+});

@@ -277,3 +277,13 @@ test("a label-less wire mention is disarmed to the person's name when the direct
     setMentionIndex(new Map());
   }
 });
+
+test("bot-ID mentions strip, resolve, and neutralize like bot-user-ID mentions", () => {
+  assert.equal(stripMention("<@BBOT|qm> <@UBOT> hi <@BBOT> <@U2|Alice>", "UBOT", "BBOT"), "hi  <@U2|Alice>");
+  assert.equal(stripMention("<@BOTHER|qm> ping", "UBOT", "BBOT"), "<@BOTHER|qm> ping");
+  assert.equal(
+    resolveMentionsInText("<@BBOT> <@BOTHER|peer>", (id) => (id === "BBOT" ? "qm" : undefined)),
+    "@qm @peer",
+  );
+  assert.equal(neutralizeMentions("<@BBOT|qm> <@BOTHER>"), "@qm @BOTHER");
+});
