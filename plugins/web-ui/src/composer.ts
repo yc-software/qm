@@ -219,6 +219,11 @@ export function clearSkillsCache(): void {
 
 const SLASH_TOKEN = /(^|\s)\/([a-zA-Z0-9_-]*)$/;
 
+function effortText(level: EffortLevel | string): TemplateResult | string {
+  const label = effortLabel(level as EffortLevel);
+  return level === "xhigh" ? html`<span class="effort-peak">${label}</span>` : label;
+}
+
 export function slashQuery(draft: string): string | null {
   const m = SLASH_TOKEN.exec(draft);
   return m ? (m[2] ?? "") : null;
@@ -970,7 +975,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       >
         ${modelGlyph(option)}
         <span class="loadout-name">${option.label}</span>
-        <span class="loadout-meta">${effortLabel(settings.effort)}</span>
+        <span class="loadout-meta">${effortText(settings.effort)}</span>
         ${settings.fast ? html`<span class="loadout-bolt" aria-label="Fast">${icon(Zap, 13)}</span>` : nothing}
         <span class="loadout-end"
           >${active ? icon(Check, 15) : html`<span class="loadout-shortcut">⌃⌘${at + 1}</span>`}</span
@@ -1063,7 +1068,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                     closeLoadoutSection();
                   }}
                 >
-                  <span>${level.label}</span>${composerState.effortLevel === level.value ? icon(Check, 15) : nothing}
+                  <span>${effortText(level.value)}</span
+                  >${composerState.effortLevel === level.value ? icon(Check, 15) : nothing}
                 </button>`,
             )
           : html` <label class="loadout-search"
@@ -1139,7 +1145,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         }}
       >
         <span class="menu-label">${selected.label}</span
-        ><span class="menu-suffix">${effortLabel(composerState.effortLevel)}</span>
+        ><span class="menu-suffix">${effortText(composerState.effortLevel)}</span>
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>
       ${
@@ -1216,7 +1222,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                         >
                           <span class="loadout-setting-label">Effort</span
                           ><span class="loadout-setting-value"
-                            >${effortLabel(composerState.effortLevel)}${icon(ChevronRight, 14)}</span
+                            >${effortText(composerState.effortLevel)}${icon(ChevronRight, 14)}</span
                           >
                         </button>
                       </div>`
