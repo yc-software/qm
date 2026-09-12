@@ -1387,13 +1387,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
         const destination = defaultDestination;
         connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-        if (deps.admin && liveTurn) {
+        if (deps.admin && liveAuthorTurn) {
           const status = await deps.admin
             .adminStatusOf(actor)
             .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
           actorIsOrgAdmin = status.isAdmin;
           if (
             actorIsOrgAdmin &&
+            liveTurn &&
             useMemory &&
             memoryPolicy.capture !== "off" &&
             resolution.orgScopeId !== memoryScopeId
