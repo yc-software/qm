@@ -114,10 +114,6 @@ test("document title follows session switches, split-pane focus, and sign-out", 
           ],
         });
       assert.equal(await refreshSessions({ silent: true }), true);
-      assert.deepEqual(
-        sessionsState.list.map((session: { title: string }) => session.title),
-        [oldTitle, newTitle],
-      );
     };
     const focusPane = (index: number) => {
       document

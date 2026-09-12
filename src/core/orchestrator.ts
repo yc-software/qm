@@ -2654,17 +2654,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : undefined;
         const titleText = input.displayText?.trim() || input.text;
         const fallbackTitle = !session.title && !syntheticPrompt ? fallbackSessionTitle(titleText) : undefined;
-        const fallbackTitleWrite = fallbackTitle
-          ? deps.sessions.updateTitle(session.id, fallbackTitle).then(() => fallbackTitle)
-          : undefined;
-        const earlyTitleGen: Promise<string | undefined> | undefined =
-          fallbackTitleWrite && deps.harness.models.generateTitle
-            ? fallbackTitleWrite.then(() =>
-                generateAndStoreTitle(session.id, scopeId, `User:\n${stripTurnBoilerplate(titleText)}`),
-              )
-            : undefined;
-        if (earlyTitleGen) {
-          void earlyTitleGen
+        const fallbackTitleWrite = fallbackTitle ? deps.sessions.updateTitle(session.id, fallbackTitle) : undefined;
+        if (fallbackTitleWrite && deps.harness.models.generateTitle) {
+          void fallbackTitleWrite
+            .then(() => generateAndStoreTitle(session.id, scopeId, `User:\n${stripTurnBoilerplate(titleText)}`))
             .finally(() => deps.errors?.flush())
             .catch(swallowAs("orchestrator: session title", undefined));
         }
@@ -3478,7 +3471,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             }
-            if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite && !earlyTitleGen) {
+            if (!pausing && turnCompleted && !session.title && !fallbackTitleWrite) {
               await generateAndStoreTitle(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
             }
           } finally {

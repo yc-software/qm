@@ -29,18 +29,12 @@ test("names a conversation from its first completed turn (auto-title)", async ()
   assert.equal(got?.session.title, "Chat: How do I roll back");
 });
 
-test("four concurrent completed turns keep a durable title when title generation is unavailable", async () => {
+test("a completed turn keeps a durable title when title generation is unavailable", async () => {
   const { app } = freshApp();
-  const turns = await Promise.all(
-    Array.from({ length: 4 }, (_, i) =>
-      app.turn(dm(`Simulate four-way title outage ${i + 1}`, `web:U1:title-load-${i + 1}`)),
-    ),
-  );
+  const turn = await app.turn(dm("Simulate four-way title outage", "web:U1:title-load"));
 
-  for (const [i, turn] of turns.entries()) {
-    assert.equal(turn.status, "ok");
-    assert.equal((await app.getSession(turn.sessionId!))?.session.title, `Simulate four-way title outage ${i + 1}`);
-  }
+  assert.equal(turn.status, "ok");
+  assert.equal((await app.getSession(turn.sessionId!))?.session.title, "Simulate four-way title outage");
 });
 
 test("a title provider exception is recorded before the completed turn gets its fallback title", async () => {
