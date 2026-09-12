@@ -19,7 +19,7 @@ import {
   modelUnavailableReason,
   resolveModel,
 } from "../model/pi-models.ts";
-import { selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
+import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
@@ -204,13 +204,13 @@ export function createTurnMethods(
             enabledWebuiModels = configuredWebuiModels.length
               ? [...new Set([...configuredWebuiModels, orgRuntime.modelId])]
               : [];
-          } else if (providers?.openrouter) {
+          } else {
+            const catalog = providers?.openrouter
+              ? await selectableModelCatalog(deps.modelCredentialFetch)
+              : builtInModelCatalog();
             enabledWebuiModels = [
               ...new Set([
-                ...selectableCatalogForHarness(
-                  await selectableModelCatalog(deps.modelCredentialFetch),
-                  runtime.harnessId,
-                )
+                ...selectableCatalogForHarness(catalog, runtime.harnessId)
                   .filter((model) => modelOfferedInWebui(model.id))
                   .map((model) => model.id),
                 ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),

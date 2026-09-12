@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   NON_INTERACTIVE_FAST_MODE,
@@ -6,6 +6,10 @@ import {
   turnModelOptions,
   validateWebTurnModelOptions,
 } from "../src/core/turn-options.ts";
+import { defaultWebuiModelIds } from "../src/model/pi-models.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
+
+afterEach(() => setCustomProviders([]));
 
 test("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {
@@ -32,6 +36,24 @@ test("web model controls are bounded by admin configuration", () => {
 
 test("interactive turns do not force model options", () => {
   assert.deepEqual(turnModelOptions({}), {});
+});
+
+test("the web-turn fallback allowlist includes live custom-provider models", () => {
+  setCustomProviders([
+    {
+      id: "acme-gateway",
+      name: "Acme Gateway",
+      protocol: "openai",
+      baseUrl: "https://llm.acme.internal/v1",
+      models: [{ id: "acme-large", name: "Acme Large" }],
+    },
+  ]);
+  assert.ok(defaultWebuiModelIds().includes("acme-large"));
+  assert.equal(validateWebTurnModelOptions({ model: "acme-large" }, null), null);
+  assert.equal(
+    validateWebTurnModelOptions({ model: "acme-large" }, ["claude-opus-4-8"]),
+    "that model is not enabled for the web UI",
+  );
 });
 
 test("a triggered turn with an explicit low thinking level overrides the xhigh trigger default", () => {
