@@ -3254,6 +3254,43 @@ a.chat-row-open {
   font-size: 13px;
   white-space: nowrap;
 }
+.effort-peak {
+  background-image: linear-gradient(
+    90deg,
+    #e2543f,
+    #d46919,
+    #a88208,
+    #74912d,
+    #3b9951,
+    #3f9492,
+    #348fc0,
+    #7280dc,
+    #b54cef
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+:root.dark .effort-peak,
+.dark .effort-peak {
+  background-image: linear-gradient(
+    90deg,
+    #e2543f,
+    #e8843a,
+    #f6cc46,
+    #abcc59,
+    #5cc074,
+    #55b7b5,
+    #5ba9d3,
+    #7b88de,
+    #b54cef
+  );
+}
+@supports not ((background-clip: text) or (-webkit-background-clip: text)) {
+  .effort-peak {
+    color: inherit;
+  }
+}
 .loadout-bolt {
   display: inline-flex;
   flex: none;
