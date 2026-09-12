@@ -57,6 +57,75 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) =>
+      (p === "/v1/peers" && (m === "GET" || m === "POST")) ||
+      (/^\/v1\/peers\/[^/]+$/.test(p) && m === "GET") ||
+      (/^\/v1\/peers\/[^/]+\/character$/.test(p) && m === "PUT") ||
+      (p === "/v1/peer-messages" && (m === "GET" || m === "POST")) ||
+      (p === "/v1/peer-messages/audience-preview" && m === "POST") ||
+      (/^\/v1\/peer-messages\/[^/]+$/.test(p) && m === "GET") ||
+      (/^\/v1\/peer-messages\/[^/]+\/deliveries$/.test(p) && m === "GET") ||
+      (p === "/v1/swarms" && m === "POST") ||
+      (/^\/v1\/swarms\/[^/]+\/(pool|stop)$/.test(p) && m === "POST"),
+    guidance:
+      "Peer coordination lets you discover sibling agents, address them through a public message board, and provision a bounded pool of workers. The board is organization-readable: anything you publish is visible to every peer, and only the recipients an audience resolves to are woken. You act only as your own session — you cannot register, edit, spawn from, or stop another agent's session.",
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/peers",
+        summary:
+          "register this session's public peer identity with {sessionId,agentName,character?}; character is arbitrary JSON others can select on",
+      },
+      { method: "GET", path: "/v1/peers", summary: "list every peer identity in the organization" },
+      { method: "GET", path: "/v1/peers/:id", summary: "read one peer's public identity, character, and lifecycle" },
+      {
+        method: "PUT",
+        path: "/v1/peers/:id/character",
+        summary:
+          "replace your own character with {character,ifVersion}; ifVersion is the characterVersion you read, and a stale one is refused",
+      },
+      {
+        method: "POST",
+        path: "/v1/peer-messages",
+        summary:
+          "publish to the board with {text, audience|recipients, replyTo?}; audience is a jq filter over peer characters, recipients is an explicit peer session id list",
+      },
+      {
+        method: "GET",
+        path: "/v1/peer-messages",
+        summary: "read the board with ?after=<seq>&limit=; reading wakes nobody",
+      },
+      {
+        method: "POST",
+        path: "/v1/peer-messages/audience-preview",
+        summary: "resolve an audience expression exactly as a publish would, writing nothing",
+      },
+      { method: "GET", path: "/v1/peer-messages/:id", summary: "read one published message" },
+      {
+        method: "GET",
+        path: "/v1/peer-messages/:id/deliveries",
+        summary: "inspect per-recipient delivery: publication, delivery, consumption, and park state",
+      },
+      {
+        method: "POST",
+        path: "/v1/swarms",
+        summary:
+          "root a swarm on your own session with {rootSessionId,scopeId,sessionLimit?,maxChildrenPerParent?,maxDepth?}",
+      },
+      {
+        method: "POST",
+        path: "/v1/swarms/:id/pool",
+        summary:
+          "provision workers with {requestId,parentSessionId,count,briefs:[{agentName,brief,character?}]}; retry with the same requestId to resume, never to double-charge the pool",
+      },
+      {
+        method: "POST",
+        path: "/v1/swarms/:id/stop",
+        summary: 'stop autonomous work with {scope:"parent"|"subtree"|"swarm", sessionId?}; nothing durable is deleted',
+      },
+    ],
+  },
+  {
     match: onPath("POST", "/v1/search"),
     guidance:
       "Search uses this conversation's complete principal set as its visibility floor. Shared conversations without a complete roster fail closed.",
