@@ -80,15 +80,16 @@ test("document title follows session switches, split-pane focus, and sign-out", 
   try {
     const { appState, signOut, syncDocumentTitle } = await vite.ssrLoadModule("/src/shell.ts");
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
-    const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-    const { activateCanvas, notifyPanesChanged, splitInterceptsOpen } = await vite.ssrLoadModule("/src/split.ts");
+    const { refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    const { activateCanvas } = await vite.ssrLoadModule("/src/split.ts");
     const oldSession = { id: "old", threadRef: "web:old", scopeId: "personal:tester", title: "Old title" };
     const newSession = { id: "new", threadRef: "web:new", scopeId: "personal:tester", title: "New title" };
     sessionsState.list = [oldSession, newSession];
     appState.me = { user: "tester", org: "test" };
     appState.currentView = "chats";
     appState.mainEl = document.createElement("main");
-    document.body.append(appState.mainEl);
+    appState.listEl = document.createElement("aside");
+    document.body.append(appState.listEl, appState.mainEl);
     mainConversation().state.sessionId = "old";
     mainConversation().state.threadRef = "web:old";
     syncDocumentTitle();
@@ -104,21 +105,38 @@ test("document title follows session switches, split-pane focus, and sign-out", 
 
     const paneTitles = () =>
       Array.from(document.querySelectorAll(".split-pane-title-text"), (node) => node.textContent?.trim());
+    const refreshTitles = async (oldTitle: string, newTitle: string) => {
+      globalThis.fetch = async () =>
+        Response.json({
+          sessions: [
+            { ...oldSession, title: oldTitle },
+            { ...newSession, title: newTitle },
+          ],
+        });
+      assert.equal(await refreshSessions({ silent: true }), true);
+      assert.deepEqual(
+        sessionsState.list.map((session: { title: string }) => session.title),
+        [oldTitle, newTitle],
+      );
+    };
+    const focusPane = (index: number) => {
+      document
+        .querySelectorAll(".dv-tab")
+        .item(index)
+        .dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
+    };
     assert.deepEqual(paneTitles(), ["Old title", "New title"]);
-    oldSession.title = "";
-    notifyPanesChanged();
+    await refreshTitles("", "New title");
     assert.deepEqual(paneTitles(), ["Web chat", "New title"]);
     assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
-    oldSession.title = "Fallback for overloaded title model";
-    notifyPanesChanged();
+    await refreshTitles("Fallback for overloaded title model", "New title");
     assert.deepEqual(paneTitles(), ["Fallback for overloaded title model", "New title"]);
-    assert.equal(splitInterceptsOpen(oldSession), true);
+    focusPane(0);
     assert.equal(document.title, `Fallback for overloaded title model · ${PRODUCT_TITLE}`);
-    newSession.title = "Fallback for OAuth callback";
-    notifyPanesChanged();
+    await refreshTitles("Fallback for overloaded title model", "Fallback for OAuth callback");
     assert.deepEqual(paneTitles(), ["Fallback for overloaded title model", "Fallback for OAuth callback"]);
     assert.equal(document.title, `Fallback for overloaded title model · ${PRODUCT_TITLE}`);
-    assert.equal(splitInterceptsOpen(newSession), true);
+    focusPane(1);
     assert.equal(document.title, `Fallback for OAuth callback · ${PRODUCT_TITLE}`);
 
     globalThis.fetch = async () => new Response(null, { status: 204 });

@@ -431,15 +431,20 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(regenerated?.title, "secret-before-join");
   assert.equal((await built.sessions.get(first.id))?.title ?? null, globalTitle);
   assert.equal(
-    (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
+    (await built.app.listSessions("member")).find((session) => session.id === first.id)?.title,
     regenerated.title,
   );
+  assert.equal((await built.app.listSessions("owner")).find((session) => session.id === first.id)?.title, globalTitle);
   assert.equal(await built.app.regenerateTitle(first.id, "outsider"), null);
   assert.ok(await built.app.updateSession(first.id, "owner", { title: "Owner-only project title" }));
   assert.equal((await built.sessions.get(first.id))?.title ?? null, globalTitle);
   assert.equal(
-    (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
+    (await built.app.listSessions("member")).find((session) => session.id === first.id)?.title,
     regenerated.title,
+  );
+  assert.equal(
+    (await built.app.listSessions("owner")).find((session) => session.id === first.id)?.title,
+    "Owner-only project title",
   );
   const unchangedAdd = await built.app.addProjectMember(project.id, "owner", "member");
   assert.equal(unchangedAdd.status, "ok");
