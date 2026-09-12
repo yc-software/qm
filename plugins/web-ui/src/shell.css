@@ -3255,36 +3255,51 @@ a.chat-row-open {
   white-space: nowrap;
 }
 .effort-peak {
-  background-image: linear-gradient(
-    90deg,
-    #e2543f,
-    #d46919,
-    #a88208,
-    #74912d,
-    #3b9951,
-    #3f9492,
-    #348fc0,
-    #7280dc,
-    #b54cef
-  );
+  background-image:
+    linear-gradient(105deg, transparent 43%, rgb(255 255 255 / 0.78) 50%, transparent 57%),
+    linear-gradient(90deg, #e2543f, #d46919, #a88208, #74912d, #3b9951, #3f9492, #348fc0, #7280dc, #b54cef);
+  background-repeat: no-repeat;
+  background-size:
+    180% 100%,
+    100% 100%;
+  background-position:
+    220% 0,
+    0 0;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
+.loadout-row:hover .effort-peak,
+.loadout-setting:hover .effort-peak,
+.loadout-effort:hover .effort-peak,
+.loadout-button:hover .effort-peak {
+  animation: effort-shine 900ms ease-out;
+}
+@keyframes effort-shine {
+  from {
+    background-position:
+      220% 0,
+      0 0;
+  }
+  to {
+    background-position:
+      -120% 0,
+      0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loadout-row:hover .effort-peak,
+  .loadout-setting:hover .effort-peak,
+  .loadout-effort:hover .effort-peak,
+  .loadout-button:hover .effort-peak {
+    animation: none;
+  }
+}
 :root.dark .effort-peak,
 .dark .effort-peak {
-  background-image: linear-gradient(
-    90deg,
-    #e2543f,
-    #e8843a,
-    #f6cc46,
-    #abcc59,
-    #5cc074,
-    #55b7b5,
-    #5ba9d3,
-    #7b88de,
-    #b54cef
-  );
+  background-image:
+    linear-gradient(105deg, transparent 43%, rgb(255 255 255 / 0.95) 50%, transparent 57%),
+    linear-gradient(90deg, #e2543f, #e8843a, #f6cc46, #abcc59, #5cc074, #55b7b5, #5ba9d3, #7b88de, #b54cef);
 }
 @supports not ((background-clip: text) or (-webkit-background-clip: text)) {
   .effort-peak {
