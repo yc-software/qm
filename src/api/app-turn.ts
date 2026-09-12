@@ -25,6 +25,7 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
+import { runtimeConfigBody } from "./runtime-config.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 
@@ -145,6 +146,8 @@ export function createTurnMethods(
       }
 
       const individualAuth = !!deps.userModelCredentials && (await deps.config.getIndividualModelAuthDurable());
+      let selectedHarness = individualAuth ? undefined : req.harness;
+      let selectedModel = individualAuth ? undefined : req.model;
       if (req.surface === "web") {
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
@@ -163,7 +166,25 @@ export function createTurnMethods(
           harnessId: fallbackHarness,
           modelId: defaultModelForHarness(fallbackHarness),
         };
-        if (!individualAuth) {
+        if (individualAuth) {
+          const available = await runtimeConfigBody(
+            { deps: { ...deps, baseModelDefault: runtimeFallback.modelId } },
+            targetScope,
+            actor.id,
+          );
+          selectedHarness = req.harness ?? available.effective.harnessId;
+          selectedModel = req.model ?? available.effective.modelId;
+          if (!available.modelsByHarness[selectedHarness]?.includes(selectedModel))
+            return {
+              status: "refused",
+              reason: "that model isn't available for your connected AI account or isn't approved",
+            };
+          const invalidModelOption = validateWebTurnModelOptions(
+            { ...req, model: selectedModel },
+            available.modelsByHarness[selectedHarness] ?? [],
+          );
+          if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
+        } else {
           const configuredKeys = deps.providerKeys ??
             deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
           const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
@@ -268,8 +289,8 @@ export function createTurnMethods(
         ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
-        ...(!individualAuth && req.harness ? { harness: req.harness } : {}),
-        ...(!individualAuth && req.model ? { model: req.model } : {}),
+        ...(selectedHarness ? { harness: selectedHarness } : {}),
+        ...(selectedModel ? { model: selectedModel } : {}),
         ...turnModelOptions(req),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
