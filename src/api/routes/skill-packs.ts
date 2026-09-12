@@ -33,6 +33,7 @@ function asConfig(v: unknown): PackConfig | undefined {
   if (Array.isArray(o.exclude)) cfg.exclude = o.exclude.filter((x): x is string => typeof x === "string");
   if (o.fieldOverrides && typeof o.fieldOverrides === "object")
     cfg.fieldOverrides = o.fieldOverrides as Record<string, string>;
+  if (o.sparseCheckout === true) cfg.sparseCheckout = true;
   return cfg;
 }
 
