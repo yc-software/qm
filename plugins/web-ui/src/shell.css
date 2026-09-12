@@ -5018,10 +5018,6 @@ a.chat-row-open {
   align-items: center;
   gap: 12px;
 }
-.file-row {
-  color: inherit;
-  text-decoration: none;
-}
 .file-row-icon {
   display: inline-flex;
   align-items: center;
@@ -5213,11 +5209,9 @@ a.chat-row-open {
 }
 
 @media (max-width: 700px) {
-  .file-row,
   .deploy-row {
     grid-template-columns: auto minmax(0, 1fr);
   }
-  .file-row .list-row-meta,
   .deploy-row .list-row-meta {
     grid-column: 2;
     justify-content: flex-start;
@@ -5885,8 +5879,26 @@ a.chat-row-open {
 }
 .file-row {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0;
   justify-content: initial;
+  padding: 0;
+}
+.file-row-main {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+.file-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px 0 8px;
 }
 .file-row .list-row-title {
   justify-self: stretch;
@@ -5913,10 +5925,10 @@ a.chat-row-open {
   text-align: right;
 }
 @media (max-width: 700px) {
-  .file-row {
+  .file-row-main {
     grid-template-columns: 22px minmax(0, 1fr);
   }
-  .file-row .list-row-meta {
+  .file-row-main .list-row-meta {
     grid-column: 2;
     justify-content: flex-start;
     flex-wrap: wrap;

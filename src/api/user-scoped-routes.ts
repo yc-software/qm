@@ -45,6 +45,7 @@ const USER_SCOPED: Rule[] = [
   pat("POST", "/v1/files/uploads/:id/complete", { in: "body", name: "principalId" }),
   pat("DELETE", "/v1/files/uploads/:id", { in: "body", name: "principalId" }),
   pat("POST", "/v1/files/upload", { in: "body", name: "principalId" }),
+  pat("DELETE", "/v1/files/:id", { in: "query", name: "principalId" }),
   pat("POST", "/v1/sessions/:id", { in: "body", name: "principalId" }),
   pat("POST", "/v1/sessions/:id/title", { in: "body", name: "principalId" }),
   pat("POST", "/v1/sessions/:id/fork", { in: "body", name: "principalId" }),
