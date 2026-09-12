@@ -82,6 +82,6 @@ test("a steer whose run already ended is recovered, never silently dropped", () 
 test("scope runtime defaults include effort and fast mode", () => {
   assert.match(composer, /effortLevel: composerState\.effortLevel/);
   assert.match(composer, /fastMode: fastOn/);
-  assert.match(composer, /config\.effective\.effortLevel/);
-  assert.match(composer, /config\.effective\.fastMode === true/);
+  assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.effortLevel/);
+  assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.fastMode === true/);
 });

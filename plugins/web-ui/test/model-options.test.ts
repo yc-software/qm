@@ -1,8 +1,8 @@
+import { applyRuntimeOptions } from "./runtime-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  applyRuntimeOptions,
   defaultModelValue,
   getModelOptions,
   getHarnessOptions,
@@ -15,8 +15,8 @@ import { metadata } from "./model-metadata.ts";
 
 const catalog = { future: metadata("future", "Future API Model"), custom: metadata("custom", "Custom", "gateway") };
 
-test("server metadata controls picker labels, geometry, price, order and effective selection", () => {
-  applyRuntimeOptions(
+test("server metadata controls picker labels, geometry, price, order and effective selection", async () => {
+  await applyRuntimeOptions(
     "scope:a",
     ["pi", "mock"],
     { pi: ["custom", "future", "custom"], mock: ["future"] },
@@ -35,7 +35,7 @@ test("server metadata controls picker labels, geometry, price, order and effecti
   assert.equal(model.model.baseUrl, "");
 });
 
-test("empty, unknown, missing-metadata and unapproved lists stay empty", () => {
+test("empty, unknown, missing-metadata and unapproved lists stay empty", async () => {
   for (const options of [
     runtimeModelOptions([], { pi: ["future"] }, catalog),
     runtimeModelOptions(["pi"], { pi: [] }, catalog),
@@ -43,22 +43,28 @@ test("empty, unknown, missing-metadata and unapproved lists stay empty", () => {
     runtimeModelOptions(["pi"], { pi: ["unknown"] }, catalog),
   ])
     assert.deepEqual(options, []);
-  applyRuntimeOptions("scope:empty", ["pi"], { pi: [] }, { harnessId: "pi", modelId: "future" }, catalog);
+  await applyRuntimeOptions("scope:empty", ["pi"], { pi: [] }, { harnessId: "pi", modelId: "future" }, catalog);
   assert.deepEqual(getModelOptions("scope:empty"), []);
   assert.equal(defaultModelValue("scope:empty"), "pi:future");
   assert.equal(transcriptModel("scope:empty"), undefined);
   assert.deepEqual(getHarnessOptions("scope:empty"), []);
 });
 
-test("scopes retain independent choices and an unloaded scope does not borrow another policy", () => {
-  applyRuntimeOptions("scope:a", ["pi"], { pi: ["future"] }, { harnessId: "pi", modelId: "future" }, catalog);
-  applyRuntimeOptions("scope:b", ["mock"], { mock: ["custom"] }, { harnessId: "mock", modelId: "custom" }, catalog);
+test("scopes retain independent choices and an unloaded scope does not borrow another policy", async () => {
+  await applyRuntimeOptions("scope:a", ["pi"], { pi: ["future"] }, { harnessId: "pi", modelId: "future" }, catalog);
+  await applyRuntimeOptions(
+    "scope:b",
+    ["mock"],
+    { mock: ["custom"] },
+    { harnessId: "mock", modelId: "custom" },
+    catalog,
+  );
   assert.equal(defaultModelValue("scope:a"), "pi:future");
   assert.equal(defaultModelValue("scope:b"), "mock:custom");
   assert.deepEqual(getModelOptions("scope:new"), []);
 });
 
-test("OpenRouter and custom provider metadata retains provider grouping", () => {
+test("OpenRouter and custom provider metadata retains provider grouping", async () => {
   const models = { "vendor/new": metadata("vendor/new", "Vendor: New", "openrouter"), custom: catalog.custom };
   const options = runtimeModelOptions(["pi"], { pi: Object.keys(models) }, models);
   assert.deepEqual(
@@ -67,29 +73,41 @@ test("OpenRouter and custom provider metadata retains provider grouping", () => 
   );
 });
 
-test("picker has no model IDs, clone templates or runtime SDK model registry imports", () => {
+test("picker has no model IDs, clone templates or runtime SDK model registry imports", async () => {
   const source = ["pi-models.ts", "model-options.ts"]
     .map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"))
     .join("\n");
   assert.doesNotMatch(source, /MODEL_CATALOG|CLONE_TEMPLATES|gpt-5|claude-opus|openrouter\/auto|import \{ getModel/);
 });
 
-test("harness controls retain their supported surfaces", () => {
+test("harness controls retain their supported surfaces", async () => {
   assert.equal(harnessSupportsEffort("pi"), true);
   assert.equal(harnessSupportsEffort("opencode"), false);
   assert.equal(harnessSupportsFastMode("claude"), true);
   assert.equal(harnessSupportsFastMode("codex"), false);
 });
 
-test("deleted selection retains identity and transcript rendering does not borrow a replacement", () => {
-  applyRuntimeOptions("scope:deleted", ["pi"], { pi: ["custom"] }, { harnessId: "pi", modelId: "future" }, catalog);
+test("deleted selection retains identity and transcript rendering does not borrow a replacement", async () => {
+  await applyRuntimeOptions(
+    "scope:deleted",
+    ["pi"],
+    { pi: ["custom"] },
+    { harnessId: "pi", modelId: "future" },
+    catalog,
+  );
   assert.equal(defaultModelValue("scope:deleted"), "pi:future");
   assert.equal(transcriptModel("scope:deleted"), undefined);
   assert.deepEqual(
     getModelOptions("scope:deleted").map((model) => model.value),
     ["pi:custom"],
   );
-  applyRuntimeOptions("scope:deleted", ["pi"], { pi: ["custom"] }, { harnessId: "pi", modelId: "custom" }, catalog);
+  await applyRuntimeOptions(
+    "scope:deleted",
+    ["pi"],
+    { pi: ["custom"] },
+    { harnessId: "pi", modelId: "custom" },
+    catalog,
+  );
   assert.equal(defaultModelValue("scope:deleted"), "pi:custom");
   assert.equal(transcriptModel("scope:deleted")?.id, "custom");
 });

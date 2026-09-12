@@ -8,7 +8,7 @@ import { errMessage, swallow } from "../../chassis/src/errors.ts";
 import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
 import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
-import { defaultEffortForModel, harnessSupportsEffort } from "./model-options.ts";
+import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
@@ -669,15 +669,6 @@ export async function fetchRuntimeConfig(scopeId?: string | null): Promise<Runti
   }
 }
 
-const runtimeConfigListeners = new Set<(config: RuntimeConfig) => void>();
-
-export function onRuntimeConfigChanged(listener: (config: RuntimeConfig) => void): () => void {
-  runtimeConfigListeners.add(listener);
-  return () => {
-    runtimeConfigListeners.delete(listener);
-  };
-}
-
 export async function updateRuntimeConfig(
   scopeId: string | null,
   change: {
@@ -689,18 +680,10 @@ export async function updateRuntimeConfig(
     keep?: boolean;
   },
 ): Promise<RuntimeConfig> {
-  const config = await api<RuntimeConfig>("/api/runtime-config", {
+  return api<RuntimeConfig>("/api/runtime-config", {
     method: "PUT",
     body: JSON.stringify({ ...change, ...(scopeId ? { scopeId } : {}) }),
   });
-  for (const listener of runtimeConfigListeners) {
-    try {
-      listener(config);
-    } catch (e) {
-      swallow("web-ui: runtime config listener", e);
-    }
-  }
-  return config;
 }
 
 export type WorkObserver = (work: WorkBlock) => void;

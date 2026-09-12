@@ -1,3 +1,5 @@
+import { getRuntimeConfig } from "./runtime-config-store.ts";
+import type { RuntimeConfig } from "./core-bridge.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBaseModel, type ModelMetadata } from "./pi-models.ts";
 
@@ -93,12 +95,20 @@ interface RuntimeOptions {
 }
 
 const FALLBACK: RuntimeOptions = { options: [], defaultValue: null };
-const byScope = new Map<string, RuntimeOptions>();
-let lastApplied: RuntimeOptions = FALLBACK;
+const derived = new WeakMap<RuntimeConfig, RuntimeOptions>();
 
 function runtimeFor(scopeKey?: string | null): RuntimeOptions {
-  if (scopeKey === undefined) return lastApplied;
-  return (scopeKey !== null ? byScope.get(scopeKey) : undefined) ?? FALLBACK;
+  const config = getRuntimeConfig(scopeKey);
+  if (!config) return FALLBACK;
+  let options = derived.get(config);
+  if (!options) {
+    options = {
+      options: runtimeModelOptions(config.approvedHarnesses, config.modelsByHarness, config.modelCatalog),
+      defaultValue: `${config.effective.harnessId}:${config.effective.modelId}`,
+    };
+    derived.set(config, options);
+  }
+  return options;
 }
 
 export function getModelOptions(scopeKey?: string | null): ModelOption[] {
@@ -126,19 +136,6 @@ export function runtimeModelOptions(
   );
 }
 
-export function applyRuntimeOptions(
-  scopeKey: string | null,
-  approvedHarnesses: readonly string[],
-  modelsByHarness: Readonly<Record<string, readonly string[]>>,
-  effective: { harnessId: string; modelId: string },
-  catalog: Readonly<Record<string, ModelMetadata>> = {},
-): void {
-  const options = runtimeModelOptions(approvedHarnesses, modelsByHarness, catalog);
-  const applied = { options, defaultValue: `${effective.harnessId}:${effective.modelId}` };
-  lastApplied = applied;
-  if (scopeKey !== null) byScope.set(scopeKey, applied);
-}
-
 export function defaultModelValue(scopeKey?: string | null): ModelOptionValue {
   return runtimeFor(scopeKey).defaultValue ?? "";
 }
@@ -148,35 +145,12 @@ export function transcriptModel(scopeKey?: string | null): Model<Api> | undefine
   return options.find((o) => o.value === defaultValue)?.model;
 }
 
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | "auto";
-
-export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "XHigh" },
-  { value: "max", label: "Max" },
-  { value: "ultracode", label: "Ultracode" },
-];
-
-export function effortLabel(level: EffortLevel): string {
-  return EFFORT_LEVELS.find((option) => option.value === level)?.label ?? level;
-}
-
-export function harnessSupportsEffort(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "codex" || harnessId === "claude";
-}
-
-export function harnessSupportsFastMode(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude";
-}
-
-export function harnessSupportsSteer(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex" || harnessId === "opencode";
-}
-
-export function defaultEffortForModel(model: Model<Api> | undefined): EffortLevel {
-  const provider = String(model?.provider ?? model?.api ?? "").toLowerCase();
-  return provider.includes("anthropic") ? "low" : "auto";
-}
+export {
+  EFFORT_LEVELS,
+  defaultEffortForModel,
+  effortLabel,
+  harnessSupportsEffort,
+  harnessSupportsFastMode,
+  harnessSupportsSteer,
+  type EffortLevel,
+} from "./runtime-capabilities.ts";
