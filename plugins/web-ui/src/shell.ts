@@ -627,7 +627,7 @@ export function renderSidebarTop(): void {
           startNewChatInLastScope();
         })}
       </div>
-      ${sessionSelectionBar() ?? html` <div class="section-label recents-label"><span>Sessions</span></div> `}
+      ${sessionSelectionBar() ?? html` <div class="section-label recents-label"></div> `}
     `,
     appState.topEl,
   );
