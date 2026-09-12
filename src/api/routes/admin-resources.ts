@@ -21,6 +21,7 @@ import {
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoiceDurable } from "../../harness/harness-router.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
+import type { FactoryConfig } from "../../resolution/config-store.ts";
 import {
   credentialInjectionError,
   isValidCredentialSlug,
@@ -34,7 +35,8 @@ import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
-import { audit } from "./shared.ts";
+import { audit, orgScope } from "./shared.ts";
+import { ensureFactoryLoop } from "../../loops/factory/factory-loop.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
@@ -154,6 +156,58 @@ const MAX_SOUL_CHARS = 100_000;
 function channelContainer(scope: string): string | undefined {
   const { kind, ref } = parseScopeId(scope);
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
+}
+
+const REQUIRED_FACTORY_STRINGS = [
+  "publishProject",
+  "targetBranch",
+  "repoCloneUrl",
+  "linearTeamId",
+  "sourceAppDirs",
+  "sourceTestRe",
+  "verifyTestsCmd",
+  "verifyTestFileCmd",
+  "verifyLintCmd",
+] as const;
+const OPTIONAL_FACTORY_STRINGS = ["repoSetupCmd", "proofStartCmd", "proofBaseUrlCmd", "slackChannel"] as const;
+const FACTORY_BOOLEANS = ["bugbotRequired", "followupsEnabled"] as const;
+
+function parseFactoryConfig(body: unknown): { value: FactoryConfig } | { error: string } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { error: "factory-config: body must be an object" };
+  }
+  const raw = body as Record<string, unknown>;
+  const allowed = new Set<string>([
+    "forge",
+    ...REQUIRED_FACTORY_STRINGS,
+    ...OPTIONAL_FACTORY_STRINGS,
+    ...FACTORY_BOOLEANS,
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) return { error: `factory-config: unknown key ${key}` };
+  }
+  if (raw.forge !== "github" && raw.forge !== "gitlab") {
+    return { error: 'factory-config: forge must be "github" or "gitlab"' };
+  }
+  const value: Partial<FactoryConfig> = { forge: raw.forge };
+  for (const key of REQUIRED_FACTORY_STRINGS) {
+    const v = raw[key];
+    if (typeof v !== "string" || !v.trim()) return { error: `factory-config: ${key} must be a non-empty string` };
+    value[key] = v.trim();
+  }
+  for (const key of OPTIONAL_FACTORY_STRINGS) {
+    const v = raw[key];
+    if (v === undefined) continue;
+    if (typeof v !== "string") return { error: `factory-config: ${key} must be a string` };
+    if (v.trim() === "") continue;
+    value[key] = v.trim();
+  }
+  for (const key of FACTORY_BOOLEANS) {
+    const v = raw[key];
+    if (typeof v !== "boolean") return { error: `factory-config: ${key} must be a boolean` };
+    value[key] = v;
+  }
+  return { value: value as FactoryConfig };
 }
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
@@ -792,6 +846,31 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "branding mark image must be an https URL" };
       }
       ctx.deps.config!.setBranding(scope, value ?? null);
+      return { ok: true };
+    },
+  },
+  {
+    id: "factory-config",
+    kind: "custom",
+    target: "org",
+    clearable: true,
+    label: "The software factory: which repository and Linear team it works, and how it verifies.",
+    readKey: "factoryConfig",
+    get: (deps) => deps.config!.getFactoryConfig(),
+    apply: async (ctx, actor, scope) => {
+      const bad = orgOnly(scope, "the factory config is org-wide");
+      if (bad) return bad;
+      const body = ctx.body;
+      const isRecord = !!body && typeof body === "object" && !Array.isArray(body);
+      if (isRecord && Object.keys(body).length === 1 && (body as { reset?: unknown }).reset === true) {
+        ctx.deps.config!.setFactoryConfig(null);
+        return { ok: true };
+      }
+      const parsed = parseFactoryConfig(body);
+      if ("error" in parsed) return parsed;
+      ctx.deps.config!.setFactoryConfig(parsed.value);
+      if (ctx.deps.loops)
+        await ensureFactoryLoop(ctx.deps.loops.store, { owner: actor.id, orgScopeId: orgScope(ctx.deps) });
       return { ok: true };
     },
   },

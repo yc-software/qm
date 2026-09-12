@@ -5839,6 +5839,64 @@
                     ><span class="status" id="st-turn-wall-clock"></span>
                   </div>
                 </section>
+                <section class="card sv-customize setting-row hidden" id="card-factory-config">
+                  <div class="head">
+                    <h2>Software factory</h2>
+                    <p>
+                      Credentials are the service credentials factory-linear, factory-github, and factory-anthropic in
+                      the keychain.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <label for="factory-forge">forge</label>
+                    <select id="factory-forge">
+                      <option value="github">github</option>
+                      <option value="gitlab">gitlab</option>
+                    </select>
+                    <label for="factory-publish-project" style="margin-top: 12px">publishProject</label>
+                    <input type="text" id="factory-publish-project" />
+                    <label for="factory-target-branch" style="margin-top: 12px">targetBranch</label>
+                    <input type="text" id="factory-target-branch" />
+                    <label for="factory-repo-clone-url" style="margin-top: 12px">repoCloneUrl</label>
+                    <input type="text" id="factory-repo-clone-url" />
+                    <label for="factory-repo-setup-cmd" style="margin-top: 12px">repoSetupCmd (optional)</label>
+                    <textarea id="factory-repo-setup-cmd" rows="3"></textarea>
+                    <label for="factory-linear-team-id" style="margin-top: 12px">linearTeamId</label>
+                    <input type="text" id="factory-linear-team-id" />
+                    <label for="factory-source-app-dirs" style="margin-top: 12px">sourceAppDirs</label>
+                    <input type="text" id="factory-source-app-dirs" />
+                    <label for="factory-source-test-re" style="margin-top: 12px">sourceTestRe</label>
+                    <input type="text" id="factory-source-test-re" />
+                    <label for="factory-verify-tests-cmd" style="margin-top: 12px">verifyTestsCmd</label>
+                    <input type="text" id="factory-verify-tests-cmd" />
+                    <label for="factory-verify-test-file-cmd" style="margin-top: 12px">verifyTestFileCmd</label>
+                    <input type="text" id="factory-verify-test-file-cmd" />
+                    <label for="factory-verify-lint-cmd" style="margin-top: 12px">verifyLintCmd</label>
+                    <input type="text" id="factory-verify-lint-cmd" />
+                    <label for="factory-proof-start-cmd" style="margin-top: 12px">proofStartCmd (optional)</label>
+                    <input type="text" id="factory-proof-start-cmd" />
+                    <label for="factory-proof-base-url-cmd" style="margin-top: 12px">proofBaseUrlCmd (optional)</label>
+                    <input type="text" id="factory-proof-base-url-cmd" />
+                    <label for="factory-slack-channel" style="margin-top: 12px">slackChannel (optional)</label>
+                    <input type="text" id="factory-slack-channel" />
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px">
+                      <label class="setting-toggle">
+                        <input type="checkbox" id="factory-bugbot-required" />
+                        <span class="setting-switch" aria-hidden="true"></span>
+                        <span class="setting-copy"><strong>bugbotRequired</strong></span>
+                      </label>
+                      <label class="setting-toggle">
+                        <input type="checkbox" id="factory-followups-enabled" />
+                        <span class="setting-switch" aria-hidden="true"></span>
+                        <span class="setting-copy"><strong>followupsEnabled</strong></span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="factory-config">Apply</button
+                    ><button id="factory-config-clear">Clear</button><span class="status" id="st-factory-config"></span>
+                  </div>
+                </section>
                 <section class="card sv-customize hidden" id="card-feature-flags">
                   <div class="head">
                     <h2>Feature flags</h2>
@@ -6361,6 +6419,7 @@
           $("card-people-directory"),
           channelDefaults,
           $("card-turn-wall-clock"),
+          $("card-factory-config"),
           $("card-feature-flags"),
           $("card-service-credentials"),
           keychains,
@@ -8406,6 +8465,27 @@
         const showTurnWallClock = scope.startsWith("org:") && "turnWallClockSec" in r.data;
         $("card-turn-wall-clock").classList.toggle("hidden", !showTurnWallClock);
         if (showTurnWallClock) $("turn-wall-clock").value = r.data.turnWallClockSec ?? "";
+        const showFactoryConfig = scope.startsWith("org:") && "factoryConfig" in r.data;
+        $("card-factory-config").classList.toggle("hidden", !showFactoryConfig);
+        if (showFactoryConfig) {
+          const f = r.data.factoryConfig || {};
+          $("factory-forge").value = f.forge || "github";
+          $("factory-publish-project").value = f.publishProject || "";
+          $("factory-target-branch").value = f.targetBranch || "";
+          $("factory-repo-clone-url").value = f.repoCloneUrl || "";
+          $("factory-repo-setup-cmd").value = f.repoSetupCmd || "";
+          $("factory-linear-team-id").value = f.linearTeamId || "";
+          $("factory-source-app-dirs").value = f.sourceAppDirs || "";
+          $("factory-source-test-re").value = f.sourceTestRe || "";
+          $("factory-verify-tests-cmd").value = f.verifyTestsCmd || "";
+          $("factory-verify-test-file-cmd").value = f.verifyTestFileCmd || "";
+          $("factory-verify-lint-cmd").value = f.verifyLintCmd || "";
+          $("factory-proof-start-cmd").value = f.proofStartCmd || "";
+          $("factory-proof-base-url-cmd").value = f.proofBaseUrlCmd || "";
+          $("factory-slack-channel").value = f.slackChannel || "";
+          $("factory-bugbot-required").checked = !!f.bugbotRequired;
+          $("factory-followups-enabled").checked = !!f.followupsEnabled;
+        }
         serviceCredDirectory = r.data.directoryMembers || [];
         const options = $("sc-people-options");
         options.textContent = "";
@@ -10698,6 +10778,30 @@
           orgName: $("branding-org-name").value.trim(),
         }),
         "turn-wall-clock": () => ({ sec: $("turn-wall-clock").value.trim() }),
+        "factory-config": () => {
+          const opt = (id, key) => {
+            const v = $(id).value.trim();
+            return v ? { [key]: v } : {};
+          };
+          return {
+            forge: $("factory-forge").value,
+            publishProject: $("factory-publish-project").value.trim(),
+            targetBranch: $("factory-target-branch").value.trim(),
+            repoCloneUrl: $("factory-repo-clone-url").value.trim(),
+            linearTeamId: $("factory-linear-team-id").value.trim(),
+            sourceAppDirs: $("factory-source-app-dirs").value.trim(),
+            sourceTestRe: $("factory-source-test-re").value.trim(),
+            verifyTestsCmd: $("factory-verify-tests-cmd").value.trim(),
+            verifyTestFileCmd: $("factory-verify-test-file-cmd").value.trim(),
+            verifyLintCmd: $("factory-verify-lint-cmd").value.trim(),
+            ...opt("factory-repo-setup-cmd", "repoSetupCmd"),
+            ...opt("factory-proof-start-cmd", "proofStartCmd"),
+            ...opt("factory-proof-base-url-cmd", "proofBaseUrlCmd"),
+            ...opt("factory-slack-channel", "slackChannel"),
+            bugbotRequired: $("factory-bugbot-required").checked,
+            followupsEnabled: $("factory-followups-enabled").checked,
+          };
+        },
       };
       const SAVE_ST = {
         "security-posture": "st-security-posture",
@@ -10717,6 +10821,7 @@
         "people-directory-url": "st-people-directory-url",
         "ack-emoji": "st-ack-emoji",
         "turn-wall-clock": "st-turn-wall-clock",
+        "factory-config": "st-factory-config",
         branding: "st-branding",
       };
       const SAVE_RELOADS = new Set([
@@ -10729,6 +10834,7 @@
         "people-directory-url",
         "ack-emoji",
         "turn-wall-clock",
+        "factory-config",
         "branding",
       ]);
       const sectionSnapshots = new Map();
@@ -11026,6 +11132,16 @@
           }
         };
       });
+      $("factory-config-clear").onclick = async () => {
+        if (!confirm("Clear the factory configuration?")) return;
+        const r = await api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/factory-config", { reset: true });
+        if (!r.ok) {
+          setStatus("st-factory-config", r.data?.message || "Clear failed.", "err");
+          return;
+        }
+        await loadScope();
+        setStatus("st-factory-config", "Cleared", "ok");
+      };
       $("view-governance").addEventListener("input", (e) => {
         if (!(
           e.target instanceof HTMLInputElement ||

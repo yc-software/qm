@@ -209,6 +209,7 @@ messages, and screenshots for organization identifiers before it pushes. Nothing
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
+- [`docs/factory.md`](./docs/factory.md) — the software factory loop: credentials, config, and what a run does
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
 

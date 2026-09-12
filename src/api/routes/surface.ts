@@ -294,6 +294,17 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, page);
 }
 
+async function deleteFile(ctx: ApiCtx): Promise<void> {
+  const { res, app, url, actor } = ctx;
+  const principalId = (actor?.p ?? url.searchParams.get("principalId"))?.trim();
+  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const outcome = await app.deleteFileForViewer(ctx.params.id!, principalId);
+  if (outcome === "not_found") return sendJson(res, 404, { error: "not_found", message: "no such file" });
+  if (outcome === "forbidden")
+    return sendJson(res, 403, { error: "forbidden", message: "that file isn't yours to delete" });
+  return sendJson(res, 200, { ok: true });
+}
+
 async function uploadFile(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body } = ctx;
   if (!deps.blobTransfer)
@@ -1281,6 +1292,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
   { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
   { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },
+  { method: "DELETE", path: "/v1/files/:id", auth: "source", handle: deleteFile },
   { method: "GET", path: "/v1/files", auth: "either", handle: listFiles },
   { method: "POST", path: "/v1/sessions/:id", auth: "source", handle: patchSession },
   { method: "GET", path: "/v1/sessions", auth: "source", handle: listSessions },
