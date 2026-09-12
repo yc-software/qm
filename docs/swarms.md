@@ -3,7 +3,7 @@
 A swarm coordinates ordinary QM sessions. The initiating session is its root;
 workers have their own durable transcripts, runs, identity, and editable JSON
 character/context. The existing authenticated session viewer lists worker sessions
-with a `Swarm worker` title. Discovery returns their session IDs and portal-relative
+with a `Swarm worker` title. Worker transcripts remain read-only for ordinary messages in the web UI, but the requesting human can allow or deny pending approvals there. Discovery returns their session IDs and portal-relative
 `sessionUrl` links. Session activity and results use the normal viewer and run APIs.
 
 ## Deployment
@@ -169,7 +169,7 @@ unexpired execution lease. Swarm writes recheck that lease inside their database
 transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
 operations. Authenticated human initialization may reference a historical run.
 Worker sessions never inherit the root session's command or security-screen
-approval grants; a worker must obtain its own approval. Frozen swarm roster checks
+approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
 
 Each outbox sweep selects at most 16 pending swarms and reconciles resources for at
