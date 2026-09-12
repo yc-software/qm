@@ -21,12 +21,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   events.setMaxListeners(0);
   const terminalListeners: Array<(run: Run) => void> = [];
 
-  function sessionUnavailable(sessionId: string, exceptId?: string): boolean {
+  function sessionUnavailable(sessionId: string, now: number): boolean {
     for (const r of runs.values()) {
       if (
         r.sessionId === sessionId &&
-        r.id !== exceptId &&
-        (r.status === "running" || (r.status === "pending" && (retryAfter.get(r.id) ?? 0) > Date.now()))
+        (r.status === "running" || (r.status === "pending" && (retryAfter.get(r.id) ?? 0) > now))
       )
         return true;
     }
@@ -75,8 +74,9 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     },
 
     async claim(workerId, ttlMs) {
+      const now = Date.now();
       const pending = [...runs.values()]
-        .filter((r) => r.status === "pending" && !sessionUnavailable(r.sessionId))
+        .filter((r) => r.status === "pending" && !sessionUnavailable(r.sessionId, now))
         .sort((a, b) => a.createdAt - b.createdAt);
       const run = pending[0];
       if (!run) return null;
@@ -85,7 +85,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claimById(runId, workerId, ttlMs) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending" || sessionUnavailable(run.sessionId)) return null;
+      if (!run || run.status !== "pending" || sessionUnavailable(run.sessionId, Date.now())) return null;
       return lease(run, workerId, ttlMs);
     },
 

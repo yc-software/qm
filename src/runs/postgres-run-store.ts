@@ -103,7 +103,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       },
       {
         id: "runs/store/0004",
-        statements: [`ALTER TABLE runs ADD COLUMN IF NOT EXISTS retry_after BIGINT NOT NULL DEFAULT 0`],
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS retry_after BIGINT NOT NULL DEFAULT 0`,
+        ],
       },
     ],
     [
