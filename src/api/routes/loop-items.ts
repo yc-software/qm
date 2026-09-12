@@ -358,6 +358,9 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       message: `message must be under ${MAX_FOLLOWUP_CHARS} chars`,
     });
   }
+  if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
+    return sendJson(ctx.res, 409, { error: "conflict", message: "the draft changed; review it before continuing" });
+  }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
     const next = await deps.fire.followUp(loop, item, message, loaded.actorId);
