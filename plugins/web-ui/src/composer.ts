@@ -77,6 +77,7 @@ import {
   reorderLoadout,
   effortLevelsForHarness,
   harnessTarget,
+  isPeakEffort,
   type LoadoutEntry,
 } from "./composer-loadout";
 
@@ -224,7 +225,7 @@ const SLASH_TOKEN = /(^|\s)\/([a-zA-Z0-9_-]*)$/;
 
 function effortText(level: EffortLevel | string): TemplateResult | string {
   const label = effortLabel(level as EffortLevel);
-  return level === "xhigh" ? html`<span class="effort-peak">${label}</span>` : label;
+  return isPeakEffort(level) ? html`<span class="effort-peak">${label}</span>` : label;
 }
 
 export function slashQuery(draft: string): string | null {

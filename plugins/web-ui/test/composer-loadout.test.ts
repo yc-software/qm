@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   effortLevelsForHarness,
   harnessTarget,
+  isPeakEffort,
   parseLoadout,
   reconcileLoadout,
   reorderLoadout,
@@ -169,4 +170,15 @@ test("switching harness otherwise takes the first model the harness serves", () 
 
 test("a harness that serves nothing yields no target", () => {
   assert.equal(harnessTarget([], "claude-opus-5", [{ value: "pi:claude-opus-5" }]), undefined);
+});
+
+test("the top three effort tiers are the peak tiers", () => {
+  for (const level of ["xhigh", "max", "ultracode"]) assert.equal(isPeakEffort(level), true, level);
+  for (const level of ["auto", "low", "medium", "high"]) assert.equal(isPeakEffort(level), false, level);
+  assert.equal(isPeakEffort(undefined), false);
+});
+
+test("every peak tier is a level some harness actually offers", () => {
+  const offered = new Set(["pi", "codex", "claude"].flatMap((h) => effortLevelsForHarness(h).map((l) => l.value)));
+  for (const level of ["xhigh", "max", "ultracode"]) assert.ok(offered.has(level), `${level} is offered by no harness`);
 });
