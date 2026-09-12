@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
+import type { Conversation } from "../src/conv-types.ts";
 
 interface Canvas {
   panes: () => number;
@@ -10,12 +11,17 @@ interface Canvas {
   tabCounts: () => number[];
   focusTile: (index: number) => void;
   splitTile: (index: number) => void;
-  seededChat: (threadRef?: string) => { state: { threadRef: string | null; agent: unknown } } | null;
+  seededChat: (threadRef?: string) => Conversation | null;
+  drag: () => void;
+  closeTile: (index: number) => void;
   split: () => void;
   switchAway: () => void;
 }
 
-async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked = false): Promise<void> {
+async function withCanvas(
+  run: (canvas: Canvas) => void | Promise<void>,
+  stacked: boolean | "single" = false,
+): Promise<void> {
   const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/web-ui/" });
   const globals = {
     window: dom.window,
@@ -69,8 +75,8 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
     appState.currentView = "chats";
     appState.mainEl = document.createElement("main");
     document.body.append(appState.mainEl);
-    assert.ok(sessions.startNewChat());
     if (stacked) {
+      const ids = stacked === "single" ? ["a"] : ["a", "b"];
       localStorage.setItem(
         "web-ui:split-canvas:v1",
         JSON.stringify({
@@ -84,7 +90,7 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
                   {
                     type: "leaf",
                     data: {
-                      views: ["a", "b"],
+                      views: ids,
                       activeView: "a",
                       id: "stack",
                     },
@@ -96,7 +102,7 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
               orientation: "HORIZONTAL",
             },
             panels: Object.fromEntries(
-              ["a", "b"].map((id) => [
+              ids.map((id) => [
                 id,
                 {
                   id,
@@ -114,6 +120,7 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
       split.loadPersistedSplit();
       assert.equal(split.mountRestoredCanvas(), true);
     }
+    if (!stacked) assert.ok(sessions.startNewChat());
     await run({
       panes: () => document.querySelectorAll(".dv-tab").length,
       tabCounts: () =>
@@ -135,7 +142,15 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
       tiles: () => document.querySelectorAll(".dv-groupview").length,
       newChat: () => sessions.startNewChat() !== null,
       seededChat: (threadRef) => sessions.startNewChat(null, null, threadRef),
-      split: () => split.activateCanvas({}, {}, "right"),
+      split: () =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Split this pane with a new session"]')!.click(),
+      drag: () => split.beginSessionDrag({ id: "second", threadRef: "web:tester:second" }),
+      closeTile: (index) =>
+        document
+          .querySelectorAll(".dv-groupview")
+          .item(index)!
+          .querySelector<HTMLButtonElement>('[aria-label="Close pane"]')!
+          .click(),
       switchAway: () => {
         appState.currentView = "crons";
         appState.mainEl.replaceChildren();
@@ -154,10 +169,10 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
 
 test("New chat stops splitting after three tiles and adds tabs to the selected pane", async () => {
   await withCanvas((canvas) => {
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [0, 0]);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
 
     assert.equal(canvas.newChat(), true);
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [0, 0], "one session: New chat replaces it");
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1], "one session: New chat replaces it");
 
     canvas.split();
     assert.deepEqual([canvas.panes(), canvas.tiles()], [2, 2]);
@@ -187,7 +202,7 @@ test("a seeded New chat hands back the conversation in the pane it just placed",
     assert.ok(first, "the canvas must return a live conversation to seed");
     assert.ok(first.state.threadRef, "…already mounted on its own new thread");
     assert.ok(first.state.agent, "…with an agent a caller can prompt");
-    assert.deepEqual([canvas.panes(), canvas.tiles()], [0, 0], "one session: it replaces that pane");
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1], "one session: it replaces that pane");
 
     canvas.split();
     const second = canvas.seededChat();
@@ -225,4 +240,53 @@ test("a restored tab-only arrangement gains a tab, not a tile", async () => {
     assert.ok(canvas.seededChat()?.state.agent);
     assert.deepEqual([canvas.panes(), canvas.tiles()], [3, 1]);
   }, true);
+});
+
+test("a drafted first pane survives splitting and closing its neighbor", async () => {
+  await withCanvas((canvas) => {
+    const first = canvas.seededChat()!;
+    first.composer.state.draft = "Keep this unsent draft";
+    const host = first.state.host;
+    const agent = first.state.agent;
+    const thread = first.state.threadRef;
+    canvas.drag();
+    assert.equal(document.querySelectorAll(".split-zone.zone-right").length, 1);
+    canvas.split();
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [2, 2]);
+    assert.equal(first.state.host, host);
+    assert.equal(first.state.agent, agent);
+    assert.equal(first.state.threadRef, thread);
+    assert.equal(first.composer.state.draft, "Keep this unsent draft");
+    canvas.closeTile(1);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
+    assert.ok(host?.isConnected);
+    assert.equal(first.state.agent, agent);
+    assert.equal(first.composer.state.draft, "Keep this unsent draft");
+    canvas.closeTile(0);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1], "closing the last pane leaves a new chat");
+  });
+});
+
+test("a saved one-pane layout restores as a splittable canvas", async () => {
+  await withCanvas((canvas) => {
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
+    canvas.split();
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [2, 2]);
+  }, "single");
+});
+
+test("splitting does not dispose a first turn waiting for its session ID", async () => {
+  await withCanvas((canvas) => {
+    const first = canvas.seededChat()!;
+    first.state.pendingSend = "pending-test-send";
+    const agent = first.state.agent!;
+    canvas.drag();
+    assert.ok(document.querySelector(".zone-right"));
+    canvas.split();
+    canvas.closeTile(1);
+    assert.deepEqual([canvas.panes(), canvas.tiles()], [1, 1]);
+    assert.equal(first.state.agent, agent);
+    assert.equal(first.state.pendingSend, "pending-test-send");
+    first.state.pendingSend = null;
+  });
 });

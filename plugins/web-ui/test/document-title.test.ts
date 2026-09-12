@@ -80,8 +80,8 @@ test("document title follows session switches, split-pane focus, and sign-out", 
   try {
     const { appState, signOut, syncDocumentTitle } = await vite.ssrLoadModule("/src/shell.ts");
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
-    const { refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-    const { activateCanvas } = await vite.ssrLoadModule("/src/split.ts");
+    const { openSession, refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    const { mountRestoredCanvas, beginSessionDrag } = await vite.ssrLoadModule("/src/split.ts");
     const oldSession = { id: "old", threadRef: "web:old", scopeId: "personal:tester", title: "Old title" };
     const newSession = { id: "new", threadRef: "web:new", scopeId: "personal:tester", title: "New title" };
     sessionsState.list = [oldSession, newSession];
@@ -99,7 +99,26 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     syncDocumentTitle();
     assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
 
-    activateCanvas({ sessionId: "old", threadRef: "web:old" }, { sessionId: "new", threadRef: "web:new" }, "right");
+    globalThis.fetch = async (input) => {
+      const session = String(input).includes("/sessions/new") ? newSession : oldSession;
+      return Response.json({
+        scopeId: "personal:tester",
+        approvedHarnesses: [],
+        modelsByHarness: {},
+        modelCatalog: {},
+        effective: { harnessId: "pi", modelId: "" },
+        session,
+        entries: [],
+        sessions: sessionsState.list,
+        contexts: [],
+      });
+    };
+    mountRestoredCanvas();
+    await openSession(oldSession);
+    beginSessionDrag(newSession);
+    document
+      .querySelector(".zone-right")!
+      .dispatchEvent(new dom.window.Event("drop", { bubbles: true, cancelable: true }));
     assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
     await new Promise((resolve) => setTimeout(resolve, 0));
 

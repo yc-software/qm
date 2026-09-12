@@ -7176,18 +7176,12 @@ h3.ambient-field-label {
   pointer-events: none;
 }
 
-.split-zones-single {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-}
-
 .split-zone {
   position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 4px;
+  margin: 0;
   border: 2px dashed color-mix(in srgb, var(--primary) 55%, var(--border));
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--primary) 6%, transparent);
@@ -7239,37 +7233,43 @@ h3.ambient-field-label {
   left: 25%;
   right: 25%;
   top: 0;
-  height: 24%;
+  height: 25%;
 }
 
 .zone-bottom {
   left: 25%;
   right: 25%;
   bottom: 0;
-  height: 24%;
+  height: 25%;
 }
 
 .zone-left {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 24%;
+  width: 25%;
 }
 
 .zone-right {
   right: 0;
   top: 0;
   bottom: 0;
-  width: 24%;
+  width: 25%;
 }
 
 /* Joining a tab strip is offered on the strip itself now, so the inner box is one target
    again — the whole of it replaces what the pane is showing. */
 .zone-center {
-  left: 26%;
-  right: 26%;
-  top: 26%;
-  bottom: 26%;
+  left: 25%;
+  right: 25%;
+  top: 25%;
+  bottom: 25%;
+}
+
+.split-zones > .split-zone:only-child {
+  inset: 0;
+  width: auto;
+  height: auto;
 }
 
 .split-toast {

@@ -685,7 +685,7 @@ export function switchView(v: View): void {
   resetActiveDetail(v);
   switch (v) {
     case "chats":
-      if (splitState.active) drawCanvas();
+      if (mountRestoredCanvas()) drawCanvas();
       else void renderChatsPage();
       renderList();
       break;
@@ -1014,7 +1014,7 @@ export async function boot(): Promise<void> {
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
 
   const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
-  if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();
+  if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   const sessions = refreshSessions({ showLoading: true });
 

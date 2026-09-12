@@ -89,6 +89,9 @@ import { allConversations, isLiveConversation, mainConversation } from "./conver
 import type { Conversation } from "./conv-types";
 import {
   startNewChatInCanvas,
+  mountRestoredCanvas,
+  focusedPaneConversation,
+  openBackgroundInCanvas,
   beginSessionDrag,
   endPaneDrag,
   notifyPanesChanged,
@@ -462,7 +465,8 @@ export function startNewChat(
 ): Conversation | null {
   closeSidebarOnNarrowView();
   if (scopeId) sessionsState.collapsedProjectScopes.delete(scopeId);
-  if (splitState.active) return startNewChatInCanvas(scopeId ?? undefined, threadRef);
+  const pane = startNewChatInCanvas(scopeId ?? undefined, threadRef);
+  if (pane) return pane;
   const conv = mainConversation();
   if (threadRef) conv.mountContinuable(threadRef, null, scopeId, [], name);
   else addPendingSession(conv.newChat(scopeId ? { scopeId, name } : undefined), scopeId, name);
@@ -470,7 +474,7 @@ export function startNewChat(
 }
 
 export function startNewChatInLastScope(): void {
-  const mounted = mainConversation().state;
+  const mounted = (focusedPaneConversation() ?? mainConversation()).state;
   const scopeId = mounted.scopeId ?? visibleSessions().find((s) => !s.archived)?.scopeId ?? null;
   startNewChat(scopeId, scopeId ? projectName(scopeId) : null);
 }
@@ -688,6 +692,7 @@ function statusMarks(s: CoreSession): TemplateResult {
 function openBackgroundInspector(e: Event, s: CoreSession): void {
   e.stopPropagation();
   e.preventDefault();
+  if (openBackgroundInCanvas(s)) return;
   mainConversation().requestBackgroundPanel(s.id || null, s.threadRef);
   void openSession(s);
 }
@@ -1535,10 +1540,11 @@ export async function openSession(
     if (splitState.active) drawCanvas();
     syncUrlFromState(s.id || null);
   }
-  if (splitInterceptsOpen(s)) return;
+  mountRestoredCanvas();
+  const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  return openSessionInto(mainConversation(), s, entriesPrefetch, approvalsPrefetch);
+  return openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
 }
 
 export async function openSessionInto(
@@ -1546,8 +1552,8 @@ export async function openSessionInto(
   s: CoreSession,
   entriesPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
+  tracked = conv === mainConversation(),
 ): Promise<void> {
-  const tracked = conv === mainConversation();
   if (!s.id) {
     if (conv.state.threadRef !== s.threadRef) {
       conv.mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);

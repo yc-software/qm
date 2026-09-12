@@ -25,7 +25,7 @@ test("the tile cap counts tiles and turns the overflow into a tab", () => {
 });
 
 test("a revived canvas is bounded by both caps and cannot blow the stack", () => {
-  assert.match(split, /if \(n < 2 \|\| n > MAX_PANES \|\| serializedTileCount\(o\.layout\) > MAX_TILES\) return;/);
+  assert.match(split, /if \(n < 1 \|\| n > MAX_PANES \|\| serializedTileCount\(o\.layout\) > MAX_TILES\) return;/);
 
   const tiles = (...kids: object[]): object => ({ grid: { root: branch(...kids) } });
   assert.equal(serializedTileCount(tiles(leaf(["a", "b", "c"]), leaf(["d"]))), 2, "tabs are not tiles");
