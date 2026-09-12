@@ -1,3 +1,5 @@
+import { NonRetryableTurnError } from "../core/turn-error.ts";
+import type { SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
@@ -39,6 +41,7 @@ interface MessageInput {
 }
 
 interface Authority {
+  fence?: SwarmRunFence;
   sessionId: string;
   actorId: string;
   rootId: string;
@@ -76,6 +79,7 @@ function signature(value: unknown): string {
 
 const RUN_EXECUTION_FIELDS = new Set([
   "runId",
+  "runLeaseToken",
   "attempt",
   "finalAttempt",
   "background",
@@ -96,7 +100,7 @@ function threadIdentity(threadRef: string, sessionId: string): { rootId: string;
 }
 
 function assertOpen(swarm: Swarm): void {
-  if (Date.now() >= swarm.expiresAt) throw new Error("swarm work window expired");
+  if (Date.now() >= swarm.expiresAt) throw new NonRetryableTurnError("swarm work window expired");
 }
 
 export function createSwarmService(deps: {
@@ -108,6 +112,7 @@ export function createSwarmService(deps: {
   authorize(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
 }): SwarmService {
   const { store, sessions, runs } = deps;
+  const update = (auth: Authority, mutate: (swarm: Swarm) => void) => store.update(auth.rootId, mutate, auth.fence);
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
     ...(member.sessionId ? { sessionUrl: `/web-ui/s/${encodeURIComponent(member.sessionId)}` } : {}),
@@ -128,13 +133,21 @@ export function createSwarmService(deps: {
       const run = await runs.get(caller.claims.runId);
       if (
         !run ||
+        caller.claims.sessionId !== session.id ||
         run.sessionId !== session.threadRef ||
         run.request.conversation.threadRef !== session.threadRef ||
         run.request.actor.id !== actorId ||
         conversationScope(run.request.conversation, actorId) !== session.scopeId
       )
         throw new Error("capability run mismatch");
-      if (run.status !== "running" || !run.leaseToken || !run.leaseExpiresAt || run.leaseExpiresAt <= Date.now())
+      if (
+        run.status !== "running" ||
+        !run.leaseToken ||
+        !run.leaseExpiresAt ||
+        run.leaseExpiresAt <= Date.now() ||
+        run.attempts !== caller.claims.runAttempt ||
+        run.leaseToken !== caller.claims.runLeaseToken
+      )
         throw new Error("active capability run required");
     }
     const identity = threadIdentity(session.threadRef, session.id);
@@ -159,7 +172,18 @@ export function createSwarmService(deps: {
       if (!swarm.members.some((member) => member.id === identity.memberId && member.sessionId === session.id))
         throw new Error("session is not a swarm member");
     } else if (identity.rootId !== session.id) throw new Error("swarm not found");
-    return { ...identity, sessionId: session.id, actorId };
+    const result: Authority = { ...identity, sessionId: session.id, actorId };
+    if (caller.kind === "agent")
+      result.fence = {
+        runId: caller.claims.runId!,
+        attempt: caller.claims.runAttempt!,
+        leaseToken: caller.claims.runLeaseToken!,
+        sessionId: session.id,
+        threadRef: session.threadRef,
+        actorId,
+        scopeId: session.scopeId,
+      };
+    return result;
   }
 
   async function load(caller: SwarmCaller): Promise<{ auth: Authority; swarm: Swarm; self: SwarmMember }> {
@@ -205,7 +229,7 @@ export function createSwarmService(deps: {
       ...(source.model ? { model: source.model } : {}),
       turnWallClockMs: SWARM_LIMITS.turnMs,
     };
-    return store.create({
+    const swarm: Swarm = {
       id: session.id,
       scopeId: session.scopeId,
       ownerId: auth.actorId,
@@ -229,11 +253,11 @@ export function createSwarmService(deps: {
       messageRequests: {},
       notificationCount: 0,
       pending: false,
-    });
+    };
+    return store.create(swarm, auth.fence);
   }
 
   async function reserveMessage(
-    rootId: string,
     auth: Authority,
     author: SwarmCaller["kind"],
     input: MessageInput,
@@ -242,7 +266,7 @@ export function createSwarmService(deps: {
     const key = signature([auth.memberId, auth.actorId, author, input.requestId]);
     const fingerprint = signature(input);
     const id = randomUUID();
-    const updated = await store.update(rootId, (swarm) => {
+    const updated = await update(auth, (swarm) => {
       const previous = swarm.messageRequests[key];
       if (previous) {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
@@ -492,7 +516,7 @@ export function createSwarmService(deps: {
     async context(caller, context) {
       const value = jsonContext(context);
       const { auth } = await load(caller);
-      const updated = await store.update(auth.rootId, (swarm) => {
+      const updated = await update(auth, (swarm) => {
         assertOpen(swarm);
         swarm.members.find((member) => member.id === auth.memberId)!.context = value;
       });
@@ -522,7 +546,7 @@ export function createSwarmService(deps: {
         const swarm = await store.get(auth.rootId);
         if (forum.ownerScopeId !== swarm!.scopeId) throw new Error("forum scope mismatch");
       }
-      const updated = await store.update(auth.rootId, (swarm) => {
+      const updated = await update(auth, (swarm) => {
         const previous = swarm.spawnRequests[key];
         if (previous) {
           if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
@@ -593,7 +617,7 @@ export function createSwarmService(deps: {
           eligible.push(member);
       }
       const audience = await selectAudience(input.audience, eligible);
-      return reserveMessage(swarm.id, auth, caller.kind, input, audience);
+      return reserveMessage(auth, caller.kind, input, audience);
     },
     async read(caller, options) {
       const waitMs = options.waitMs ?? 0;
@@ -619,19 +643,20 @@ export function createSwarmService(deps: {
     async binding(input) {
       const session = await sessions.getByThread(input.conversation.threadRef);
       if (!session) {
-        if (input.swarm || input.conversation.threadRef.startsWith("swarm:")) throw new Error("unknown swarm session");
+        if (input.swarm || input.conversation.threadRef.startsWith("swarm:"))
+          throw new NonRetryableTurnError("unknown swarm session");
         return null;
       }
       const identity = threadIdentity(session.threadRef, session.id);
       if (!input.swarm && identity.rootId === session.id) return null;
       const swarm = await store.get(identity.rootId);
       if (!swarm) {
-        if (input.swarm || session.threadRef.startsWith("swarm:")) throw new Error("unknown swarm");
+        if (input.swarm || session.threadRef.startsWith("swarm:")) throw new NonRetryableTurnError("unknown swarm");
         return null;
       }
       const member = swarm.members.find((peer) => peer.id === identity.memberId);
       if (!member || member.state !== "ready" || member.sessionId !== session.id || session.scopeId !== swarm.scopeId)
-        throw new Error("invalid swarm membership");
+        throw new NonRetryableTurnError("invalid swarm membership");
       if (!input.swarm) {
         if (
           !(await sessions.participantsOf(session.id)).includes(input.actor.id) ||
@@ -643,7 +668,7 @@ export function createSwarmService(deps: {
             members: input.conversation.audience,
           }))
         )
-          throw new Error("swarm session access denied");
+          throw new NonRetryableTurnError("swarm session access denied");
         return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
       }
       if (input.swarm) {
@@ -664,7 +689,7 @@ export function createSwarmService(deps: {
           input.origin.useOwnerKeychain ||
           requestSignature(input) !== requestSignature(dedup.request)
         )
-          throw new Error("forged swarm provenance");
+          throw new NonRetryableTurnError("forged swarm provenance");
       }
       const participants = await sessions.participantsOf(swarm.id);
       const recipientParticipants = await sessions.participantsOf(session.id);
@@ -680,7 +705,7 @@ export function createSwarmService(deps: {
           members: input.conversation.audience,
         }))
       )
-        throw new Error("swarm authorization changed");
+        throw new NonRetryableTurnError("swarm authorization changed");
       return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
     },
   };

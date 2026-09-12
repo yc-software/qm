@@ -69,6 +69,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
       attempt: run.attempts,
+      runLeaseToken: token,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
       cancel: cancel.signal,

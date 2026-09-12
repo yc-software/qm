@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -9,7 +9,31 @@ import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
-const databaseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.DATABASE_URL;
+const schema = `swarm_test_${process.pid}`;
+const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
+isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
+const databaseUrl = isolatedUrl?.toString();
+before(async () => {
+  if (!baseUrl) return;
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: baseUrl });
+  try {
+    await pool.query(`CREATE SCHEMA ${schema}`);
+  } finally {
+    await pool.end();
+  }
+});
+after(async () => {
+  if (!baseUrl) return;
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: baseUrl });
+  try {
+    await pool.query(`DROP SCHEMA ${schema} CASCADE`);
+  } finally {
+    await pool.end();
+  }
+});
 const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
 
 test(
@@ -21,7 +45,7 @@ test(
     const sessions = createPostgresSessionStore(databaseUrl!);
     const backing = factory.map<SwarmStorage>("swarms");
     const fixture = await swarmFixture({
-      store: createSwarmStore(backing),
+      store: createSwarmStore(backing, { runs: runtime.runs, sessions, pg: factory.pool }),
       sessions,
       runs: runtime.runs,
       lock: createPostgresAdvisoryLock(factory.pool),
@@ -148,7 +172,7 @@ test(
     const runtime = createPostgresRunStore(databaseUrl!);
     const sessions = createPostgresSessionStore(databaseUrl!);
     const backing = factory.map<SwarmStorage>("swarms");
-    const store = createSwarmStore(backing);
+    const store = createSwarmStore(backing, { runs: runtime.runs, sessions, pg: factory.pool });
     let rootId: string | undefined;
     try {
       const fixture = await swarmFixture({
@@ -184,7 +208,7 @@ test("Postgres swarms atomically bound concurrent pools across independent clien
   const second = createPostgresMapFactory(databaseUrl!);
   const sessions = createPostgresSessionStore(databaseUrl!);
   const runtime = createPostgresRunStore(databaseUrl!);
-  const store = createSwarmStore(first.map<SwarmStorage>("swarms"));
+  const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
   try {
     const fixture = await swarmFixture({
       store,
@@ -194,7 +218,7 @@ test("Postgres swarms atomically bound concurrent pools across independent clien
     });
     const sibling = createSwarmService({
       ...fixture.serviceOptions,
-      store: createSwarmStore(second.map<SwarmStorage>("swarms")),
+      store: createSwarmStore(second.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: second.pool }),
       lock: createPostgresAdvisoryLock(second.pool),
     });
     const attempts = await Promise.allSettled([
@@ -227,7 +251,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
   const restoredSessions = createPostgresSessionStore(databaseUrl!);
   const runtime = createPostgresRunStore(databaseUrl!);
   const restoredRuntime = createPostgresRunStore(databaseUrl!);
-  const store = createSwarmStore(first.map<SwarmStorage>("swarms"));
+  const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
   try {
     const fixture = await swarmFixture({
       store,
@@ -248,7 +272,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
       ...fixture.serviceOptions,
       sessions: restoredSessions,
       runs: restoredRuntime.runs,
-      store: createSwarmStore(second.map<SwarmStorage>("swarms")),
+      store: createSwarmStore(second.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: second.pool }),
       lock: createPostgresAdvisoryLock(second.pool),
     });
     await store.update(initial.id, (swarm) => {
@@ -286,5 +310,45 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
   } finally {
     await Promise.all([runtime.close(), restoredRuntime.close()]);
     await Promise.all([first.pool.close(), second.pool.close()]);
+  }
+});
+
+test("Postgres rolls back a swarm mutation whose run expires while waiting for the write lock", { skip }, async () => {
+  const factory = createPostgresMapFactory(databaseUrl!);
+  const runtime = createPostgresRunStore(databaseUrl!);
+  const sessions = createPostgresSessionStore(databaseUrl!);
+  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+    runs: runtime.runs,
+    sessions,
+    pg: factory.pool,
+  });
+  const fixture = await swarmFixture({
+    store,
+    sessions,
+    runs: runtime.runs,
+    lock: createPostgresAdvisoryLock(factory.pool),
+  });
+  const client = await (await factory.pool.pool()).connect();
+  try {
+    await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
+    if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
+    const run = (await runtime.runs.get(fixture.caller.claims.runId!))!;
+    const before = await store.get(fixture.root.id);
+    await runtime.runs.heartbeat(run.id, run.leaseToken!, 200);
+    await client.query("BEGIN");
+    await client.query("SELECT v FROM durable_map_versions WHERE tbl='swarms' FOR UPDATE");
+    const mutation = assert.rejects(
+      fixture.service.context(fixture.caller, { changed: true }),
+      /active capability run required/,
+    );
+    await sleep(300);
+    await client.query("COMMIT");
+    await mutation;
+    assert.deepEqual(await store.get(fixture.root.id), before);
+  } finally {
+    await client.query("ROLLBACK");
+    client.release();
+    await runtime.close();
+    await factory.pool.close();
   }
 });

@@ -20,7 +20,8 @@ the core container includes them.
 The `swarms` durable-map table has its own registered migration,
 `durable-map/swarms/0001`. Apply registered migrations through the normal QM deploy
 path before starting workers. Memory stores implement the same contract for tests;
-they are not a production durability substitute.
+they are not a production durability substitute. Swarms are unavailable with
+mixed memory/Postgres stores so execution leases and writes share one authority.
 
 ## Agent API
 
@@ -163,8 +164,9 @@ agent API. Initializing a root from this endpoint additionally requires a `runId
 belonging to that session and actor. Human-origin actions are separately recorded;
 their asynchronous notifications still run unattended.
 
-Agent operations require the signed run to be running with an unexpired execution
-lease. Completed, failed, queued, and expired runs cannot authorize agent swarm
+Agent operations require credentials bound to the exact session, run attempt, and
+unexpired execution lease. Swarm writes recheck that lease inside their database
+transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
 operations. Authenticated human initialization may reference a historical run.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Frozen swarm roster checks
@@ -217,3 +219,14 @@ ordinary QM actions. Workers and their durable results remain visible; computers
 can be retired through the existing sandbox inventory. There is no automatic
 filesystem export on retirement: publish useful outputs through existing Files
 or your version-control workflow first.
+
+## Verification
+
+Run the focused suites with `node --experimental-test-module-mocks --test test/swarm*.test.ts`.
+Run `npm run test:pg` against a disposable Postgres database. The swarm suite uses
+a separate schema so migration-reset tests cannot invalidate its state.
+Set `SWARM_TEST_DATABASE_URL` when running `test/swarm-orchestrator.test.ts` to
+exercise the HTTP spawn/reply flow across an application restart with real durable
+state. These tests use deterministic model and Modal doubles; live provider and
+model acceptance remains a separate deployment check. The agent-board UI is
+intentionally deferred.

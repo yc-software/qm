@@ -90,6 +90,7 @@ export interface OrchestratorInput extends Omit<
   origin: TurnOrigin;
   runId?: string;
   attempt?: number;
+  runLeaseToken?: string;
 
   runStartedAt?: number;
   finalAttempt?: boolean;

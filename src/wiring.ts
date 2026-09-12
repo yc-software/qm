@@ -1254,21 +1254,29 @@ export function buildApp(
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
   const runs: RunStore = runStore.runs;
-  const swarms = createSwarmService({
-    store: createSwarmStore(artifactMap<SwarmStorage>("swarms")),
-    sessions,
-    runs,
-    sandboxes: sandboxResources,
-    lock: advisoryLock,
-    authorize: async (claims) => {
-      await identity.refresh();
-      return (
-        identity.isInternal(identity.classify(claims.actorId)) &&
-        (claims.members ?? []).every((member) => identity.isInternal(identity.classify(member.id))) &&
-        app.authorizesCapabilityScope(claims)
-      );
-    },
-  });
+  const swarmStoreKind = config.databaseUrl ? "postgres" : "memory";
+  const swarms =
+    config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
+      ? createSwarmService({
+          store: createSwarmStore(artifactMap<SwarmStorage>("swarms"), {
+            runs,
+            sessions,
+            ...(pgArtifactMap && runStoreKind === "postgres" ? { pg: pgArtifactMap.pool } : {}),
+          }),
+          sessions,
+          runs,
+          sandboxes: sandboxResources,
+          lock: advisoryLock,
+          authorize: async (claims) => {
+            await identity.refresh();
+            return (
+              identity.isInternal(identity.classify(claims.actorId)) &&
+              (claims.members ?? []).every((member) => identity.isInternal(identity.classify(member.id))) &&
+              app.authorizesCapabilityScope(claims)
+            );
+          },
+        })
+      : undefined;
   const ledger = runStore.ledger;
 
   let processes: ProcessRegistry | undefined;
@@ -2055,7 +2063,7 @@ export function buildApp(
       keepWarmSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
-      swarms.start();
+      swarms?.start();
       orphanedSignalSweeper.start();
       drain.start();
     },
@@ -2074,7 +2082,7 @@ export function buildApp(
       blobSweeper.stop();
       fileUploads?.stop();
       wakeSweep.stop();
-      swarms.stop();
+      swarms?.stop();
       orphanedSignalSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
         swallowAs("wiring: worker drain failed", undefined),
