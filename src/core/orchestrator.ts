@@ -197,6 +197,8 @@ import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
+import type { EmailDraftInput } from "../types.ts";
+import { GMAIL_HOST } from "../loops/sources/gmail.ts";
 
 export {
   egressClaimAllowingControlPlane,
@@ -1322,6 +1324,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           keychainInjected.push(m);
         }
       }
+      let gmailConnected = false;
       if (!strictReadOnly && deps.connectorTokens && conversation.kind === "dm") {
         for (const host of CONNECTOR_HOSTS) {
           const token =
@@ -1329,6 +1332,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
           if (token) connectorEnv[envKey(host)] = token;
+          if (token && host === GMAIL_HOST) gmailConnected = true;
         }
       }
       perf.credsMs += Date.now() - credsStart;
@@ -2175,6 +2179,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
+          ...(deps.emailDrafts && isWeb && gmailConnected && !strictReadOnly
+            ? {
+                holdEmailDraft: (draft: EmailDraftInput) => deps.emailDrafts!.hold(actor.id, draft, session.id),
+                attachEmailFiles: (paths: readonly string[]) =>
+                  createAttachStaging({
+                    sandbox: deps.sandbox,
+                    provision,
+                    blobTransfer,
+                    fileRegistration: { ...fileRegistration, seed: `${fileRegistration.seed}:email:${randomUUID()}` },
+                  }).attach(paths),
+              }
+            : {}),
           ...(() => {
             const available =
               strictReadOnly || actor.type !== "internal"
@@ -2969,6 +2985,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             tools,
             ...(tools.credentialExecServices ? { credentialExecServices: tools.credentialExecServices } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
+            ...(tools.holdEmailDraft ? { emailDrafts: true } : {}),
             ...(selectedTape
               ? {
                   tapeRows: selectedTape.rows,

@@ -10,6 +10,8 @@ import type {
   SurfaceContextResult,
   TurnRequest,
   TurnResult,
+  EmailDraftInput,
+  HeldEmailDraft,
 } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
@@ -167,6 +169,7 @@ export interface OrchestratorDeps {
   runtime?: RuntimeService;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
+  emailDrafts?: { hold(owner: string, draft: EmailDraftInput, sessionId?: string): Promise<HeldEmailDraft> };
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;

@@ -1,4 +1,5 @@
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { Readable } from "node:stream";
+import type { EmailAttachment, LoopItem, LoopSourcePayload } from "../../types.ts";
 
 export interface ConnectorTokenSource {
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
@@ -17,6 +18,18 @@ export interface SourceActionDeps {
   tokens: ConnectorTokenSource;
   fetchImpl?: typeof fetch;
   slackClient?: (token: string) => SlackUserClient;
+  files?: OwnedFileSource;
+}
+
+interface OpenedOwnedFile {
+  name: string;
+  mimetype: string;
+  sizeBytes: number;
+  stream: Readable;
+}
+
+interface OwnedFileSource {
+  open(artifactId: string): Promise<OpenedOwnedFile | null>;
 }
 
 export type SourceActionResult =
@@ -123,6 +136,25 @@ export interface ReplyDraft {
   cc?: string[];
   subject?: string;
   body: string;
+  attachments?: EmailAttachment[];
+}
+
+export const MAX_EMAIL_ATTACHMENTS = 10;
+const MIME_TYPE_RE = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
+
+function attachmentList(v: unknown): EmailAttachment[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: EmailAttachment[] = [];
+  for (const raw of v.slice(0, MAX_EMAIL_ATTACHMENTS)) {
+    if (!isObj(raw)) continue;
+    const artifactId = clip(raw.artifactId, 200);
+    const name = clip(raw.name, 150);
+    const declared = clip(raw.mimetype, 200);
+    const mimetype = declared && MIME_TYPE_RE.test(declared) ? declared : "application/octet-stream";
+    const sizeBytes = typeof raw.sizeBytes === "number" && Number.isFinite(raw.sizeBytes) ? raw.sizeBytes : 0;
+    if (artifactId && name) out.push({ artifactId, name, mimetype, sizeBytes });
+  }
+  return out.length ? out : undefined;
 }
 
 export function parseReplyDraft(v: unknown): ReplyDraft | null {
@@ -132,7 +164,14 @@ export function parseReplyDraft(v: unknown): ReplyDraft | null {
   const to = addressList(v.to);
   const cc = addressList(v.cc);
   const subject = clipOpt(v.subject, 300);
-  return { body, ...(to ? { to } : {}), ...(cc ? { cc } : {}), ...(subject ? { subject } : {}) };
+  const attachments = attachmentList(v.attachments);
+  return {
+    body,
+    ...(to ? { to } : {}),
+    ...(cc ? { cc } : {}),
+    ...(subject ? { subject } : {}),
+    ...(attachments ? { attachments } : {}),
+  };
 }
 
 export function draftOf(item: LoopItem): ReplyDraft | null {

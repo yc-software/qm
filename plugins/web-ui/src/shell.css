@@ -10547,6 +10547,54 @@ h3.ambient-field-label {
   background: white;
 }
 
+.email-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--secondary) 30%, var(--background));
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.email-draft-head {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.email-draft-head > span:nth-child(odd) {
+  color: var(--muted-foreground);
+}
+.email-draft-body {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.email-draft-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.email-draft-attachments .file-chip {
+  text-decoration: none;
+}
+.email-draft-meta,
+.email-draft-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.email-draft-notice {
+  color: var(--warning);
+}
+
 .menu-search {
   position: sticky;
   top: -6px;

@@ -2876,7 +2876,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!user) return unauthorized(res, req);
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
     const ledgerPath = /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path);
-    if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
+    if (loopsPath && !ledgerPath && !isLoopsUser(user)) {
       return json(res, 403, { error: "forbidden" });
     }
     const found = findRoute(apiRoutes, method, path);

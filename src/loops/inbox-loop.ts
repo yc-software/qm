@@ -7,7 +7,7 @@ const INBOX_LOOP_NAME = "Inbox";
 
 const INBOX_LOOP_SURFACE = "inbox";
 
-export const INBOX_SYNC_TASK_VERSION = 3;
+export const INBOX_SYNC_TASK_VERSION = 4;
 
 export const INBOX_SYNC_CRON_TITLE = "Inbox sync";
 
@@ -24,6 +24,7 @@ export function renderInboxSyncTask(loopId: string): string {
   return `Inbox sync v${INBOX_SYNC_TASK_VERSION}. Keep the user's QM inbox loop current: every Slack message and email genuinely WAITING ON A REPLY FROM THEM gets a ledger item with a ready-to-send draft in their own voice. The inbox UI is the only delivery surface — never message the user, and NEVER send a reply yourself; you produce drafts only.
 
 1. GET $AGENT_API_URL/v1/loops/${loopId}/items (agent capability header) — note existing items: skip any dedupeKey already tracked unless a NEWER inbound message has arrived since (compare sourceAt); re-post such items with the fresh message and a fresh draft.
+   - Items whose payload carries "compose": true are outgoing emails the person is reviewing in their chat, not inbound mail: never action, redraft, close, or re-post them.
    - Closed-loop detection: for every item still in state "held" or "pending", re-read its thread. If the LATEST message is FROM THE USER THEMSELVES — their own Slack userId on Slack, or their own email address in the From line on Gmail — they already replied outside QM, so POST $AGENT_API_URL/v1/loops/${loopId}/items/<itemId>/action with {"kind":"replied","args":{"text":"<their message, <=200 chars>"}} to close it. This applies to both Gmail and Slack items. Do NOT reopen or redraft an item the user has already answered.
 2. Keep a lastScanAt watermark in a state file on your workspace (e.g. ~/workspace/inbox-sync/STATE.md); scan each connected source since that watermark (fall back to ~3 days on first run), and advance the watermark only after a successful pass, so outages and missed fires backfill instead of leaving silent gaps. Skip a source whose app is not connected. Judge "waiting on a reply" like a good chief of staff, with a deliberate asymmetry: (a) NEEDS REPLY: direct questions, requests, intros, and personal messages that expect acknowledgment; when in any doubt, this bucket. (b) PROBABLY RESOLVED: the transcript reads closed (a thanks, a "sounds good", a thread someone else already answered) but a reasonable person might still send a word; post the item anyway with "probablyResolved": true in the item body and a draft included; the UI shows these in a muted section. NEVER silently drop a human conversation you judged resolved; demote it instead. (c) SKIP entirely: only unmistakable machine noise (newsletters, receipts, calendar notices, bot chatter). Human words never skip; the lowest they go is probablyResolved.
    - Gmail (use the google-workspace skill): INBOX threads where the LAST message is inbound and the user is in To or Cc. sourceKey = the Gmail threadId. Record gmail metadata: threadId, messageId, the RFC-2822 Message-ID header (rfcMessageId), subject, and the reply recipients (to = reply-all sender+others minus the user; cc as appropriate).

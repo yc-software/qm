@@ -4,7 +4,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check, Clone } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
+import type { CronFireLogEntry, EmailAttachment, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor, ShareDirective } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
@@ -12,6 +12,7 @@ import { classifyScopeLabel } from "../classify/scope-classifier.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
+import { MAX_EMAIL_ATTACHMENTS } from "../loops/sources/adapter.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
@@ -322,6 +323,7 @@ export interface AgentToolsOptions {
   readOnly?: boolean;
   surfaceTools?: boolean;
   surfaceName?: string;
+  emailDrafts?: boolean;
 }
 
 export type CoreToolOptions = Omit<AgentToolsOptions, "readOnly" | "surfaceTools" | "surfaceName">;
@@ -3090,6 +3092,91 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const sendEmail = defineTool({
+    name: "send_email",
+    label: "send_email",
+    description:
+      "Hand a finished email to the user to review and send from their own Gmail. This call sends nothing: the draft appears in the conversation with Send and Discard buttons, and only the user can send it. Use it whenever they ask you to email someone, after writing the complete email yourself in their voice. If they want changes, they ask you and you call it again. To attach files, write them to the workspace first and name their paths. Afterwards tell them in one line that the draft is ready to review; do not repeat the email text.",
+    parameters: Type.Object({
+      to: Type.Array(Type.String(), { description: "Recipient email addresses." }),
+      cc: Type.Optional(Type.Array(Type.String(), { description: "Cc addresses." })),
+      subject: Type.String(),
+      body: Type.String({
+        description: "The plain-text email body, paragraphs separated by blank lines. No markdown.",
+      }),
+      attachments: Type.Optional(
+        Type.Array(Type.String(), { description: 'Workspace-relative paths of files to attach, e.g. ["report.pdf"].' }),
+      ),
+    }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc) return text("[error] no active tool context");
+      const to = params.to.map((a) => a.trim()).filter(Boolean);
+      const cc = (params.cc ?? []).map((a) => a.trim()).filter(Boolean);
+      const subject = params.subject.trim();
+      const body = params.body.trim();
+      const paths = (params.attachments ?? []).map((p) => p.trim()).filter(Boolean);
+      const summary = {
+        tool: "send_email",
+        to,
+        ...(cc.length ? { cc } : {}),
+        subject,
+        ...(paths.length ? { attachments: paths } : {}),
+      };
+      await recordCall(callId, summary);
+      const fail = (message: string) =>
+        recordResult(callId, { ...summary, error: message }, text(`[error] ${message}`), true, undefined, true);
+      if (!tc.holdEmailDraft) {
+        return fail(
+          "Gmail is not connected for this user here. Ask them to connect Google Workspace under Keychain in the web UI, then try again.",
+        );
+      }
+      const bad = [...to, ...cc].find((a) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.match(/<([^>]*)>\s*$/)?.[1] ?? a));
+      if (to.length === 0) return fail("send_email needs at least one recipient in `to`");
+      if (bad) return fail(`"${bad}" is not an email address`);
+      if (!subject) return fail("send_email needs a subject");
+      if (!body) return fail("send_email needs a body");
+      let attachments: EmailAttachment[] = [];
+      if (paths.length > MAX_EMAIL_ATTACHMENTS)
+        return fail(`an email carries at most ${MAX_EMAIL_ATTACHMENTS} attachments`);
+      if (paths.length) {
+        if (!tc.attachEmailFiles) return fail("attachments are not available in this conversation");
+        const staged = await tc.attachEmailFiles(paths);
+        if (!staged.ok) return fail(staged.message);
+        const unstored = staged.files.find((f) => !f.artifactId);
+        if (unstored) return fail(`"${unstored.name}" could not be stored for the email; write it again and retry`);
+        attachments = staged.files.map((f) => ({
+          artifactId: f.artifactId!,
+          name: f.name,
+          mimetype: f.mimetype,
+          sizeBytes: f.sizeBytes,
+        }));
+      }
+      try {
+        const held = await tc.holdEmailDraft({
+          to,
+          ...(cc.length ? { cc } : {}),
+          subject,
+          body,
+          ...(attachments.length ? { attachments } : {}),
+        });
+        return recordResult(
+          callId,
+          { ...summary, ok: true, itemId: held.itemId },
+          text(
+            `Draft ${held.itemId} is held for the user's review. The conversation now shows it with Send and Discard buttons, and only the user can send it; a send from an agent is refused. Nothing more is needed from you beyond a one-line note that the draft is ready.`,
+          ),
+          false,
+          undefined,
+          true,
+          { emailDraft: held },
+        );
+      } catch (e) {
+        return fail(errMessage(e));
+      }
+    },
+  });
+
   const staySilent = defineTool({
     name: "stay_silent",
     label: "stay_silent",
@@ -3619,6 +3706,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...(controlTools ? [cron, webhook, share] : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface, staySilent] : [attach, finishSilently]),
+    ...(opts?.emailDrafts ? [sendEmail] : []),
     createGoal,
     getGoal,
     updateGoal,

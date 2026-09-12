@@ -28,7 +28,10 @@ memory or from this conversation's tone. The profile's **Hard rules** and
 3. Self-check against the profile before showing anything: opener and sign-off drawn
    from their real ones, sentence rhythm right, no anti-pattern present. If a sentence
    could appear in anyone's email, rewrite it or cut it.
-4. Show the user the exact text and ask for approval before creating any draft.
+4. Hand it over. If the `send_email` tool is available, call it with the finished
+   to/cc/subject/body and stop: the draft appears in the conversation for the user to
+   review and send themselves, so do not paste the text again. Otherwise show the user
+   the exact text, ask for approval, and use Gmail Drafts below.
 
 ## Gmail
 
