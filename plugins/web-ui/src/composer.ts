@@ -1174,6 +1174,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                     aria-haspopup="menu"
                     aria-expanded=${loadoutSection === "add" ? "true" : "false"}
                     ?disabled=${entries.length >= LOADOUT_CAP}
+                    @mouseenter=${() => {
+                      if (!isPhone() && entries.length < LOADOUT_CAP) openLoadoutSection("add");
+                    }}
                     @keydown=${(e: KeyboardEvent) => {
                       if (e.key === "ArrowRight") {
                         e.preventDefault();
