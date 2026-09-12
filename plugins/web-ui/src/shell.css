@@ -3259,9 +3259,6 @@ a.chat-row-open {
   flex: none;
   color: var(--muted-foreground);
 }
-.loadout-bolt svg {
-  fill: currentColor;
-}
 .loadout-end {
   display: inline-flex;
   align-items: center;
