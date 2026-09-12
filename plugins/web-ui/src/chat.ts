@@ -199,7 +199,9 @@ export function createChatSurface(
   ctx: ConvCtx,
   dependencies: { fetchTranscript?: typeof fetchTranscript; openSession?: typeof openSession } = {},
 ): ChatSurface {
-  const runSlot = createRunSlot();
+  const runSlot = createRunSlot((message) => {
+    ctx.composer.state.error = message;
+  });
   const transcriptViewport = createTranscriptViewport();
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
@@ -587,21 +589,21 @@ export function createChatSurface(
   }
 
   async function stopLiveRun(): Promise<void> {
-    if (!hasLiveRun(runSlot)) {
-      requestStop(runSlot);
-      return;
-    }
+    if (runSlot.stopGeneration === runSlot.generation) return;
     const agent = chatState.agent;
-    const revealUnstoppedRun = (): void => {
-      runSlot.unreachedAbort = true;
-      if (agent && agent === chatState.agent && !agent.state.isStreaming) void refreshTranscriptFromEntries(agent);
-    };
+    const generation = runSlot.generation;
+    requestStop(runSlot);
+    drawActiveChat();
+    if (!hasLiveRun(runSlot)) return;
     try {
-      const outcome = await signalLiveRun(runSlot, "abort", undefined, { threadRef: chatState.threadRef });
-      if (!outcome.ok) revealUnstoppedRun();
+      await signalLiveRun(runSlot, "abort", undefined, { threadRef: chatState.threadRef });
     } catch (err) {
-      revealUnstoppedRun();
+      if (generation !== runSlot.generation || runSlot.stopGeneration !== generation || agent !== chatState.agent)
+        return;
+      runSlot.stopGeneration = null;
       throw err;
+    } finally {
+      if (agent === chatState.agent) drawActiveChat();
     }
   }
 
@@ -710,7 +712,7 @@ export function createChatSurface(
     const generation = ++transcriptRefreshGeneration;
     const last = agent.state.messages[agent.state.messages.length - 1] as { stopReason?: string } | undefined;
     if (last?.stopReason === "error") return drawActiveChat(agent);
-    if (last?.stopReason === "aborted" && !runSlot.unreachedAbort) return drawActiveChat(agent);
+    if (last?.stopReason === "aborted") return drawActiveChat(agent);
     try {
       const anchor = chatState.transcriptAnchorSeq;
       const page = await transcriptFetcher(sessionId, anchor !== null ? { sinceSeq: anchor } : undefined);
@@ -739,7 +741,6 @@ export function createChatSurface(
         return;
       if (refreshedInherited) chatState.inheritedMessages = entriesToMessages(refreshedInherited, transcriptModel());
       agent.state.messages = messages;
-      runSlot.unreachedAbort = false;
       const rawEarlier = page.earlierEntries ?? 0;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawEarlier);
       chatState.transcriptAnchorSeq = rawEarlier > 0 ? (page.entries?.[0]?.seq ?? null) : null;
@@ -1228,6 +1229,7 @@ export function createChatSurface(
     if (activePendingApprovals().length) return "Needs your approval";
     if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
+      if (runSlot.stopGeneration === runSlot.generation) return "Stopping…";
       const summary = liveWorkSummary(work);
       if (!summary) return "Thinking…";
       return summary.detail ? `${summary.label}: ${summary.detail}` : summary.label;
@@ -2139,7 +2141,8 @@ export function createChatSurface(
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
-    const summary = liveWorkSummary(work);
+    const stopping = runSlot.stopGeneration === runSlot.generation;
+    const summary = stopping ? null : liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
     let title = "";
@@ -2156,7 +2159,7 @@ export function createChatSurface(
         >
           ${summary ? html`<span class="tool-icon">${icon(summary.icon, 15)}</span>` : nothing}
           <span class="live-work-label"
-            >${summary ? summary.label : sheenLabel(`Thinking${usedToolsSuffix(work)}`, true)}</span
+            >${summary ? summary.label : sheenLabel(stopping ? "Stopping…" : `Thinking${usedToolsSuffix(work)}`, true)}</span
           >
           ${summary?.detail ? html`<span class="live-work-detail">${summary.detail}</span>` : nothing}
           ${expandable ? html`<span class="live-work-toggle">${icon(ChevronRight, 14)}</span>` : nothing}
@@ -2714,6 +2717,7 @@ export function createChatSurface(
         channelName: chatState.contextName,
       }),
     stopLiveRun,
+    isStopping: () => runSlot.stopGeneration === runSlot.generation,
     currentTurnOptions,
     newChat,
     teardown: teardownActiveChat,

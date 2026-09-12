@@ -948,7 +948,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       await recordCall(callId, { tool: "read", path: params.path });
-      const { content, sourceScopeId, shared } = await tc.read(params.path);
+      const signal = ref.abortSignal;
+      signal?.throwIfAborted();
+      const { content, sourceScopeId, shared } = await tc.read(params.path, signal);
+      signal?.throwIfAborted();
       return recordResult(
         callId,
         {

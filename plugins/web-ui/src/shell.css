@@ -1776,8 +1776,19 @@ a.chat-row-open {
   display: flow-root;
 }
 .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits) .user-bubble > .pin-content {
+  position: relative;
   max-height: var(--pin-clamp, 320px);
   overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits) .user-bubble > .pin-content::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 18px;
+  backdrop-filter: blur(2px);
+  mask-image: linear-gradient(to bottom, transparent, #000);
+  pointer-events: none;
 }
 .pin-toggle {
   display: none;

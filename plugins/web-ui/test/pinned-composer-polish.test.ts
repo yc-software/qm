@@ -36,3 +36,15 @@ test("composer status rows share the responsive input font size", () => {
     for (const declaration of declarations) assert.match(declaration[1], /^var\(--composer-font-size[,)]/);
   }
 });
+
+test("only collapsed overflowing prompt content gets the soft cutoff", () => {
+  const selector =
+    ".message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits) .user-bubble > .pin-content";
+  const rule = css.slice(css.indexOf(`${selector} {`)).split("}")[0] ?? "";
+  const overlay = css.slice(css.indexOf(`${selector}::after {`)).split("}")[0] ?? "";
+  assert.match(rule, /position: relative;/);
+  assert.match(rule, /mask-image: linear-gradient\(to bottom, #000 calc\(100% - 18px\), transparent\);/);
+  assert.match(overlay, /height: 18px;/);
+  assert.match(overlay, /backdrop-filter: blur\(2px\);/);
+  assert.match(overlay, /pointer-events: none;/);
+});
