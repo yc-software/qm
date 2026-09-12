@@ -10,7 +10,7 @@ export const FACTORY_STDOUT_CAP_BYTES = 4 * 1024 * 1024;
 export const FACTORY_TERM_GRACE_MS = 30_000;
 export const FACTORY_DRAIN_EMPTY_READS = 2;
 export const FACTORY_READ_RETRIES = 6;
-export const FACTORY_READ_RETRY_MS = 2_000;
+const FACTORY_READ_RETRY_MS = 2_000;
 const FACTORY_READ_MAX_BYTES = 65_536;
 const TICKET_RE = /^[A-Z][A-Z0-9]*-\d+$/;
 
