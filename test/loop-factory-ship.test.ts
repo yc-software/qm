@@ -37,7 +37,14 @@ const parseBody = (rec: Recorded): Record<string, unknown> => JSON.parse(rec.bod
 
 const queryOf = (rec: Recorded): string => String(parseBody(rec).query ?? "");
 
-const LINEAR_OPS = ["issueUpdate", "issueAddLabel", "issueLabels", "commentCreate", "issue("] as const;
+const LINEAR_OPS = [
+  "issueUpdate",
+  "issueRemoveLabel",
+  "issueAddLabel",
+  "issueLabels",
+  "commentCreate",
+  "issue(",
+] as const;
 
 const routeKey = (rec: Recorded): string => {
   if (rec.url === LINEAR_URL) {
@@ -88,9 +95,12 @@ const TEAM_STATES = [
 const AUTO_TRIAGE = { id: "st_triage", name: "Auto-Triage", type: "unstarted" };
 const IN_REVIEW = { id: "st_review", name: "In Review", type: "started" };
 
+const FACTORY_GROUP = { id: "grp_factory" };
+
 const issueRead = (over: {
   state?: { id: string; name: string; type: string };
   labels?: string[];
+  groupLabels?: string[];
   states?: { id: string; name: string; type: string }[];
 }): Route => ({
   body: {
@@ -98,7 +108,12 @@ const issueRead = (over: {
       issue: {
         id: "iss_1",
         state: over.state ?? AUTO_TRIAGE,
-        labels: { nodes: (over.labels ?? []).map((name, index) => ({ id: `lbl_${index}`, name })) },
+        labels: {
+          nodes: [
+            ...(over.labels ?? []).map((name, index) => ({ id: `lbl_${index}`, name, parent: null })),
+            ...(over.groupLabels ?? []).map((name, index) => ({ id: `grp_lbl_${index}`, name, parent: FACTORY_GROUP })),
+          ],
+        },
         team: { id: "team_1", states: { nodes: over.states ?? TEAM_STATES } },
       },
     },
@@ -107,7 +122,8 @@ const issueRead = (over: {
 
 const ok = (payload: Record<string, unknown>): Route => ({ body: { data: payload } });
 
-const LABEL_LOOKUP = ok({ issueLabels: { nodes: [{ id: "lbl_rfr" }] } });
+const LABEL_LOOKUP = ok({ issueLabels: { nodes: [{ id: "lbl_rfr", parent: FACTORY_GROUP }] } });
+const REMOVE_OK = ok({ issueRemoveLabel: { success: true } });
 const STATE_OK = ok({ issueUpdate: { success: true } });
 const LABEL_OK = ok({ issueAddLabel: { success: true } });
 const COMMENT_OK = ok({ commentCreate: { success: true } });
@@ -179,6 +195,28 @@ test("shipping a GitHub draft PR undrafts it, moves the ticket to In Review, and
   assert.equal(linearCalls.length, 4);
   for (const call of linearCalls) assert.equal(call.headers.authorization, LINEAR_KEY);
   assert.equal(linearCalls.filter((call) => /issue\(id: "QM-21"\)/.test(queryOf(call))).length, 1);
+});
+
+test("a sibling factory-state label is removed before ready-for-review is added", async () => {
+  const fetched = fakeFetch({
+    [`GET ${GH_PULL}`]: { body: { draft: false, state: "open", merged: false } },
+    "linear:issue": issueRead({ state: IN_REVIEW, labels: ["bug"], groupLabels: ["converging"] }),
+    "linear:issueLabels": LABEL_LOOKUP,
+    "linear:issueRemoveLabel": REMOVE_OK,
+    "linear:issueAddLabel": LABEL_OK,
+  });
+
+  await shipFactoryPullRequest(github, "QM-1", depsFor(fetched.fetchImpl));
+
+  assert.deepEqual(keysOf(fetched.calls).slice(-3), [
+    "linear:issueLabels",
+    "linear:issueRemoveLabel",
+    "linear:issueAddLabel",
+  ]);
+  assert.match(
+    queryOf(only(fetched.calls, "linear:issueRemoveLabel")),
+    /issueRemoveLabel\(id: "iss_1", labelId: "grp_lbl_0"\)/,
+  );
 });
 
 test("re-shipping a ready GitHub PR already In Review and labelled writes nothing", async () => {
