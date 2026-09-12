@@ -467,6 +467,18 @@ test("a transient read failure is retried and the run completes with no signal",
   assert.equal(result.stdout, SUCCESS_STDOUT);
   assert.equal(result.exitCode, 3);
   assert.equal(fake.calls.readProcess.length, SUCCESS_READS.length + 1);
+  assert.equal(fake.calls.readProcess[2]!.opts?.sinceCursor, 9);
+  assert.deepEqual(fake.calls.signalProcess, []);
+});
+
+test("a successful read resets the failure count, so two separate streaks under the budget both survive", async () => {
+  const flaky = new Error("The operation was aborted due to timeout");
+  const streak = (): ReadStep[] => Array.from({ length: FACTORY_READ_RETRIES }, () => ({ error: flaky }));
+  const fake = fakeSandbox({
+    reads: [...streak(), SUCCESS_READS[0]!, ...streak(), ...SUCCESS_READS.slice(1)],
+  });
+  const result = await runFactoryProcess(baseInput(fake, { readRetryMs: 0 }));
+  assert.equal(result.stdout, SUCCESS_STDOUT);
   assert.deepEqual(fake.calls.signalProcess, []);
 });
 
@@ -598,12 +610,16 @@ test("no path logs to the console or puts a credential in an error", async () =>
     () => runFactoryProcess(baseInput(fakeSandbox({}), { env, ticketId: "QM-12; rm -rf /" })),
     () => runFactoryProcess(baseInput(fakeSandbox({ processSessions: false }), { env })),
     () => runFactoryProcess(baseInput(fakeSandbox({ startError: new Error("boom-start") }), { env })),
-    () => runFactoryProcess(baseInput(fakeSandbox({ reads: [{ error: new Error("boom-read") }] }), { env })),
     () =>
       runFactoryProcess(
-        baseInput(fakeSandbox({ reads: [{ error: new Error("boom-read") }], signalError: new Error("boom-signal") }), {
-          env,
-        }),
+        baseInput(fakeSandbox({ reads: persistentReadFailure(new Error("boom-read")) }), { env, readRetryMs: 0 }),
+      ),
+    () =>
+      runFactoryProcess(
+        baseInput(
+          fakeSandbox({ reads: persistentReadFailure(new Error("boom-read")), signalError: new Error("boom-signal") }),
+          { env, readRetryMs: 0 },
+        ),
       ),
   ];
   const logged: unknown[][] = [];
