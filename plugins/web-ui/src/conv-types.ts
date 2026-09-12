@@ -65,6 +65,7 @@ export interface ChatSurface {
   hasLiveRun(): boolean;
   signalLiveRun(kind: "abort" | "steer", text?: string): Promise<import("./core-bridge").SignalOutcome>;
   stopLiveRun(): Promise<void>;
+  isStopping(): boolean;
   currentTurnOptions(): TurnOptions;
   newChat(context?: { scopeId: string; name: string | null }): string;
   teardown(): void;

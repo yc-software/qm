@@ -98,3 +98,40 @@ test("createKeyedQueue ops queued at drain time are not lost to the cleanup race
   assert.equal(await second, "ok");
   assert.deepEqual(order, ["first", "second"]);
 });
+
+test("withAbort cleans listeners after resolution, rejection, and cancellation", async () => {
+  const { withAbort } = await import("../src/util/async.ts");
+  const { default: EventEmitter } = await import("node:events");
+  const controller = new AbortController();
+  assert.equal(await withAbort(async () => "ok", controller.signal), "ok");
+  assert.equal(EventEmitter.getEventListeners(controller.signal, "abort").length, 0);
+  await assert.rejects(
+    withAbort(async () => {
+      throw new Error("read failed");
+    }, controller.signal),
+    /read failed/,
+  );
+  assert.equal(EventEmitter.getEventListeners(controller.signal, "abort").length, 0);
+  const pending = Promise.withResolvers<string>();
+  const result = withAbort(() => pending.promise, controller.signal);
+  await Promise.resolve();
+  controller.abort();
+  await assert.rejects(result, { name: "AbortError" });
+  assert.equal(EventEmitter.getEventListeners(controller.signal, "abort").length, 0);
+  pending.reject(new Error("late IO failure"));
+  await sleep(0);
+});
+
+test("withAbort skips an already cancelled operation and preserves the reason", async () => {
+  const { withAbort } = await import("../src/util/async.ts");
+  const reason = new Error("cancelled");
+  let called = false;
+  await assert.rejects(
+    withAbort(async () => {
+      called = true;
+    }, AbortSignal.abort(reason)),
+    (error) => error === reason,
+  );
+  assert.equal(called, false);
+  assert.equal(await withAbort(async () => 42), 42);
+});

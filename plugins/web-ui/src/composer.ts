@@ -732,7 +732,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
     const canQueue = Boolean(composerState.draft.trim() || composerState.attachments.length);
     return html`
-      <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
+      <button
+        class="stop-btn"
+        type="button"
+        aria-label="Stop"
+        ${tip("Stop")}
+        ?disabled=${ctx.chat.isStopping()}
+        @click=${() => stopStreaming(agent)}
+      >
         ${icon(Square, 16)}
       </button>
       <button
@@ -1286,8 +1293,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function stopStreaming(agent: Agent): void {
-    void ctx.chat.stopLiveRun().catch((e) => swallow("web-ui: abort signal", e));
-    agent.abort();
+    composerState.error = "";
+    void ctx.chat.stopLiveRun().catch(() => {
+      if (agent !== ctx.chat.state.agent) return;
+      composerState.error = "Could not request stop. Try again.";
+      ctx.chat.drawActiveChat(agent);
+    });
   }
 
   let failedQueueSend: { threadRef: string; text: string; filesKey: string; idempotencyKey: string } | null = null;
@@ -1440,7 +1451,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   // Either way the message must not silently vanish: detach from the stale stream,
   // then attach to the replay run — or resend the text as an ordinary prompt.
   function recoverEndedRunSteer(agent: Agent, text: string, outcome: { replayed?: boolean }): void {
-    agent.abort();
     if (outcome.replayed) {
       const last = agent.state.messages[agent.state.messages.length - 1] as
         { role?: string; content?: unknown; steered?: boolean } | undefined;

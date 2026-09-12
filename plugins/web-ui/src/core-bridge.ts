@@ -693,16 +693,15 @@ export interface RunSlot {
   runId: string | null;
   generation: number;
   stopGeneration: number | null;
-  unreachedAbort: boolean;
+  onStopError?: (message: string) => void;
 }
 
-export function createRunSlot(): RunSlot {
-  return { runId: null, generation: 0, stopGeneration: null, unreachedAbort: false };
+export function createRunSlot(onStopError?: (message: string) => void): RunSlot {
+  return { runId: null, generation: 0, stopGeneration: null, onStopError };
 }
 
 function beginSubmit(slot: RunSlot | undefined): number {
   if (!slot) return 0;
-  slot.unreachedAbort = false;
   return ++slot.generation;
 }
 
@@ -745,6 +744,7 @@ export async function signalLiveRun(
   try {
     await api(runPath(run.runId, "/signal"), {
       method: "POST",
+      signal: kind === "abort" ? AbortSignal.timeout(15_000) : undefined,
       body: JSON.stringify({ kind, ...(text !== undefined ? { text } : {}), ...steerContext }),
     });
     return { ok: true };
@@ -1172,16 +1172,13 @@ async function followRun(
 ): Promise<void> {
   try {
     if (slot && slot.stopGeneration === gen) {
-      slot.stopGeneration = null;
       slot.runId = runId;
-      try {
-        const outcome = await signalLiveRun(slot, "abort", undefined, { threadRef: null });
-        if (!outcome.ok) slot.unreachedAbort = true;
-      } catch (e) {
-        slot.unreachedAbort = true;
-        swallow("web-ui: stop requested before the run id arrived", e);
-      }
-      return abortStream(stream, partial);
+      void signalLiveRun(slot, "abort", undefined, { threadRef: null }).catch(() => {
+        if (slot.generation !== gen || slot.stopGeneration !== gen) return;
+        slot.stopGeneration = null;
+        slot.onStopError?.("Could not request stop. Try again.");
+        notify?.();
+      });
     }
     if (signal?.aborted) return abortStream(stream, partial);
     if (slot) slot.runId = runId;

@@ -37,3 +37,24 @@ export function createKeyedQueue<K = string>(): <T>(key: K, fn: () => Promise<T>
     return run;
   };
 }
+
+export async function withAbort<T>(start: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return start();
+  signal.throwIfAborted();
+  let onAbort!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const operation = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return start();
+    });
+    const value = await Promise.race([operation, cancelled]);
+    signal.throwIfAborted();
+    return value;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
