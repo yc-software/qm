@@ -6,6 +6,11 @@ image:
 
 imagePullSecrets: []
 
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
 nameOverride: ""
 fullnameOverride: ""
 

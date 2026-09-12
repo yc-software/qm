@@ -130,11 +130,11 @@ test("resizing a settled transcript updates the prompt expansion control", () =>
   const f = fixture();
   try {
     f.prompt.innerHTML =
-      '<div class="user-bubble"><div class="pin-content"><markdown-block></markdown-block></div></div><button class="pin-toggle" hidden>Show more</button>';
-    const bubble = f.prompt.querySelector<HTMLElement>(".user-bubble")!;
+      '<div class="user-bubble"><div class="pin-content"><markdown-block></markdown-block></div><button class="pin-toggle" hidden>Show more</button></div>';
+    const content = f.prompt.querySelector<HTMLElement>(".pin-content")!;
     const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
     let availableHeight = 240;
-    Object.defineProperties(bubble, {
+    Object.defineProperties(content, {
       scrollHeight: { value: 240 },
       clientHeight: { get: () => availableHeight },
     });
@@ -282,6 +282,86 @@ test("a prompt stays in flow when pins leave too little room, and can stick agai
     f.resize(30, 50);
     assert.equal(f.prompt.classList.contains("sticky-disabled"), false);
     assert.equal(f.prompt.classList.contains("stuck"), true);
+  } finally {
+    f.close();
+  }
+});
+
+test("prompt expansion control belongs inside the bubble in both renderers", () => {
+  for (const [source, start] of [
+    [chat, '<article class="message-row user-row'],
+    [readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8"), "<article class=${"],
+  ]) {
+    const rowStart = source!.indexOf(start!);
+    assert.ok(rowStart >= 0);
+    const row = source!.slice(rowStart, source!.indexOf("</article>", rowStart) + "</article>".length);
+    const dom = new JSDOM(row);
+    try {
+      const toggle = dom.window.document.querySelector(".pin-toggle");
+      assert.equal(toggle?.parentElement?.tagName, "DIV");
+      assert.equal(toggle?.parentElement?.parentElement?.tagName, "ARTICLE");
+    } finally {
+      dom.window.close();
+    }
+  }
+  assert.match(css, /:not\(\.pin-expanded\):not\(\.pin-fits\)\s+\.user-bubble\s+>\s+\.pin-content \{/);
+  assert.match(css, /\.user-bubble > \.pin-toggle:not\(\[hidden\]\)/);
+});
+
+test("nested paste and attachment controls do not toggle the whole prompt", () => {
+  const f = fixture();
+  try {
+    f.prompt.innerHTML =
+      '<div class="user-bubble"><div class="pin-content"><code-block><button class="text-code-toggle">Show more</button><copy-button><button>Copy</button></copy-button></code-block><div class="message-files"><a class="file-chip" href="#file">notes.txt</a></div></div><button class="pin-toggle" hidden>Show more</button></div>';
+    const content = f.prompt.querySelector<HTMLElement>(".pin-content")!;
+    const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
+    Object.defineProperties(content, {
+      scrollHeight: { value: 500 },
+      clientHeight: { value: 160 },
+    });
+    f.viewport.sync(f.s);
+    assert.equal(toggle.hidden, false);
+    for (const expanded of [false, true]) {
+      if (expanded) toggle.click();
+      for (const selector of [".text-code-toggle", "copy-button button", ".file-chip"]) {
+        f.prompt.querySelector<HTMLElement>(selector)!.click();
+        assert.equal(f.prompt.classList.contains("pin-expanded"), expanded);
+        assert.equal(toggle.getAttribute("aria-expanded"), String(expanded));
+      }
+    }
+  } finally {
+    f.close();
+  }
+});
+
+test("plain-text copy confirmation can grow beyond its icon width", () => {
+  const rule = css.match(/\.user-bubble code-block\[language="text"\] copy-button button \{[^}]*\}/)?.[0] ?? "";
+  assert.match(rule, /min-width: var\(--meta-lane\)/);
+  assert.doesNotMatch(rule, /(?:^|[;{])\s*width:/);
+});
+
+test("marginal overflow is shown in full without an expansion control", () => {
+  const f = fixture();
+  try {
+    f.prompt.innerHTML =
+      '<div class="user-bubble"><div class="pin-content"></div><button class="pin-toggle" hidden>Show more</button></div>';
+    const content = f.prompt.querySelector<HTMLElement>(".pin-content")!;
+    const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
+    let overflow = 5;
+    Object.defineProperties(content, {
+      scrollHeight: { get: () => 160 + overflow },
+      clientHeight: { get: () => (f.prompt.classList.contains("pin-fits") ? 160 + overflow : 160) },
+    });
+    f.viewport.sync(f.s);
+    for (overflow of [0, 5, 24, 25, 100, 5]) {
+      f.resize(30, 50);
+      assert.equal(toggle.hidden, overflow <= 24);
+      assert.equal(f.prompt.classList.contains("pin-fits"), overflow <= 24);
+      f.resize(30, 50);
+      assert.equal(toggle.hidden, overflow <= 24, "stable on repeated measurements");
+    }
+    f.viewport.dispose();
+    assert.equal(f.prompt.classList.contains("pin-fits"), false);
   } finally {
     f.close();
   }

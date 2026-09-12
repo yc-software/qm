@@ -23,7 +23,6 @@ export function createForkOriginController<T>(options: {
   redraw(): void;
   setError(error: string): void;
 }) {
-  let refreshGeneration = 0;
   let toggleGeneration = 0;
   let loadingGeneration: number | null = null;
   return {
@@ -31,20 +30,6 @@ export function createForkOriginController<T>(options: {
       options.setError("");
       toggleGeneration++;
       loadingGeneration = null;
-    },
-    beginRefresh() {
-      return ++refreshGeneration;
-    },
-    invalidateRefresh() {
-      refreshGeneration++;
-    },
-    isCurrentRefresh(generation: number) {
-      return generation === refreshGeneration && options.current();
-    },
-    applyRefresh(generation: number, messages: T[] | null) {
-      if (generation !== refreshGeneration || !options.current()) return false;
-      if (messages) options.state.inheritedMessages = messages;
-      return true;
     },
     async navigate() {
       try {

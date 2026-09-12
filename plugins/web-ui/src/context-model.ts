@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { fetchRuntimeConfig, updateRuntimeConfig, type RuntimeConfig } from "./core-bridge";
+import type { RuntimeConfig } from "./core-bridge";
+import { getRuntimeConfig, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import {
   EFFORT_LEVELS,
   effortLabel,
@@ -19,22 +20,26 @@ export const contextModelState = {
   saving: false,
   pending: null as string | null,
   pendingEffort: null as string | null,
-  config: null as RuntimeConfig | null,
+  get config(): RuntimeConfig | null {
+    return getRuntimeConfig(contextModelState.scope);
+  },
   notice: "",
   noticeKind: "" as "" | "saved" | "error",
 };
 
 let loadSeq = 0;
+let unsubscribeRuntime: (() => void) | undefined;
 let redraw: () => void = () => {};
 
 export function resetContextModel(): void {
   loadSeq += 1;
+  unsubscribeRuntime?.();
+  unsubscribeRuntime = undefined;
   contextModelState.scope = null;
   contextModelState.loading = false;
   contextModelState.saving = false;
   contextModelState.pending = null;
   contextModelState.pendingEffort = null;
-  contextModelState.config = null;
   contextModelState.notice = "";
   contextModelState.noticeKind = "";
 }
@@ -46,9 +51,12 @@ export async function loadContextModel(scopeId: string, onChange: () => void): P
   const seq = ++loadSeq;
   contextModelState.scope = scopeId;
   contextModelState.loading = true;
-  const config = await fetchRuntimeConfig(scopeId);
+  unsubscribeRuntime = subscribeRuntimeConfig(scopeId, () => {
+    contextModelState.loading = false;
+    redraw();
+  });
+  const config = await loadRuntimeConfig(scopeId);
   if (seq !== loadSeq) return;
-  contextModelState.config = config;
   contextModelState.loading = false;
   if (!config) {
     contextModelState.notice = "Couldn't load this project's model.";
@@ -101,7 +109,7 @@ async function choose(scope: string, value: string, effort?: string): Promise<vo
   try {
     const sep = value.indexOf(":");
     const harnessId = value.slice(0, sep);
-    const config = await updateRuntimeConfig(
+    const config = await saveRuntimeConfig(
       scope,
       value === INHERIT
         ? { inherit: true }
@@ -112,7 +120,6 @@ async function choose(scope: string, value: string, effort?: string): Promise<vo
           },
     );
     if (seq !== loadSeq) return;
-    contextModelState.config = config;
     const effortNote = config.scopeOverride?.effortLevel
       ? ` · ${effortLabel(config.scopeOverride.effortLevel as EffortLevel)} effort`
       : "";

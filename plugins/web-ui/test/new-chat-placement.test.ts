@@ -41,6 +41,7 @@ async function withCanvas(run: (canvas: Canvas) => void | Promise<void>, stacked
     },
     fetch: async () =>
       Response.json({
+        scopeId: "personal:tester",
         approvedHarnesses: ["pi"],
         modelsByHarness: { pi: [] },
         modelCatalog: {},

@@ -158,12 +158,18 @@ export function stripTurnBoilerplate(text: string): string {
   return kept || text.trim();
 }
 
+export function visibleTitleEntryText(entry: SessionEntry): string | undefined {
+  const payload = entry.payload as { text?: unknown; display?: unknown } | null;
+  const value = entry.type === "user" && typeof payload?.display === "string" ? payload.display : payload?.text;
+  return typeof value === "string" ? value.trim() || undefined : undefined;
+}
+
 export function renderTitleTranscript(entries: SessionEntry[]): string {
   const lines: string[] = [];
   for (const e of entries) {
     if (e.type !== "user" && e.type !== "assistant") continue;
     if (isOverheardEntry(e)) continue;
-    const raw = (e.payload as { text?: string } | null)?.text?.trim();
+    const raw = visibleTitleEntryText(e);
     if (!raw) continue;
     const text = e.type === "user" ? stripTurnBoilerplate(raw) : raw;
     if (!text) continue;

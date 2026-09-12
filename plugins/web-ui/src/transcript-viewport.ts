@@ -23,8 +23,10 @@ export function createTranscriptViewport() {
   }
 
   function clearPrompt(): void {
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
+    if (content) content.scrollTop = 0;
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-fits");
     prompt?.style.removeProperty("--pin-clamp");
+    prompt?.style.removeProperty("--pin-expanded-max");
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
     expanded = false;
@@ -38,8 +40,10 @@ export function createTranscriptViewport() {
       `${Math.round(Math.min(320, Math.max(96, scroller.clientHeight * 0.35)))}px`,
     );
     prompt.classList.toggle("pin-expanded", expanded);
-    const bubble = prompt.querySelector<HTMLElement>(".user-bubble");
-    const clipped = !expanded && !!bubble && bubble.scrollHeight > bubble.clientHeight + 1;
+    // Measure at the normal clamp before deciding whether collapsing saves a useful amount.
+    prompt.classList.remove("pin-fits");
+    const clipped = !expanded && content.scrollHeight > content.clientHeight + 24;
+    prompt.classList.toggle("pin-fits", !expanded && !clipped);
     const toggle = prompt.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) {
       toggle.hidden = !clipped && !expanded;
@@ -55,6 +59,7 @@ export function createTranscriptViewport() {
     if (!toggle || !prompt?.contains(toggle)) return;
     cancelFollow();
     expanded = !expanded;
+    if (!expanded && content) content.scrollTop = 0;
     syncSticky();
   }
 
@@ -67,6 +72,11 @@ export function createTranscriptViewport() {
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
     const promptMargin = prompt ? parseFloat(getComputedStyle(prompt).marginBottom) || 0 : 0;
+    if (prompt && content) {
+      const chrome = prompt.getBoundingClientRect().height - content.getBoundingClientRect().height;
+      const available = scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;
+      prompt.style.setProperty("--pin-expanded-max", `${Math.max(0, Math.floor(available))}px`);
+    }
     const canStick =
       !!prompt &&
       prompt.getBoundingClientRect().height + promptMargin + top + paddingTop + paddingBottom <= scroller.clientHeight;

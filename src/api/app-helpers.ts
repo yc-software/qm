@@ -10,7 +10,8 @@ import type {
 import { orgId as orgIdOf } from "../config.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type FileArtifact, type ListOwnedOptions } from "../files/file-artifact-store.ts";
-import type { Run } from "../runs/run-store.ts";
+import { isTerminal, type Run } from "../runs/run-store.ts";
+import { sleep } from "../util/async.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
 import { processRun } from "../runs/worker.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
@@ -199,16 +200,26 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function drive(runId: string): Promise<TurnResult> {
-    const claimed = await deps.runs.claimById(runId, "inline", deps.leaseTtlMs);
-    if (claimed) {
-      return withAdminLink(
-        await processRun({ runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs }, claimed),
-      );
+    const timeoutMs = deps.runWaitMs ?? 60_000;
+    const deadline = performance.now() + timeoutMs;
+    for (;;) {
+      const run = await deps.runs.get(runId);
+      if (!run) throw new Error(`run ${runId} not found`);
+      if (isTerminal(run.status)) {
+        return withAdminLink(
+          run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
+        );
+      }
+      const claimed = await deps.runs.claimById(runId, "inline", deps.leaseTtlMs);
+      if (claimed) {
+        return withAdminLink(
+          await processRun({ runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs }, claimed),
+        );
+      }
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
+      await sleep(Math.min(100, remaining));
     }
-    const finished = await deps.runs.waitFor(runId, deps.runWaitMs);
-    return withAdminLink(
-      finished.result ?? { status: "failed", sessionId: finished.sessionId, reason: "run produced no result" },
-    );
   }
 
   async function mayUseSharedScope(kind: "channel" | "group", ref: string, actor: Principal): Promise<boolean> {
