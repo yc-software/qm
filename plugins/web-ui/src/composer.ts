@@ -1874,6 +1874,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     state: composerState,
     restageAttachments,
     composerForm,
+    composerApprovalPanel,
     queuedStrip,
     queuedRunsFor,
     setQueuedRuns,

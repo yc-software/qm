@@ -132,8 +132,9 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const router: Sandbox = {
     profile: fallback.profile,
 
-    async profileFor(scopeId: string): Promise<AgentComputerProfile> {
-      const resource = await opts.resources?.resolve(scopeId);
+    async profileFor(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile> {
+      const resource = sandboxId ? await opts.resources?.get(sandboxId) : await opts.resources?.resolve(scopeId);
+      if (sandboxId && !resource) throw new Error("sandbox inventory unavailable");
       if (resource) {
         const sandbox = backends[resource.backend];
         if (!sandbox) throw new Error(`sandbox backend unavailable: ${resource.backend}`);

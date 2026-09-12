@@ -117,6 +117,7 @@ interface ComposerState {
 }
 
 export interface ComposerSurface {
+  composerApprovalPanel(approvals: PendingApproval[]): TemplateResult;
   restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;
   composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;

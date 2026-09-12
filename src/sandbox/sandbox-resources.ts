@@ -47,7 +47,13 @@ export interface SandboxResources {
     defaultMode: "none" | "selected";
     providers: Array<{ name: SandboxBackendName; spec?: AgentComputerSpec; actions: string[] }>;
   }>;
-  create(actorId: string, scopeId: ScopeId, backend: string, name?: string): Promise<SandboxResource>;
+  create(
+    actorId: string,
+    scopeId: ScopeId,
+    backend: string,
+    name?: string,
+    reservationId?: string,
+  ): Promise<SandboxResource>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string): Promise<void>;
@@ -284,12 +290,13 @@ export function createSandboxResources(opts: {
         providers,
       };
     },
-    async create(actorId, scopeId, backend, name) {
+    async create(actorId, scopeId, backend, name, reservationId) {
       await requireEnabled();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
-      const id = randomUUID();
+      const id = reservationId ?? randomUUID();
+      if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) throw new Error("invalid sandbox reservation");
       const record: SandboxResource = {
         id,
         backend: backend as SandboxBackendName,
@@ -302,6 +309,13 @@ export function createSandboxResources(opts: {
         state: "provisioning",
       };
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
+        const existing = await opts.records.get(id);
+        if (existing) {
+          if (existing.ownerScopeId !== scopeId || existing.createdBy !== actorId || existing.backend !== backend)
+            throw new Error("sandbox reservation ownership mismatch");
+          if (existing.state === "ready") return existing;
+          if (existing.state === "retired") throw new Error("sandbox reservation is retired");
+        }
         await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
