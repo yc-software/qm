@@ -1779,6 +1779,11 @@ a.chat-row-open {
   max-height: var(--pin-clamp, 320px);
   overflow: hidden;
 }
+.message-stack .user-row.pin-expanded .user-bubble > .pin-content {
+  max-height: var(--pin-expanded-max);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
 .pin-toggle {
   display: none;
   width: fit-content;

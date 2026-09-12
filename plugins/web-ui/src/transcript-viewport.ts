@@ -23,8 +23,10 @@ export function createTranscriptViewport() {
   }
 
   function clearPrompt(): void {
+    if (content) content.scrollTop = 0;
     prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-fits");
     prompt?.style.removeProperty("--pin-clamp");
+    prompt?.style.removeProperty("--pin-expanded-max");
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
     expanded = false;
@@ -57,6 +59,7 @@ export function createTranscriptViewport() {
     if (!toggle || !prompt?.contains(toggle)) return;
     cancelFollow();
     expanded = !expanded;
+    if (!expanded && content) content.scrollTop = 0;
     syncSticky();
   }
 
@@ -69,6 +72,11 @@ export function createTranscriptViewport() {
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
     const promptMargin = prompt ? parseFloat(getComputedStyle(prompt).marginBottom) || 0 : 0;
+    if (prompt && content) {
+      const chrome = prompt.getBoundingClientRect().height - content.getBoundingClientRect().height;
+      const available = scroller.clientHeight - top - paddingTop - paddingBottom - promptMargin - chrome;
+      prompt.style.setProperty("--pin-expanded-max", `${Math.max(0, Math.floor(available))}px`);
+    }
     const canStick =
       !!prompt &&
       prompt.getBoundingClientRect().height + promptMargin + top + paddingTop + paddingBottom <= scroller.clientHeight;
