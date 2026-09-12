@@ -108,6 +108,7 @@ export async function runLoopFire(
 
     let autoShippedCount = 0;
     let autoOutputCount = 0;
+    let itemReady = false;
     try {
       const { runId } = await effects.work({
         loop,
@@ -167,6 +168,7 @@ export async function runLoopFire(
         await stores.outputs.supersedeAttempt(item.id, runId);
         continue;
       }
+      itemReady = true;
       const ready = await stores.outputs.promoteAttempt(item.id, runId);
       const autoShipped: string[] = [];
       autoOutputCount = ready.filter(
@@ -191,9 +193,14 @@ export async function runLoopFire(
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       summary.failures.push(`${item.sourceKey}: ${reason}`);
-      if (autoShippedCount > 0) {
-        const partialReason = `partial auto-ship: ${autoShippedCount} of ${autoOutputCount} actions completed before failure — needs human review`;
-        await stores.items.park(item.id, partialReason);
+      // A ready item has released its claim and its outputs are already promoted, so it parks in
+      // place for a person instead of superseding the attempt and requeueing the work.
+      if (itemReady) {
+        const shipReason =
+          autoShippedCount > 0
+            ? `partial auto-ship: ${autoShippedCount} of ${autoOutputCount} actions completed before failure — needs human review`
+            : `auto-ship failed: ${reason} — needs human review`;
+        await stores.items.park(item.id, shipReason);
         summary.parked.push(item.id);
         continue;
       }

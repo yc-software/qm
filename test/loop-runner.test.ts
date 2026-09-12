@@ -165,6 +165,36 @@ test("a partial auto-ship parks for human review without superseding or requeuei
   assert.equal(next.worked, 0);
 });
 
+test("a failed auto-ship with nothing shipped parks the ready output for a person", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { shipActions: [{ action: "open_pr", gate: "auto" }] });
+  const summary = await runLoopFire(
+    loop,
+    s,
+    effects(s, {
+      ship: async ({ output }) => {
+        const claimed = await s.outputs.claimShipping(output.id);
+        await s.outputs.failShipping(claimed!.id, claimed!.claimToken!);
+        throw new Error("label group conflict");
+      },
+    }),
+  );
+  const item = (await s.items.byLoop(loop.id))[0]!;
+  const outputs = await s.outputs.byItem(item.id);
+  assert.deepEqual(
+    outputs.map((output) => output.state),
+    ["ready"],
+  );
+  assert.equal(item.status, "ready");
+  assert.equal(item.parkedReason, "auto-ship failed: label group conflict — needs human review");
+  assert.deepEqual(summary.parked, [item.id]);
+  assert.deepEqual(summary.continued, []);
+  assert.deepEqual(summary.failures, ["SENTRY-1: label group conflict"]);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 1);
+  const next = await runLoopFire(loop, s, effects(s));
+  assert.equal(next.worked, 0);
+});
+
 test("a standing grant graduates its slice and leaves the rest for review", async () => {
   const s = stores();
   const loop = await loopIn(s);
