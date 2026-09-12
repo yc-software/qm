@@ -3106,6 +3106,34 @@ a.chat-row-open {
   left: auto;
   width: 230px;
 }
+.harness-button {
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.harness-button .model-mark {
+  flex: none;
+}
+.harness-control .menu-popover {
+  width: 200px;
+}
+.harness-mark-slot {
+  flex: none;
+  width: 15px;
+}
+.harness-option-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+@container chat (max-width: 470px) {
+  [data-density] .harness-button .menu-label {
+    display: none;
+  }
+}
 .loadout-button {
   gap: 7px;
   height: 32px;

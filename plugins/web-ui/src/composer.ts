@@ -52,7 +52,9 @@ import {
   defaultEffortForModel,
   defaultModelValue,
   effortLabel,
+  getHarnessOptions,
   getModelOptions,
+  getModelOptionsForHarness,
   harnessSupportsEffort,
   harnessSupportsFastMode,
   harnessSupportsSteer,
@@ -74,6 +76,7 @@ import {
   upsertLoadout,
   reorderLoadout,
   effortLevelsForHarness,
+  harnessTarget,
   type LoadoutEntry,
 } from "./composer-loadout";
 
@@ -468,7 +471,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
     const compact = Boolean(ctx.pane) || isPhone();
     const showRuntimeControls = !appState.me?.individualModelAuth;
-    const runtimeControls = loadoutControl(agent, selectedModel, inputBlocked);
+    const runtimeControls = html`${harnessControl(agent, selectedModel, inputBlocked)}${loadoutControl(agent, selectedModel, inputBlocked)}`;
     return html`
       <form
         class="composer-wrap ${compact ? "compact" : ""}"
@@ -1099,6 +1102,54 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   </button>`,
               )}
               ${catalog.length ? nothing : html`<div class="loadout-empty">No models found</div>`}`
+      }
+    </div>`;
+  }
+
+  function harnessControl(agent: Agent, selected: ModelOption, disabled: boolean): TemplateResult | typeof nothing {
+    const harnesses = getHarnessOptions(scopeKey());
+    if (harnesses.length < 2) return nothing;
+    const open = composerState.openMenu === "harness";
+    return html`<div class="menu-control harness-control" data-align="left">
+      <button
+        class="menu-button harness-button"
+        type="button"
+        aria-label=${`Harness: ${selected.harnessLabel}`}
+        aria-haspopup="menu"
+        aria-expanded=${open ? "true" : "false"}
+        ?disabled=${disabled}
+        ${tip("Harness")}
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          composerState.openMenu = open ? null : "harness";
+          ctx.chat.drawActiveChat(agent);
+        }}
+      >
+        ${modelMark(selected.harnessId, 15) ?? nothing}<span class="menu-label">${selected.harnessLabel}</span
+        >${icon(ChevronDown, 13)}
+      </button>
+      ${
+        open
+          ? html`<div class="menu-popover harness-popover" role="menu" @click=${(e: Event) => e.stopPropagation()}>
+              ${harnesses.map(
+                (harness) =>
+                  html`<button
+                    class="menu-option ${harness.value === selected.harnessId ? "active" : ""}"
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked=${harness.value === selected.harnessId ? "true" : "false"}
+                    @click=${() => selectHarness(harness.value, agent)}
+                  >
+                    <span class="harness-option-copy"
+                      >${modelMark(harness.value, 15) ?? html`<span class="harness-mark-slot"></span>`}<span
+                        >${harness.label}</span
+                      ></span
+                    >
+                    ${harness.value === selected.harnessId ? icon(Check, 15) : nothing}
+                  </button>`,
+              )}
+            </div>`
+          : nothing
       }
     </div>`;
   }
@@ -2057,6 +2108,28 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (composerState.effortLevel === previousDefaultEffort) {
       composerState.effortLevel = defaultEffortForModel(option.model);
       persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
+    }
+    composerState.openMenu = null;
+    ctx.chat.drawActiveChat(agent);
+  }
+
+  function selectHarness(harnessId: string, agent: Agent): void {
+    const selected = currentModelOption();
+    if (!selected || selected.harnessId === harnessId) {
+      composerState.openMenu = null;
+      ctx.chat.drawActiveChat(agent);
+      return;
+    }
+    const target = harnessTarget(getModelOptionsForHarness(harnessId, scopeKey()), selected.model.id, loadout);
+    if (!target) return;
+    selectModel(target.value, agent);
+    if (!effortLevelsForHarness(harnessId).some((level) => level.value === composerState.effortLevel)) {
+      composerState.effortLevel = defaultEffortForModel(target.model);
+      persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
+    }
+    if (!harnessSupportsFastMode(harnessId) || !modelSupportsFastMode(scopeKey(), target.model.id)) {
+      composerState.fastMode = false;
+      persistPreference(FAST_MODE_STORAGE_KEY, "0");
     }
     composerState.openMenu = null;
     ctx.chat.drawActiveChat(agent);

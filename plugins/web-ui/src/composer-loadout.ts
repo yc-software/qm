@@ -76,3 +76,14 @@ export function effortLevelsForHarness(harnessId: string): Array<{ value: Effort
     return value === "auto";
   }).map((option) => ({ ...option, label: option.value === "xhigh" ? "Extra high" : option.label }));
 }
+
+export function harnessTarget<T extends { value: string; model: { id: string } }>(
+  options: readonly T[],
+  currentModelId: string,
+  loadout: ReadonlyArray<{ value: string }>,
+): T | undefined {
+  const sameModel = options.find((option) => option.model.id === currentModelId);
+  if (sameModel) return sameModel;
+  const saved = loadout.find((entry) => options.some((option) => option.value === entry.value));
+  return options.find((option) => option.value === saved?.value) ?? options[0];
+}

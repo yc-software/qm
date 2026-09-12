@@ -23,9 +23,16 @@ test("Edit exposes changed runtime defaults and always allows an existing overri
 });
 
 test("compact and full composers share one left-side picker with Fast inside its menu", () => {
-  assert.ok(
-    /const runtimeControls = loadoutControl\(agent, selectedModel, inputBlocked\)/.test(composer),
+  const runtimeControls = /const runtimeControls = ([^\n]*)/.exec(composer)?.[1] ?? "";
+  assert.match(
+    runtimeControls,
+    /loadoutControl\(agent, selectedModel, inputBlocked\)/,
     "compact surfaces must retain the full model and effort picker",
+  );
+  assert.match(
+    runtimeControls,
+    /harnessControl\(agent, selectedModel, inputBlocked\)/,
+    "the harness picker rides beside it on both surfaces",
   );
   const leftStart = composer.indexOf('class="composer-left"');
   const rightStart = composer.indexOf('class="composer-right"');
