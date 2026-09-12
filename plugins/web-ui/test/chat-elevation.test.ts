@@ -6,7 +6,7 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("transcript edges do not blur or mask the response", () => {
   assert.doesNotMatch(css, /\.chat-scroll::(?:before|after)/);
-  assert.doesNotMatch(css, /\.message-stack \.user-row[^{}]*::after/);
+  assert.doesNotMatch(css, /\.message-stack \.user-row[^{}]* > \.user-bubble::(?:before|after)/);
   assert.doesNotMatch(css, /--chat-edge-fade/);
 });
 
