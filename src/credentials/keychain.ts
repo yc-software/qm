@@ -459,6 +459,18 @@ function expired(rec: { expiresAt?: number }, now: number): boolean {
   return typeof rec.expiresAt === "number" && rec.expiresAt < now;
 }
 
+/** Epoch ms of a JWT access token's exp claim; undefined for opaque tokens. */
+function jwtExpiryMs(token: string | null): number | undefined {
+  if (!token || token.split(".").length !== 3) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as unknown;
+    const exp = (payload as { exp?: unknown } | null)?.exp;
+    return typeof exp === "number" ? exp * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: number): boolean {
   return rec.kind !== "file" && expired(rec, now);
 }
@@ -772,7 +784,14 @@ export function createKeychain(deps: {
   async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
     const t = now();
     const refreshable = rec.refresh?.refreshTokenEnc && deps.refreshConnector && rec.host ? rec.host : null;
-    if (refreshable && rec.expiresAt !== undefined && t >= rec.expiresAt - oauthRefreshMargin) {
+    const secret = tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
+    // A record stored without its expiry (a login flow that predates expiry
+    // capture) would otherwise never refresh and hand out a long-dead token
+    // forever. When the access token is itself a JWT its exp claim is the
+    // authoritative expiry, so fall back to it; one successful refresh then
+    // persists a real expiresAt and the record is healed.
+    const expiresAt = rec.expiresAt ?? jwtExpiryMs(secret);
+    if (refreshable && expiresAt !== undefined && t >= expiresAt - oauthRefreshMargin) {
       let pending = inflightRefreshes.get(rec.id);
       if (!pending) {
         pending = refreshAndStore(refreshable, rec.ownerId, rec.refresh?.accountType, rec);
@@ -781,8 +800,8 @@ export function createKeychain(deps: {
       }
       return pending;
     }
-    if (oauthExpired(rec, t) && !refreshable) return null;
-    return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
+    if (expiresAt !== undefined && t >= expiresAt - oauthSkew && !refreshable) return null;
+    return secret;
   }
 
   function connectorMeta(rec: KeychainCredentialMeta, t: number): ConnectorMeta {

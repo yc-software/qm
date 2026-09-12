@@ -5,6 +5,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  childCodexAuthFromDerived,
   childCodexOAuthAuth,
   codexOAuthAccessTokenExpiresAt,
   codexOAuthAuthFromValue,
@@ -100,6 +101,27 @@ test("child auth material never includes the refresh token", () => {
   assert.equal(tokens.access_token, (auth.tokens as Record<string, unknown>).access_token);
   assert.equal(tokens.id_token, (auth.tokens as Record<string, unknown>).id_token);
   assert.equal(child.auth_mode, "chatgpt");
+});
+
+test("child auth material always carries a last_refresh stamp", () => {
+  // The Codex CLI reads a missing last_refresh as "refresh immediately", and
+  // the child holds only the empty refresh-token placeholder — so a child
+  // auth.json without the stamp fails every turn on "Failed to refresh token".
+  const passedThrough = authJson("acct", FRESH_EXP);
+  passedThrough.last_refresh = "2026-01-02T03:04:05.000Z";
+  assert.equal(childCodexOAuthAuth(passedThrough).last_refresh, "2026-01-02T03:04:05.000Z");
+
+  const stamped = childCodexOAuthAuth(authJson("acct", FRESH_EXP));
+  assert.ok(typeof stamped.last_refresh === "string" && !Number.isNaN(Date.parse(stamped.last_refresh)));
+
+  const derived = childCodexAuthFromDerived({
+    accessToken: accessToken("acct", FRESH_EXP),
+    idToken: idToken("acct"),
+    accountId: "acct",
+  });
+  assert.ok(derived);
+  assert.ok(typeof derived.last_refresh === "string" && !Number.isNaN(Date.parse(derived.last_refresh)));
+  assert.equal((derived.tokens as Record<string, unknown>).refresh_token, "");
 });
 
 test("codexOAuthAuthFromValue validates shape and account binding", () => {

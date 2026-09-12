@@ -10,6 +10,13 @@ function idToken(accountId: string): string {
   return `${seg({ alg: "RS256", typ: "JWT" })}.${seg({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } })}.sig`;
 }
 
+const ACCESS_EXP_SEC = 2_000_000_000;
+
+function accessToken(): string {
+  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${seg({ alg: "RS256", typ: "JWT" })}.${seg({ exp: ACCESS_EXP_SEC })}.sig`;
+}
+
 /** Fake `codex app-server` that serves the device-login RPCs and writes auth.json on approval. */
 function loginBinary(dir: string, opts: { succeed: boolean; delayMs?: number }): string {
   const path = join(dir, `codex-login-${opts.succeed ? "ok" : "fail"}`);
@@ -31,7 +38,7 @@ rl.on("line", (line) => {
       if (${JSON.stringify(opts.succeed)}) {
         fs.writeFileSync(path.join(process.env.CODEX_HOME, "auth.json"), JSON.stringify({
           auth_mode: "chatgpt",
-          tokens: { access_token: "acc-1", refresh_token: "ref-1", id_token: ${JSON.stringify(idToken("acct_9"))}, account_id: "acct_9" },
+          tokens: { access_token: ${JSON.stringify(accessToken())}, refresh_token: "ref-1", id_token: ${JSON.stringify(idToken("acct_9"))}, account_id: "acct_9" },
         }));
         send({ method: "account/login/completed", params: { loginId: "login-1", success: true, error: null } });
       } else {
@@ -61,9 +68,12 @@ test("device login: start returns the prompt, poll is pending then yields tokens
   const tokens = await login.poll(prompt.deviceAuthId);
   assert.notEqual(tokens, "pending");
   if (tokens === "pending") return;
-  assert.equal(tokens.accessToken, "acc-1");
+  assert.equal(tokens.accessToken, accessToken());
   assert.equal(tokens.refreshToken, "ref-1");
   assert.equal(tokens.accountId, "acct_9");
+  // The harvest carries the access token's exp claim: the keychain's central
+  // refresh keys off the stored expiry, so a record without one never refreshes.
+  assert.equal(tokens.expiresAt, ACCESS_EXP_SEC * 1000);
   // The login is one-shot: after harvest it is gone.
   await assert.rejects(() => login.poll(prompt.deviceAuthId), /expired or unknown/);
 });

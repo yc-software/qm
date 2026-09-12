@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CodexAppServer } from "../harness/codex-app-server.ts";
-import { codexOAuthAuthFromValue } from "../harness/codex-auth-store.ts";
+import { codexOAuthAccessTokenExpiresAt, codexOAuthAuthFromValue } from "../harness/codex-auth-store.ts";
 import { asObject, codexOAuthJwtAccountId, type JsonObject } from "../harness/codex-auth-file.ts";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
 import type { ChatGPTDevicePrompt } from "./subscription-oauth.ts";
@@ -27,11 +27,17 @@ function tokensFromAuthJson(home: string): UserOAuthTokens {
   const accessToken = tokens.access_token as string;
   const idToken = typeof tokens.id_token === "string" ? tokens.id_token : undefined;
   const accountId = codexOAuthJwtAccountId(auth) ?? undefined;
+  // Carry the access token's own expiry into the keychain record: the central
+  // refresh triggers off the stored expiresAt, and a record without one is
+  // never refreshed — children then receive a long-expired token they cannot
+  // refresh themselves (they hold no refresh token).
+  const expiresAt = codexOAuthAccessTokenExpiresAt(auth);
   return {
     accessToken,
     refreshToken: tokens.refresh_token as string,
     ...(idToken ? { idToken } : {}),
     ...(accountId ? { accountId } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
   };
 }
 

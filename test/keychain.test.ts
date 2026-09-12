@@ -366,6 +366,42 @@ describe("connectors are grantable like any keychain record", () => {
     await assert.rejects(k2.materialize(g2.id, G1, "carol@x"), (e: KeychainError) => e.status === 410);
   });
 
+  it("a record stored without expiresAt refreshes off its JWT access token's exp claim; opaque tokens stay reused", async () => {
+    const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const expiredJwt = `${seg({ alg: "RS256" })}.${seg({ exp: Math.floor((Date.now() - 60_000) / 1000) })}.sig`;
+    const k = kcWithRefresh("ya29.fresh");
+    // No expiresAt on the record: the login flow that stored it dropped the
+    // expiry. The token's own exp claim must still drive the central refresh.
+    await k.setConnectorToken(GMAIL, "alex@x", { accessToken: expiredJwt, refreshToken: "rt" });
+    const g = await k.createGrant({
+      credentialId: await cidOf(k, "alex@x"),
+      ownerId: "alex@x",
+      audienceScopeId: G1,
+      mode: "standing",
+      purpose: "p",
+    });
+    const m = await k.materialize(g.id, G1, "member@example.com");
+    assert.deepEqual(m.kind === "env" ? m.env : null, [
+      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.fresh" },
+    ]);
+
+    // An opaque token without expiresAt carries no readable expiry: unchanged
+    // behavior, handed out as stored with no refresh attempt.
+    const k2 = kcWithRefresh("ya29.fresh");
+    await k2.setConnectorToken(GMAIL, "bob@x", { accessToken: "ya29.opaque", refreshToken: "rt" });
+    const g2 = await k2.createGrant({
+      credentialId: await cidOf(k2, "bob@x"),
+      ownerId: "bob@x",
+      audienceScopeId: G1,
+      mode: "standing",
+      purpose: "p",
+    });
+    const m2 = await k2.materialize(g2.id, G1, "member@example.com");
+    assert.deepEqual(m2.kind === "env" ? m2.env : null, [
+      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.opaque" },
+    ]);
+  });
+
   it("a still-valid token within the refresh margin is refreshed; one with ample life is reused", async () => {
     const k = kcWithRefresh("ya29.fresh");
     await k.setConnectorToken(GMAIL, "alex@x", {
