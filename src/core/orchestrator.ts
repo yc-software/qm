@@ -131,6 +131,7 @@ import {
   isVisionAttachment,
   MAX_HISTORY_IMAGE_BYTES,
   materializeInbound,
+  peerSenderNote,
   safeAttachmentName,
   senderNote,
   sharedFilesSystemSection,
@@ -516,6 +517,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const automatedTurn = input.origin.kind === "automation";
       const ambientTurn = input.origin.kind === "ambient";
       const humanTurn = input.origin.kind === "human";
+      const peerTurn = input.origin.kind === "peer";
+      const peerSender = input.origin.kind === "peer" ? input.origin.senderAgentName : null;
+      const authorName = peerSender ?? actor.displayName;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -874,7 +878,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }
                 : {}),
               ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
-              ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
+              ...(authorName?.trim() ? { name: authorName.trim() } : {}),
             };
             const taintedEntry = await deps.sessions.append(lease, {
               type: "user",
@@ -975,7 +979,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
       let modeName = "mode-fallback";
       if (input.surfaceTools) modeName = "mode-autonomous";
-      else if (!automatedTurn && (conversation.kind === "dm" || isWeb)) modeName = "mode-conversation";
+      else if (!automatedTurn && !peerTurn && (conversation.kind === "dm" || isWeb)) modeName = "mode-conversation";
       let frameMd = MODE_FALLBACK_MD;
       if (modeName === "mode-autonomous") frameMd = MODE_AUTONOMOUS_MD;
       else if (modeName === "mode-conversation") frameMd = MODE_CONVERSATION_MD;
@@ -2578,7 +2582,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         })();
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef);
-        const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
+        const personSender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
+        const sender = peerSender ? peerSenderNote(peerSender) : personSender;
         const unscreenedNote = inputUnscreened || inbound.unscreened.length ? unscreenedNotice("inbound content") : "";
         const turnEnv = environmentNote(
           [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim(), volatileContext]
@@ -2648,7 +2653,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? {
                 text: input.text,
                 ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
-                ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
+                ...(authorName?.trim() ? { name: authorName.trim() } : {}),
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
               }
             : undefined;
@@ -2983,7 +2988,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
               const meta = {
                 ...rec.meta,
-                ...(actor.displayName?.trim() ? { author: actor.displayName.trim() } : {}),
+                ...(authorName?.trim() ? { author: authorName.trim() } : {}),
                 ...(syntheticPrompt || continuation ? { hidden: true } : {}),
                 ...(input.displayText?.trim() && rec.meta.bareText === input.text
                   ? { display: input.displayText }
@@ -3006,8 +3011,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   }
                   if (tainted.type !== "user") return tainted;
                   const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
-                  if (actor.displayName?.trim() && typeof payload.name !== "string")
-                    payload.name = actor.displayName.trim();
+                  if (authorName?.trim() && typeof payload.name !== "string") payload.name = authorName.trim();
                   if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
                     payload.display = input.displayText;
                   if (syntheticPrompt || continuation) payload.hidden = true;

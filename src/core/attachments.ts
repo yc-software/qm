@@ -282,6 +282,10 @@ export function senderNote(name: string | undefined): string {
   return n ? `This message is from @${n}.` : "";
 }
 
+export function peerSenderNote(agentName: string): string {
+  return `This message is from the peer agent @${agentName.trim()}, not from a person.`;
+}
+
 export async function materializeInbound(
   sandbox: Sandbox,
   handle: SandboxHandle,
