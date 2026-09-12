@@ -13,6 +13,7 @@ import { apiRoutes } from "../src/api/routes/index.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import { userScopedField } from "../src/api/user-scoped-routes.ts";
 import { testConfig } from "./support/test-config.ts";
+import { fileArtifactId } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
 
 const CAP = "core-only-capability-secret-for-delete-01";
@@ -137,6 +138,50 @@ test("with enforcement off, a verified actor still wins over a query principal i
     { id: "mine", principalId: "U1" },
     "a source-auth caller must not be able to delete as somebody else",
   );
+});
+
+test("against the real app the same three outcomes come back, and the deleted row leaves the listing", async () => {
+  const real = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "file-delete-wired-")) }));
+  const base = await listen(createInsecureTestServer(real.app, { portalIdentitySecret: PID, identity: real.identity }));
+  const as = async (principalId: string) => ({ "x-portal-identity": await token(principalId) });
+  const mine = fileArtifactId("wired-mine", "out", 0);
+  const theirs = fileArtifactId("wired-theirs", "out", 0);
+  for (const [id, owner] of [
+    [mine, "U1"],
+    [theirs, "U2"],
+  ] as const)
+    await real.files.put({
+      id,
+      ownerScopeId: scopeId("personal", owner),
+      createdBy: owner,
+      name: `${owner}.txt`,
+      path: `artifacts/${id}/${owner}.txt`,
+      mimetype: "text/plain",
+      data: Buffer.from(owner),
+      direction: "out",
+    });
+
+  const owned = async () => {
+    const r = await fetch(`${base}/v1/files`, { headers: await as("U1") });
+    assert.equal(r.status, 200);
+    return ((await r.json()) as { owned: Array<{ id: string; deletable?: boolean }> }).owned;
+  };
+  assert.deepEqual(
+    (await owned()).map((f) => [f.id, f.deletable]),
+    [[mine, true]],
+    "the listing the page renders carries the flag that decides whether a Delete button exists",
+  );
+
+  const refused = await del(base, `/v1/files/${theirs}?principalId=U1`, await as("U1"));
+  assert.equal(refused.status, 403);
+  assert.ok(await real.files.get(theirs), "a refused delete leaves somebody else's artifact in place");
+
+  const gone = await del(base, `/v1/files/${mine}?principalId=U1`, await as("U1"));
+  assert.equal(gone.status, 200);
+  assert.deepEqual(await gone.json(), { ok: true });
+  assert.equal(await real.files.get(mine), null);
+  assert.deepEqual(await owned(), [], "the page reload after a delete cannot show the row again");
+  assert.equal((await del(base, `/v1/files/${mine}?principalId=U1`, await as("U1"))).status, 404);
 });
 
 test("the direct-upload abort route keeps its own handler; /v1/files/:id cannot shadow it", () => {
