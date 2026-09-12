@@ -37,8 +37,10 @@ test("concurrent completed turns keep durable titles when title generation is un
     ),
   );
 
-  for (const [i, turn] of turns.entries())
+  for (const [i, turn] of turns.entries()) {
+    assert.equal(turn.status, "ok");
     assert.equal((await app.getSession(turn.sessionId!))?.session.title, `Simulate four-way title outage ${i + 1}`);
+  }
 });
 
 test("a title provider exception is recorded before the completed turn gets its fallback title", async () => {
