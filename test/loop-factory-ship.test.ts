@@ -122,7 +122,9 @@ const issueRead = (over: {
 
 const ok = (payload: Record<string, unknown>): Route => ({ body: { data: payload } });
 
-const LABEL_LOOKUP = ok({ issueLabels: { nodes: [{ id: "lbl_rfr", parent: FACTORY_GROUP }] } });
+const LABEL_LOOKUP = ok({
+  issueLabels: { nodes: [{ id: "lbl_rfr", name: "ready-for-review", parent: FACTORY_GROUP }] },
+});
 const REMOVE_OK = ok({ issueRemoveLabel: { success: true } });
 const STATE_OK = ok({ issueUpdate: { success: true } });
 const LABEL_OK = ok({ issueAddLabel: { success: true } });
@@ -206,7 +208,7 @@ test("a sibling factory-state label is removed before ready-for-review is added"
     "linear:issueAddLabel": LABEL_OK,
   });
 
-  await shipFactoryPullRequest(github, "QM-1", depsFor(fetched.fetchImpl));
+  await shipFactoryPullRequest(github, TICKET, depsFor(fetched.fetchImpl));
 
   assert.deepEqual(keysOf(fetched.calls).slice(-3), [
     "linear:issueLabels",
@@ -217,6 +219,19 @@ test("a sibling factory-state label is removed before ready-for-review is added"
     queryOf(only(fetched.calls, "linear:issueRemoveLabel")),
     /issueRemoveLabel\(id: "iss_1", labelId: "grp_lbl_0"\)/,
   );
+});
+
+test("an ungrouped ready-for-review label removes nothing", async () => {
+  const fetched = fakeFetch({
+    [`GET ${GH_PULL}`]: { body: { draft: false, state: "open", merged: false } },
+    "linear:issue": issueRead({ state: IN_REVIEW, labels: ["bug"], groupLabels: ["converging"] }),
+    "linear:issueLabels": ok({ issueLabels: { nodes: [{ id: "lbl_rfr", name: "ready-for-review", parent: null }] } }),
+    "linear:issueAddLabel": LABEL_OK,
+  });
+
+  await shipFactoryPullRequest(github, TICKET, depsFor(fetched.fetchImpl));
+
+  assert.deepEqual(keysOf(fetched.calls).slice(-2), ["linear:issueLabels", "linear:issueAddLabel"]);
 });
 
 test("re-shipping a ready GitHub PR already In Review and labelled writes nothing", async () => {

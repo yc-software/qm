@@ -233,18 +233,17 @@ async function addReadyLabel(deps: ShipDeps, issue: LinearIssue): Promise<ShipSt
   const data = await linearGraphql(
     deps,
     "label",
-    `query { issueLabels(filter: { name: { eq: ${gql(LABEL_READY)} } }) { nodes { id parent { id } } } }`,
+    `query { issueLabels(filter: { name: { eq: ${gql(LABEL_READY)} } }) { nodes { id name parent { id } } } }`,
   );
   let ready: LinearLabel | undefined;
   for (const node of nodes(data.issueLabels)) {
-    ready = linearLabel({ ...obj(node), name: LABEL_READY });
+    ready = linearLabel(node);
     if (ready !== undefined) break;
   }
   if (ready === undefined) throw new Error(`linear_label_missing: ${LABEL_READY}`);
-  const labelId = ready.id;
   // Linear allows one label per group, and the wrapper leaves its own state label in the same group.
-  for (const sibling of issue.labels) {
-    if (ready.groupId === undefined || sibling.groupId !== ready.groupId) continue;
+  const siblings = ready.groupId === undefined ? [] : issue.labels.filter((label) => label.groupId === ready.groupId);
+  for (const sibling of siblings) {
     await linearGraphql(
       deps,
       "label",
@@ -254,7 +253,7 @@ async function addReadyLabel(deps: ShipDeps, issue: LinearIssue): Promise<ShipSt
   await linearGraphql(
     deps,
     "label",
-    `mutation { issueAddLabel(id: ${gql(issue.id)}, labelId: ${gql(labelId)}) { success } }`,
+    `mutation { issueAddLabel(id: ${gql(issue.id)}, labelId: ${gql(ready.id)}) { success } }`,
   );
   return { step, changed: true };
 }
