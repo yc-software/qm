@@ -53,11 +53,12 @@ const FACTORY_SOURCE_BOOTSTRAP_SCRIPT = [
 
 export const FACTORY_LOOP_SURFACE = "factory";
 
-// The wrapper's ownership marker and session branch need a positive integer that is stable for one run
-// and distinct across runs; a loop has no ECS session, so the run id is hashed into one.
-export function factorySessionIdFor(runId: string): number {
+// The wrapper's ownership marker and session branch need a positive integer that is stable across an
+// item's attempts, so a re-run revises the same branch and PR, and distinct across items; a loop has no
+// ECS session, so the item key is hashed into one.
+export function factorySessionIdFor(itemKey: string): number {
   let hash = 0x811c9dc5;
-  for (const ch of runId) {
+  for (const ch of itemKey) {
     hash ^= ch.charCodeAt(0);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
@@ -274,7 +275,8 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
             })
           : undefined;
 
-      const itemPrefix = `factory:${loop.id}:${item.id}:`;
+      const itemKey = `factory:${loop.id}:${item.id}`;
+      const itemPrefix = `${itemKey}:`;
       const runId = `${itemPrefix}${item.attempts + 1}`;
       const env = renderFactoryEnv({
         config,
@@ -283,7 +285,7 @@ export function createFactoryLoopEffects(deps: FactoryEffectsDeps): FactoryWorkE
         githubToken,
         anthropicApiKey,
         ...(slack ? { slack } : {}),
-        factorySessionId: factorySessionIdFor(runId),
+        factorySessionId: factorySessionIdFor(itemKey),
         repoDir,
         factorySourceDir: FACTORY_SOURCE_DIR,
       });

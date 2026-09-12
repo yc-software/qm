@@ -534,7 +534,7 @@ test("work preflights on a warm-released handle, then runs the wrapper with the 
       linearApiKey: LINEAR_KEY,
       githubToken: GITHUB_TOKEN,
       anthropicApiKey: ANTHROPIC_KEY,
-      factorySessionId: factorySessionIdFor("factory:loop-1:item-1:1"),
+      factorySessionId: factorySessionIdFor("factory:loop-1:item-1"),
       repoDir: REPO_DIR,
       factorySourceDir: FACTORY_SOURCE_DIR,
     }),
@@ -573,12 +573,25 @@ test("a run with no pull request carries the wrapper's redacted diagnostics in i
   assert.equal(verdict.reason.includes("npm warn"), false);
 });
 
-test("factorySessionIdFor is a stable positive integer that differs across runs", () => {
-  const a = factorySessionIdFor("factory:loop-1:item-1:1");
-  assert.equal(a, factorySessionIdFor("factory:loop-1:item-1:1"));
+test("factorySessionIdFor is a stable positive integer per item and differs across items and loops", () => {
+  const a = factorySessionIdFor("factory:loop-1:item-1");
+  assert.equal(a, factorySessionIdFor("factory:loop-1:item-1"));
   assert.ok(Number.isInteger(a) && a > 0 && a <= 2_000_000_000);
-  assert.notEqual(a, factorySessionIdFor("factory:loop-1:item-1:2"));
-  assert.notEqual(a, factorySessionIdFor("factory:loop-1:item-2:1"));
+  assert.notEqual(a, factorySessionIdFor("factory:loop-1:item-2"));
+  assert.notEqual(a, factorySessionIdFor("factory:loop-2:item-1"));
+});
+
+test("a second attempt of the same item launches the wrapper with the same session id", async () => {
+  const first = fakeSandbox();
+  await createFactoryLoopEffects(deps({ sandbox: first.sandbox })).work({ loop: LOOP, item: ITEM });
+  const second = fakeSandbox();
+  await createFactoryLoopEffects(deps({ sandbox: second.sandbox })).work({
+    loop: LOOP,
+    item: { ...ITEM, attempts: 1 },
+  });
+  const sessionOf = (calls: Call[]) => wrapperStart(calls).opts?.env?.IO_FACTORY_SESSION_ID;
+  assert.ok(sessionOf(first.calls));
+  assert.equal(sessionOf(second.calls), sessionOf(first.calls));
 });
 
 test("work bootstraps the factory control plane on the preflight handle before the wrapper, once per call", async () => {
@@ -1106,7 +1119,7 @@ test("a blank or unset slack channel posts nothing, requires no credential, and 
         linearApiKey: LINEAR_KEY,
         githubToken: GITHUB_TOKEN,
         anthropicApiKey: ANTHROPIC_KEY,
-        factorySessionId: factorySessionIdFor(runId),
+        factorySessionId: factorySessionIdFor(runId.replace(/:\d+$/, "")),
         repoDir: REPO_DIR,
         factorySourceDir: FACTORY_SOURCE_DIR,
       }),
