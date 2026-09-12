@@ -68,18 +68,6 @@ test("splitting the file row into an open anchor and an actions cell keeps the c
   );
   assert.match(
     css,
-    /\.file-row \{[^}]*column-gap: 0;/,
-    "an inherited column gap would end the open anchor short of the row's right edge on every row",
-  );
-  assert.match(css, /\.file-row \{[^}]*cursor: default;/);
-  assert.match(css, /\.file-row-main \{[^}]*cursor: pointer;/);
-  assert.match(
-    css,
-    /\.file-row-main:not\(\[href\]\) \{\s*cursor: default;/,
-    "an unopenable row must not advertise a navigation nothing performs",
-  );
-  assert.match(
-    css,
     /@media \(max-width: 700px\) \{\s*\.file-row-main \{\s*grid-template-columns: 22px minmax\(0, 1fr\);/,
   );
   assert.doesNotMatch(

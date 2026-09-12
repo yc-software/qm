@@ -349,7 +349,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const withDeletable = (rows: FileArtifact[]) =>
       Promise.all(
         rows.map(async (f) => {
-          const key = `${f.ownerScopeId}\0${samePerson(f.createdBy, principalId)}`;
+          const key = `${f.ownerScopeId}\0${f.createdBy}`;
           let decision = manages.get(key);
           if (!decision) {
             decision = principalManagesArtifactHome(f.ownerScopeId, f.createdBy, principalId);

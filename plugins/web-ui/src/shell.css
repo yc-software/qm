@@ -5883,7 +5883,6 @@ a.chat-row-open {
   column-gap: 0;
   justify-content: initial;
   padding: 0;
-  cursor: default;
 }
 .file-row-main {
   display: grid;
@@ -5894,10 +5893,6 @@ a.chat-row-open {
   padding: 12px;
   color: inherit;
   text-decoration: none;
-  cursor: pointer;
-}
-.file-row-main:not([href]) {
-  cursor: default;
 }
 .file-row-actions {
   display: inline-flex;
