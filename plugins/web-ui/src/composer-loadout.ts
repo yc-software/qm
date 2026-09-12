@@ -77,6 +77,12 @@ export function effortLevelsForHarness(harnessId: string): Array<{ value: Effort
   }).map((option) => ({ ...option, label: option.value === "xhigh" ? "Extra high" : option.label }));
 }
 
+const PEAK_EFFORTS: ReadonlySet<string> = new Set(["xhigh", "max", "ultracode"]);
+
+export function isPeakEffort(level: EffortLevel | string | undefined): boolean {
+  return typeof level === "string" && PEAK_EFFORTS.has(level);
+}
+
 export function harnessTarget<T extends { value: string; model: { id: string } }>(
   options: readonly T[],
   currentModelId: string,
