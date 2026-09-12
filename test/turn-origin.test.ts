@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  isPersonAuthored,
   normalizeTurnOrigin,
   resolveTurnOrigin,
   turnOriginRequestFields,
@@ -101,4 +102,42 @@ test("matching automation origins preserve or combine every screening payload", 
   assert.equal(merged.kind, "automation");
   assert.match(merged.kind === "automation" ? (merged.screenData ?? "") : "", /typed/);
   assert.match(merged.kind === "automation" ? (merged.screenData ?? "") : "", /legacy/);
+});
+
+test("a peer origin round-trips through the request contract without a legacy encoding", () => {
+  const peer: TurnOrigin = { kind: "peer", senderSessionId: "s-1", senderAgentName: "scout", messageId: "m-1" };
+  assert.deepEqual(turnOriginRequestFields(peer), { origin: peer });
+  assert.deepEqual(resolveTurnOrigin(turnOriginRequestFields(peer)), peer);
+  assert.equal(isPersonAuthored("peer"), false);
+});
+
+test("every origin kind round-trips, and the four legacy kinds keep their exact bytes", () => {
+  const origins: TurnOrigin[] = [
+    { kind: "direct" },
+    { kind: "human", messageTs: "1", entryTs: "2" },
+    { kind: "ambient", entryTs: "3", live: true },
+    { kind: "automation", screenData: "x", useOwnerKeychain: true },
+    { kind: "peer", senderSessionId: "s-1", senderAgentName: "scout", messageId: "m-1", entryTs: "4" },
+  ];
+  for (const origin of origins) assert.deepEqual(resolveTurnOrigin(turnOriginRequestFields(origin)), origin);
+  assert.equal(JSON.stringify(turnOriginRequestFields({ kind: "direct" })), "{}");
+  assert.equal(
+    JSON.stringify(turnOriginRequestFields({ kind: "human", messageTs: "1", entryTs: "2" })),
+    '{"liveActor":true,"triggerTs":"1","entryTs":"2"}',
+  );
+  assert.equal(
+    JSON.stringify(turnOriginRequestFields({ kind: "ambient", entryTs: "3", live: true })),
+    '{"unprompted":true,"entryTs":"3","liveActor":true}',
+  );
+  assert.equal(
+    JSON.stringify(turnOriginRequestFields({ kind: "automation", screenData: "x", useOwnerKeychain: true })),
+    '{"triggered":true,"securityScreenData":"x","ownerKeychainUnion":true}',
+  );
+});
+
+test("a typed peer origin outranks every legacy person flag and loses only to automation", () => {
+  const peer: TurnOrigin = { kind: "peer", senderSessionId: "s-1", senderAgentName: "scout", messageId: "m-1" };
+  assert.deepEqual(resolveTurnOrigin({ origin: peer, liveActor: true }), peer);
+  assert.deepEqual(resolveTurnOrigin({ origin: peer, unprompted: true }), peer);
+  assert.deepEqual(resolveTurnOrigin({ origin: peer, triggered: true }), { kind: "automation" });
 });
