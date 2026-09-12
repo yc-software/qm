@@ -88,8 +88,13 @@ const PI_GLYPH = "M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282
 
 const PI_DOT = "M517.36 400H634.72V634.72H517.36Z";
 
-const MARK_KEYS: Record<string, "claude" | "codex" | "pi"> = {
+const OPENCODE_FRAME = "M180 60H60V240H180V60ZM240 300H0V0H240V300Z";
+
+const OPENCODE_SCREEN = "M180 240H60V120H180V240Z";
+
+const MARK_KEYS: Record<string, "claude" | "codex" | "pi" | "opencode"> = {
   anthropic: "claude",
+  opencode: "opencode",
   pi: "pi",
   claude: "claude",
   openai: "codex",
@@ -99,6 +104,19 @@ const MARK_KEYS: Record<string, "claude" | "codex" | "pi"> = {
 export function modelMark(key: string, size = 16): TemplateResult | null {
   const mark = MARK_KEYS[key.toLocaleLowerCase()];
   if (!mark) return null;
+  if (mark === "opencode")
+    return html`<svg
+      class="model-mark"
+      width=${size}
+      height=${size}
+      viewBox="-30 0 300 300"
+      role="img"
+      aria-label="OpenCode"
+      focusable="false"
+    >
+      <path fill="currentColor" opacity="0.45" d=${OPENCODE_SCREEN} />
+      <path fill="currentColor" d=${OPENCODE_FRAME} />
+    </svg>`;
   if (mark === "pi")
     return html`<svg
       class="model-mark"
