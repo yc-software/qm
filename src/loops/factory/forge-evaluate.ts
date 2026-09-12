@@ -1,4 +1,5 @@
 import type { SuccessCheckResult, SuccessVerdict } from "../success-evaluation.ts";
+import { sleep as defaultSleep } from "../../util/async.ts";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_GRAPHQL = "https://api.github.com/graphql";
@@ -8,6 +9,19 @@ const PAGE = `per_page=${PAGE_SIZE}`;
 const GITHUB_MERGEABLE_STATES = new Set(["clean", "unstable", "has_hooks"]);
 const GITHUB_GREEN_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 const BUGBOT_LOGIN_PREFIX = "cursor";
+// CI registers and finishes minutes after Ship; judging a pending check would send the item back to work for nothing.
+const CI_SETTLE_MS = 30 * 60_000;
+const CI_POLL_MS = 30_000;
+const GITLAB_PENDING_STATUSES = new Set([
+  "created",
+  "waiting_for_resource",
+  "waiting_for_callback",
+  "preparing",
+  "pending",
+  "running",
+  "scheduled",
+  "canceling",
+]);
 const BUGBOT_NOTE_MARKER = "BUGBOT_REVIEW";
 
 export interface ForgeEvaluateInput {
@@ -18,6 +32,9 @@ export interface ForgeEvaluateInput {
   number: number;
   branch: string;
   bugbotRequired: boolean;
+  ciSettleMs?: number;
+  ciPollMs?: number;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export const FORGE_CHECKS = ["exact_head", "ci_green_on_head", "ledger_clean", "mergeable", "bugbot_reviewed"] as const;
@@ -28,6 +45,8 @@ interface CheckOutcome {
   passed: boolean;
   detail?: string;
 }
+
+type CiReading = CheckOutcome | { pending: string };
 
 const isObj = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
@@ -85,7 +104,9 @@ const unresolvedDetail = (count: number): CheckOutcome =>
 
 export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<SuccessVerdict> {
   const github = input.forge === "github";
-  const request = obj(await forgeGet(input, github ? `/pulls/${input.number}` : `/merge_requests/${input.number}`));
+  const requestPath = github ? `/pulls/${input.number}` : `/merge_requests/${input.number}`;
+  // Re-read after every CI poll: mergeability is computed from the same checks, so the pre-wait snapshot is stale.
+  let request = obj(await forgeGet(input, requestPath));
   const headSha = (github ? str(obj(request.head).sha) : str(request.sha)) ?? "";
 
   let discussions: unknown[] | undefined;
@@ -103,23 +124,38 @@ export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<S
   };
 
   const ciGreenOnHead = async (): Promise<CheckOutcome> => {
-    if (github) {
-      const payload = obj(await forgeGet(input, `/commits/${headSha}/check-runs?${PAGE}`));
-      const runs = arr(payload.check_runs);
-      if (runs.length === 0) return { passed: false, detail: "no check runs" };
-      // A full page may hide runs on the next one, so the check fails closed rather than trusting the visible runs.
-      if (runs.length >= PAGE_SIZE) return { passed: false, detail: "check runs exceed one page" };
-      const offending = runs
-        .map(obj)
-        .find((run) => run.status !== "completed" || !GITHUB_GREEN_CONCLUSIONS.has(str(run.conclusion) ?? ""));
-      if (offending === undefined) return { passed: true };
-      return { passed: false, detail: str(offending.name) ?? "unnamed check run" };
+    const deadline = Date.now() + (input.ciSettleMs ?? CI_SETTLE_MS);
+    const pollMs = input.ciPollMs ?? CI_POLL_MS;
+    const sleep = input.sleep ?? defaultSleep;
+    for (;;) {
+      const reading = github ? await githubChecks() : gitlabPipeline();
+      if (!("pending" in reading)) return reading;
+      if (Date.now() >= deadline) return { passed: false, detail: reading.pending };
+      await sleep(pollMs);
+      request = obj(await forgeGet(input, requestPath));
     }
-    // GitLab merged-result pipelines run on a temporary merge commit, so the MR's head_pipeline is the
-    // only pointer that survives that sha mismatch.
+  };
+
+  const githubChecks = async (): Promise<CiReading> => {
+    const payload = obj(await forgeGet(input, `/commits/${headSha}/check-runs?${PAGE}`));
+    const runs = arr(payload.check_runs).map(obj);
+    if (runs.length === 0) return { pending: "no check runs" };
+    // A full page may hide runs on the next one, so the check fails closed rather than trusting the visible runs.
+    if (runs.length >= PAGE_SIZE) return { passed: false, detail: "check runs exceed one page" };
+    const running = runs.find((run) => run.status !== "completed");
+    if (running !== undefined) return { pending: `unsettled: ${str(running.name) ?? "unnamed check run"}` };
+    const offending = runs.find((run) => !GITHUB_GREEN_CONCLUSIONS.has(str(run.conclusion) ?? ""));
+    if (offending === undefined) return { passed: true };
+    return { passed: false, detail: str(offending.name) ?? "unnamed check run" };
+  };
+
+  // GitLab merged-result pipelines run on a temporary merge commit, so the MR's head_pipeline is the
+  // only pointer that survives that sha mismatch.
+  const gitlabPipeline = (): CiReading => {
     const pipeline = obj(request.head_pipeline);
-    if (Object.keys(pipeline).length === 0) return { passed: false, detail: "no pipeline" };
+    if (Object.keys(pipeline).length === 0) return { pending: "no pipeline" };
     const status = str(pipeline.status) ?? "unknown";
+    if (GITLAB_PENDING_STATUSES.has(status)) return { pending: `unsettled: ${status}` };
     return status === "success" ? { passed: true } : { passed: false, detail: status };
   };
 
