@@ -10,7 +10,6 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
-  ArrowUpRight,
   Settings,
   Plus,
   Sparkles,
@@ -1186,7 +1185,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                       else openLoadoutSection("add", true);
                     }}
                   >
-                    ${icon(Plus, 16)}<span>Add models</span><span class="loadout-end">${icon(ArrowUpRight, 14)}</span>
+                    ${icon(Plus, 16)}<span>Add models</span><span class="loadout-end">${icon(ChevronRight, 14)}</span>
                   </button>
                 </div>
                 ${loadoutEditing && entries.length >= LOADOUT_CAP ? html`<div class="loadout-empty">Remove a model to add another.</div>` : nothing}
