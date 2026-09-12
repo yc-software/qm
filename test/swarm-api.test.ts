@@ -164,3 +164,45 @@ test("authenticated swarm API binds agent operations to the token and human oper
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
+  const fixture = await swarmFixture();
+  assert.equal(fixture.caller.kind, "agent");
+  if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
+  const first = (await fixture.runs.get(fixture.caller.claims.runId!))!;
+  const claims = {
+    ...fixture.caller.claims,
+    sessionId: fixture.root.id,
+    runAttempt: first.attempts,
+    runLeaseToken: first.leaseToken!,
+  };
+  const secret = "swarm-attempt-regression-secret";
+  const server = createServer(
+    { swarms: fixture.service, authorizesCapabilityScope: async () => true } as unknown as App,
+    { signingSecret: "swarm-attempt-source-secret-distinct-long", capabilitySecret: secret },
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
+  const token = await mintCapabilityToken(claims, secret);
+  const post = async (credential: string, requestId: string) =>
+    fetch(base, {
+      method: "POST",
+      headers: { "x-agent-capability": credential, "content-type": "application/json" },
+      body: JSON.stringify({ action: "spawn", requestId, text: "Work" }),
+    });
+  try {
+    assert.equal((await post(token, "initial")).status, 202);
+    await fixture.runs.releaseLease(first.id, first.leaseToken!);
+    const next = (await fixture.runs.claimById(first.id, "replacement", 60_000))!;
+    assert.ok(next);
+    assert.equal((await post(token, "stale")).status, 400);
+    const current = await mintCapabilityToken(
+      { ...claims, runAttempt: next.attempts, runLeaseToken: next.leaseToken! },
+      secret,
+    );
+    assert.equal((await post(current, "current")).status, 202);
+    assert.equal((await fixture.store.get(fixture.root.id))!.members.length, 3);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});

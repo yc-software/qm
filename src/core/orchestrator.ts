@@ -1442,6 +1442,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(automatedTurn ? { triggered: true } : {}),
           ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
           ...(input.runId ? { runId: input.runId } : {}),
+          sessionId: session.id,
+          runAttempt: input.attempt,
+          runLeaseToken: input.runLeaseToken,
           threadRef: conversation.threadRef,
         };
         connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(

@@ -25,7 +25,7 @@ export async function swarmFixture(
   const sessions = options.sessions ?? createMemorySessionStore();
   const runs = options.runs ?? createMemoryRunStore().runs;
   const lock = options.lock ?? createMemoryAdvisoryLock();
-  const store = options.store ?? createSwarmStore(createMemoryMap());
+  const store = options.store ?? createSwarmStore(createMemoryMap(), { runs, sessions });
   const records = createMemoryMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
@@ -97,13 +97,16 @@ export async function swarmFixture(
     deliveryTarget: "private-dm",
   };
   const { run } = await runs.enqueue({ sessionId: root.threadRef, request: template });
-  await runs.claimById(run.id, "swarm-fixture", 60_000);
+  const claim = (await runs.claimById(run.id, "swarm-fixture", 60_000))!;
   const caller: SwarmCaller = {
     kind: "agent",
     claims: {
       actorId: actor.id,
       scopeId: root.scopeId,
       runId: run.id,
+      sessionId: root.id,
+      runAttempt: claim.attempts,
+      runLeaseToken: claim.leaseToken!,
       threadRef: root.threadRef,
       liveActor: true,
       exp: Date.now() + 60_000,
@@ -117,14 +120,17 @@ export async function swarmFixture(
     const notification = swarm.messages
       .flatMap((message) => Object.entries(message.notifications))
       .find(([recipient]) => recipient === id)![1];
-    const run = await runs.get(notification.runId!);
-    if (run?.status === "pending") await runs.claimById(run.id, "swarm-fixture-worker", 60_000);
+    let run = await runs.get(notification.runId!);
+    if (run?.status === "pending") run = await runs.claimById(run.id, "swarm-fixture-worker", 60_000);
     return {
       kind: "agent",
       claims: {
         actorId: actor.id,
         scopeId: root.scopeId,
         runId: notification.runId!,
+        sessionId: member.sessionId!,
+        runAttempt: run!.attempts,
+        runLeaseToken: run!.leaseToken!,
         threadRef: member.threadRef,
         exp: Date.now() + 60_000,
       },

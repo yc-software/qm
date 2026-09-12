@@ -29,7 +29,7 @@ export async function selectAudience(
     const output = await new Promise<string>((resolve, reject) => {
       const child = spawn(
         "prlimit",
-        ["--as=134217728", "--cpu=1", "--nofile=16", "--", "jq", "-c", "-L", "/dev/null", "--", filter],
+        ["--as=134217728", "--cpu=1", "--nofile=16", "--", "jq", "-c", "-L", "/dev/null", `(${filter}\n)`],
         { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "pipe", "pipe"] },
       );
       let result = "";

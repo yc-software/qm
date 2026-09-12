@@ -132,3 +132,29 @@ test("a deployment claim round-trips and must be a non-empty string", async () =
     assert.equal(await verifyCapabilityToken(token, SECRET), null, `deployment=${JSON.stringify(deployment)}`);
   }
 });
+
+test("session and run-attempt claims round-trip and reject malformed values", async () => {
+  const bound = claims({ sessionId: "session", runAttempt: 2, runLeaseToken: "lease" });
+  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(bound, SECRET), SECRET), {
+    orgId: "default-org",
+    ...bound,
+  });
+  for (const invalid of [
+    { sessionId: "" },
+    { sessionId: 1 },
+    { runAttempt: 0 },
+    { runAttempt: -1 },
+    { runAttempt: 1.5 },
+    { runAttempt: "1" },
+    { runLeaseToken: "" },
+    { runLeaseToken: 1 },
+  ]) {
+    assert.equal(
+      await verifyCapabilityToken(
+        await mintCapabilityToken(claims(invalid as Partial<CapabilityClaims>), SECRET),
+        SECRET,
+      ),
+      null,
+    );
+  }
+});

@@ -949,3 +949,35 @@ test("swarm work cancellation has a hard worker deadline independent of the harn
   await work;
   assert.equal(cancelled, true);
 });
+
+for (const action of ["spawn", "send", "context"] as const) {
+  test(`a replaced run cannot commit ${action} after admission`, async () => {
+    const fixture = await swarmFixture();
+    await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
+    const before = await fixture.store.get(fixture.root.id);
+    if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
+    const run = (await fixture.runs.get(fixture.caller.claims.runId!))!;
+    const update = fixture.store.update.bind(fixture.store);
+    fixture.store.update = async (id, mutate, fence) => {
+      await fixture.runs.releaseLease(run.id, run.leaseToken!);
+      await fixture.runs.claimById(run.id, "replacement", 60_000);
+      return update(id, mutate, fence);
+    };
+    const operations = {
+      spawn: () => fixture.service.spawn(fixture.caller, { requestId: "later", text: "Work" }),
+      send: () => fixture.service.send(fixture.caller, { requestId: "later", audience: ".[]", text: "Work" }),
+      context: () => fixture.service.context(fixture.caller, { role: "changed" }),
+    };
+    await assert.rejects(operations[action], /active capability run required/);
+    assert.deepEqual(await fixture.store.get(fixture.root.id), before);
+  });
+}
+
+test("an old session credential cannot attach to a replacement session on the same thread", async () => {
+  const fixture = await swarmFixture();
+  await fixture.sessions.deleteSession(fixture.root.id);
+  const replacement = await fixture.sessions.getOrCreateByThread(fixture.root.threadRef, "dm", fixture.root.scopeId);
+  await fixture.sessions.addParticipant(replacement.id, "alice");
+  await assert.rejects(fixture.service.spawn(fixture.caller, { requestId: "replacement", text: "Work" }), /mismatch/);
+  assert.equal(await fixture.store.get(replacement.id), null);
+});
