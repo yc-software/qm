@@ -233,11 +233,12 @@ async function addReadyLabel(deps: ShipDeps, issue: LinearIssue): Promise<ShipSt
   const data = await linearGraphql(
     deps,
     "label",
-    `query { issueLabels(filter: { name: { eq: ${gql(LABEL_READY)} } }) { nodes { id name parent { id } } } }`,
+    `query { issueLabels(filter: { name: { eq: ${gql(LABEL_READY)} } }) { nodes { id parent { id } } } }`,
   );
   let ready: LinearLabel | undefined;
   for (const node of nodes(data.issueLabels)) {
-    ready = linearLabel(node);
+    // The lookup is filtered by name, so only the id and the group come back.
+    ready = linearLabel({ ...obj(node), name: LABEL_READY });
     if (ready !== undefined) break;
   }
   if (ready === undefined) throw new Error(`linear_label_missing: ${LABEL_READY}`);

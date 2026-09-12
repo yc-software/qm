@@ -225,7 +225,7 @@ test("an ungrouped ready-for-review label removes nothing", async () => {
   const fetched = fakeFetch({
     [`GET ${GH_PULL}`]: { body: { draft: false, state: "open", merged: false } },
     "linear:issue": issueRead({ state: IN_REVIEW, labels: ["bug"], groupLabels: ["converging"] }),
-    "linear:issueLabels": ok({ issueLabels: { nodes: [{ id: "lbl_rfr", name: "ready-for-review", parent: null }] } }),
+    "linear:issueLabels": ok({ issueLabels: { nodes: [{ id: "lbl_rfr", parent: null }] } }),
     "linear:issueAddLabel": LABEL_OK,
   });
 
