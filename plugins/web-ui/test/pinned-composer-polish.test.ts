@@ -19,7 +19,7 @@ test("editable background activity is rendered inside the composer surface", () 
     chat,
     /composerForm\(agent, html`\$\{glanceTier \? nothing : liveWorkStatus\(agent\)\} \$\{backgroundActivityStrip\(\)\}`\)/,
   );
-  assert.match(composer, /<form class="composer-wrap[^]*?\$\{header\}/);
+  assert.match(composer, /<form[^]*?class="composer-wrap[^]*?\$\{header\}/);
   assert.match(
     css,
     /\.composer-wrap > \.bg-activity \{[^}]*background: color-mix\(in srgb, var\(--secondary\) 40%, var\(--background\)\);/,

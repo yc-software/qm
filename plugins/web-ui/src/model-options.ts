@@ -155,7 +155,7 @@ export const EFFORT_LEVELS: Array<{ value: EffortLevel; label: string }> = [
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
-  { value: "xhigh", label: "XHigh" },
+  { value: "xhigh", label: "Extra high" },
   { value: "max", label: "Max" },
   { value: "ultracode", label: "Ultracode" },
 ];
@@ -169,7 +169,7 @@ export function harnessSupportsEffort(harnessId: string): boolean {
 }
 
 export function harnessSupportsFastMode(harnessId: string): boolean {
-  return harnessId === "pi" || harnessId === "claude";
+  return harnessId === "pi" || harnessId === "claude" || harnessId === "codex";
 }
 
 export function harnessSupportsSteer(harnessId: string): boolean {
