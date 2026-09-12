@@ -78,7 +78,7 @@ test("harness controls retain their supported surfaces", () => {
   assert.equal(harnessSupportsEffort("pi"), true);
   assert.equal(harnessSupportsEffort("opencode"), false);
   assert.equal(harnessSupportsFastMode("claude"), true);
-  assert.equal(harnessSupportsFastMode("codex"), false);
+  assert.equal(harnessSupportsFastMode("codex"), true);
 });
 
 test("deleted selection retains identity and transcript rendering does not borrow a replacement", () => {
