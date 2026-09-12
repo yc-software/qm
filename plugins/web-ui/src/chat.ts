@@ -54,6 +54,7 @@ import {
   entriesToMessages,
   fetchEntry,
   fetchTranscript,
+  fetchSessionApprovals,
   currentEarlierCount,
   forkOriginDetails,
   forkCutSeq,
@@ -65,6 +66,7 @@ import {
   makeOpenerStreamFn,
   makeRunResumeStreamFn,
   resolveApproval,
+  runApprovalTurn,
   type RunPoll,
   TAIL_TURNS,
   type ApprovalDecision,
@@ -292,12 +294,14 @@ export function createChatSurface(
     addPendingSession(chatState.threadRef, chatState.scopeId, chatState.contextName);
   }
 
+  let readonlyApprove: ((decision: ApprovalDecision) => Promise<void>) | null = null;
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
 
   function teardownActiveChat(): void {
     transcriptViewport.dispose();
     transcriptRefreshGeneration++;
     readOnlyView = null;
+    readonlyApprove = null;
     preserveOutgoingWorkingDot(null);
     detachActiveAgent();
     chatState.agent = null;
@@ -386,6 +390,7 @@ export function createChatSurface(
     const container = ctx.claimContainer();
     if (!container) return;
     readOnlyView = null;
+    readonlyApprove = null;
     preserveOutgoingWorkingDot(threadRef);
     dropAbandonedNewChat(threadRef);
     detachActiveAgent();
@@ -674,6 +679,7 @@ export function createChatSurface(
   function resolveCommandApproval(decision: ApprovalDecision): void {
     const agent = chatState.agent;
     if (agent) void approveCommand(agent, decision);
+    else if (readonlyApprove) void readonlyApprove(decision);
   }
 
   function activePendingApprovals(): PendingApproval[] {
@@ -943,6 +949,7 @@ export function createChatSurface(
     resetBackgroundPanel();
     const host = document.createElement("div");
     host.className = "custom-chat readonly-chat";
+    let approvals: PendingApproval[] = [];
     const draw = () => {
       const shownMessages = chatState.inheritedExpanded ? [...chatState.inheritedMessages, ...messages] : messages;
       updateSpeakerLabels(shownMessages);
@@ -968,7 +975,7 @@ export function createChatSurface(
                   : "This conversation is read-only here."
               }
             </div>
-            ${backgroundActivityStrip()}
+            ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
             <section class="chat-scroll readonly-scroll">
               ${pinnedStrip()}
               <div class="message-stack">
@@ -1040,7 +1047,36 @@ export function createChatSurface(
         if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
       });
     };
+    const current = (): boolean => readonlyRedraw === draw;
+    const refreshApprovals = async (): Promise<void> => {
+      if (!s.threadRef.startsWith("swarm:")) return;
+      const result = await fetchSessionApprovals(s.id);
+      if (!current()) return;
+      approvals = result?.approvals ?? [];
+      draw();
+    };
+    readonlyApprove = async (decision) => {
+      if (!current() || chatState.resolvingApprovals.size || !approvals.some((a) => a.requestId === decision.requestId))
+        return;
+      chatState.resolvingApprovals.add(decision.requestId);
+      ctx.composer.state.error = "";
+      draw();
+      let completed = false;
+      try {
+        await runApprovalTurn(new Agent({ initialState: { model: transcriptModel() } }), decision, undefined);
+        completed = true;
+      } catch (error) {
+        if (current()) ctx.composer.state.error = errMessage(error, "Could not send the approval.");
+      } finally {
+        if (current()) {
+          chatState.resolvingApprovals.delete(decision.requestId);
+          await refreshApprovals();
+          if (completed && current()) onDelivery(s.threadRef);
+        }
+      }
+    };
     readonlyRedraw = draw;
+    void refreshApprovals();
     draw();
     container.replaceChildren(host);
     if (!sameSession) scrollToBottom();
