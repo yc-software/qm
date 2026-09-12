@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   FACTORY_DRAIN_EMPTY_READS,
+  FACTORY_READ_RETRIES,
   FACTORY_READ_WAIT_MS,
   FACTORY_STDOUT_CAP_BYTES,
   FACTORY_TERM_GRACE_MS,
@@ -197,6 +198,9 @@ const SUCCESS_READS: ReadStep[] = [
 ];
 
 const SUCCESS_STDOUT = "line one\nBRANCH:qm-12-s99\nMR:41\n";
+
+const persistentReadFailure = (error: Error): ReadStep[] =>
+  Array.from({ length: FACTORY_READ_RETRIES + 1 }, () => ({ error }));
 
 async function rejection(promise: Promise<unknown>): Promise<Error> {
   try {
@@ -436,31 +440,48 @@ test("a sandbox failure propagates after teardown, with no partial result", asyn
   assert.deepEqual(started.calls.signalProcess, []);
 
   const readBoom = new Error("boom-read");
-  const read = fakeSandbox({ reads: [{ chunks: "line one\n", cursor: 9 }, { error: readBoom }] });
-  assert.equal(await rejection(runFactoryProcess(baseInput(read))), readBoom);
+  const read = fakeSandbox({ reads: [{ chunks: "line one\n", cursor: 9 }, ...persistentReadFailure(readBoom)] });
+  assert.equal(await rejection(runFactoryProcess(baseInput(read, { readRetryMs: 0 }))), readBoom);
   assert.deepEqual(read.calls.teardown, [{ handle: HANDLE, opts: { keepWarm: true } }]);
 });
 
-test("a read that throws terminates the wrapper once, before the unchanged teardown", async () => {
+test("a read that keeps throwing terminates the wrapper once after the retry budget, before the unchanged teardown", async () => {
   const readBoom = new Error("boom-read");
-  const fake = fakeSandbox({ reads: [{ chunks: "line one\n", cursor: 9 }, { error: readBoom }] });
-  assert.equal(await rejection(runFactoryProcess(baseInput(fake))), readBoom);
+  const fake = fakeSandbox({ reads: [{ chunks: "line one\n", cursor: 9 }, ...persistentReadFailure(readBoom)] });
+  assert.equal(await rejection(runFactoryProcess(baseInput(fake, { readRetryMs: 0 }))), readBoom);
   assert.deepEqual(fake.calls.signalProcess, [{ handle: HANDLE, processId: "p-7", signal: "TERM" }]);
   assert.deepEqual(fake.calls.teardown, [{ handle: HANDLE, opts: { keepWarm: true } }]);
   assert.deepEqual(fake.calls.order, [
     "provision",
     "startProcess",
-    "readProcess",
-    "readProcess",
+    ...Array.from({ length: FACTORY_READ_RETRIES + 2 }, () => "readProcess"),
     "signalProcess",
     "teardown",
   ]);
 });
 
+test("a transient read failure is retried and the run completes with no signal", async () => {
+  const timeout = new Error("The operation was aborted due to timeout");
+  const fake = fakeSandbox({ reads: [SUCCESS_READS[0]!, { error: timeout }, ...SUCCESS_READS.slice(1)] });
+  const result = await runFactoryProcess(baseInput(fake, { readRetryMs: 0 }));
+  assert.equal(result.stdout, SUCCESS_STDOUT);
+  assert.equal(result.exitCode, 3);
+  assert.equal(fake.calls.readProcess.length, SUCCESS_READS.length + 1);
+  assert.deepEqual(fake.calls.signalProcess, []);
+});
+
+test("a vanished process session is not retried", async () => {
+  const gone = new Error("no such process session: p-7");
+  const fake = fakeSandbox({ reads: [{ chunks: "line one\n", cursor: 9 }, { error: gone }] });
+  assert.equal(await rejection(runFactoryProcess(baseInput(fake, { readRetryMs: 0 }))), gone);
+  assert.equal(fake.calls.readProcess.length, 2);
+  assert.deepEqual(fake.calls.signalProcess, [{ handle: HANDLE, processId: "p-7", signal: "TERM" }]);
+});
+
 test("a cleanup signal that itself rejects never masks the error that triggered it", async () => {
   const readBoom = new Error("boom-read");
-  const fake = fakeSandbox({ reads: [{ error: readBoom }], signalError: new Error("boom-signal") });
-  assert.equal(await rejection(runFactoryProcess(baseInput(fake))), readBoom);
+  const fake = fakeSandbox({ reads: persistentReadFailure(readBoom), signalError: new Error("boom-signal") });
+  assert.equal(await rejection(runFactoryProcess(baseInput(fake, { readRetryMs: 0 }))), readBoom);
   assert.deepEqual(fake.calls.signalProcess, [{ handle: HANDLE, processId: "p-7", signal: "TERM" }]);
   assert.deepEqual(fake.calls.teardown, [{ handle: HANDLE, opts: { keepWarm: true } }]);
 });
@@ -488,8 +509,8 @@ test("a failing teardown is swallowed on both the success and the failure path",
   assert.equal(ok.calls.teardown.length, 1);
 
   const boom = new Error("boom-read");
-  const bad = fakeSandbox({ reads: [{ error: boom }], teardownError });
-  assert.equal(await rejection(runFactoryProcess(baseInput(bad))), boom);
+  const bad = fakeSandbox({ reads: persistentReadFailure(boom), teardownError });
+  assert.equal(await rejection(runFactoryProcess(baseInput(bad, { readRetryMs: 0 }))), boom);
   assert.equal(bad.calls.teardown.length, 1);
 });
 
