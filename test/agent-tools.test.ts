@@ -3207,3 +3207,31 @@ test("surface messages use Markdown and only Slack tools teach Slack mentions", 
     else assert.doesNotMatch(text, /Slack|<@U…>|<!subteam/);
   }
 });
+
+test("read passes turn cancellation through and cannot record a late success", async () => {
+  const controller = new AbortController();
+  const started = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<{ content: string; sourceScopeId: string }>();
+  const emitted: Emitted[] = [];
+  const context = fakeToolContext();
+  let received: AbortSignal | undefined;
+  context.read = async (_path, signal) => {
+    received = signal;
+    started.resolve();
+    return pending.promise;
+  };
+  const read = createAgentTools({
+    current: context,
+    abortSignal: controller.signal,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+  }).find((t) => t.name === "read");
+  const result = call(read, { path: "notes.md" });
+  await started.promise;
+  controller.abort();
+  pending.resolve({ content: "late data", sourceScopeId: "personal:U1" });
+  await assert.rejects(result, { name: "AbortError" });
+  assert.equal(received, controller.signal);
+  assert.equal(emitted.filter((e) => e.type === "tool_result").length, 0);
+});
