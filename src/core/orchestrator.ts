@@ -150,7 +150,7 @@ import {
 } from "../harness/replay.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
-import { jsonbSafeStringify } from "../util/text.ts";
+import { headSlice, jsonbSafeStringify } from "../util/text.ts";
 import { NonRetryableTurnError, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
@@ -316,15 +316,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     scopeId: ScopeId,
     transcript: string,
     principalId?: string,
+    fallbackText?: string,
   ): Promise<string | undefined> {
-    if (!deps.harness.models.generateTitle || !transcript.trim()) return undefined;
+    if (!transcript.trim()) return undefined;
+    let title: string | undefined;
     try {
-      const title = await deps.harness.models.generateTitle(transcript);
-      if (title) {
-        if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
-        else await deps.sessions.updateTitle(sessionId, title);
-      }
-      return title;
+      title = await deps.harness.models.generateTitle?.(transcript);
     } catch (e) {
       deps.errors?.record({
         category: "session_title",
@@ -333,8 +330,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeLabel: scopeId,
         sessionId,
       });
-      return undefined;
     }
+    if (!title && fallbackText) {
+      const text = stripTurnBoilerplate(fallbackText).replace(/\s+/g, " ").trim();
+      title = text.length > 60 ? `${headSlice(text, 59).trimEnd()}…` : text;
+    }
+    if (title) {
+      if (principalId) await deps.sessions.updateParticipantView(sessionId, principalId, { title });
+      else await deps.sessions.updateTitle(sessionId, title);
+    }
+    return title;
   }
 
   function recordSessionBusy(busy: {
@@ -490,11 +495,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       if (entries.length === 0) return null;
       const transcript = renderTitleTranscript(entries);
+      const fallbackPayload = entries.find((entry) => entry.type === "user" && !isOverheardEntry(entry))?.payload;
       const title = await generateAndStoreTitle(
         session.id,
         session.scopeId,
         transcript,
         participantIds?.length ? principalId : undefined,
+        isObj(fallbackPayload) && typeof fallbackPayload.text === "string" ? fallbackPayload.text : undefined,
       );
       return { title: title ?? (participantIds ? null : (session.title ?? null)) };
     },
@@ -2643,7 +2650,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : undefined;
         const earlyTitleGen: Promise<string | undefined> | undefined =
           humanTurn && !session.title && !syntheticPrompt && input.text.trim()
-            ? generateAndStoreTitle(session.id, scopeId, `User:\n${stripTurnBoilerplate(input.text)}`)
+            ? generateAndStoreTitle(
+                session.id,
+                scopeId,
+                `User:\n${stripTurnBoilerplate(input.text)}`,
+                undefined,
+                input.text,
+              )
             : undefined;
         const requestedTurnWallClockMs =
           typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 ? input.turnWallClockMs : undefined;
@@ -3456,7 +3469,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             }
             if (!pausing && turnCompleted && !session.title && !(earlyTitleGen && (await earlyTitleGen))) {
-              await generateAndStoreTitle(session.id, scopeId, `User:\n${input.text}\n\nAssistant:\n${result.reply}`);
+              await generateAndStoreTitle(
+                session.id,
+                scopeId,
+                `User:\n${input.text}\n\nAssistant:\n${result.reply}`,
+                undefined,
+                input.text,
+              );
             }
           } finally {
             await reclaimBox();

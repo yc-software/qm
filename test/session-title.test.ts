@@ -29,6 +29,65 @@ test("names a conversation from its first completed turn (auto-title)", async ()
   assert.equal(got?.session.title, "Chat: How do I roll back");
 });
 
+test("four concurrent completed turns keep a durable title when title generation is unavailable", async () => {
+  const { app } = freshApp();
+  const turns = await Promise.all(
+    Array.from({ length: 4 }, (_, i) =>
+      app.turn(dm(`Simulate four-way title outage ${i + 1}`, `web:U1:title-load-${i + 1}`)),
+    ),
+  );
+
+  for (const [i, turn] of turns.entries()) {
+    assert.equal(turn.status, "ok");
+    assert.equal((await app.getSession(turn.sessionId!))?.session.title, `Simulate four-way title outage ${i + 1}`);
+  }
+});
+
+test("a title provider exception is recorded before the completed turn gets its fallback title", async () => {
+  const { app, errors } = freshApp();
+  const turn = await app.turn(dm("Simulate title provider exception", "web:U1:title-error"));
+
+  assert.equal(turn.status, "ok");
+  assert.equal((await app.getSession(turn.sessionId!))?.session.title, "Simulate title provider exception");
+  const failures = (await errors.list({ sessionId: turn.sessionId! })).filter(
+    (error) => error.category === "session_title" && error.code === "generation_failed",
+  );
+  assert.equal(failures.length, 1);
+  assert.match(failures[0]!.message, /title model overloaded/);
+});
+
+test("the durable fallback strips turn boilerplate and stays within the generated title limit", async () => {
+  const { app } = freshApp();
+  const turn = await app.turn(
+    dm(
+      "[browser context that must not become the title]\n\nSimulate four-way title outage with deliberately long distinguishing words for truncation",
+      "web:U1:title-fallback-shape",
+    ),
+  );
+  const title = (await app.getSession(turn.sessionId!))?.session.title;
+
+  assert.equal(turn.status, "ok");
+  assert.equal(title?.length, 60);
+  assert.match(title!, /^Simulate four-way title outage/);
+  assert.match(title!, /…$/);
+  assert.doesNotMatch(title!, /browser context/);
+});
+
+test("the shared fallback covers approval pauses and manual regeneration", async () => {
+  const { app } = freshApp();
+  const turn = await app.turn(dm("!paused-approval Simulate four-way title outage deploy", "web:U1:title-paused"));
+
+  assert.ok(turn.pendingApprovals?.length);
+  assert.equal(
+    (await app.getSession(turn.sessionId!))?.session.title,
+    "!paused-approval Simulate four-way title outage deploy",
+  );
+  assert.equal(
+    (await app.regenerateTitle(turn.sessionId!, "U1"))?.title,
+    "!paused-approval Simulate four-way title outage deploy",
+  );
+});
+
 test("the title is generated ONCE — a later turn does not rewrite it", async () => {
   const { app } = freshApp();
   const r1 = await app.turn(dm("First topic about pricing tiers", "web:U1:t2"));
