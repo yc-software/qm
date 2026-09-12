@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   effortLevelsForHarness,
+  harnessTarget,
   parseLoadout,
   reconcileLoadout,
   reorderLoadout,
@@ -139,4 +140,33 @@ test("harness effort choices exclude unsupported settings and label extra high c
     assert.equal(effortLevelsForHarness(harnessId).find(({ value }) => value === "xhigh")?.label, "Extra high");
   for (const harnessId of ["opencode", "mock", "unknown"])
     assert.deepEqual(effortLevelsForHarness(harnessId), [{ value: "auto", label: "Auto" }]);
+});
+
+test("switching harness keeps the same model when the new harness offers it", () => {
+  const options = [
+    { value: "codex:gpt-5.6-sol", model: { id: "gpt-5.6-sol" } },
+    { value: "codex:gpt-6-astra", model: { id: "gpt-6-astra" } },
+  ];
+  assert.equal(harnessTarget(options, "gpt-6-astra", [])?.value, "codex:gpt-6-astra");
+});
+
+test("switching harness falls back to a model already in the loadout", () => {
+  const options = [
+    { value: "pi:claude-sonnet-5", model: { id: "claude-sonnet-5" } },
+    { value: "pi:claude-opus-5", model: { id: "claude-opus-5" } },
+  ];
+  const loadout = [{ value: "pi:claude-opus-5" }];
+  assert.equal(harnessTarget(options, "gpt-6-astra", loadout)?.value, "pi:claude-opus-5");
+});
+
+test("switching harness otherwise takes the first model the harness serves", () => {
+  const options = [
+    { value: "pi:claude-fable-5-1", model: { id: "claude-fable-5-1" } },
+    { value: "pi:claude-opus-5", model: { id: "claude-opus-5" } },
+  ];
+  assert.equal(harnessTarget(options, "gpt-6-astra", [])?.value, "pi:claude-fable-5-1");
+});
+
+test("a harness that serves nothing yields no target", () => {
+  assert.equal(harnessTarget([], "claude-opus-5", [{ value: "pi:claude-opus-5" }]), undefined);
 });
