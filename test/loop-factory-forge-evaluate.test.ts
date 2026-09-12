@@ -209,7 +209,7 @@ const GITHUB_FAILURES: {
   },
   {
     name: "ci_green_on_head",
-    detail: "slow-suite",
+    detail: "unsettled: slow-suite",
     routes: {
       [GH.checkRuns]: {
         body: {
@@ -267,7 +267,7 @@ test("each failing GitHub check stops the sequence at that check and names it", 
     const label = `${scenario.name} — ${scenario.detail}`;
     const fetched = fakeFetch(githubRoutes(scenario.routes));
 
-    const verdict = await evaluateFactoryForge(githubInput(fetched.fetchImpl));
+    const verdict = await evaluateFactoryForge(githubInput(fetched.fetchImpl, { ciSettleMs: 0 }));
 
     assert.equal(verdict.outcome, "continue", label);
     assert.equal(verdict.reason, `check failed: ${scenario.name} — ${scenario.detail}`, label);
@@ -286,6 +286,64 @@ test("each failing GitHub check stops the sequence at that check and names it", 
     assert.equal(verdict.checks[position - 1]?.detail, scenario.detail, label);
     assert.deepEqual(keysOf(fetched.calls), scenario.reads, label);
   }
+});
+
+test("ci_green_on_head waits for running checks and judges the settled result", async () => {
+  const running = { name: "slow-suite", status: "in_progress", conclusion: null };
+  const finished = { name: "slow-suite", status: "completed", conclusion: "success" };
+  let reads = 0;
+  const base = fakeFetch(githubRoutes());
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("/check-runs")) {
+      reads += 1;
+      const body = { check_runs: reads < 3 ? [running] : [finished] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return base.fetchImpl(url, init);
+  }) as typeof fetch;
+  const slept: number[] = [];
+  const sleep = async (ms: number): Promise<void> => {
+    slept.push(ms);
+  };
+
+  const verdict = await evaluateFactoryForge(githubInput(fetchImpl, { ciPollMs: 7, ciSettleMs: 60_000, sleep }));
+
+  assert.equal(verdict.outcome, "met");
+  assert.equal(reads, 3);
+  assert.deepEqual(slept, [7, 7]);
+});
+
+test("a GitLab pipeline still running is re-read until it settles", async () => {
+  let reads = 0;
+  const pending = {
+    sha: HEAD,
+    detailed_merge_status: "mergeable",
+    head_pipeline: { id: 9, sha: HEAD, status: "running" },
+  };
+  const done = {
+    sha: HEAD,
+    detailed_merge_status: "mergeable",
+    head_pipeline: { id: 9, sha: HEAD, status: "success" },
+  };
+  const base = fakeFetch(gitlabRoutes());
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).endsWith("/merge_requests/42")) {
+      reads += 1;
+      const body = reads < 2 ? pending : done;
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return base.fetchImpl(url, init);
+  }) as typeof fetch;
+  const slept: number[] = [];
+  const sleep = async (ms: number): Promise<void> => {
+    slept.push(ms);
+  };
+
+  const verdict = await evaluateFactoryForge(gitlabInput(fetchImpl, { ciPollMs: 3, ciSettleMs: 60_000, sleep }));
+
+  assert.equal(verdict.outcome, "met");
+  assert.equal(reads, 2);
+  assert.deepEqual(slept, [3]);
 });
 
 test("a converged GitLab merge request meets the condition on its own endpoints", async () => {
@@ -326,7 +384,7 @@ test("the merge request's head_pipeline decides ci_green_on_head, whatever sha i
     gitlabRoutes({ [GL.mr]: { body: { sha: HEAD, detailed_merge_status: "mergeable", head_pipeline: null } } }),
   );
   assert.equal(
-    (await evaluateFactoryForge(gitlabInput(absent.fetchImpl))).reason,
+    (await evaluateFactoryForge(gitlabInput(absent.fetchImpl, { ciSettleMs: 0 }))).reason,
     "check failed: ci_green_on_head — no pipeline",
   );
 });
