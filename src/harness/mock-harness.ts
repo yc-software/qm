@@ -959,6 +959,9 @@ export function createMockHarness(): Harness {
       },
 
       generateTitle(transcript: string): Promise<string | undefined> {
+        if (transcript.includes("Simulate title provider exception"))
+          return Promise.reject(new Error("title model overloaded"));
+        if (transcript.includes("Simulate four-way title outage")) return Promise.resolve(undefined);
         const line = transcript
           .split("\n")
           .map((l) => l.trim())

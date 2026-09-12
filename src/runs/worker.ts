@@ -9,6 +9,7 @@ import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { retryDelay } from "./retry-delay.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -88,6 +89,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       });
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !(err instanceof NonRetryableTurnError),
+      retryAfterMs: retryDelay(run.errorAttempts),
     });
     throw err;
   } finally {

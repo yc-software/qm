@@ -6,12 +6,12 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const shared = readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8");
 
-const pinned = String.raw`\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble`;
+const pinned = String.raw`\.message-stack\s+\.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\):not\(\.pin-fits\)\s+\.user-bubble\s+>\s+\.pin-content`;
 
 test("only the collapsed pinned prompt is capped and overflow clips instead of nesting scrollbars", () => {
   const bubble =
     css.match(
-      /\.message-stack \.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\) \.user-bubble \{[^}]*\}/,
+      /\.message-stack\s+\.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\):not\(\.pin-fits\)\s+\.user-bubble\s+>\s+\.pin-content \{[^}]*\}/,
     )?.[0] ?? "";
   assert.match(bubble, /max-height: var\(--pin-clamp, 320px\);/);
   assert.match(bubble, /overflow: hidden;/);
@@ -24,7 +24,7 @@ test("the scroller is the size container the cap measures, except the content-si
   assert.match(css, /\n\.chat-scroll \{[^}]*container-type: size;/);
   const mini = css.match(/\n\.mini-convo-body \.chat-scroll \{[^}]*\}/)?.[0] ?? "";
   assert.match(mini, /container-type: normal;/);
-  assert.match(css, new RegExp(String.raw`\n\.mini-convo-body ${pinned} \{[^}]*max-height: 100px;`));
+  assert.match(css, new RegExp(String.raw`\n\.mini-convo-body\s+${pinned} \{[^}]*max-height: 100px;`));
   assert.match(css, /\n\.readonly-chat \.custom-chat-shell \{[^}]*flex-direction: column;/);
   assert.match(css, /\n\.readonly-chat \.chat-scroll \{[^}]*flex: 1;/);
   assert.doesNotMatch(chat, /--chat-viewport/);

@@ -36,3 +36,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 {{- end -}}
+
+{{- define "qm.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "qm.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}

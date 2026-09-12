@@ -39,6 +39,7 @@ const capFor = (
   opts: {
     memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
     liveActor?: boolean;
+    liveAuthor?: boolean;
     grants?: string[];
   } = {},
 ) =>
@@ -49,6 +50,7 @@ const capFor = (
       exp: Date.now() + CAPABILITY_TTL_MS,
       ...(opts.memory ? { memory: opts.memory } : {}),
       ...(opts.liveActor ? { liveActor: true } : {}),
+      ...(opts.liveAuthor ? { liveAuthor: true } : {}),
       ...(opts.grants ? { grants: opts.grants } : {}),
     },
     SECRET,
@@ -215,4 +217,27 @@ test("the catalog IS the gate: discovery rows with real paths are admitted, unli
   assert.equal(agentApiMatches("POST", "/v1/turns"), false, "turn ingress stays source-auth only");
   assert.equal(agentApiMatches("GET", "/v1/sessions/abc"), false);
   assert.equal(agentApiMatches("DELETE", "/v1/webhooks"), false);
+});
+
+test("discovery includes admin routes for a verified human thread reply", async () => {
+  const s = await start();
+  try {
+    const { body } = await listApis(
+      s.base,
+      await capFor("admin-alice", {
+        liveAuthor: true,
+        grants: ["admin.sessions.read"],
+      }),
+    );
+    const p = paths(body);
+    assert.ok(p.includes("/v1/admin/scopes/:scopeId/:resource"));
+    assert.equal(p.filter((path) => path === "/v1/admin/whoami").length, 1);
+    assert.equal(p.filter((path) => path === "/v1/admin/scopes").length, 1);
+    assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
+    assert.ok(!body.guidance.some((g: string) => g.includes("This cron")));
+    const member = await listApis(s.base, await capFor("U1", { liveAuthor: true }));
+    assert.ok(!paths(member.body).includes("/v1/admin/scopes"));
+  } finally {
+    await s.close();
+  }
 });

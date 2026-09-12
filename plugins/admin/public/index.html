@@ -5590,6 +5590,33 @@
                     ><span class="status" id="st-external-slack-participants"></span>
                   </div>
                 </section>
+                <section class="card sv-governance setting-row hidden" id="card-internal-member-overrides">
+                  <div class="head">
+                    <h2 id="internal-member-overrides-title">Internal member overrides</h2>
+                    <p id="internal-member-overrides-help">
+                      Treat listed Slack users as internal members, including guests and people missing from the
+                      directory. This grants internal-member access, not just permission to mention the agent. Rooms
+                      containing only internal members may use organization credentials. Add only trusted colleagues.
+                      Enter one Slack user ID or Slack-profile email per line (commas also accepted).
+                    </p>
+                  </div>
+                  <div class="body">
+                    <textarea
+                      id="internal-member-overrides"
+                      rows="4"
+                      aria-labelledby="internal-member-overrides-title"
+                      aria-describedby="internal-member-overrides-help internal-member-overrides-count"
+                      spellcheck="false"
+                      placeholder="contractor@example.com&#10;U0123ABCDE"
+                      style="width: 100%; max-width: 560px; font-family: var(--mono, monospace)"
+                    ></textarea>
+                    <small class="muted" id="internal-member-overrides-count"></small>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="internal-member-overrides">Apply</button
+                    ><span class="status" id="st-internal-member-overrides"></span>
+                  </div>
+                </section>
                 <section class="card sv-customize setting-row hidden" id="card-org-ambient">
                   <div class="head">
                     <h2>Ambient behavior</h2>
@@ -6404,6 +6431,7 @@
           $("card-sharing-posture"),
           governanceAmbient,
           $("card-external-slack"),
+          $("card-internal-member-overrides"),
           $("card-command-policy"),
           $("card-egress"),
         ].forEach((card) => content.appendChild(card));
@@ -8069,6 +8097,15 @@
           document
             .querySelectorAll('[data-checkbox-for="external-slack-participants"]')
             .forEach((input) => (input.checked = input.value === (r.data.externalSlackParticipants ? "on" : "off")));
+        }
+        const showInternalOverrides = scope.startsWith("org:") && "internalMemberOverrides" in r.data;
+        $("card-internal-member-overrides").classList.toggle("hidden", !showInternalOverrides);
+        if (showInternalOverrides) {
+          const members = Array.isArray(r.data.internalMemberOverrides) ? r.data.internalMemberOverrides : [];
+          $("internal-member-overrides").value = members.join("\n");
+          $("internal-member-overrides-count").textContent = members.length
+            ? members.length + " override" + (members.length === 1 ? "" : "s")
+            : "No overrides configured.";
         }
         const showOrgAmbient = scope.startsWith("org:") && "orgAmbient" in r.data;
         $("card-org-ambient").classList.toggle("hidden", !showOrgAmbient);
@@ -10712,6 +10749,16 @@
         "ambient-policy": () => collectAmbientPolicy(),
         egress: () => collectEgress(),
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
+        "internal-member-overrides": () => ({
+          members: [
+            ...new Set(
+              $("internal-member-overrides")
+                .value.split(/[\n,]/)
+                .map((m) => m.trim().toLowerCase())
+                .filter(Boolean),
+            ),
+          ],
+        }),
         "org-ambient": () => ({ on: $("org-ambient").checked }),
         "channel-header-pin-default": () => ({ on: $("channel-header-pin-default").checked }),
         runtime: () => ({
@@ -10766,6 +10813,7 @@
         "ambient-policy": "st-ambient-policy",
         egress: "st-egress",
         "external-slack-participants": "st-external-slack-participants",
+        "internal-member-overrides": "st-internal-member-overrides",
         "org-ambient": "st-org-ambient",
         "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
@@ -10777,6 +10825,7 @@
         branding: "st-branding",
       };
       const SAVE_RELOADS = new Set([
+        "internal-member-overrides",
         "auto-flagger",
         "soul",
         "external-slack-participants",
@@ -10901,6 +10950,32 @@
               : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
             confirmLabel: body.on ? "Allow external audiences" : "Require internal audiences",
             danger: !!body.on,
+          });
+        }
+        if (key === "internal-member-overrides") {
+          const norm = (list) => [
+            ...new Set((Array.isArray(list) ? list : []).map((m) => String(m).trim().toLowerCase()).filter(Boolean)),
+          ];
+          const before = norm(JSON.parse(sectionSnapshots.get(key) || "{}").members);
+          const after = norm(body.members);
+          const added = after.filter((m) => !before.includes(m));
+          const removed = before.filter((m) => !after.includes(m));
+          if (!added.length && !removed.length) return Promise.resolve(true);
+          const show = (list) => (list.length ? list.join(", ") : "none");
+          return reviewGovernanceChange({
+            title: "Change internal member overrides?",
+            subtitle: "These users count as internal members throughout the organization, not just for mentions.",
+            facts: [
+              ["Scope", governanceScopeName()],
+              ["Adding", show(added)],
+              ["Removing", show(removed)],
+              ["Total after", String(after.length)],
+            ],
+            warning: added.length
+              ? "These users receive internal-member access. Rooms containing only internal members may use organization credentials, and replies are visible to everyone there. Only add trusted colleagues."
+              : "Removed users without another source of internal membership return to external treatment after the directory refreshes.",
+            confirmLabel: "Apply overrides",
+            danger: added.length > 0,
           });
         }
         return Promise.resolve(true);

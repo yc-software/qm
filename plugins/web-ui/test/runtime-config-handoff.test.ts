@@ -14,28 +14,10 @@ test("boot hands its runtime config to the composer instead of dropping it", () 
   assert.ok(fetchAt > 0 && seedAt > fetchAt, "boot must seed the config it just fetched");
 });
 
-test("the first mount in the seeded scope renders from it — no blanking, no second fetch", () => {
-  const fn = composer.slice(
-    composer.indexOf("async function refreshRuntimeSelection"),
-    composer.indexOf("function applySelectedRuntime"),
-  );
-  assert.ok(fn, "refreshRuntimeSelection not found");
-  const seedRead = fn.indexOf("seededRuntime?.scopeId === scopeKey");
-  const blank = fn.indexOf("activeRuntimeConfig = null");
-  const fetchCall = fn.indexOf("await fetchRuntimeConfig(scopeId)");
-  assert.ok(seedRead > 0, "the seeded config must be consulted");
-  assert.ok(seedRead < blank, "consult the seed BEFORE blanking the composer");
-  assert.ok(seedRead < fetchCall, "consult the seed BEFORE refetching");
-  assert.match(fn, /if \(seeded\) \{\s*seededRuntime = null;\s*applySelectedRuntime\(seeded, agent\);\s*return;\s*\}/);
-  assert.match(fn, /seededRuntime\?\.scopeId === scopeKey \? seededRuntime\.config : null/);
-  assert.match(fn, /const scopeKey = runtimeScopeKey\(scopeId\);/);
-  assert.match(fn, /seededRuntime = null;/, "later refreshes must read current server metadata");
-  const change = composer.slice(composer.indexOf("async function changeScopeRuntime"));
-  assert.match(
-    change.slice(0, change.indexOf("\n  }")),
-    /seededRuntime = null;/,
-    "scope updates also retire any remaining boot seed",
-  );
+test("composers read the shared boot snapshot without consuming or copying it", () => {
+  assert.match(composer, /const activeRuntimeConfig = getRuntimeConfig\(scopeKey\(\)\);/);
+  assert.match(composer, /await loadRuntimeConfig\(key, refresh\)/);
+  assert.doesNotMatch(composer, /seededRuntime|applyRuntimeOptions|let activeRuntimeConfig/);
 });
 
 test("a still-loading composer is not painted as a failure", () => {
@@ -69,6 +51,4 @@ test("a personal mount passing null still matches the seeded personal scope", ()
   assert.ok(resolver, "runtimeScopeKey not found");
   assert.match(resolver, /if \(scopeId\) return scopeId;/, "a named scope is used as-is");
   assert.match(resolver, /return user \? `personal:\$\{user\}` : null;/, "null resolves to the personal scope");
-  assert.match(composer, /seededRuntime = \{ scopeId: runtimeScopeKey\(scopeId\), config \};/);
-  assert.match(composer, /scopeKey !== null && seededRuntime\?\.scopeId === scopeKey/);
 });

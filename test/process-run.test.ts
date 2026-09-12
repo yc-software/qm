@@ -170,7 +170,7 @@ test("processRun heartbeats the lease while the turn runs, and the beat stops wi
 });
 
 test("a retryable turn failure requeues the run, rethrows, and stops the heartbeat", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
   const store = createMemoryRunStore();
   const { runs, beats } = spyHeartbeats(store.runs);
 
@@ -195,6 +195,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   assert.equal(requeued?.status, "pending", "an ordinary failure goes back on the queue");
   assert.equal(requeued?.attempts, 1);
 
+  assert.equal(await runs.claim("w2", 9_000), null);
   t.mock.timers.tick(30_000);
   await microtasks();
   assert.equal(beats.length, 1, "no heartbeat leaks past the failure");
@@ -221,7 +222,8 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   );
 });
 
-test("finalAttempt marks the attempt whose error would park the run, from the claim-time budget", async () => {
+test("finalAttempt marks the attempt whose error would park the run, from the claim-time budget", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { runs } = createMemoryRunStore();
   const seen: OrchestratorInput[] = [];
   const orchestrator = fakeOrchestrator(async (input) => {
@@ -236,6 +238,8 @@ test("finalAttempt marks the attempt whose error would park the run, from the cl
   assert.equal(seen[0]?.finalAttempt, false, "budget remains — the orchestrator must not record a terminal failure");
   assert.equal((await runs.get(first!.id))?.status, "pending");
 
+  assert.equal(await runs.claim("w1", 5_000), null);
+  t.mock.timers.tick(60_000);
   const second = await runs.claim("w1", 5_000);
   await assert.rejects(processRun(deps, second!), /hiccup/);
   assert.equal(seen[1]?.finalAttempt, true, "the last budgeted attempt is marked — an error now is terminal");
