@@ -8,7 +8,7 @@ import type { FeatureFlagStore } from "../feature-flags.ts";
 import { swallow } from "../util/errors.ts";
 import type { MessageBoardStore } from "./message-board.ts";
 import type { PeerDirectory } from "./peer-directory.ts";
-import { descendantSessionIds, type SwarmStore } from "./swarm-store.ts";
+import { descendantSessionIds, liveChildren, type SwarmStore } from "./swarm-store.ts";
 import { evaluateAudience } from "./jq-audience.ts";
 import {
   DEFAULT_MAX_CHILDREN_PER_PARENT,
@@ -26,7 +26,8 @@ import {
   type Swarm,
 } from "./types.ts";
 
-export type CoordinationCaller = { kind: "capability"; sessionId: string | null; actorId: string } | { kind: "source" };
+export type CoordinationCaller =
+  { kind: "capability"; sessionId: string | null; runId: string | null; actorId: string } | { kind: "source" };
 
 type Fail = { ok: false; status: number; body: Record<string, unknown> };
 type Ok<T> = { ok: true; value: T };
@@ -179,6 +180,9 @@ export function createCoordinationService(deps: CoordinationDeps): CoordinationS
   const ownsSession = (caller: CoordinationCaller, sessionId: string): boolean =>
     caller.kind === "source" || callerSession(caller) === sessionId;
 
+  const callerRun = (caller: CoordinationCaller, senderSessionId: string): string | null =>
+    caller.kind === "capability" && caller.sessionId === senderSessionId ? caller.runId : null;
+
   const resolveSender = async (caller: CoordinationCaller, body: PublishBody): Promise<Outcome<PeerIdentity>> => {
     const claimed = typeof body.senderSessionId === "string" ? body.senderSessionId : undefined;
     if (caller.kind === "capability") {
@@ -222,6 +226,7 @@ export function createCoordinationService(deps: CoordinationDeps): CoordinationS
 
   const publishMessage = async (
     sender: PeerIdentity,
+    senderRunId: string | null,
     text: string,
     recipientIds: string[],
     audienceExpr: string | null,
@@ -231,7 +236,7 @@ export function createCoordinationService(deps: CoordinationDeps): CoordinationS
       id: newId(),
       orgId: configOrgId(),
       senderSessionId: sender.sessionId,
-      senderRunId: null,
+      senderRunId,
       text,
       audienceExpr,
       resolvedRecipientIds: recipientIds,
@@ -349,6 +354,7 @@ export function createCoordinationService(deps: CoordinationDeps): CoordinationS
       if (!frozen.ok) return frozen;
       const message = await publishMessage(
         sender.value,
+        callerRun(caller, sender.value.sessionId),
         text,
         frozen.value.recipientIds,
         frozen.value.audienceExpr,
@@ -450,22 +456,41 @@ export function createCoordinationService(deps: CoordinationDeps): CoordinationS
         n: briefs.length,
         createdAt: now(),
       });
-      if (!reserved.ok) return fail(409, reserved.reason, "the swarm cannot admit that many more sessions");
+      if (!reserved.ok) {
+        const why =
+          reserved.reason === "provisioning_in_progress"
+            ? "that requestId is still being provisioned; retry once it settles"
+            : "the swarm cannot admit that many more sessions";
+        return fail(409, reserved.reason, why);
+      }
       if (reserved.reservation.n !== briefs.length || reserved.reservation.parentSessionId !== parentSessionId) {
         return fail(409, "reservation_conflict", "that requestId already reserved a different pool");
       }
 
       const parentMember = (await deps.swarms.getMember(swarmId, parentSessionId))!;
-      const created = [...reserved.reservation.sessionIds];
+      const slots = [...reserved.reservation.slots];
+      const unrecorded: string[] = [];
+      const senderRunId = callerRun(caller, parentSessionId);
       try {
-        while (created.length < briefs.length) {
-          const brief = briefs[created.length]!;
+        for (const [slot, brief] of briefs.entries()) {
+          if (slots[slot]) continue;
           const spawned = await deps.app.spawnSession(parent.executionActorId, {
             scopeId: parent.scopeId,
             title: brief.agentName,
           });
           if (!spawned) throw new Error("spawnSession refused the parent's scope");
           const childId = spawned.session.id;
+          unrecorded.push(childId);
+          await deps.swarms.appendChild({
+            swarmId,
+            requestId,
+            childSessionId: childId,
+            parentSessionId,
+            slot,
+            depth: parentMember.depth + 1,
+            createdAt: now(),
+          });
+          slots[slot] = childId;
           const identity = await deps.directory.register({
             sessionId: childId,
             scopeId: parent.scopeId,
@@ -477,28 +502,25 @@ export function createCoordinationService(deps: CoordinationDeps): CoordinationS
             depth: parentMember.depth + 1,
           });
           if (!identity) throw new Error("a peer identity already exists for a freshly spawned session");
-          await deps.swarms.appendChild({
-            swarmId,
-            requestId,
-            childSessionId: childId,
-            parentSessionId,
-            depth: parentMember.depth + 1,
-            createdAt: now(),
-          });
-          created.push(childId);
-          await publishMessage(parent, brief.brief, [childId], null, null);
+          await publishMessage(parent, senderRunId, brief.brief, [childId], null, null);
         }
       } catch (error) {
         swallow("coordination: pool provisioning", error);
         const open = await deps.swarms.getReservation(swarmId, requestId);
-        const discarded = await discardReserved(open?.sessionIds ?? created, parent.executionActorId);
+        const reachable = new Set([...(open ? liveChildren(open) : []), ...unrecorded]);
+        const discarded = await discardReserved([...reachable], parent.executionActorId);
         await deps.swarms.settleFailure(swarmId, requestId, discarded);
         return fail(503, "provisioning_failed", "the pool could not be provisioned; retry with the same requestId");
       }
       const after = await deps.swarms.getSwarm(swarmId);
       return {
         ok: true,
-        value: { swarmId, requestId, sessionIds: created, sessionsUsed: after?.sessionsUsed ?? swarm.sessionsUsed },
+        value: {
+          swarmId,
+          requestId,
+          sessionIds: liveChildren({ ...reserved.reservation, slots }),
+          sessionsUsed: after?.sessionsUsed ?? swarm.sessionsUsed,
+        },
       };
     },
 

@@ -46,6 +46,15 @@ describe("peer coordination HTTP surface", () => {
   const setFlag = (scope: ScopeId, on: boolean) =>
     built.featureFlags.setEnabled("peer_coordination", scope, on, "test");
 
+  const advertisedCoordinationPaths = async (tok: string): Promise<string[]> => {
+    const listing = (await (await call("GET", "/v1/apis", tok)).json()) as { endpoints: Array<{ path: string }> };
+    return listing.endpoints
+      .map((endpoint) => endpoint.path)
+      .filter(
+        (path) => path.startsWith("/v1/peers") || path.startsWith("/v1/peer-messages") || path.startsWith("/v1/swarms"),
+      );
+  };
+
   before(async () => {
     const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "peer-routes-")), signingSecret: SECRET });
     built = buildApp(config);
@@ -82,6 +91,7 @@ describe("peer coordination HTTP surface", () => {
       assert.equal(res.status, 404, `${method} ${path} must 404 with the flag off`);
     }
     assert.equal(await built.coordination.listPeers().then((peers) => peers.length), 0);
+    assert.deepEqual(await advertisedCoordinationPaths(tok), []);
   });
 
   it("serves the org-wide reads when the only enabled scope is the session's own", async () => {
@@ -97,6 +107,7 @@ describe("peer coordination HTTP surface", () => {
     for (const path of ["/v1/peers", "/v1/peer-messages", `/v1/peer-messages/${messageId}/deliveries`]) {
       assert.equal((await call("GET", path, tok)).status, 200, `${path} must serve on an org-wide read`);
     }
+    assert.ok((await advertisedCoordinationPaths(tok)).includes("/v1/peers"));
 
     await setFlag(ALICE, false);
     for (const path of ["/v1/peers", "/v1/peer-messages", `/v1/peer-messages/${messageId}/deliveries`]) {

@@ -26,7 +26,8 @@ export type ReserveRefusal =
   | "parent_stopped"
   | "pool_exhausted"
   | "breadth_exceeded"
-  | "depth_exceeded";
+  | "depth_exceeded"
+  | "provisioning_in_progress";
 
 export type ReserveResult =
   { ok: true; reservation: SwarmReservation; replay: boolean } | { ok: false; reason: ReserveRefusal };
@@ -36,6 +37,7 @@ interface AppendChildInput {
   requestId: string;
   childSessionId: string;
   parentSessionId: string;
+  slot: number;
   depth: number;
   createdAt: number;
 }
@@ -51,6 +53,14 @@ export interface SwarmStore {
   settleFailure(swarmId: string, requestId: string, discardedSessionIds: readonly string[]): Promise<void>;
   markStopped(swarmId: string, sessionIds: readonly string[], at: number, wholeSwarm: boolean): Promise<void>;
   close?(): Promise<void>;
+}
+
+export function reservationBusy(reservation: SwarmReservation, at: number): boolean {
+  return reservation.slots.includes(null) && reservation.leaseExpiresAt > at;
+}
+
+export function liveChildren(reservation: SwarmReservation): string[] {
+  return reservation.slots.filter((id): id is string => id !== null);
 }
 
 export function reservationRefusal(

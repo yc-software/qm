@@ -151,9 +151,10 @@ async function harness(enabledScopes: ScopeId[] = [ALICE, BOB]) {
   };
 }
 
-const cap = (sessionId: string | null, actorId: string): CoordinationCaller => ({
+const cap = (sessionId: string | null, actorId: string, runId: string | null = null): CoordinationCaller => ({
   kind: "capability",
   sessionId,
+  runId,
   actorId,
 });
 const SOURCE: CoordinationCaller = { kind: "source" };
@@ -490,6 +491,22 @@ test("a dispatched peer delivery carries the recipient's own authority and the s
   assert.equal(delivery!.consumedAt, null, "delivery is not proof the recipient ran");
 });
 
+test("a shared-scope recipient is dispatched into its own project conversation", async () => {
+  const PROJECT = scopeId("group", "P1");
+  const h = await harness([ALICE, PROJECT]);
+  await registeredPeer(h, "s-a", "alice", ALICE);
+  await registeredPeer(h, "s-proj", "carol", PROJECT, {}, ["carol"]);
+  const published = await h.service.publish(cap("s-a", "alice"), { text: "ping", recipients: ["s-proj"] });
+  assert.ok(published.ok);
+
+  const { dispatcher, calls } = dispatcherFor(h, [{ status: "queued", runId: "run-1" }], { carol: "Carol Human" });
+  await dispatcher.tick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.conversation.kind, "group");
+  assert.equal(calls[0]!.conversation.channelRef, "P1", "the channel ref is what arms the project roster gate");
+  assert.equal(calls[0]!.actor.externalId, "carol");
+});
+
 test("consumption is stamped only once the linked run is terminal or gone", async () => {
   const h = await harness();
   await registeredPeer(h, "s-a", "alice", ALICE);
@@ -791,7 +808,11 @@ test("a mid-provision failure that keeps a child leaves the reservation charged 
   });
   assert.equal(out.ok, false);
   const held = await h.swarms.getReservation(swarm.id, "req-resume");
-  assert.deepEqual(held!.sessionIds, ["child-1"], "the discarded child leaves the reservation, the survivor stays");
+  assert.deepEqual(
+    held!.slots,
+    ["child-1", null, null],
+    "the discarded child frees its slot, the survivor keeps its own",
+  );
   assert.equal(held!.n, 3);
   assert.equal(await h.directory.get("child-2"), null);
   assert.equal(await h.swarms.getMember(swarm.id, "child-2"), null);
@@ -810,10 +831,100 @@ test("a mid-provision failure that keeps a child leaves the reservation charged 
   assert.equal(resumed.value.sessionIds[0], "child-1", "the surviving child is not re-provisioned");
   assert.equal((await h.swarms.getSwarm(swarm.id))!.sessionsUsed, 4, "the pool is never over-subscribed");
   assert.equal(
-    (await h.swarms.getReservation(swarm.id, "req-resume"))!.sessionIds.length,
+    (await h.swarms.getReservation(swarm.id, "req-resume"))!.slots.length,
     3,
     "the live children under the reservation equal what the pool was charged",
   );
+});
+
+test("a resume whose survivor is not the first child still delivers every brief exactly once", async () => {
+  const { h, swarm } = await swarmHarness();
+  h.spawnFailsAfter.count = 2;
+  h.undeletable.add("child-2");
+  const out = await h.service.createPool(cap("s-root", "alice"), swarm.id, {
+    requestId: "req-gap",
+    parentSessionId: "s-root",
+    count: 3,
+    briefs: briefs(3),
+  });
+  assert.equal(out.ok, false);
+  assert.deepEqual(
+    (await h.swarms.getReservation(swarm.id, "req-gap"))!.slots,
+    [null, "child-2", null],
+    "the survivor holds the slot of the brief it was given",
+  );
+
+  h.spawnFailsAfter.count = Number.POSITIVE_INFINITY;
+  const resumed = await h.service.createPool(cap("s-root", "alice"), swarm.id, {
+    requestId: "req-gap",
+    parentSessionId: "s-root",
+    count: 3,
+    briefs: briefs(3),
+  });
+  assert.ok(resumed.ok, JSON.stringify(resumed));
+  assert.deepEqual(resumed.value.sessionIds.slice().sort(), ["child-2", "child-3", "child-4"]);
+  assert.equal((await h.swarms.getSwarm(swarm.id))!.sessionsUsed, 4, "the pool is never over-subscribed");
+
+  const messages = await h.service.listMessages({});
+  const delivered = new Map<string, string[]>();
+  for (const childId of resumed.value.sessionIds) {
+    const texts = messages.messages.filter((m) => m.resolvedRecipientIds.includes(childId)).map((m) => m.text);
+    delivered.set(childId, texts);
+    assert.equal(texts.length, 1, `${childId} receives exactly one brief`);
+    assert.equal((await h.directory.get(childId))!.agentName, `worker-${texts[0]!.slice("do part ".length)}`);
+  }
+  assert.deepEqual([...delivered.values()].flat().sort(), ["do part 0", "do part 1", "do part 2"]);
+});
+
+test("two concurrent submits of one requestId provision a single pool", async () => {
+  const { h, swarm } = await swarmHarness();
+  const body = { requestId: "dup", parentSessionId: "s-root", count: 2, briefs: briefs(2) };
+  const [a, b] = await Promise.all([
+    h.service.createPool(cap("s-root", "alice"), swarm.id, body),
+    h.service.createPool(cap("s-root", "alice"), swarm.id, body),
+  ]);
+  const winners = [a, b].filter((out) => out.ok);
+  const losers = [a, b].filter((out) => !out.ok);
+  assert.equal(winners.length, 1, `exactly one submit provisions: ${JSON.stringify([a, b])}`);
+  assert.equal(losers.length, 1);
+  assert.equal(losers[0]!.ok === false && losers[0]!.body.error, "provisioning_in_progress");
+  assert.equal(h.spawned.length, 2, "the duplicate submit spawns nothing");
+  assert.equal((await h.swarms.getSwarm(swarm.id))!.sessionsUsed, 3, "the pool counter matches the live sessions");
+  assert.equal((await h.swarms.getMember(swarm.id, "s-root"))!.childrenUsed, 2);
+
+  const replay = await h.service.createPool(cap("s-root", "alice"), swarm.id, body);
+  assert.ok(replay.ok, "once provisioning settles the same requestId replays");
+  assert.deepEqual(replay.value.sessionIds, winners[0]!.ok === true ? winners[0]!.value.sessionIds : []);
+  assert.equal(h.spawned.length, 2);
+});
+
+test("the board records which run authored a message", async () => {
+  const h = await harness([ALICE, BOB]);
+  await registeredPeer(h, "s-a", "alice", ALICE);
+  await registeredPeer(h, "s-b", "bob", BOB);
+  const published = await h.service.publish(cap("s-a", "alice", "run-7"), { text: "ping", recipients: ["s-b"] });
+  assert.ok(published.ok);
+  assert.equal(published.value.senderRunId, "run-7");
+  assert.equal((await h.board.get(published.value.orgId, published.value.id))!.senderRunId, "run-7");
+
+  const bySource = await h.service.publish(SOURCE, { senderSessionId: "s-a", text: "ping", recipients: ["s-b"] });
+  assert.ok(bySource.ok);
+  assert.equal(bySource.value.senderRunId, null, "a source caller authors no run");
+});
+
+test("a task brief records the run that spawned the pool", async () => {
+  const { h, swarm } = await swarmHarness();
+  const pool = await h.service.createPool(cap("s-root", "alice", "run-9"), swarm.id, {
+    requestId: "req-run",
+    parentSessionId: "s-root",
+    count: 1,
+    briefs: briefs(1),
+  });
+  assert.ok(pool.ok);
+  const brief = (await h.service.listMessages({})).messages.find((m) =>
+    m.resolvedRecipientIds.includes(pool.value.sessionIds[0]!),
+  );
+  assert.equal(brief!.senderRunId, "run-9");
 });
 
 test("a capability caller cannot spawn from, root, or stop someone else's swarm", async () => {

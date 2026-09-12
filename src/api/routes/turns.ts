@@ -17,6 +17,19 @@ function isTurnRequest(body: unknown): body is TurnRequest {
 }
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
+  if (origin?.kind === "peer") {
+    const { senderSessionId, senderAgentName, messageId, entryTs } = origin;
+    if (![senderSessionId, senderAgentName, messageId].every((v) => typeof v === "string" && v.trim() !== "")) {
+      return undefined;
+    }
+    return {
+      kind: "peer",
+      senderSessionId,
+      senderAgentName,
+      messageId,
+      ...(typeof entryTs === "string" && entryTs ? { entryTs } : {}),
+    };
+  }
   if (origin?.kind !== "automation") return origin;
   const { useOwnerKeychain: _internalOnly, ...safe } = origin;
   return safe;

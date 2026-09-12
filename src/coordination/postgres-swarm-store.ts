@@ -1,10 +1,10 @@
 import { createPgPool, withPgTransaction, type PoolClient, type Rows } from "../persistence/pg-pool.ts";
-import type { Swarm, SwarmMember, SwarmReservation } from "./types.ts";
-import { reservationRefusal, type ReserveResult, type SwarmStore } from "./swarm-store.ts";
+import { PROVISIONING_LEASE_MS, type Swarm, type SwarmMember, type SwarmReservation } from "./types.ts";
+import { reservationBusy, reservationRefusal, type ReserveResult, type SwarmStore } from "./swarm-store.ts";
 
 const MIGRATION = {
   id: "coordination/swarms/0001",
-  expectedChecksum: "1c8baec25c002c23b3b7fb8899e48af785014d472287f1f4e33176a0fc197351",
+  expectedChecksum: "5b0d4c2febad12cdb08eaac2b3d5539ea707e5b5818f95c69b0e5abdc0d21d43",
   statements: [
     `CREATE TABLE IF NOT EXISTS swarms(
       id TEXT PRIMARY KEY,
@@ -33,6 +33,7 @@ const MIGRATION = {
       parent_session_id TEXT NOT NULL,
       n INT NOT NULL,
       session_ids TEXT[] NOT NULL DEFAULT '{}',
+      lease_expires_at BIGINT NOT NULL DEFAULT 0,
       created_at BIGINT NOT NULL,
       PRIMARY KEY (swarm_id, request_id)
     )`,
@@ -71,7 +72,8 @@ function rowToReservation(row: Record<string, unknown>): SwarmReservation {
     requestId: row.request_id as string,
     parentSessionId: row.parent_session_id as string,
     n: Number(row.n),
-    sessionIds: (row.session_ids as string[] | null) ?? [],
+    slots: (row.session_ids as (string | null)[] | null) ?? [],
+    leaseExpiresAt: Number(row.lease_expires_at),
     createdAt: Number(row.created_at),
   };
 }
@@ -129,7 +131,15 @@ export function createPostgresSwarmStore(connectionString: string): SwarmStore {
           input.swarmId,
           input.requestId,
         ]);
-        if (replay.rows[0]) return { ok: true, reservation: rowToReservation(replay.rows[0]), replay: true };
+        if (replay.rows[0]) {
+          const existing = rowToReservation(replay.rows[0]);
+          if (reservationBusy(existing, input.createdAt)) return { ok: false, reason: "provisioning_in_progress" };
+          const leased = await client.query(
+            `UPDATE swarm_reservations SET lease_expires_at = $3 WHERE swarm_id = $1 AND request_id = $2 RETURNING *`,
+            [input.swarmId, input.requestId, input.createdAt + PROVISIONING_LEASE_MS],
+          );
+          return { ok: true, reservation: rowToReservation(leased.rows[0]!), replay: true };
+        }
         const parentRow = await client.query(`SELECT * FROM swarm_members WHERE swarm_id = $1 AND session_id = $2`, [
           input.swarmId,
           input.parentSessionId,
@@ -146,9 +156,17 @@ export function createPostgresSwarmStore(connectionString: string): SwarmStore {
           [input.swarmId, input.parentSessionId, input.n],
         );
         const inserted = await client.query(
-          `INSERT INTO swarm_reservations(swarm_id, request_id, parent_session_id, n, created_at)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-          [input.swarmId, input.requestId, input.parentSessionId, input.n, input.createdAt],
+          `INSERT INTO swarm_reservations(swarm_id, request_id, parent_session_id, n, session_ids,
+                                          lease_expires_at, created_at)
+           VALUES ($1, $2, $3, $4, array_fill(NULL::text, ARRAY[$4::int]), $5, $6) RETURNING *`,
+          [
+            input.swarmId,
+            input.requestId,
+            input.parentSessionId,
+            input.n,
+            input.createdAt + PROVISIONING_LEASE_MS,
+            input.createdAt,
+          ],
         );
         return { ok: true, reservation: rowToReservation(inserted.rows[0]!), replay: false };
       });
@@ -168,9 +186,8 @@ export function createPostgresSwarmStore(connectionString: string): SwarmStore {
           [input.swarmId, input.childSessionId, input.parentSessionId, input.depth, input.createdAt],
         );
         await client.query(
-          `UPDATE swarm_reservations SET session_ids = array_append(session_ids, $3)
-             WHERE swarm_id = $1 AND request_id = $2 AND NOT (session_ids @> ARRAY[$3]::text[])`,
-          [input.swarmId, input.requestId, input.childSessionId],
+          `UPDATE swarm_reservations SET session_ids[$4] = $3 WHERE swarm_id = $1 AND request_id = $2`,
+          [input.swarmId, input.requestId, input.childSessionId, input.slot + 1],
         );
       });
     },
@@ -188,10 +205,11 @@ export function createPostgresSwarmStore(connectionString: string): SwarmStore {
           swarmId,
           discarded,
         ]);
-        const kept = reservation.sessionIds.filter((id) => !discarded.includes(id));
-        if (kept.length) {
+        const kept = reservation.slots.map((id) => (id !== null && discarded.includes(id) ? null : id));
+        if (kept.some((id) => id !== null)) {
           await client.query(
-            `UPDATE swarm_reservations SET session_ids = $3::text[] WHERE swarm_id = $1 AND request_id = $2`,
+            `UPDATE swarm_reservations SET session_ids = $3::text[], lease_expires_at = 0
+               WHERE swarm_id = $1 AND request_id = $2`,
             [swarmId, requestId, kept],
           );
           return;

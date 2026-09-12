@@ -629,10 +629,15 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
     resource: "apis",
     scopeLabel: capability.scopeId,
   });
+  const coordination = (await deps.coordination?.availableForScope(capability.scopeId).catch(() => false)) === true;
   return sendJson(
     res,
     200,
-    renderAgentApis(capability, { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) }),
+    renderAgentApis(
+      capability,
+      { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
+      { coordination },
+    ),
   );
 }
 

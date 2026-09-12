@@ -12,6 +12,7 @@ export const MAX_BOARD_PAGE = 200;
 export const DEFAULT_SESSION_LIMIT = 16;
 export const DEFAULT_MAX_CHILDREN_PER_PARENT = 4;
 export const DEFAULT_MAX_DEPTH = 3;
+export const PROVISIONING_LEASE_MS = 60_000;
 
 export interface PeerIdentity {
   sessionId: string;
@@ -93,6 +94,7 @@ export interface SwarmReservation {
   requestId: string;
   parentSessionId: string;
   n: number;
-  sessionIds: string[];
+  slots: (string | null)[];
+  leaseExpiresAt: number;
   createdAt: number;
 }

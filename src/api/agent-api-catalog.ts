@@ -10,6 +10,7 @@ interface AgentApiRoute {
 interface AgentApiView {
   claims: CapabilityClaims;
   isAdmin: boolean;
+  coordinationEnabled: boolean;
 }
 
 interface AgentApiFamily {
@@ -67,6 +68,7 @@ const FAMILIES: AgentApiFamily[] = [
       (/^\/v1\/peer-messages\/[^/]+\/deliveries$/.test(p) && m === "GET") ||
       (p === "/v1/swarms" && m === "POST") ||
       (/^\/v1\/swarms\/[^/]+\/(pool|stop)$/.test(p) && m === "POST"),
+    when: (v) => v.coordinationEnabled,
     guidance:
       "Peer coordination lets you discover sibling agents, address them through a public message board, and provision a bounded pool of workers. The board is organization-readable: anything you publish is visible to every peer, and only the recipients an audience resolves to are woken. You act only as your own session — you cannot register, edit, spawn from, or stop another agent's session.",
     routes: [
@@ -116,7 +118,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/swarms/:id/pool",
         summary:
-          "provision workers with {requestId,parentSessionId,count,briefs:[{agentName,brief,character?}]}; retry with the same requestId to resume, never to double-charge the pool",
+          "provision workers with {requestId,parentSessionId,count,briefs:[{agentName,brief,character?}]}; retry with the same requestId to resume, never to double-charge the pool; a retry that races a submit still provisioning is refused with 409 provisioning_in_progress",
       },
       {
         method: "POST",
@@ -940,10 +942,15 @@ export interface AgentApiListing {
   guidance: string[];
 }
 
-export function renderAgentApis(claims: CapabilityClaims, admin: { isAdmin: boolean; role?: string }): AgentApiListing {
+export function renderAgentApis(
+  claims: CapabilityClaims,
+  admin: { isAdmin: boolean; role?: string },
+  available: { coordination?: boolean } = {},
+): AgentApiListing {
   const view: AgentApiView = {
     claims,
     isAdmin: admin.isAdmin,
+    coordinationEnabled: available.coordination === true,
   };
   const visible = [...FAMILIES, WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
   return {

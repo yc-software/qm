@@ -1,6 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
+import { PROVISIONING_LEASE_MS } from "../src/coordination/types.ts";
 import { createMemoryMessageBoardStore } from "../src/coordination/memory-message-board-store.ts";
 import { createPostgresMessageBoardStore } from "../src/coordination/postgres-message-board-store.ts";
 import { createMemorySwarmStore } from "../src/coordination/memory-swarm-store.ts";
@@ -163,16 +164,28 @@ test("swarm twins agree on reservation, replay, settlement and stop", { skip }, 
     });
     assert.ok(reserved.ok);
     assert.equal(reserved.replay, false);
-    assert.deepEqual(reserved.reservation.sessionIds, []);
+    assert.deepEqual(reserved.reservation.slots, [null, null]);
+    assert.equal(reserved.reservation.leaseExpiresAt, 1_001 + PROVISIONING_LEASE_MS);
     assert.equal((await swarms.getSwarm(swarmId))!.sessionsUsed, 3);
     assert.equal((await swarms.getMember(swarmId, `root-${tag}`))!.childrenUsed, 2);
+
+    const concurrent = await swarms.reserve({
+      swarmId,
+      requestId: "req-1",
+      parentSessionId: `root-${tag}`,
+      n: 2,
+      createdAt: 1_002,
+    });
+    assert.equal(concurrent.ok, false, `${name}: a duplicate submit cannot provision the same reservation twice`);
+    assert.equal(concurrent.ok === false && concurrent.reason, "provisioning_in_progress");
+    assert.equal((await swarms.getSwarm(swarmId))!.sessionsUsed, 3);
 
     const replayed = await swarms.reserve({
       swarmId,
       requestId: "req-1",
       parentSessionId: `root-${tag}`,
       n: 2,
-      createdAt: 1_002,
+      createdAt: 1_002 + PROVISIONING_LEASE_MS,
     });
     assert.ok(replayed.ok);
     assert.equal(replayed.replay, true, `${name}: a replayed requestId never charges the pool twice`);
@@ -194,6 +207,7 @@ test("swarm twins agree on reservation, replay, settlement and stop", { skip }, 
       requestId: "req-1",
       childSessionId: `kid-a-${tag}`,
       parentSessionId: `root-${tag}`,
+      slot: 0,
       depth: 1,
       createdAt: 1_004,
     });
@@ -202,19 +216,32 @@ test("swarm twins agree on reservation, replay, settlement and stop", { skip }, 
       requestId: "req-1",
       childSessionId: `kid-b-${tag}`,
       parentSessionId: `root-${tag}`,
+      slot: 1,
       depth: 1,
       createdAt: 1_005,
     });
-    assert.deepEqual((await swarms.getReservation(swarmId, "req-1"))!.sessionIds, [`kid-a-${tag}`, `kid-b-${tag}`]);
-
-    await swarms.settleFailure(swarmId, "req-1", [`kid-b-${tag}`]);
-    const kept = await swarms.getReservation(swarmId, "req-1");
-    assert.deepEqual(kept!.sessionIds, [`kid-a-${tag}`], `${name}: a surviving child keeps the reservation open`);
-    assert.equal(kept!.n, 2, `${name}: a live reservation stays charged its full n`);
-    assert.equal((await swarms.getSwarm(swarmId))!.sessionsUsed, 3);
-    assert.equal(await swarms.getMember(swarmId, `kid-b-${tag}`), null);
+    assert.deepEqual((await swarms.getReservation(swarmId, "req-1"))!.slots, [`kid-a-${tag}`, `kid-b-${tag}`]);
 
     await swarms.settleFailure(swarmId, "req-1", [`kid-a-${tag}`]);
+    const kept = await swarms.getReservation(swarmId, "req-1");
+    assert.deepEqual(kept!.slots, [null, `kid-b-${tag}`], `${name}: a survivor keeps the slot of the brief it took`);
+    assert.equal(kept!.n, 2, `${name}: a live reservation stays charged its full n`);
+    assert.equal(kept!.leaseExpiresAt, 0, `${name}: a settled failure hands the reservation back for a resume`);
+    assert.equal((await swarms.getSwarm(swarmId))!.sessionsUsed, 3);
+    assert.equal(await swarms.getMember(swarmId, `kid-a-${tag}`), null);
+
+    const resumed = await swarms.reserve({
+      swarmId,
+      requestId: "req-1",
+      parentSessionId: `root-${tag}`,
+      n: 2,
+      createdAt: 1_006,
+    });
+    assert.ok(resumed.ok);
+    assert.equal(resumed.replay, true, `${name}: a settled failure resumes without recharging the pool`);
+    assert.equal((await swarms.getSwarm(swarmId))!.sessionsUsed, 3);
+
+    await swarms.settleFailure(swarmId, "req-1", [`kid-b-${tag}`]);
     assert.equal(await swarms.getReservation(swarmId, "req-1"), null, `${name}: an emptied reservation is released`);
     assert.equal((await swarms.getSwarm(swarmId))!.sessionsUsed, 1);
     assert.equal((await swarms.getMember(swarmId, `root-${tag}`))!.childrenUsed, 0);

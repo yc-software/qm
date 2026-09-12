@@ -729,6 +729,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(ambientTurn && actor.displayName?.trim()
               ? [{ source: "sender", content: senderNote(actor.displayName) }]
               : []),
+            ...(peerSender ? [{ source: "sender", content: peerSenderNote(peerSender) }] : []),
+            ...(peerTurn && input.text.trim() ? [{ source: "peer", content: input.text }] : []),
             ...(input.conversationHeader?.trim()
               ? [{ source: "conversation-header", content: input.conversationHeader }]
               : []),

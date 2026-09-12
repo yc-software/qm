@@ -11,7 +11,12 @@ async function callerOf(ctx: ApiCtx): Promise<CoordinationCaller> {
   const { capability, deps } = ctx;
   if (!capability) return { kind: "source" };
   const session = capability.threadRef ? await deps.sessions?.getByThread(capability.threadRef) : null;
-  return { kind: "capability", sessionId: session?.id ?? null, actorId: capability.actorId };
+  return {
+    kind: "capability",
+    sessionId: session?.id ?? null,
+    runId: capability.runId ?? null,
+    actorId: capability.actorId,
+  };
 }
 
 async function scoped(ctx: ApiCtx, scope: () => Promise<ScopeId | null>): Promise<CoordinationService | null> {
