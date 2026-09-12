@@ -15,10 +15,12 @@ const CI_POLL_MS = 30_000;
 const GITLAB_PENDING_STATUSES = new Set([
   "created",
   "waiting_for_resource",
+  "waiting_for_callback",
   "preparing",
   "pending",
   "running",
   "scheduled",
+  "canceling",
 ]);
 const BUGBOT_NOTE_MARKER = "BUGBOT_REVIEW";
 
@@ -43,6 +45,8 @@ interface CheckOutcome {
   passed: boolean;
   detail?: string;
 }
+
+type CiReading = CheckOutcome | { pending: string };
 
 const isObj = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
@@ -100,7 +104,9 @@ const unresolvedDetail = (count: number): CheckOutcome =>
 
 export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<SuccessVerdict> {
   const github = input.forge === "github";
-  const request = obj(await forgeGet(input, github ? `/pulls/${input.number}` : `/merge_requests/${input.number}`));
+  const requestPath = github ? `/pulls/${input.number}` : `/merge_requests/${input.number}`;
+  // Re-read after every CI poll: mergeability is computed from the same checks, so the pre-wait snapshot is stale.
+  let request = obj(await forgeGet(input, requestPath));
   const headSha = (github ? str(obj(request.head).sha) : str(request.sha)) ?? "";
 
   let discussions: unknown[] | undefined;
@@ -121,38 +127,36 @@ export async function evaluateFactoryForge(input: ForgeEvaluateInput): Promise<S
     const deadline = Date.now() + (input.ciSettleMs ?? CI_SETTLE_MS);
     const pollMs = input.ciPollMs ?? CI_POLL_MS;
     const sleep = input.sleep ?? defaultSleep;
-    let mergeRequest = request;
     for (;;) {
-      const settled = github ? await githubChecks() : gitlabPipeline(mergeRequest);
-      if (settled.outcome !== undefined) return settled.outcome;
-      if (Date.now() >= deadline) return { passed: false, detail: settled.pending };
+      const reading = github ? await githubChecks() : gitlabPipeline();
+      if (!("pending" in reading)) return reading;
+      if (Date.now() >= deadline) return { passed: false, detail: reading.pending };
       await sleep(pollMs);
-      if (!github) mergeRequest = obj(await forgeGet(input, `/merge_requests/${input.number}`));
+      request = obj(await forgeGet(input, requestPath));
     }
   };
 
-  const githubChecks = async (): Promise<{ outcome?: CheckOutcome; pending: string }> => {
+  const githubChecks = async (): Promise<CiReading> => {
     const payload = obj(await forgeGet(input, `/commits/${headSha}/check-runs?${PAGE}`));
-    const runs = arr(payload.check_runs);
+    const runs = arr(payload.check_runs).map(obj);
     if (runs.length === 0) return { pending: "no check runs" };
     // A full page may hide runs on the next one, so the check fails closed rather than trusting the visible runs.
-    if (runs.length >= PAGE_SIZE)
-      return { outcome: { passed: false, detail: "check runs exceed one page" }, pending: "" };
-    const running = runs.map(obj).find((run) => run.status !== "completed");
+    if (runs.length >= PAGE_SIZE) return { passed: false, detail: "check runs exceed one page" };
+    const running = runs.find((run) => run.status !== "completed");
     if (running !== undefined) return { pending: `unsettled: ${str(running.name) ?? "unnamed check run"}` };
-    const offending = runs.map(obj).find((run) => !GITHUB_GREEN_CONCLUSIONS.has(str(run.conclusion) ?? ""));
-    if (offending === undefined) return { outcome: { passed: true }, pending: "" };
-    return { outcome: { passed: false, detail: str(offending.name) ?? "unnamed check run" }, pending: "" };
+    const offending = runs.find((run) => !GITHUB_GREEN_CONCLUSIONS.has(str(run.conclusion) ?? ""));
+    if (offending === undefined) return { passed: true };
+    return { passed: false, detail: str(offending.name) ?? "unnamed check run" };
   };
 
   // GitLab merged-result pipelines run on a temporary merge commit, so the MR's head_pipeline is the
   // only pointer that survives that sha mismatch.
-  const gitlabPipeline = (mergeRequest: Record<string, unknown>): { outcome?: CheckOutcome; pending: string } => {
-    const pipeline = obj(mergeRequest.head_pipeline);
+  const gitlabPipeline = (): CiReading => {
+    const pipeline = obj(request.head_pipeline);
     if (Object.keys(pipeline).length === 0) return { pending: "no pipeline" };
     const status = str(pipeline.status) ?? "unknown";
     if (GITLAB_PENDING_STATUSES.has(status)) return { pending: `unsettled: ${status}` };
-    return { outcome: status === "success" ? { passed: true } : { passed: false, detail: status }, pending: "" };
+    return status === "success" ? { passed: true } : { passed: false, detail: status };
   };
 
   const ledgerClean = async (): Promise<CheckOutcome> => {

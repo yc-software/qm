@@ -288,33 +288,67 @@ test("each failing GitHub check stops the sequence at that check and names it", 
   }
 });
 
-test("ci_green_on_head waits for running checks and judges the settled result", async () => {
-  const running = { name: "slow-suite", status: "in_progress", conclusion: null };
-  const finished = { name: "slow-suite", status: "completed", conclusion: "success" };
-  let reads = 0;
-  const base = fakeFetch(githubRoutes());
-  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
-    if (String(url).includes("/check-runs")) {
-      reads += 1;
-      const body = { check_runs: reads < 3 ? [running] : [finished] };
-      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    return base.fetchImpl(url, init);
-  }) as typeof fetch;
-  const slept: number[] = [];
-  const sleep = async (ms: number): Promise<void> => {
-    slept.push(ms);
-  };
+const jsonResponse = (body: unknown): Response =>
+  new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 
-  const verdict = await evaluateFactoryForge(githubInput(fetchImpl, { ciPollMs: 7, ciSettleMs: 60_000, sleep }));
+// Serves the scripted bodies in order for the one URL `match` accepts, then repeats the last one; everything else falls through.
+function sequencedFetch(
+  base: typeof fetch,
+  match: (url: string) => boolean,
+  bodies: unknown[],
+): { fetchImpl: typeof fetch; reads: () => number } {
+  let reads = 0;
+  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (!match(String(url))) return base(url, init);
+    reads += 1;
+    return jsonResponse(bodies[Math.min(reads, bodies.length) - 1]);
+  }) as typeof fetch;
+  return { fetchImpl, reads: () => reads };
+}
+
+function recordingSleep(): { sleep: (ms: number) => Promise<void>; slept: number[] } {
+  const slept: number[] = [];
+  return {
+    slept,
+    sleep: async (ms: number): Promise<void> => {
+      slept.push(ms);
+    },
+  };
+}
+
+test("ci_green_on_head waits for running checks and judges the settled result", async () => {
+  const running = { check_runs: [{ name: "slow-suite", status: "in_progress", conclusion: null }] };
+  const finished = { check_runs: [{ name: "slow-suite", status: "completed", conclusion: "success" }] };
+  const checks = sequencedFetch(fakeFetch(githubRoutes()).fetchImpl, (url) => url.includes("/check-runs"), [
+    running,
+    running,
+    finished,
+  ]);
+  const { sleep, slept } = recordingSleep();
+
+  const verdict = await evaluateFactoryForge(githubInput(checks.fetchImpl, { ciPollMs: 7, ciSettleMs: 60_000, sleep }));
 
   assert.equal(verdict.outcome, "met");
-  assert.equal(reads, 3);
+  assert.equal(checks.reads(), 3);
   assert.deepEqual(slept, [7, 7]);
 });
 
+test("mergeable judges the pull request as re-read after the checks settled, not the pre-wait snapshot", async () => {
+  const blocked = { head: { sha: HEAD }, mergeable: false, mergeable_state: "blocked" };
+  const clean = { head: { sha: HEAD }, mergeable: true, mergeable_state: "clean" };
+  const running = { check_runs: [{ name: "gate", status: "in_progress", conclusion: null }] };
+  const finished = { check_runs: [{ name: "gate", status: "completed", conclusion: "success" }] };
+  const pulls = sequencedFetch(fakeFetch(githubRoutes()).fetchImpl, (url) => url === GH.pr.slice(4), [blocked, clean]);
+  const checks = sequencedFetch(pulls.fetchImpl, (url) => url.includes("/check-runs"), [running, finished]);
+  const { sleep } = recordingSleep();
+
+  const verdict = await evaluateFactoryForge(githubInput(checks.fetchImpl, { ciPollMs: 1, ciSettleMs: 60_000, sleep }));
+
+  assert.equal(verdict.outcome, "met");
+  assert.equal(pulls.reads(), 2);
+});
+
 test("a GitLab pipeline still running is re-read until it settles", async () => {
-  let reads = 0;
   const pending = {
     sha: HEAD,
     detailed_merge_status: "mergeable",
@@ -325,24 +359,13 @@ test("a GitLab pipeline still running is re-read until it settles", async () => 
     detailed_merge_status: "mergeable",
     head_pipeline: { id: 9, sha: HEAD, status: "success" },
   };
-  const base = fakeFetch(gitlabRoutes());
-  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
-    if (String(url).endsWith("/merge_requests/42")) {
-      reads += 1;
-      const body = reads < 2 ? pending : done;
-      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
-    }
-    return base.fetchImpl(url, init);
-  }) as typeof fetch;
-  const slept: number[] = [];
-  const sleep = async (ms: number): Promise<void> => {
-    slept.push(ms);
-  };
+  const mr = sequencedFetch(fakeFetch(gitlabRoutes()).fetchImpl, (url) => url === GL.mr.slice(4), [pending, done]);
+  const { sleep, slept } = recordingSleep();
 
-  const verdict = await evaluateFactoryForge(gitlabInput(fetchImpl, { ciPollMs: 3, ciSettleMs: 60_000, sleep }));
+  const verdict = await evaluateFactoryForge(gitlabInput(mr.fetchImpl, { ciPollMs: 3, ciSettleMs: 60_000, sleep }));
 
   assert.equal(verdict.outcome, "met");
-  assert.equal(reads, 2);
+  assert.equal(mr.reads(), 2);
   assert.deepEqual(slept, [3]);
 });
 
