@@ -471,7 +471,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
     const compact = Boolean(ctx.pane) || isPhone();
     const showRuntimeControls = !appState.me?.individualModelAuth;
-    const runtimeControls = html`${harnessControl(agent, selectedModel, inputBlocked)}${loadoutControl(agent, selectedModel, inputBlocked)}`;
+    const runtimeControls = html`${loadoutControl(agent, selectedModel, inputBlocked)}${harnessControl(agent, selectedModel, inputBlocked)}`;
     return html`
       <form
         class="composer-wrap ${compact ? "compact" : ""}"
@@ -1131,6 +1131,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       ${
         open
           ? html`<div class="menu-popover harness-popover" role="menu" @click=${(e: Event) => e.stopPropagation()}>
+              <div class="menu-title">Harness</div>
               ${harnesses.map(
                 (harness) =>
                   html`<button
