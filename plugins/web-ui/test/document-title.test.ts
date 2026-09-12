@@ -81,7 +81,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     const { appState, signOut, syncDocumentTitle } = await vite.ssrLoadModule("/src/shell.ts");
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-    const { activateCanvas, splitInterceptsOpen } = await vite.ssrLoadModule("/src/split.ts");
+    const { activateCanvas, notifyPanesChanged, splitInterceptsOpen } = await vite.ssrLoadModule("/src/split.ts");
     const oldSession = { id: "old", threadRef: "web:old", scopeId: "personal:tester", title: "Old title" };
     const newSession = { id: "new", threadRef: "web:new", scopeId: "personal:tester", title: "New title" };
     sessionsState.list = [oldSession, newSession];
@@ -100,8 +100,26 @@ test("document title follows session switches, split-pane focus, and sign-out", 
 
     activateCanvas({ sessionId: "old", threadRef: "web:old" }, { sessionId: "new", threadRef: "web:new" }, "right");
     assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const paneTitles = () =>
+      Array.from(document.querySelectorAll(".split-pane-title-text"), (node) => node.textContent?.trim());
+    assert.deepEqual(paneTitles(), ["Old title", "New title"]);
+    oldSession.title = "";
+    notifyPanesChanged();
+    assert.deepEqual(paneTitles(), ["Web chat", "New title"]);
+    assert.equal(document.title, `New title · ${PRODUCT_TITLE}`);
+    oldSession.title = "Fallback for overloaded title model";
+    notifyPanesChanged();
+    assert.deepEqual(paneTitles(), ["Fallback for overloaded title model", "New title"]);
     assert.equal(splitInterceptsOpen(oldSession), true);
-    assert.equal(document.title, `Old title · ${PRODUCT_TITLE}`);
+    assert.equal(document.title, `Fallback for overloaded title model · ${PRODUCT_TITLE}`);
+    newSession.title = "Fallback for OAuth callback";
+    notifyPanesChanged();
+    assert.deepEqual(paneTitles(), ["Fallback for overloaded title model", "Fallback for OAuth callback"]);
+    assert.equal(document.title, `Fallback for overloaded title model · ${PRODUCT_TITLE}`);
+    assert.equal(splitInterceptsOpen(newSession), true);
+    assert.equal(document.title, `Fallback for OAuth callback · ${PRODUCT_TITLE}`);
 
     globalThis.fetch = async () => new Response(null, { status: 204 });
     await signOut();

@@ -405,7 +405,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     grantedBy: "owner",
   });
   assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "ok");
-  assert.equal((await turn("owner", "web:owner:first", "after joining")).status, "ok");
+  assert.equal((await turn("owner", "web:owner:first", "Simulate four-way title outage after joining")).status, "ok");
   assert.ok((await built.app.listSessions("member")).some((session) => session.id === first.id));
   const latestRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
   assert.match(JSON.stringify(latestRequest.promptEnvelope), /secret-before-join/);
@@ -428,7 +428,14 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const globalTitle = (await built.sessions.get(first.id))?.title ?? null;
   const regenerated = await built.app.regenerateTitle(first.id, "member");
-  assert.ok(regenerated?.title);
+  assert.equal(regenerated?.title, "secret-before-join");
+  assert.equal((await built.sessions.get(first.id))?.title ?? null, globalTitle);
+  assert.equal(
+    (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
+    regenerated.title,
+  );
+  assert.equal(await built.app.regenerateTitle(first.id, "outsider"), null);
+  assert.ok(await built.app.updateSession(first.id, "owner", { title: "Owner-only project title" }));
   assert.equal((await built.sessions.get(first.id))?.title ?? null, globalTitle);
   assert.equal(
     (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
