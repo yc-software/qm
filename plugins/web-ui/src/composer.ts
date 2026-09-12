@@ -1,5 +1,6 @@
 import { getRuntimeConfig, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
+import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
 import { html, nothing, type TemplateResult } from "lit";
@@ -263,7 +264,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     );
   }
 
-  let dragDepth = 0;
+  const fileDrag = createFileDragState((dragging) => {
+    composerState.dragging = dragging;
+    ctx.chat.drawActiveChat();
+  });
   let skillsLoading = false;
   let slashActiveIndex = 0;
   let fastModeCharging = false;
@@ -1726,11 +1730,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   function onDragEnter(e: DragEvent): void {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
-    dragDepth += 1;
-    if (!composerState.dragging) {
-      composerState.dragging = true;
-      ctx.chat.drawActiveChat();
-    }
+    fileDrag.enter(e);
   }
 
   function onDragOver(e: DragEvent): void {
@@ -1740,20 +1740,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function onDragLeave(e: DragEvent): void {
-    if (!dragHasFiles(e)) return;
-    e.preventDefault();
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0 && composerState.dragging) {
-      composerState.dragging = false;
-      ctx.chat.drawActiveChat();
-    }
+    fileDrag.leave(e);
   }
 
   async function onDrop(e: DragEvent, agent: Agent): Promise<void> {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
-    dragDepth = 0;
-    composerState.dragging = false;
+    fileDrag.reset();
     const { files, folders } = splitDropItems(Array.from(e.dataTransfer?.items ?? []));
     if (!files.length && !folders.length) files.push(...Array.from(e.dataTransfer?.files ?? []));
     ctx.chat.drawActiveChat(agent);
@@ -1870,6 +1863,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   function dispose(): void {
     unsubscribeRuntime?.();
     ++runtimeRequest;
+    fileDrag.dispose();
     autosizeObserver?.disconnect();
     autosizeObserver = null;
     autosizedTa = null;
