@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createApp, type AppDeps } from "../src/api/app.ts";
+import { buildApp } from "../src/wiring.ts";
+import { testConfig } from "./support/test-config.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import {
   createMemoryFileArtifactStore,
@@ -271,4 +276,94 @@ test("an unopenable row the viewer manages is still deletable", async () => {
   assert.equal(page.owned[0]!.deletable, true, "bytes you cannot read are still a row you can remove");
   assert.equal(await app.deleteFileForViewer(id, "U1"), "deleted");
   assert.deepEqual(deleted, [id]);
+});
+
+test("deleting an artifact revokes its shares, so no grantee's turn context keeps naming it", async () => {
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const acl = createAclStore();
+  const app = makeApp(files, acl);
+  const id = fileArtifactId("shared-then-deleted", "out", 0);
+  const { artifact } = await seed(files, id, "U1");
+  await acl.grant({
+    ownerScopeId: artifact.ownerScopeId,
+    ref: artifact.path,
+    granteeScopeId: channel,
+    permission: "read",
+    grantedBy: "U1",
+  });
+  assert.equal((await acl.handlesFor([channel])).length, 1);
+
+  assert.equal(await app.deleteFileForViewer(id, "U1"), "deleted");
+
+  assert.deepEqual(await acl.handlesFor([channel]), [], "nothing backs an artifact handle once its row is gone");
+  assert.deepEqual(await acl.list(), [], "a grant nobody can revoke would outlive the file forever");
+});
+
+test("deleting a workspace-backed row keeps its shares: the workspace copy still answers the handle", async () => {
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const acl = createAclStore();
+  const app = makeApp(files, acl, {
+    channels: [{ channelId: "C2", name: "general", isPrivate: false }],
+    sessionScopes: [publicChannel],
+    channelPrivacy: async () => false,
+  });
+  const id = fileArtifactId("workspace-backed", "out", 0);
+  await files.put({
+    id,
+    ownerScopeId: publicChannel,
+    createdBy: "U1",
+    name: "report.md",
+    path: "report.md",
+    mimetype: "text/markdown",
+    data: Buffer.from("report"),
+    direction: "out",
+  });
+  await acl.grant({
+    ownerScopeId: publicChannel,
+    ref: "report.md",
+    granteeScopeId: scopeId("personal", "U2"),
+    permission: "read",
+    grantedBy: "U1",
+  });
+
+  assert.equal(await app.deleteFileForViewer(id, "U1"), "deleted");
+
+  assert.equal(
+    (await acl.handlesFor([scopeId("personal", "U2")])).length,
+    1,
+    "the workspace still holds these bytes — dropping the catalog row must not unshare them",
+  );
+});
+
+test("under real wiring the revoke satisfies the ACL store's own manage check instead of throwing", async () => {
+  const real = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "file-delete-acl-")) }));
+  await real.directory.replaceChannels(
+    [{ channelId: "C9", name: "general", isPrivate: false }],
+    [{ channelId: "C9", principalId: "U1" }],
+  );
+  const home = scopeId("channel", "C9");
+  const id = fileArtifactId("channel-share", "out", 0);
+  const path = `artifacts/${id}/notes.txt`;
+  await real.files.put({
+    id,
+    ownerScopeId: home,
+    createdBy: "U1",
+    name: "notes.txt",
+    path,
+    mimetype: "text/plain",
+    data: Buffer.from("notes"),
+    direction: "out",
+  });
+  await real.acl.grant(
+    { ownerScopeId: home, ref: path, granteeScopeId: scopeId("personal", "U2"), permission: "read", grantedBy: "U1" },
+    "U1",
+  );
+
+  assert.equal(
+    await real.app.deleteFileForViewer(id, "U1"),
+    "deleted",
+    "wiring.ts hands the ACL store managesArtifactHome, so the revoke must be told who authored the row",
+  );
+  assert.deepEqual(await real.acl.handlesFor([scopeId("personal", "U2")]), []);
+  assert.equal(await real.files.get(id), null);
 });

@@ -189,4 +189,9 @@ test("the direct-upload abort route keeps its own handler; /v1/files/:id cannot 
   assert.equal(upload && "path" in upload.route ? upload.route.path : null, "/v1/files/uploads/:id");
   const artifact = findRoute(apiRoutes, "DELETE", "/v1/files/abc123");
   assert.equal(artifact && "path" in artifact.route ? artifact.route.path : null, "/v1/files/:id");
+  assert.deepEqual(
+    userScopedField("DELETE", "/v1/files/uploads/abc123"),
+    { in: "body", name: "principalId" },
+    "the abort route keeps binding its actor from the body the portal-identity gate reads",
+  );
 });

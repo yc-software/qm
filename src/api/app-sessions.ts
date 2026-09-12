@@ -1,7 +1,7 @@
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
+import { fileArtifactId, artifactPath, isArtifactPath } from "../files/file-artifact-store.ts";
 import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../harness/tape-projection.ts";
 import { appendCoverageImport } from "../harness/replay.ts";
@@ -379,6 +379,11 @@ export function createSessionMethods(
       const art = await deps.files.get(id);
       if (!art) return "not_found";
       if (!(await principalManagesArtifactHome(art.ownerScopeId, art.createdBy, principalId))) return "forbidden";
+      if (isArtifactPath(art.path)) {
+        const grantees = new Set((await deps.acl.grantsFor(art.ownerScopeId, art.path)).map((g) => g.granteeScopeId));
+        for (const grantee of grantees)
+          await deps.acl.revoke(art.ownerScopeId, art.path, grantee, principalId, art.createdBy);
+      }
       await deps.files.delete(id);
       deps.auditLog?.record({
         at: Date.now(),
