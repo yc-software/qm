@@ -5,6 +5,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import {
   createMemoryFileArtifactStore,
   fileArtifactId,
+  FileArtifactDeletedError,
   type FileArtifactStore,
 } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -144,6 +145,18 @@ test("deleting is idempotent: an unknown id and a second delete both answer not_
   assert.equal(await app.deleteFileForViewer(id, "U1"), "not_found");
 });
 
+test("a retried turn cannot resurrect a deleted artifact under its deterministic id", async () => {
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const app = makeApp(files, createAclStore());
+  const id = fileArtifactId("retry", "out", 0);
+  await seed(files, id, "U1");
+  assert.equal(await app.deleteFileForViewer(id, "U1"), "deleted");
+
+  await assert.rejects(() => seed(files, id, "U1"), FileArtifactDeletedError, "the tombstone outlives the row");
+  assert.equal(await files.get(id), null, "a refused republish leaves nothing behind for the next listing");
+  assert.deepEqual((await app.listFilesForViewer("U1")).owned, []);
+});
+
 test("deleting one of two identical-byte artifacts leaves the other readable", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const app = makeApp(files, createAclStore());
@@ -159,11 +172,7 @@ test("deleting one of two identical-byte artifacts leaves the other readable", a
   assert.ok(survivor);
   const read: Buffer[] = [];
   for await (const c of survivor!.stream) read.push(c as Buffer);
-  assert.deepEqual(
-    Buffer.concat(read),
-    PNG,
-    "erasing shared bytes would break every artifact with the same digest",
-  );
+  assert.deepEqual(Buffer.concat(read), PNG, "erasing shared bytes would break every artifact with the same digest");
 });
 
 test("deletable is computed once per (ownerScopeId, authorship) pair, not once per row", async () => {
