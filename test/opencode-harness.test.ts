@@ -1,6 +1,7 @@
 import test from "node:test";
+import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -421,3 +422,51 @@ test("OpenCode advertises aliases only for tools available on the turn", async (
     else assert.match(systemPrompt, /workspace_execute is execute/);
   }
 });
+
+for (const failure of ["emit", "idle"] as const) {
+  test(`OpenCode acceptance survives ${failure} failure`, async (context) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-opencode-accepted-"));
+    const signals = createMemoryRunSignalStore();
+    const binary = fakeSidecar(
+      dir,
+      "accepted",
+      String.raw`
+      if (req.method === "POST" && message) {
+        await readBody(req);
+        require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "ready");
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return json(res, ${okAssistant});
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/prompt_async")) {
+        await readBody(req);
+        require("node:fs").appendFileSync(${JSON.stringify(join(dir, "submissions"))}, "accepted\n");
+        return json(res, {});
+      }
+      if (url.pathname === "/session/status") return json(res, { ses_main: { type: ${JSON.stringify(failure === "idle" ? "busy" : "idle")} } });
+      if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+    `,
+    );
+    const harness = createOpenCodeHarness({ binaryPath: binary, signals, turnWallClockMs: 1000 });
+    context.after(async () => {
+      await harness.turns.close?.();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const entries: SessionEntry[] = [];
+    const turn = { ...turnInput(entries, []), runId: "accepted-opencode" };
+    const emit = turn.emit;
+    turn.emit = async (entry) => {
+      if (failure === "emit" && (entry.payload as { steered?: boolean }).steered) throw new Error("emit unavailable");
+      return emit(entry);
+    };
+    const running = harness.turns.runTurn(turn);
+    const deadline = Date.now() + 4000;
+    while (!existsSync(join(dir, "started"))) {
+      assert.ok(Date.now() < deadline);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await signals.send(turn.runId, { kind: "steer", text: "accepted" });
+    await running;
+    assert.equal(readFileSync(join(dir, "submissions"), "utf8"), "accepted\n");
+    assert.deepEqual(await signals.pending(turn.runId), []);
+  });
+}

@@ -64,6 +64,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
+      runLeaseToken: token,
       attempt: run.attempts,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
@@ -154,7 +155,8 @@ export function createWorker(deps: WorkerDeps): Worker {
         run.leaseToken !== null ? { runId: run.id, leaseToken: run.leaseToken, threadRef: run.sessionId } : null;
       deps.onClaimed?.();
       try {
-        await processRun(deps, run, { background: true });
+        const result = await processRun(deps, run, { background: true });
+        if (result.refusalKind === "session_busy") await sleep(pollMs);
       } catch (e) {
         swallow("worker: background run crashed", e);
       } finally {

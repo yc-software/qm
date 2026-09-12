@@ -1098,10 +1098,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             turn.runId,
             {
               onAbort: async () => interrupt(true),
-              onSteer: async (text, ts) => {
+              onSteer: async (text, ts, signalId, delivery) => {
+                await rt.server.request("turn/steer", { threadId, expectedTurnId: turnId, input: [userInput(text)] });
+                await delivery.accepted();
                 const steered = await turn.emit({
                   type: "user",
-                  payload: { text, ...(ts ? { ts } : {}), steered: true },
+                  payload: { text, signalId, ...(ts ? { ts } : {}), steered: true },
                   scopeLabel: turn.scopeLabel,
                 });
                 if (turn.tape) {
@@ -1118,10 +1120,9 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
                     payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
                   });
                 }
-                await rt.server.request("turn/steer", { threadId, expectedTurnId: turnId, input: [userInput(text)] });
               },
             },
-            { onError: (error) => swallow("codex signal poll", error) },
+            { runLeaseToken: turn.runLeaseToken, onError: (error) => swallow("codex signal poll", error) },
           )
         : null;
     let timer: NodeJS.Timeout | undefined;

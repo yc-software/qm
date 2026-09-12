@@ -90,7 +90,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     if (path === "/api/runs/q1") return Response.json({ status: "done", result: { status: "ok", reply: "done" } });
     if (path === "/api/turn") return Response.json({ runId: "q1" });
     if (path === "/api/runs/q1/withdraw") return Response.json({ withdrawn: true });
-    if (path === "/api/runs/r1/signal") return Response.json({ accepted: true });
+    if (path === "/api/runs/r1/signal") return Response.json({ accepted: true, signalId: "signal-q1", runId: "r1" });
     if (path.endsWith("/approvals")) return Response.json({ approvals: pending });
     if (path.startsWith("/api/sessions/s1")) {
       if (submitted) await handoff.promise;
@@ -170,7 +170,8 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       await until(() => requests.some((r) => r.path === "/api/runs/r1/signal"));
       assert.deepEqual(requests.find((r) => r.path === "/api/runs/r1/signal")?.body, {
         kind: "steer",
-        text: "use the smaller change",
+        idempotencyKey: "q1",
+        queuedRunId: "q1",
         threadRef: row.threadRef,
         scopeId: row.scopeId,
       });

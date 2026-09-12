@@ -1076,10 +1076,21 @@ export function buildApp(
       : createMemorySessionStore();
   memorySessions.store = sessions;
   const runStoreKind = config.runStore;
+  const signalOptions = {
+    readerLeaseValid: async (runId: string, leaseToken: string) => {
+      const run = await runs.get(runId);
+      return run?.status === "running" && run.leaseToken === leaseToken && (run.leaseExpiresAt ?? 0) > Date.now();
+    },
+    onReaderClosed: (runId: string) => app.replayOrphanedRunSignals(runId),
+    readerFinished: async (runId: string) => {
+      const run = await runs.get(runId);
+      return !run || isTerminal(run.status);
+    },
+  };
   const runSignals: RunSignalStore =
     runStoreKind === "postgres"
-      ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
-      : createMemoryRunSignalStore();
+      ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"), signalOptions)
+      : createMemoryRunSignalStore(signalOptions);
   const tasks = config.databaseUrl ? createPostgresTaskStore(config.databaseUrl) : createMemoryTaskStore();
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
@@ -1795,13 +1806,13 @@ export function buildApp(
   let lastSignalPrune = 0;
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
-        const run = await runs.get(runId);
-        if (!run || isTerminal(run.status)) await app.replayOrphanedRunSignals(runId);
+      for (const run of await runs.pendingSignalTransfers()) {
+        await app.signalRun(run.signalTargetRunId!, { kind: "steer", queuedRunId: run.id });
       }
+      for (const runId of await runSignals.pendingRunIds()) await app.replayOrphanedRunSignals(runId);
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
-        await runSignals.prune(7 * 24 * 60 * 60_000);
+        await runSignals.prune(14 * 24 * 60 * 60_000);
       }
     },
     config.reaperIntervalMs,

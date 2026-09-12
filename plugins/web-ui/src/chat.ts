@@ -2707,12 +2707,19 @@ export function createChatSurface(
   return {
     state: chatState,
     hasLiveRun: () => hasLiveRun(runSlot),
-    signalLiveRun: (kind, text) =>
-      signalLiveRun(runSlot, kind, text, {
-        threadRef: chatState.threadRef,
-        scopeId: chatState.scopeId,
-        channelName: chatState.contextName,
-      }),
+    signalLiveRun: (kind, text, idempotencyKey, queuedRunId) =>
+      signalLiveRun(
+        runSlot,
+        kind,
+        text,
+        {
+          threadRef: chatState.threadRef,
+          scopeId: chatState.scopeId,
+          channelName: chatState.contextName,
+        },
+        idempotencyKey,
+        queuedRunId,
+      ),
     stopLiveRun,
     currentTurnOptions,
     newChat,

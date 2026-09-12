@@ -881,12 +881,14 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     }
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     const queuedSignals = new Set<Promise<void>>();
-    const queueSignal = (text: string): Promise<void> => {
+    const queueSignal = (text: string, accepted: () => Promise<void>): Promise<void> => {
       const pending = (async () => {
-        await rt.client.session.promptAsync({
+        const response = await rt.client.session.promptAsync({
           path: { id: sessionId },
           body: { model, agent: "qm", parts: [{ type: "text", text }] },
         });
+        if (response.error) throw new Error(`OpenCode rejected signal: ${JSON.stringify(response.error)}`);
+        await accepted();
         await waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS);
       })();
       queuedSignals.add(pending);
@@ -899,16 +901,20 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             turn.runId,
             {
               onAbort: async () => abort(true),
-              onSteer: async (text, ts) => {
+              onSteer: async (text, ts, signalId, delivery) => {
+                await queueSignal(text, delivery.accepted);
                 await turn.emit({
                   type: "user",
-                  payload: { text, ...(ts ? { ts } : {}), steered: true },
+                  payload: { text, signalId, ...(ts ? { ts } : {}), steered: true },
                   scopeLabel: turn.scopeLabel,
                 });
-                await queueSignal(text);
               },
             },
-            { onError: (error) => swallow("opencode signal poll", error), drainOnStop: true },
+            {
+              runLeaseToken: turn.runLeaseToken,
+              onError: (error) => swallow("opencode signal poll", error),
+              drainOnStop: true,
+            },
           )
         : null;
     const flushLlmRequests = async () => {

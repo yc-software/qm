@@ -64,8 +64,8 @@ test("a redelivered message that folded into a live run as a steer is injected o
     const steer = await built.app.turn(slackTurn("also this", "t2"));
     const replay = await built.app.turn(slackTurn("also this", "t2"));
     assert.equal((steer as { steered?: boolean }).steered, true);
-    assert.equal(replay.status, "silent", "the replay is recognized as already folded and injects nothing");
-    const pending = await built.signals.takePending(runId);
+    assert.equal(replay.signalId, steer.signalId, "redelivery resolves the same accepted signal");
+    const pending = await built.signals.pending(runId);
     assert.equal(pending.filter((s) => s.kind === "steer" && s.text?.includes("also this")).length, 1);
   } finally {
     await built.runtime.stop();
@@ -81,7 +81,7 @@ test("a redelivery that arrives while the first delivery's run is live joins tha
     assert.equal(claimed?.id, runId);
     const again = await built.app.turn(slackTurn("hello", "t1"));
     assert.equal(again.status, "silent");
-    assert.equal((await built.signals.takePending(runId)).length, 0, "the agent is not fed its own prompt as a steer");
+    assert.equal((await built.signals.pending(runId)).length, 0, "the agent is not fed its own prompt as a steer");
   } finally {
     await built.runtime.stop();
   }
@@ -93,11 +93,14 @@ test("a message folded as a steer is not re-run as a fresh turn after that run e
     const first = await built.app.turn(slackTurn("first", "t1"));
     const runId = (first as { runId: string }).runId;
     const claimed = await built.runs.claim("w1", 30_000);
-    await built.app.turn(slackTurn("fold me", "t2"));
+    const steered = await built.app.turn(slackTurn("fold me", "t2"));
     await built.runs.complete(runId, claimed!.leaseToken!, { status: "silent" });
     const late = await built.app.turn(slackTurn("fold me", "t2"));
-    assert.equal(late.status, "silent");
-    assert.equal(await built.runs.activeForThread("ch:C1:t1"), null, "no second run was enqueued");
+    assert.equal(late.signalId, steered.signalId);
+    const again = await built.app.turn(slackTurn("fold me", "t2"));
+    assert.equal(again.runId, late.runId);
+    assert.notEqual(late.runId, runId);
+    assert.equal((await built.runs.list()).length, 2);
   } finally {
     await built.runtime.stop();
   }
@@ -133,7 +136,7 @@ test("a redelivery that slips past the lookup still cannot steer the run it belo
     built.runs.getByDedupKey = async (key) => (misses-- > 0 ? null : real(key));
     const again = await built.app.turn(slackTurn("hello", "t1"));
     assert.equal(again.status, "silent");
-    assert.equal((await built.signals.takePending(runId)).length, 0);
+    assert.equal((await built.signals.pending(runId)).length, 0);
   } finally {
     await built.runtime.stop();
   }

@@ -1,450 +1,568 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
+import { randomUUID } from "node:crypto";
+import { createMemoryRunSignalStore, startSignalPoll, type RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-const until = async (cond: () => boolean, ms = 3_000): Promise<void> => {
-  const deadline = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
-    await sleep(20);
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const until = async (condition: () => boolean): Promise<void> => {
+  const deadline = Date.now() + 3000;
+  while (!condition()) {
+    assert.ok(Date.now() < deadline, "timed out");
+    await sleep(10);
   }
 };
 
-test("memory store: send appends, takePending drains in order and consumes", async () => {
-  const store = createMemoryRunSignalStore();
-  await store.send("r1", { kind: "steer", text: "a" });
-  await store.send("r1", { kind: "abort" });
-  await store.send("other", { kind: "abort" });
-  const taken = await store.takePending("r1");
-  assert.deepEqual(
-    taken.map((s) => s.kind),
-    ["steer", "abort"],
+for (const backend of ["memory", "postgres"] as const) {
+  const skip = backend === "postgres" && !process.env.DATABASE_URL;
+  async function stores(run: (store: RunSignalStore, observer: RunSignalStore, id: string) => Promise<void>) {
+    const store =
+      backend === "memory" ? createMemoryRunSignalStore() : createPostgresRunSignalStore(process.env.DATABASE_URL!);
+    const observer = backend === "memory" ? store : createPostgresRunSignalStore(process.env.DATABASE_URL!);
+    try {
+      await run(store, observer, randomUUID());
+    } finally {
+      await store.close?.();
+      if (observer !== store) await observer.close?.();
+    }
+  }
+  test(`${backend}: delivery contract: failed handler retains the entire ordered mailbox`, { skip }, async () => {
+    await stores(async (store, observer, id) => {
+      await store.send(id, { kind: "steer", text: "first" });
+      await store.send(id, { kind: "steer", text: "second" });
+      const original = await store.pending(id);
+      const failed = Promise.withResolvers<void>();
+      const keepAlive = setInterval(() => {}, 1000);
+      const stop = startSignalPoll(
+        store,
+        id,
+        {
+          onSteer: async () => {
+            throw new Error("transient handler failure");
+          },
+          onAbort: async () => {},
+        },
+        { intervalMs: 5, onError: () => failed.resolve() },
+      );
+      try {
+        await failed.promise;
+        await stop();
+      } finally {
+        clearInterval(keepAlive);
+      }
+      assert.deepEqual(await observer.pending(id), original);
+      const seen: string[] = [];
+      const retry = startSignalPoll(
+        observer,
+        id,
+        {
+          onSteer: async (text) => {
+            seen.push(text);
+          },
+          onAbort: async () => {},
+        },
+        { intervalMs: 5 },
+      );
+      try {
+        await until(() => seen.length === 2);
+      } finally {
+        await retry();
+      }
+      assert.deepEqual(seen, ["first", "second"]);
+      assert.deepEqual(await store.pending(id), []);
+    });
+  });
+  test(
+    `${backend}: claims serialize replicas, fence stale acknowledgements, and preserve order`,
+    { skip },
+    async () => {
+      await stores(async (store, observer, id) => {
+        await store.openReader(id, "owner");
+        await store.send(id, { kind: "steer", text: "first" });
+        await store.send(id, { kind: "steer", text: "second" });
+        const claims = await Promise.all([
+          store.claim(id, { readerToken: "owner" }, 1000),
+          observer.claim(id, { readerToken: "owner" }, 1000),
+        ]);
+        assert.equal(claims.filter(Boolean).length, 1);
+        const first = claims.find(Boolean)!;
+        assert.equal(first.signal.text, "first");
+        await observer.release({ ...first, token: "wrong" });
+        assert.equal(await observer.claim(id, { readerToken: "owner" }, 1000), null);
+        assert.equal(await observer.ack({ ...first, token: "wrong" }), false);
+        await store.release(first);
+        const retry = (await observer.claim(id, { readerToken: "owner" }, 1000))!;
+        assert.equal(retry.signal.id, first.signal.id);
+        assert.notEqual(retry.token, first.token);
+        assert.equal(await store.ack(first), false);
+        assert.equal(await observer.ack(retry), true);
+        assert.equal((await store.claim(id, { readerToken: "owner" }, 1000))?.signal.text, "second");
+      });
+    },
   );
-  assert.deepEqual(await store.takePending("r1"), [], "consumed — second take is empty");
-  assert.equal((await store.takePending("other")).length, 1, "other run unaffected");
+  test(`${backend}: expired claims recover; replaced readers cannot claim or acknowledge`, { skip }, async () => {
+    await stores(async (store, observer, id) => {
+      await store.openReader(id, "old");
+      await store.send(id, { kind: "steer", text: "message" });
+      const old = (await store.claim(id, { readerToken: "old" }, 50))!;
+      await assert.rejects(observer.openReader(id, "new"), /still accepting/);
+      assert.equal(await store.renew(old, 50), true);
+      await sleep(65);
+      await observer.openReader(id, "new");
+      assert.equal(await store.claim(id, { readerToken: "old" }, 1000), null);
+      assert.equal(await store.ack(old), false);
+      assert.equal(await store.renew(old, 1000), false);
+      await store.closeReader(id, "old");
+      assert.equal(await observer.readerClosed(id), false);
+      await sleep(65);
+      const replacement = (await observer.claim(id, { readerToken: "new" }, 1000))!;
+      assert.equal(replacement.signal.id, old.signal.id);
+      await store.release(old);
+      assert.equal(await observer.ack(replacement), true);
+    });
+  });
+  test(
+    `${backend}: abort is level-triggered across reader replacement and terminal transfer retires it`,
+    { skip },
+    async () => {
+      await stores(async (store, observer, id) => {
+        await store.send(id, { kind: "abort" });
+        await store.openReader(id, "first");
+        assert.equal(await store.aborted(id, "first"), true);
+        assert.equal(await store.aborted(id, "first"), true);
+        await observer.openReader(id, "second");
+        assert.equal(await store.aborted(id, "first"), false);
+        assert.equal(await observer.aborted(id, "second"), true);
+        await observer.closeReader(id, "second");
+        await store.claim(id, { terminal: false }, 1000);
+        assert.equal((await store.pending(id)).length, 1);
+        await store.claim(id, { terminal: true }, 1000);
+        assert.deepEqual(await store.pending(id), []);
+      });
+    },
+  );
+  test(
+    `${backend}: stable admission identity survives concurrency, acknowledgement, closure and pruning`,
+    { skip },
+    async () => {
+      await stores(async (store, observer, id) => {
+        const signal = { kind: "steer" as const, text: "message", dedupeKey: id };
+        const admissions = await Promise.all([store.send(id, signal), observer.send(id, signal)]);
+        assert.deepEqual(admissions.map((admission) => admission.status).sort(), ["duplicate", "sent"]);
+        const saved = await observer.getByDedupeKey(id);
+        assert.ok(saved);
+        const claim = (await store.claim(id, { terminal: true }, 1000))!;
+        assert.equal(await store.ack(claim, "queued-run"), true);
+        await store.prune(14 * 24 * 60 * 60_000);
+        assert.equal((await observer.getByDedupeKey(id))?.deliveryRunId, "queued-run");
+        const duplicate = await observer.send(id, signal);
+        assert.equal(duplicate.status, "duplicate");
+        assert.equal(duplicate.signal.id, saved.id);
+        await store.prune(-1);
+        assert.equal(await observer.getByDedupeKey(id), null);
+      });
+    },
+  );
+  test(`${backend}: a live claim excludes terminal transfer until release`, { skip }, async () => {
+    await stores(async (store, observer, id) => {
+      await store.openReader(id, "live");
+      await store.send(id, { kind: "steer", text: "owned" });
+      assert.equal(await observer.claim(id, { terminal: false }, 1000), null);
+      const live = (await store.claim(id, { readerToken: "live" }, 1000))!;
+      assert.equal(await observer.claim(id, { terminal: true }, 1000), null);
+      assert.equal(await store.renew(live, 1000), true);
+      await store.release(live);
+      await store.closeReader(id, "live");
+      const transfer = (await observer.claim(id, { terminal: false }, 1000))!;
+      assert.equal(transfer.signal.id, live.signal.id);
+      assert.equal((await store.send(id, { kind: "steer", text: "late" })).status, "closed");
+      await observer.release(transfer);
+      assert.ok((await store.pendingRunIds()).includes(id));
+    });
+  });
+  test(`${backend}: replay ownership survives failed acknowledgement and reader reopening`, { skip }, async () => {
+    await stores(async (store, observer, id) => {
+      await store.send(id, { kind: "steer", text: "once" });
+      await store.openReader(id, "old");
+      await store.closeReader(id, "old");
+      const transfer = (await store.claim(id, { terminal: false }, 1000))!;
+      await store.release(transfer);
+      await observer.openReader(id, "new");
+      assert.equal(await observer.claim(id, { readerToken: "new" }, 1000), null);
+      const recovered = await observer.claim(id, { terminal: false }, 1000);
+      assert.equal(recovered?.signal.id, transfer.signal.id);
+    });
+  });
+  test(`${backend}: confirmed acceptance survives bookkeeping and acknowledgement errors`, { skip }, async () => {
+    await stores(async (store, observer, id) => {
+      let submissions = 0;
+      let acknowledgements = 0;
+      const ack = store.ack.bind(store);
+      store.ack = async (...args) => {
+        if (++acknowledgements === 1) throw new Error("lost acknowledgement");
+        return ack(...args);
+      };
+      const done = Promise.withResolvers<void>();
+      const stop = startSignalPoll(
+        store,
+        id,
+        {
+          onSteer: async (_text, _ts, _id, delivery) => {
+            submissions++;
+            await delivery.accepted();
+            done.resolve();
+            throw new Error("tape failed after acceptance");
+          },
+          onAbort: async () => {},
+        },
+        { intervalMs: 5 },
+      );
+      await store.send(id, { kind: "steer", text: "accepted once" });
+      try {
+        await done.promise;
+      } finally {
+        await stop();
+      }
+      assert.equal(submissions, 1);
+      assert.equal(acknowledgements, 2);
+      assert.deepEqual(await observer.pending(id), []);
+      assert.equal(await observer.claim(id, { terminal: true }, 1000), null);
+    });
+  });
+
+  test(`${backend}: delayed close cannot transfer a replacement reader's new messages`, { skip }, async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let transferred = false;
+    let finished = false;
+    const options = {
+      readerFinished: async () => finished,
+      onReaderClosed: async (runId: string) => {
+        entered.resolve();
+        await release.promise;
+        transferred ||= !!(await observer.claim(runId, { terminal: false }, 1000));
+      },
+    };
+    const store =
+      backend === "memory"
+        ? createMemoryRunSignalStore(options)
+        : createPostgresRunSignalStore(process.env.DATABASE_URL!, options);
+    const observer = backend === "memory" ? store : createPostgresRunSignalStore(process.env.DATABASE_URL!);
+    const id = randomUUID();
+    try {
+      await store.openReader(id, "old");
+      const closing = store.closeReader(id, "old");
+      await entered.promise;
+      await observer.openReader(id, "new");
+      await observer.send(id, { kind: "steer", text: "new message" });
+      release.resolve();
+      await closing;
+      assert.equal(transferred, false);
+      const live = (await observer.claim(id, { readerToken: "new" }, 1000))!;
+      assert.equal(live.signal.text, "new message");
+      await observer.ack(live);
+      await store.closeReader(id, "old");
+      assert.equal(await observer.readerClosed(id), false);
+      await store.closeReader(id, "new");
+      await store.prune(-1);
+      assert.equal(await observer.readerClosed(id), true);
+      finished = true;
+      await store.prune(-1);
+      assert.equal(await observer.readerClosed(id), false);
+    } finally {
+      release.resolve();
+      await store.close?.();
+      if (observer !== store) await observer.close?.();
+    }
+  });
+
+  test(`${backend}: closure racing admission leaves every accepted message owned once`, { skip }, async () => {
+    await stores(async (store, observer, id) => {
+      await store.openReader(id, "reader");
+      const [admission] = await Promise.all([
+        store.send(id, { kind: "steer", text: "raced", dedupeKey: id }),
+        observer.closeReader(id, "reader"),
+      ]);
+      const claim = await observer.claim(id, { terminal: false }, 1000);
+      assert.equal(!!claim, admission.status !== "closed");
+      if (claim) await observer.ack(claim, "queued");
+      assert.deepEqual(await store.pending(id), []);
+      assert.equal((await store.send(id, { kind: "steer", text: "late" })).status, "closed");
+      await store.send(id, { kind: "abort" });
+      assert.equal((await store.pending(id))[0]?.kind, "abort");
+    });
+  });
+
+  test(`${backend}: notifications across replicas deliver immediately with complete metadata`, { skip }, async () => {
+    await stores(async (store, observer, id) => {
+      let received: { text: string; ts?: string } | undefined;
+      const stop = startSignalPoll(
+        observer,
+        id,
+        {
+          onSteer: async (text, ts) => {
+            received = { text, ts };
+          },
+          onAbort: async () => {},
+        },
+        { intervalMs: 10_000 },
+      );
+      await sleep(100);
+      await store.send(id, { kind: "steer", text: "doorbell", ts: "123.456" });
+      try {
+        await until(() => !!received);
+      } finally {
+        await stop();
+      }
+      assert.deepEqual(received, { text: "doorbell", ts: "123.456" });
+    });
+  });
+}
+
+test("close waits for in-flight acceptance and hands only unacknowledged messages to transfer", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const handoff: string[] = [];
+  const store = createMemoryRunSignalStore({
+    onReaderClosed: async (id) => {
+      for (;;) {
+        const claim = await store.claim(id, { terminal: false }, 1000);
+        if (!claim) return;
+        handoff.push(claim.signal.text!);
+        await store.ack(claim, "queued");
+      }
+    },
+  });
+  const stop = startSignalPoll(store, "close", {
+    onSteer: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+    onAbort: async () => {},
+  });
+  await store.send("close", { kind: "steer", text: "first" });
+  await entered.promise;
+  await store.send("close", { kind: "steer", text: "second" });
+  const closing = stop();
+  assert.deepEqual(handoff, []);
+  release.resolve();
+  await closing;
+  assert.deepEqual(handoff, ["second"]);
 });
 
-test("memory store: takeLive consumes steers but leaves an abort pending for the terminal drain", async () => {
+test("abort still reaches a handler waiting for steer acceptance", async () => {
+  const entered = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
   const store = createMemoryRunSignalStore();
-  await store.send("r1", { kind: "steer", text: "a" });
-  await store.send("r1", { kind: "abort" });
-  await store.send("r1", { kind: "steer", text: "b" });
-  assert.deepEqual(
-    (await store.takeLive("r1")).map((s) => s.kind),
-    ["steer", "abort", "steer"],
-    "a live drain sees everything pending, in order",
-  );
-  assert.deepEqual(
-    (await store.takeLive("r1")).map((s) => s.kind),
-    ["abort"],
-    "steers are consumed exactly once; the abort is never consumed by a live drain",
-  );
-  assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.kind),
-    ["abort"],
-    "the terminal drain is what consumes the abort",
-  );
-  assert.deepEqual(await store.takeLive("r1"), []);
-  assert.deepEqual(await store.pendingRunIds(), [], "nothing outlives the terminal drain");
-});
-
-test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by the reclaiming poller, and dies with the terminal drain", async () => {
-  const store = createMemoryRunSignalStore();
-  await store.send("r1", { kind: "abort" });
-  let loserAborts = 0;
-  const loser = startSignalPoll(
-    store,
-    "r1",
-    { onSteer: async () => {}, onAbort: async () => void loserAborts++ },
-    { intervalMs: 20 },
-  );
-  await until(() => loserAborts >= 1);
-  await loser();
-  assert.deepEqual(
-    (await store.takeLive("r1")).map((s) => s.kind),
-    ["abort"],
-    "the losing poller did not consume the stop",
-  );
-  let reclaimerAborts = 0;
-  const reclaimer = startSignalPoll(
-    store,
-    "r1",
-    { onSteer: async () => {}, onAbort: async () => void reclaimerAborts++ },
-    { intervalMs: 20 },
-  );
-  await until(() => reclaimerAborts >= 1);
-  await reclaimer();
-  assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.kind),
-    ["abort"],
-    "terminal completion consumes the stop",
-  );
-  assert.deepEqual(await store.pendingRunIds(), [], "the stop does not outlive the run's terminal completion");
-});
-
-test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the still-pending stop re-delivers on the next drain", async () => {
-  const store = createMemoryRunSignalStore();
-  const steered: string[] = [];
-  let aborts = 0;
-  let releaseFirst!: () => void;
-  const firstGate = new Promise<void>((r) => (releaseFirst = r));
   const stop = startSignalPoll(
     store,
-    "r1",
+    "abort",
     {
-      onSteer: async (text) => {
-        steered.push(text);
-        if (text === "first") await firstGate;
+      onSteer: async () => {
+        entered.resolve();
+        await aborted.promise;
+        throw new Error("aborted before acceptance");
       },
-      onAbort: async () => void aborts++,
+      onAbort: async () => aborted.resolve(),
     },
-    { intervalMs: 60_000 },
+    { intervalMs: 5 },
   );
+  await store.send("abort", { kind: "steer", text: "message" });
+  await entered.promise;
+  await store.send("abort", { kind: "abort" });
+  const keepAlive = setInterval(() => {}, 1000);
   try {
-    await store.send("r1", { kind: "steer", text: "first" });
-    await until(() => steered.length === 1);
-    await store.send("r1", { kind: "abort" });
-    await store.send("r1", { kind: "abort" });
-    releaseFirst();
-    await until(() => aborts === 1, 500);
-    await sleep(50);
-    assert.equal(aborts, 1, "one drain delivers a batch of stops once");
-    await store.send("r1", { kind: "steer", text: "second" });
-    await until(() => steered.length === 2, 500);
-    await until(() => aborts === 2, 500);
-    assert.deepEqual(steered, ["first", "second"], "steers still flow while a stop is pending");
+    await aborted.promise;
+    await stop();
+  } finally {
+    clearInterval(keepAlive);
+  }
+  assert.equal((await store.pending("abort")).length, 2);
+});
+
+test("reader registration retries after transient failure", async () => {
+  const store = createMemoryRunSignalStore();
+  const open = store.openReader.bind(store);
+  let attempts = 0;
+  store.openReader = async (...args) => {
+    if (++attempts === 1) throw new Error("offline");
+    await open(...args);
+  };
+  let accepted = false;
+  const stop = startSignalPoll(
+    store,
+    "retry",
+    {
+      onAbort: async () => {
+        accepted = true;
+      },
+      onSteer: async () => {},
+    },
+    { intervalMs: 5 },
+  );
+  await store.send("retry", { kind: "abort" });
+  try {
+    await until(() => accepted);
   } finally {
     await stop();
   }
-  await store.takePending("r1");
-  assert.deepEqual(await store.pendingRunIds(), []);
+  assert.equal(attempts, 2);
 });
 
-test("startSignalPoll: a stop whose delivery throws is retried on the next drain instead of being lost", async () => {
+test("stopping before registration resolves still closes the reader", async () => {
+  const store = createMemoryRunSignalStore();
+  const opened = Promise.withResolvers<void>();
+  const open = store.openReader.bind(store);
+  store.openReader = async (...args) => {
+    await opened.promise;
+    await open(...args);
+  };
+  const stop = startSignalPoll(store, "delayed-registration", { onSteer: async () => {}, onAbort: async () => {} });
+  const stopping = stop();
+  opened.resolve();
+  await stopping;
+  assert.equal(await store.readerClosed("delayed-registration"), true);
+});
+
+test("a failed abort retries and remains level-triggered across reader handoff", async () => {
   const store = createMemoryRunSignalStore();
   let attempts = 0;
   const stop = startSignalPoll(
     store,
-    "r1",
+    "abort-retry",
     {
       onSteer: async () => {},
       onAbort: async () => {
-        attempts++;
-        if (attempts === 1) throw new Error("transient interrupt failure");
+        if (++attempts === 1) throw new Error("retry");
       },
     },
-    { intervalMs: 20, onError: () => {} },
+    { intervalMs: 5 },
   );
+  await store.send("abort-retry", { kind: "abort" });
   try {
-    await store.send("r1", { kind: "abort" });
     await until(() => attempts >= 2);
   } finally {
     await stop();
   }
-  assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.kind),
-    ["abort"],
-    "the stop stayed pending through the failed delivery",
-  );
+  await store.openReader("abort-retry", "replacement");
+  assert.equal(await store.aborted("abort-retry", "replacement"), true);
 });
 
-test("memory store: onSignal doorbell fires on send for that run only; unsubscribe stops it", async () => {
+test("known acceptance still acknowledges when renewal fails before storage recovers", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createMemoryRunSignalStore();
-  let rings = 0;
-  const off = store.onSignal("r1", () => rings++);
-  await store.send("other", { kind: "abort" });
-  assert.equal(rings, 0, "other run's send does not ring");
-  await store.send("r1", { kind: "steer", text: "x" });
-  assert.equal(rings, 1);
-  off();
-  await store.send("r1", { kind: "steer", text: "y" });
-  assert.equal(rings, 1, "no ring after unsubscribe");
-});
-
-test("startSignalPoll: doorbell dispatches a signal immediately, far before the poll interval", async () => {
-  const store = createMemoryRunSignalStore();
-  const steered: string[] = [];
+  const failed = Promise.withResolvers<void>();
+  const delivered = Promise.withResolvers<void>();
+  const ack = store.ack.bind(store);
+  let attempts = 0;
+  store.ack = async (...args) => {
+    if (++attempts === 1) throw new Error("temporary storage outage");
+    return ack(...args);
+  };
+  store.renew = async () => false;
+  await store.send("known", { kind: "steer", text: "once" });
   const stop = startSignalPoll(
     store,
-    "r1",
+    "known",
     {
-      onSteer: async (text) => {
-        steered.push(text);
+      onSteer: async (_text, _ts, _id, delivery) => {
+        await delivery.accepted();
+        delivered.resolve();
       },
       onAbort: async () => {},
     },
-    { intervalMs: 60_000 },
+    { onError: () => failed.resolve() },
   );
   try {
-    await store.send("r1", { kind: "steer", text: "now" });
-    await until(() => steered.length === 1, 500);
-    assert.deepEqual(steered, ["now"]);
-  } finally {
-    stop();
-  }
-});
-
-test("startSignalPoll: a steer's ts is dispatched to onSteer (so the harness can persist + dedupe it)", async () => {
-  const store = createMemoryRunSignalStore();
-  const seen: Array<{ text: string; ts?: string }> = [];
-  const stop = startSignalPoll(
-    store,
-    "r1",
-    {
-      onSteer: async (text, ts) => {
-        seen.push({ text, ...(ts ? { ts } : {}) });
-      },
-      onAbort: async () => {},
-    },
-    { intervalMs: 60_000 },
-  );
-  try {
-    await store.send("r1", { kind: "steer", text: "send it", ts: "900.001" });
-    await until(() => seen.length === 1, 500);
-    assert.deepEqual(seen, [{ text: "send it", ts: "900.001" }]);
-  } finally {
-    stop();
-  }
-});
-
-test("startSignalPoll: a legacy durable followUp row is dispatched as a steer during rolling deploys", async () => {
-  const store = createMemoryRunSignalStore();
-  const seen: string[] = [];
-  const stop = startSignalPoll(
-    store,
-    "r1",
-    {
-      onSteer: async (text) => {
-        seen.push(text);
-      },
-      onAbort: async () => {},
-    },
-    { intervalMs: 60_000 },
-  );
-  try {
-    await store.send("r1", { kind: "followUp", text: "legacy text" } as never);
-    await until(() => seen.length === 1, 500);
-    assert.deepEqual(seen, ["legacy text"]);
+    await failed.promise;
+    t.mock.timers.tick(10_000);
+    await delivered.promise;
+    assert.deepEqual(await store.pending("known"), []);
+    assert.equal(attempts, 2);
   } finally {
     await stop();
   }
 });
 
-test("startSignalPoll: a doorbell during a slow drain queues one re-drain (no signal stranded)", async () => {
-  const store = createMemoryRunSignalStore();
-  const seen: string[] = [];
-  let releaseFirst!: () => void;
-  const firstGate = new Promise<void>((r) => (releaseFirst = r));
-  const stop = startSignalPoll(
-    store,
-    "r1",
-    {
-      onSteer: async (text) => {
-        seen.push(text);
-        if (seen.length === 1) await firstGate;
-      },
-      onAbort: async () => {},
+for (const backend of ["memory", "postgres"]) {
+  test(
+    `${backend}: renewal errors cancel an unaccepted recipient before handoff`,
+    { skip: backend === "postgres" && !process.env.DATABASE_URL },
+    async (t) => {
+      t.mock.timers.enable({ apis: ["setInterval"] });
+      const store =
+        backend === "memory" ? createMemoryRunSignalStore() : createPostgresRunSignalStore(process.env.DATABASE_URL!);
+      const id = crypto.randomUUID();
+      const entered = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+      let aborted = false;
+      store.renew = async () => {
+        throw new Error("renewal unavailable");
+      };
+      await store.send(id, { kind: "steer", text: "not yet accepted" });
+      const stop = startSignalPoll(store, id, {
+        onSteer: async () => {
+          entered.resolve();
+          await released.promise;
+          throw new Error("cancelled before acceptance");
+        },
+        onAbort: async () => {
+          aborted = true;
+          released.resolve();
+        },
+      });
+      try {
+        await entered.promise;
+        t.mock.timers.tick(10_000);
+        await sleep(20);
+        assert.equal(aborted, true);
+        assert.equal((await store.pending(id)).length, 1);
+      } finally {
+        released.resolve();
+        await stop();
+        await store.close?.();
+      }
     },
-    { intervalMs: 60_000 },
   );
-  try {
-    await store.send("r1", { kind: "steer", text: "first" });
-    await until(() => seen.length === 1);
-    await store.send("r1", { kind: "steer", text: "second" });
-    releaseFirst();
-    await until(() => seen.length === 2);
-    assert.deepEqual(seen, ["first", "second"]);
-  } finally {
-    stop();
-  }
-});
+}
 
-test("startSignalPoll: stop consumes nothing more — an undrained signal stays pending for the terminal drain", async () => {
+test("an unaccepted claim stays owned until recipient cancellation completes", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createMemoryRunSignalStore();
-  const seen: string[] = [];
-  let releaseFirst!: () => void;
-  const firstGate = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
+  const entered = Promise.withResolvers<void>();
+  const releaseHandler = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<void>();
+  const aborting = Promise.withResolvers<void>();
+  let releases = 0;
+  const release = store.release.bind(store);
+  store.release = async (...args) => {
+    releases++;
+    await release(...args);
+  };
+  store.renew = async () => false;
+  await store.send("quiescence", { kind: "steer", text: "not accepted" });
+  const stop = startSignalPoll(store, "quiescence", {
+    onSteer: async () => {
+      entered.resolve();
+      await releaseHandler.promise;
+      throw new Error("cancelled");
+    },
+    onAbort: async () => {
+      aborting.resolve();
+      releaseHandler.resolve();
+      await cancelled.promise;
+    },
   });
-  const stop = startSignalPoll(
-    store,
-    "r1",
-    {
-      onSteer: async (text) => {
-        seen.push(text);
-        if (text === "first") await firstGate;
-      },
-      onAbort: async () => {},
-    },
-    { intervalMs: 60_000 },
-  );
-  await store.send("r1", { kind: "steer", text: "first" });
-  await until(() => seen.length === 1);
-  await store.send("r1", { kind: "steer", text: "second" });
-  const stopped = stop();
-  releaseFirst();
-  await stopped;
-  assert.deepEqual(seen, ["first"], "nothing consumed after stop");
-  assert.deepEqual(
-    (await store.takePending("r1")).map((s) => s.text),
-    ["second"],
-    "the undrained signal is still pending",
-  );
-});
-
-test("pg store: NOTIFY doorbell reaches a listener on a different connection", { skip }, async () => {
-  const sender = createPostgresRunSignalStore(URL!);
-  const receiver = createPostgresRunSignalStore(URL!);
-  const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
-    let rings = 0;
-    const off = receiver.onSignal(runId, () => rings++);
-    await sleep(300);
-    await sender.send(runId, { kind: "steer", text: "hello" });
-    await until(() => rings >= 1);
-    off();
-    const taken = await receiver.takePending(runId);
-    assert.deepEqual(taken, [{ kind: "steer", text: "hello" }], "the durable row is still the truth");
+    await entered.promise;
+    t.mock.timers.tick(10_000);
+    await aborting.promise;
+    await sleep(20);
+    assert.equal(releases, 0);
   } finally {
-    await sender.close?.();
-    await receiver.close?.();
+    cancelled.resolve();
+    releaseHandler.resolve();
+    await stop();
   }
-});
-
-test("pg store: takeLive consumes steers but leaves an abort pending for the terminal drain", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
-  const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  try {
-    await store.send(runId, { kind: "steer", text: "a" });
-    await store.send(runId, { kind: "abort" });
-    await store.send(runId, { kind: "steer", text: "b" });
-    assert.deepEqual(
-      (await store.takeLive(runId)).map((s) => s.kind),
-      ["steer", "abort", "steer"],
-      "a live drain sees everything pending, in order",
-    );
-    assert.deepEqual(
-      (await store.takeLive(runId)).map((s) => s.kind),
-      ["abort"],
-      "steers are consumed exactly once; the abort is never consumed by a live drain",
-    );
-    assert.ok((await store.pendingRunIds()).includes(runId));
-    assert.deepEqual(
-      (await store.takePending(runId)).map((s) => s.kind),
-      ["abort"],
-      "the terminal drain is what consumes the abort",
-    );
-    assert.deepEqual(await store.takeLive(runId), []);
-    assert.ok(!(await store.pendingRunIds()).includes(runId), "nothing outlives the terminal drain");
-  } finally {
-    await store.close?.();
-  }
-});
-
-test("memory store: a signal round-trips ts and request intact", async () => {
-  const store = createMemoryRunSignalStore();
-  const request = {
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
-    text: "why did you do it wrong?",
-  };
-  await store.send("r1", { kind: "steer", text: "why did you do it wrong?", ts: "1.2", request });
-  const [taken] = await store.takePending("r1");
-  assert.equal(taken!.ts, "1.2");
-  assert.deepEqual(taken!.request, request);
-});
-
-test("pg store: a signal round-trips ts and request intact", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
-  const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const request = {
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "channel" as const, threadRef: "ch:C1:1.1" },
-    text: "why did you do it wrong?",
-  };
-  try {
-    await store.send(runId, { kind: "steer", text: "why did you do it wrong?", ts: "1784151699.674169", request });
-    const [taken] = await store.takePending(runId);
-    assert.equal(taken!.ts, "1784151699.674169", "ts survives the pg round-trip (the inert-#1196 bug)");
-    assert.deepEqual(taken!.request, request, "the stored surface request survives for orphan replay");
-  } finally {
-    await store.close?.();
-  }
-});
-
-test("memory store: pendingRunIds lists runs with unconsumed signals; prune is a no-op", async () => {
-  const store = createMemoryRunSignalStore();
-  await store.send("r1", { kind: "steer", text: "a" });
-  await store.send("r2", { kind: "abort" });
-  assert.deepEqual((await store.pendingRunIds()).sort(), ["r1", "r2"]);
-  await store.takePending("r1");
-  assert.deepEqual(await store.pendingRunIds(), ["r2"]);
-  await store.prune(0);
-  assert.deepEqual(await store.pendingRunIds(), ["r2"], "prune never touches unconsumed signals");
-});
-
-test("pg store: pendingRunIds lists unconsumed runs; prune deletes only old consumed rows", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
-  const a = `test-run-${Date.now()}-a-${Math.random().toString(36).slice(2)}`;
-  const b = `test-run-${Date.now()}-b-${Math.random().toString(36).slice(2)}`;
-  try {
-    await store.send(a, { kind: "steer", text: "x" });
-    await store.send(b, { kind: "steer", text: "y" });
-    const pending = await store.pendingRunIds();
-    assert.ok(pending.includes(a) && pending.includes(b));
-    await store.takePending(a);
-    await store.prune(0);
-    const after = await store.pendingRunIds();
-    assert.ok(!after.includes(a), "consumed and pruned");
-    assert.ok(after.includes(b), "unconsumed survives any prune");
-    assert.equal((await store.takePending(b)).length, 1, "the surviving signal is intact");
-  } finally {
-    await store.close?.();
-  }
-});
-
-test("memory store: a signal carrying a dedupe key is stored once, and the second send reports the duplicate", async () => {
-  const store = createMemoryRunSignalStore();
-  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), true);
-  assert.equal(await store.send("r1", { kind: "steer", text: "go", dedupeKey: "slack:B:C1:1.0:steer" }), false);
-  assert.equal(await store.send("r1", { kind: "steer", text: "again" }), true, "keyless signals never dedupe");
-  assert.equal((await store.takePending("r1")).length, 2);
-});
-
-test("pg store: a dedupe key collapses a redelivered steer to one row", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
-  const key = `slack:B:C1:${Date.now()}:steer`;
-  try {
-    assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), true);
-    assert.equal(await store.send("r-dedupe", { kind: "steer", text: "go", dedupeKey: key }), false);
-    assert.equal((await store.takePending("r-dedupe")).length, 1);
-  } finally {
-    await store.close?.();
-  }
-});
-
-test("memory store: hasDedupeKey answers for keys already recorded", async () => {
-  const store = createMemoryRunSignalStore();
-  assert.equal(await store.hasDedupeKey("k"), false);
-  await store.send("r1", { kind: "steer", text: "go", dedupeKey: "k" });
-  assert.equal(await store.hasDedupeKey("k"), true);
-});
-
-test("pg store: hasDedupeKey answers for keys already recorded", { skip }, async () => {
-  const store = createPostgresRunSignalStore(URL!);
-  const key = `slack:B:C1:${Date.now()}:has`;
-  try {
-    assert.equal(await store.hasDedupeKey(key), false);
-    await store.send("r-has", { kind: "steer", text: "go", dedupeKey: key });
-    assert.equal(await store.hasDedupeKey(key), true);
-  } finally {
-    await store.close?.();
-  }
+  assert.equal(releases, 1);
 });

@@ -1,3 +1,4 @@
+import { createMemoryAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
@@ -12,6 +13,7 @@ export interface MemoryRuntime {
 const FENCE_HOLD_MS = 600_000;
 
 export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRuntime {
+  const admission = createMemoryAdvisoryLock();
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
   const runs = new Map<string, Run>();
   const byKey = new Map<string, string>();
@@ -36,6 +38,25 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const store: RunStore = {
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
+    withAdmission: (key, fn) => admission.withLock(`turn-admission:${key}`, fn),
+    async beginSignalTransfer(runId, targetRunId) {
+      const run = runs.get(runId);
+      if (!run || run.status !== "pending" || (run.signalTargetRunId && run.signalTargetRunId !== targetRunId))
+        return null;
+      run.signalTargetRunId = targetRunId;
+      return run;
+    },
+    async pendingSignalTransfers() {
+      return [...runs.values()].filter((run) => run.status === "pending" && run.signalTargetRunId);
+    },
+    async finishSignalTransfer(runId, result) {
+      const run = runs.get(runId);
+      if (!run || run.status !== "pending" || !run.signalTargetRunId) return;
+      run.status = "done";
+      run.result = result;
+      run.finishedAt = Date.now();
+      settle(run);
+    },
     async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
       if (dedupKey) {
         const existingId = byKey.get(dedupKey);
@@ -70,7 +91,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claim(workerId, ttlMs) {
       const pending = [...runs.values()]
-        .filter((r) => r.status === "pending" && !sessionHasRunning(r.sessionId))
+        .filter((r) => r.status === "pending" && !r.signalTargetRunId && !sessionHasRunning(r.sessionId))
         .sort((a, b) => a.createdAt - b.createdAt);
       const run = pending[0];
       if (!run) return null;
@@ -79,7 +100,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claimById(runId, workerId, ttlMs) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending" || sessionHasRunning(run.sessionId)) return null;
+      if (!run || run.status !== "pending" || run.signalTargetRunId || sessionHasRunning(run.sessionId)) return null;
       return lease(run, workerId, ttlMs);
     },
 
@@ -103,12 +124,19 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     async complete(runId, leaseToken, result) {
       const run = runs.get(runId);
       if (!run || run.leaseToken !== leaseToken) return false;
+      if (releasesDedupKey(result) && run.dedupKey?.startsWith("signal-delivery:")) {
+        run.status = "pending";
+        run.leaseToken = null;
+        run.leaseExpiresAt = null;
+        run.workerId = null;
+        return true;
+      }
       run.status = "done";
       run.result = result;
       run.leaseToken = null;
       run.leaseExpiresAt = null;
       run.finishedAt = Date.now();
-      if (releasesDedupKey(result) && run.dedupKey) {
+      if (releasesDedupKey(result) && run.dedupKey && !run.dedupKey.startsWith("signal-delivery:")) {
         byKey.delete(run.dedupKey);
         run.dedupKey = null;
       }
@@ -152,20 +180,27 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     async activeForThread(sessionId) {
       return (
         [...runs.values()]
-          .filter((r) => r.sessionId === sessionId && !isTerminal(r.status))
+          .filter((r) => r.sessionId === sessionId && !r.signalTargetRunId && !isTerminal(r.status))
           .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null
       );
     },
 
     async inFlightForThread(sessionId) {
       return [...runs.values()]
-        .filter((r) => r.sessionId === sessionId && !isTerminal(r.status))
+        .filter((r) => r.sessionId === sessionId && !r.signalTargetRunId && !isTerminal(r.status))
         .sort((a, b) => a.createdAt - b.createdAt);
     },
 
     async withdraw(runId) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending") return false;
+      if (!run || run.status !== "pending" || run.signalTargetRunId) return false;
+      if (run.dedupKey?.startsWith("signal-delivery:")) {
+        run.status = "done";
+        run.result = { status: "refused", reason: "withdrawn" };
+        run.finishedAt = Date.now();
+        settle(run);
+        return true;
+      }
       runs.delete(runId);
       if (run.dedupKey) byKey.delete(run.dedupKey);
       return true;

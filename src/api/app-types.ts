@@ -258,7 +258,7 @@ export interface SessionSearchHit {
 }
 
 export interface App {
-  turn(req: TurnRequest): Promise<TurnResult>;
+  turn(req: TurnRequest, signalId?: string): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
@@ -292,7 +292,7 @@ export interface App {
     runId: string,
     signal: RunSignal,
     viewer?: string,
-  ): Promise<{ accepted: boolean; reason?: string; replayed?: boolean }>;
+  ): Promise<{ accepted: boolean; reason?: string; signalId?: string; runId?: string; deliveryRunId?: string }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
   getSession(
     sessionId: string,

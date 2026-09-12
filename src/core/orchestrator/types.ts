@@ -88,6 +88,7 @@ export interface OrchestratorInput extends Omit<
   conversation: Conversation;
   origin: TurnOrigin;
   runId?: string;
+  runLeaseToken?: string;
   attempt?: number;
 
   runStartedAt?: number;

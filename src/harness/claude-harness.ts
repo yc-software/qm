@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { createSignalReceipts } from "./signal-receipts.ts";
+import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chownSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -144,7 +145,7 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
   private ended = false;
 
   push(value: SDKUserMessage): void {
-    if (this.ended) return;
+    if (this.ended) throw new Error("prompt queue closed");
     const waiter = this.waiters.shift();
     if (waiter) waiter({ value, done: false });
     else this.values.push(value);
@@ -153,6 +154,7 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
   close(): void {
     if (this.ended) return;
     this.ended = true;
+    this.values.length = 0;
     for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true });
   }
 
@@ -314,6 +316,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       consult: { description: "Provide an independent expert analysis.", prompt: childPolicy, tools: childToolNames },
     };
     const queue = new MessageQueue();
+    const signalReceipts = createSignalReceipts();
     let terminateProvider = () => {
       queue.close();
       controller.abort();
@@ -467,19 +470,26 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             opts.signals,
             turn.runId,
             {
-              onAbort: async () => interrupt(true),
-              onSteer: async (steer, ts) => {
+              onAbort: async () => {
+                await interrupt(true);
+                signalReceipts.close();
+              },
+              onSteer: async (steer, ts, signalId, delivery) => {
+                const prompt = { ...userMessage(steer), uuid: randomUUID() };
+                await signalReceipts.waitFor(prompt.uuid, async () => {
+                  steerPrompts.push(steer);
+                  pendingPrompts++;
+                  queue.push(prompt);
+                });
+                await delivery.accepted();
                 await turn.emit({
                   type: "user",
-                  payload: { text: steer, ...(ts ? { ts } : {}), steered: true },
+                  payload: { text: steer, signalId, ...(ts ? { ts } : {}), steered: true },
                   scopeLabel: turn.scopeLabel,
                 });
-                steerPrompts.push(steer);
-                pendingPrompts++;
-                queue.push(userMessage(steer));
               },
             },
-            { onError: (error) => swallow("claude signal poll", error) },
+            { runLeaseToken: turn.runLeaseToken, onError: (error) => swallow("claude signal poll", error) },
           )
         : null;
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
@@ -543,6 +553,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       const consume = (async () => {
         for await (const message of sdkQuery) {
           if (settled) break;
+          if (message.type === "user" && message.uuid) signalReceipts.accept(message.uuid);
           if (message.type === "assistant") {
             const usage = message.message.usage;
             const seen = {
@@ -659,6 +670,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           pendingPrompts = Math.max(0, pendingPrompts - 1);
           if (pendingPrompts > 0) continue;
           if (!signalsStopped) {
+            signalReceipts.close();
             await stopSignals?.();
             signalsStopped = true;
           }
@@ -783,6 +795,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           swallow("claude: llm request record", error);
         }
       }
+      signalReceipts.close();
       queue.close();
       if (!signalsStopped) await stopSignals?.();
       turn.cancel?.removeEventListener("abort", onCancel);
