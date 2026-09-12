@@ -47,6 +47,48 @@ test("Files uses compact rows that open directly", () => {
   );
 });
 
+test("splitting the file row into an open anchor and an actions cell keeps the click target and the row height", () => {
+  const start = source.indexOf("function fileRow(");
+  const row = source.slice(start, source.indexOf("\nfunction rowsFromPage", start));
+  assert.match(
+    row,
+    /class="btn danger compact"/,
+    "a full-size button is taller than the row body and would stretch every deletable row past its neighbours",
+  );
+  assert.match(css, /\.file-row \{[^}]*padding: 0;/);
+  assert.match(
+    css,
+    /\.file-row-main \{[^}]*padding: 12px;/,
+    "the row's click ring belongs to the open anchor now; left on the outer div it stops opening the file",
+  );
+  assert.match(
+    css,
+    /\.file-row-actions \{[^}]*padding: 0 [\d.]+px 0 [\d.]+px;/,
+    "vertical padding on the actions cell makes deletable rows taller than the rows beside them",
+  );
+  assert.match(
+    css,
+    /\.file-row \{[^}]*column-gap: 0;/,
+    "an inherited column gap would end the open anchor short of the row's right edge on every row",
+  );
+  assert.match(css, /\.file-row \{[^}]*cursor: default;/);
+  assert.match(css, /\.file-row-main \{[^}]*cursor: pointer;/);
+  assert.match(
+    css,
+    /\.file-row-main:not\(\[href\]\) \{\s*cursor: default;/,
+    "an unopenable row must not advertise a navigation nothing performs",
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 700px\) \{\s*\.file-row-main \{\s*grid-template-columns: 22px minmax\(0, 1fr\);/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.file-row,\s*\.deploy-row \{\s*grid-template-columns: auto minmax\(0, 1fr\)/,
+    "a narrow-width override of the outer row would collapse the column the Delete button sits in",
+  );
+});
+
 test("Files groups rows by scope instead of repeating scope badges", () => {
   assert.match(source, /function groupFilesByScope\(files: FileRow\[\]\)/);
   assert.match(source, /groups\.map\(/);
