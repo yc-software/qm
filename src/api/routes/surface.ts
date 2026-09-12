@@ -13,6 +13,7 @@ import {
   fastModeModelIds,
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
+import { dropHidden } from "../../model/model-classification.ts";
 import { errMessage } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -1058,11 +1059,12 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshModels?.();
   const { res, deps } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
-  const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
+  const [webuiModels, baseModel, externalSlackParticipants, branding, classifications] = await Promise.all([
     deps.config.getWebuiModelsDurable(orgScope(deps)),
     deps.config.getBaseModelDurable(orgScope(deps)),
     deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
+    deps.config.getModelClassificationsDurable(orgScope(deps)),
   ]);
   const harnessId = deps.harnessId ?? "pi";
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
@@ -1085,7 +1087,11 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     ...(branding.selfLabel ? { selfLabel: branding.selfLabel } : {}),
   };
   return sendJson(res, 200, {
-    webuiModels: webuiModels != null ? configuredPicker : allowed,
+    webuiModels: dropHidden(
+      webuiModels != null ? configuredPicker : allowed,
+      classifications,
+      webuiModels != null ? [resolvedBase, ...configuredPicker] : [resolvedBase],
+    ),
     baseModel: resolvedBase,
     harnessId,
     ...(providerStatus && {

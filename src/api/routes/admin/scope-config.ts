@@ -6,6 +6,7 @@ import {
   harnessSupportsFastMode,
   HARNESS_IDS,
   selectableBaseModels,
+  DEFAULT_WEBUI_MODEL_IDS,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   modelServiceable,
@@ -19,6 +20,7 @@ import {
   selectableModelCatalog,
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
+import { dropHidden, type ModelStatus } from "../../../model/model-classification.ts";
 import { sendJson } from "../../http.ts";
 import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
 import {
@@ -305,16 +307,33 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     (currentProvider === "anthropic" || currentProvider === "openai" || currentProvider === "openrouter")
       ? ({ id: runtime.modelId, name: resolvedCurrent!.name, provider: currentProvider } satisfies ModelCatalogEntry)
       : null;
+  const classifications = (values.modelClassifications as Record<string, ModelStatus> | undefined) ?? {};
   const modelsFor = (harnessId: string) => {
     const models = selectableCatalogForHarness(catalog, harnessId);
     if (currentModel && runtime?.harnessId === harnessId && !models.some((model) => model.id === currentModel.id))
       models.push(currentModel);
+    const visible = new Set(
+      dropHidden(
+        models.map((model) => model.id),
+        classifications,
+        currentModel ? [currentModel.id] : [],
+      ),
+    );
     return models.filter(
       (model) =>
-        modelServiceable(model.id, providersFor(harnessId)) ||
-        (runtime?.harnessId === harnessId && currentModel?.id === model.id),
+        visible.has(model.id) &&
+        (modelServiceable(model.id, providersFor(harnessId)) ||
+          (runtime?.harnessId === harnessId && currentModel?.id === model.id)),
     );
   };
+  const browseCurrent = deps.config.getBrowseModel(targetScope);
+  const browseVisible = new Set(
+    dropHidden(
+      selectableBaseModels().map((model) => model.id),
+      classifications,
+      browseCurrent ? [browseCurrent] : [],
+    ),
+  );
   return sendJson(res, 200, {
     scopeId: targetScope,
     ...environmentMetadata,
@@ -335,8 +354,9 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
-    browseModelOptions: selectableBaseModels().filter((m) =>
-      modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
+    webuiModelDefaults: [...DEFAULT_WEBUI_MODEL_IDS],
+    browseModelOptions: selectableBaseModels().filter(
+      (m) => browseVisible.has(m.id) && modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),
     egressEnforcement: {
       backend: scopeProfile?.backend ?? deps.sandboxBackend ?? "unknown",

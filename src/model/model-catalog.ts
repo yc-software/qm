@@ -45,11 +45,11 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
   return [...builtIns, ...[...overlayModelCatalog(), ...customModelCatalog()].filter((model) => !known.has(model.id))];
 }
 
-async function boundedJson(response: Response): Promise<unknown> {
+export async function boundedJson(response: Response): Promise<unknown> {
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_CATALOG_BYTES)
-    throw new Error("OpenRouter catalog is too large");
-  if (!response.body) throw new Error("OpenRouter catalog has no body");
+    throw new Error("model catalog is too large");
+  if (!response.body) throw new Error("model catalog has no body");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let bytes = 0;
@@ -60,7 +60,7 @@ async function boundedJson(response: Response): Promise<unknown> {
     bytes += chunk.value.byteLength;
     if (bytes > MAX_CATALOG_BYTES) {
       await reader.cancel();
-      throw new Error("OpenRouter catalog is too large");
+      throw new Error("model catalog is too large");
     }
     text += decoder.decode(chunk.value, { stream: true });
   }
