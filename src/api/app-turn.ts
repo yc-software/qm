@@ -82,6 +82,8 @@ export function createTurnMethods(
       if (!deps.identity.isInternal(actor)) {
         return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
       }
+      const origin = resolveTurnOrigin(req);
+      const peerTurn = origin.kind === "peer";
       let projectAudience: Principal[] | undefined;
       let projectName: string | undefined;
       let projectVersion: string | undefined;
@@ -116,7 +118,7 @@ export function createTurnMethods(
         projectName = project.name;
         projectVersion = String(project.updatedAt);
         sessionParticipantIds = [...activeMemberIds];
-      } else if (req.surface === "web" && req.conversation.kind !== "dm") {
+      } else if ((req.surface === "web" || peerTurn) && req.conversation.kind !== "dm") {
         if (!conversationRef || !(await mayUseSharedScope(req.conversation.kind, conversationRef, actor))) {
           return { status: "refused", reason: "you're not a member of that context" };
         }
@@ -145,7 +147,7 @@ export function createTurnMethods(
       }
 
       const individualAuth = !!deps.userModelCredentials && (await deps.config.getIndividualModelAuthDurable());
-      if (req.surface === "web") {
+      if (req.surface === "web" || peerTurn) {
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
         if (existing) {
@@ -153,9 +155,16 @@ export function createTurnMethods(
           if (existing.scopeId !== claimed) {
             return { status: "refused", reason: "that conversation lives in a different context" };
           }
+          if (peerTurn && (await deps.sessions.getForParticipant(existing.id, actor.id))?.archived) {
+            return { status: "refused", reason: "that conversation is archived" };
+          }
+        } else if (peerTurn) {
+          return { status: "refused", reason: "that conversation doesn't exist" };
         } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
           return { status: "refused", reason: "you can only start a new conversation on your own thread" };
         }
+      }
+      if (req.surface === "web") {
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);
         const fallbackHarness = isHarnessId(deps.harnessId) ? deps.harnessId : "pi";
@@ -248,8 +257,6 @@ export function createTurnMethods(
         ...(req.conversation.isMpim !== undefined ? { isMpim: req.conversation.isMpim } : {}),
         ...(publishMembers ? { publishMembers } : {}),
       };
-
-      const origin = resolveTurnOrigin(req);
 
       const input = {
         surface: req.surface,
@@ -346,26 +353,28 @@ export function createTurnMethods(
       if (
         req.surface !== "web" &&
         deps.signals &&
-        (origin.kind === "human" || origin.kind === "ambient") &&
+        (origin.kind === "human" || origin.kind === "ambient" || origin.kind === "peer") &&
         !req.approval &&
         !req.spawned &&
         !req.idempotencyKey
       ) {
         const live = await deps.runs.activeForThread(conversation.threadRef);
         const liveOriginKind = live ? resolveTurnOrigin(live.request).kind : undefined;
-        const personIntoAutomation =
+        const foreignIntoAutomation =
           liveOriginKind === "automation" &&
-          (origin.kind === "human" || (origin.kind === "ambient" && origin.live === true)) &&
+          (origin.kind === "peer" || origin.kind === "human" || (origin.kind === "ambient" && origin.live === true)) &&
           !(origin.kind === "human" && isHalt(req.text));
         if (live && redeliveryKey && live.dedupKey === redeliveryKey) return { status: "silent" };
-        if (live && !isTerminal(live.status) && !personIntoAutomation) {
+        if (live && !isTerminal(live.status) && !foreignIntoAutomation) {
+          const steerer =
+            origin.kind === "peer" ? { id: origin.senderSessionId, displayName: origin.senderAgentName } : actor;
           const steerText = attributedSteerText(
-            actor,
-            origin.kind === "ambient" ? null : live.request.actor.id,
+            steerer,
+            origin.kind === "ambient" || origin.kind === "peer" ? null : live.request.actor.id,
             req.text,
           );
           let injectedText = steerText;
-          if (origin.kind === "ambient") {
+          if (origin.kind === "ambient" || origin.kind === "peer") {
             const session = await deps.sessions.getByThread(conversation.threadRef);
             const decision = await deps.orchestrator.screenSecuritySteer({
               payload: steerText,
