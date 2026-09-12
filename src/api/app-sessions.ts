@@ -58,6 +58,7 @@ export function createSessionMethods(
   | "listFilesForViewer"
   | "uploadFileForViewer"
   | "openFileForViewer"
+  | "deleteFileForViewer"
   | "listSessions"
   | "searchSessions"
   | "sessionBackground"
@@ -372,6 +373,21 @@ export function createSessionMethods(
       const opened = await deps.files.open(id);
       if (!opened) return null;
       return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
+    },
+
+    async deleteFileForViewer(id, principalId) {
+      const art = await deps.files.get(id);
+      if (!art) return "not_found";
+      if (!(await principalManagesArtifactHome(art.ownerScopeId, art.createdBy, principalId))) return "forbidden";
+      await deps.files.delete(id);
+      deps.auditLog?.record({
+        at: Date.now(),
+        principalId,
+        action: "file.delete",
+        resource: art.path,
+        scopeLabel: art.createdInScope ?? art.ownerScopeId,
+      });
+      return "deleted";
     },
 
     async listSessions(principalId) {

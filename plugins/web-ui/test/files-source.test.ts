@@ -20,15 +20,20 @@ test("Files uses compact rows that open directly", () => {
   const start = source.indexOf("function fileRow(");
   const end = source.indexOf("\nfunction rowsFromPage", start);
   const row = source.slice(start, end);
-  assert.match(row, /<a class="list-row file-row" href=\$\{contentUrl\} target="_blank"/);
+  assert.match(row, /<div class="list-row file-row">/);
+  assert.match(row, /<a class="file-row-main" href=\$\{contentUrl\} target="_blank"/);
+  assert.match(row, /<span class="file-row-main">\$\{content\}<\/span>/);
   assert.doesNotMatch(row, /file-row-type|\$\{f\.mimetype\}|class="badge"|\$\{f\.kind\}|>Open</);
   assert.doesNotMatch(row, /scopeChip|fileScope\(f\)/);
   assert.match(row, /formatBytes\(f\.sizeBytes\)/);
   assert.match(row, /relTime\(f\.createdAt\)/);
-  assert.match(css, /\.file-row \{\s*color: inherit;\s*text-decoration: none;/);
   assert.match(
     css,
-    /\.file-row \{\s*display: grid;\s*grid-template-columns: 22px minmax\(0, 1fr\) auto;\s*justify-content: initial;/,
+    /\.file-row \{\s*display: grid;\s*grid-template-columns: minmax\(0, 1fr\) auto;[^}]*justify-content: initial;/,
+  );
+  assert.match(
+    css,
+    /\.file-row-main \{\s*display: grid;\s*grid-template-columns: 22px minmax\(0, 1fr\) auto;[^}]*color: inherit;\s*text-decoration: none;/,
   );
   assert.match(css, /\.file-row \.list-row-title \{\s*justify-self: stretch;\s*text-align: left;/);
   assert.match(css, /\.file-row \.list-row-meta \{\s*gap: 14px;/);
