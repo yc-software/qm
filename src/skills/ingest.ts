@@ -53,6 +53,13 @@ function matchesAny(path: string, globs: string[] | undefined): boolean {
   return !!globs && globs.some((g) => globToRegExp(g).test(path));
 }
 
+const SKILL_MANIFEST_SUFFIX = "/SKILL.md";
+
+function asSkillDirGlob(glob: string): string {
+  if (glob === "SKILL.md") return "";
+  return glob.endsWith(SKILL_MANIFEST_SUFFIX) ? glob.slice(0, -SKILL_MANIFEST_SUFFIX.length) : glob;
+}
+
 function skillDirOf(skillMdPath: string): string {
   const i = skillMdPath.lastIndexOf("/");
   return i < 0 ? "" : skillMdPath.slice(0, i);
@@ -172,14 +179,31 @@ export interface IngestContext {
 
 export function planIngest(repo: FetchedRepo, ctx: IngestContext): IngestPlan {
   const cfg = ctx.config;
-  const counts = { total: 0, eligible: 0, scope: 0, private: 0, collision: 0, "binary-asset": 0, malformed: 0 };
+  const counts = {
+    total: 0,
+    filtered: 0,
+    eligible: 0,
+    scope: 0,
+    private: 0,
+    collision: 0,
+    "binary-asset": 0,
+    malformed: 0,
+  };
   const candidates: IngestCandidate[] = [];
+  const selected = cfg?.skillGlobs?.length ? cfg.skillGlobs.map(asSkillDirGlob) : undefined;
+  const excluded = cfg?.exclude?.map(asSkillDirGlob);
 
   for (const f of repo.files) {
     if (lastSegment(f.path) !== "SKILL.md") continue;
     const skillDir = skillDirOf(f.path);
-    if (cfg?.skillGlobs && !matchesAny(skillDir, cfg.skillGlobs)) continue;
-    if (matchesAny(skillDir, cfg?.exclude)) continue;
+    if (selected && !matchesAny(skillDir, selected)) {
+      counts.filtered++;
+      continue;
+    }
+    if (isExcludedPath(skillDir, excluded)) {
+      counts.filtered++;
+      continue;
+    }
 
     counts.total++;
     const upstreamName = lastSegment(skillDir) || lastSegment(f.path);
