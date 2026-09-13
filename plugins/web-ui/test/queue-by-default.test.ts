@@ -113,7 +113,7 @@ test("Steer withdraws the queued run before it signals, and only then shows the 
   );
   assert.match(
     fn,
-    /if \(!outcome\.ok\) recoverEndedRunSteer\(agent, queued\.text, outcome\);/,
+    /if \(!outcome\.ok\) await recoverEndedRunSteer\(agent, queued\.text, outcome\);/,
     "a steer the run outlived is recovered (replayed run followed, or resent as its own turn)",
   );
   assert.match(fn, /if \(!\(await withdrawRun\(queued\.runId\)\)\) return ctx\.chat\.drawActiveChat\(agent\);/);

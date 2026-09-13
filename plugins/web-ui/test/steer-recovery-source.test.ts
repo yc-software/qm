@@ -49,7 +49,7 @@ test("a queued steer the run outlived settles every way: replay followed, ended 
   const at = composer.indexOf("async function steerQueued");
   assert.ok(at >= 0);
   const body = composer.slice(at, composer.indexOf("function recoverEndedRunSteer", at));
-  assert.match(body, /if \(!outcome\.ok\) recoverEndedRunSteer\(agent, queued\.text, outcome\);/);
+  assert.match(body, /if \(!outcome\.ok\) await recoverEndedRunSteer\(agent, queued\.text, outcome\);/);
   assert.match(
     body,
     /if \(!\(await enqueueTurn\(agent, threadRef, queued\.text\)\)\) composerState\.draft = queued\.text;/,
