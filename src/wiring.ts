@@ -135,6 +135,7 @@ import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
+import { createLegacyFlyDeployProvider } from "./deploy/legacy-fly-deploy-provider.ts";
 import { createFlyDeployProvider } from "./deploy/fly-deploy-provider.ts";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
@@ -456,6 +457,7 @@ export interface BuiltApp {
   sandboxMigration: SandboxMigrationRunner;
   sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
+  deployReleaseTransfer: BlobTransferStore;
   files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
   livenessCache: LivenessCache;
@@ -704,6 +706,14 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
+  const deployReleaseTransfer: BlobTransferStore =
+    config.transferStore === "s3" && config.s3Bucket
+      ? createS3BlobTransferStore({
+          bucket: config.s3Bucket,
+          ...(config.s3Region ? { region: config.s3Region } : {}),
+          prefix: `${config.s3Prefix ?? ""}deploy-releases/`,
+        })
+      : createLocalBlobTransferStore(join(config.dataDir, "deploy-releases"));
   const fileBytes: DurableByteStore =
     config.snapshotStore === "s3" && config.s3Bucket
       ? createS3DurableByteStore({
@@ -1314,6 +1324,17 @@ export function buildApp(
       }),
   };
   const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
+  const legacyDeploymentIds = new Set(config.flyLegacyDeploymentIds);
+  const legacyFlyProvider = legacyDeploymentIds.size
+    ? createLegacyFlyDeployProvider({
+        ...config.flyDeploy,
+        image: config.flyDeploy.baseImage,
+        region: config.flyDeploy.region ?? "lhr",
+        apiBaseUrl: config.apiBaseUrl ?? "",
+        capabilitySecret: config.capabilitySecret ?? "",
+        releaseStore: deployReleaseTransfer,
+      })
+    : undefined;
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
@@ -1357,6 +1378,12 @@ export function buildApp(
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const deployService = createDeployService({
+    ...(legacyFlyProvider
+      ? {
+          providerFor: (deployment: Deployment) =>
+            legacyDeploymentIds.has(deployment.id) ? legacyFlyProvider : deployProvider,
+        }
+      : {}),
     deployStore,
     provider: deployProvider,
     deployDir: join(config.dataDir, "deployments"),
@@ -2132,6 +2159,7 @@ export function buildApp(
     sandboxResources,
     advisoryLock,
     blobTransfer,
+    deployReleaseTransfer,
     files,
     ...(fileUploads ? { fileUploads } : {}),
     livenessCache,
@@ -2251,6 +2279,7 @@ export function serverDeps(
     filesDirectUploadsEnabled: config.filesDirectUploadsEnabled,
     memory: built.memory,
     blobTransfer: built.blobTransfer,
+    deployReleaseTransfer: built.deployReleaseTransfer,
     sandboxBackend: built.sandbox.profile.backend,
     egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
     egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {

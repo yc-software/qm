@@ -175,4 +175,5 @@ export interface ServerDeps {
   secretDrops?: SecretDropStore;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   blobTransfer?: BlobTransferStore;
+  deployReleaseTransfer?: BlobTransferStore;
 }

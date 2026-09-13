@@ -63,6 +63,7 @@ export interface ReachOptions {
 
 export interface DeployService {
   readonly providerProfile: DeployProfile;
+  providerProfileFor?(deployment: Deployment): DeployProfile;
   deploy(input: DeployInput): Promise<Deployment>;
   redeploy(
     id: string,
@@ -108,6 +109,7 @@ export interface DeploymentGrantee {
 export interface DeployServiceDeps {
   deployStore: DeployStore;
   provider: DeployProvider;
+  providerFor?: (deployment: Deployment) => DeployProvider;
   deployDir: string;
   auditLog: AuditLog;
   acl: AclStore;
@@ -152,6 +154,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
   const advisoryLock = deps.advisoryLock ?? createNoopAdvisoryLock();
   const deployQueue = createKeyedQueue();
+  const providerFor = (deployment: Deployment): DeployProvider => deps.providerFor?.(deployment) ?? deps.provider;
   function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
   }
@@ -162,15 +165,16 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     fromVersion?: number,
   ): Promise<DeployEndpoint> => {
     const d = (await deps.deployStore.get(id))!;
+    const provider = providerFor(d);
     const deploymentEnv = await deps.deploymentEnv?.(d);
     if (deploymentEnv && Object.keys(deploymentEnv).length)
       version = { ...version, env: { ...version.env, ...deploymentEnv } };
     let endpoint: DeployEndpoint;
-    if (deps.provider.reconcile && version.commit) {
+    if (provider.reconcile && version.commit) {
       const diff = await deps.deployStore.diffVersions(id, fromVersion, version.version);
       const allPaths = ((await deps.deployStore.treeOf(id, version.version)) ?? []).map((f) => f.path);
       const gitBundle = await deps.deployStore.bundleOf(id, version.version);
-      endpoint = await deps.provider.reconcile(d, version, {
+      endpoint = await provider.reconcile(d, version, {
         ...(gitBundle ? { gitBundle } : {}),
         changedPaths: diff ? [...diff.added, ...diff.modified].map((f) => f.path) : allPaths,
         deletedPaths: diff?.deleted.map((f) => f.path) ?? [],
@@ -183,7 +187,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (files == null) throw new Error(`cannot materialize deployment ${id} version ${version.version}`);
         materialized = { ...version, snapshotDir: await snapshotFiles(deps.deployDir, files) };
       }
-      endpoint = await deps.provider.apply(d, materialized);
+      endpoint = await provider.apply(d, materialized);
     }
     if (endpoint.image && endpoint.image !== version.image) {
       await deps.deployStore.setVersionImage(id, version.version, endpoint.image);
@@ -198,10 +202,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   };
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
-    if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
+    const provider = providerFor(d);
+    if (!provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
     const version = d.versions.find((v) => v.version === d.currentVersion);
     if (!version) return d.endpoint;
-    const resolved = await deps.provider.resolveEndpoint(d, version);
+    const resolved = await provider.resolveEndpoint(d, version);
     if (resolved) {
       if (!endpointsEqual(resolved, d.endpoint)) await deps.deployStore.setEndpoint(d.id, resolved);
       return resolved;
@@ -209,7 +214,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return withDeployLock(d.id, async () => {
       const cur = (await deps.deployStore.get(d.id)) ?? d;
       const v = cur.versions.find((x) => x.version === cur.currentVersion) ?? version;
-      const again = await deps.provider.resolveEndpoint!(cur, v);
+      const again = await providerFor(cur).resolveEndpoint?.(cur, v);
       if (again) {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
         return again;
@@ -343,6 +348,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   return {
     providerProfile: deps.provider.profile,
+    providerProfileFor: (deployment) => providerFor(deployment).profile,
 
     async deploy(input) {
       if (input.name !== undefined) {
@@ -433,7 +439,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return withDeployLock(id, async () => {
         const d = await deps.deployStore.get(id);
         if (!d) return;
-        await deps.provider.destroy(d);
+        await providerFor(d).destroy(d);
         await deps.deployStore.setStatus(id, "archived");
         await deps.deployStore.setEndpoint(id, null);
       });
@@ -451,7 +457,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           const endpoint = await applyVersion(id, version, d.appliedVersion);
           await markVersionRunning(id, version.version, endpoint);
         } catch (error) {
-          await deps.provider
+          await providerFor(d)
             .destroy(d)
             .catch((cleanupError) => swallow("deploy restore runtime cleanup", cleanupError));
           await deps.deployStore
@@ -554,10 +560,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async deploymentLogs(idOrName, opts): Promise<string | null> {
-      if (!deps.provider.logs) return null;
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d || d.status !== "running") return null;
-      return deps.provider.logs(d, opts);
+      return (await providerFor(d).logs?.(d, opts)) ?? null;
     },
 
     async gitRepoPath(idOrName) {
@@ -604,17 +609,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async reapIdleDeployments(ttlMs, now = Date.now()) {
       const result = await leaderLease.hold("deployments:reaper", async () => {
-        if (deps.provider.profile.managedScaleToZero) return 0;
         let stopped = 0;
         for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
+          if (d.status !== "running" || providerFor(d).profile.managedScaleToZero) continue;
           if (d.alwaysOn) continue;
           const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
           if (now - last < ttlMs) continue;
           await withDeployLock(d.id, async () => {
             const cur = await deps.deployStore.get(d.id);
             if (!cur || cur.status !== "running" || cur.alwaysOn) return;
-            await deps.provider.destroy(cur);
+            const provider = providerFor(cur);
+            if (provider.profile.managedScaleToZero) return;
+            await provider.destroy(cur);
             await deps.deployStore.setStatus(d.id, "stopped");
             await deps.deployStore.setEndpoint(d.id, null);
             stopped++;

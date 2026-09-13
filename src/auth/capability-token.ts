@@ -10,6 +10,7 @@ export const OAUTH_CONSENT_AUD = "oauth-consent";
 export const CREDENTIAL_BROKER_AUD = "credential-broker";
 export const EGRESS_PROXY_AUD = "egress-proxy";
 export const BLOB_TRANSFER_AUD = "blob-transfer";
+export const DEPLOY_RELEASE_AUD = "deploy-release";
 export const SECRET_DROP_AUD = "secret-drop";
 
 interface BlobGrant {
@@ -112,4 +113,23 @@ export async function verifyBlobTransferCapability(
   if (grant.id !== undefined && (typeof grant.id !== "string" || !BLOB_ID.test(grant.id))) return null;
   if (expected.dir === "read" ? grant.id !== expected.id : grant.id !== undefined) return null;
   return claims as BlobTransferClaims;
+}
+
+export async function verifyDeployReleaseCapability(
+  token: string,
+  secret: string | string[],
+  blobId: string,
+  now: number = Date.now(),
+): Promise<CapabilityClaims | null> {
+  const claims = await verifyCapabilityToken(token, secret, now);
+  if (
+    !claims ||
+    claims.aud !== DEPLOY_RELEASE_AUD ||
+    claims.blob?.dir !== "read" ||
+    claims.blob.id !== blobId ||
+    !BLOB_ID.test(blobId)
+  ) {
+    return null;
+  }
+  return claims;
 }
