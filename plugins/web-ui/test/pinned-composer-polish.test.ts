@@ -36,3 +36,11 @@ test("composer status rows share the responsive input font size", () => {
     for (const declaration of declarations) assert.match(declaration[1], /^var\(--composer-font-size[,)]/);
   }
 });
+
+test("queued cards tuck beneath the next card just as the queue tucks beneath the composer", () => {
+  const strip = css.match(/\.queued-strip \{([^}]+)\}/)?.[1] ?? "";
+  const stacked = css.match(/\.queued-chip \+ \.queued-chip \{([^}]+)\}/)?.[1] ?? "";
+  assert.doesNotMatch(strip, /gap:/);
+  assert.match(strip, /margin: 0 auto -10px;/);
+  assert.match(stacked, /margin-top: -10px;/);
+});

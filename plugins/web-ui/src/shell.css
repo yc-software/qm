@@ -1817,7 +1817,6 @@ a.chat-row-open {
   z-index: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
   width: min(calc(var(--content-w) - 24px), calc(100% - 56px));
   margin: 0 auto -10px;
 }
@@ -1833,6 +1832,9 @@ a.chat-row-open {
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.2;
+}
+.queued-chip + .queued-chip {
+  margin-top: -10px;
 }
 .queued-tag {
   flex: none;
