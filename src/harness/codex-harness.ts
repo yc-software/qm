@@ -1194,6 +1194,15 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       } else {
         const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : textFromTurn(result);
+        if (
+          !turn.surfaceTools &&
+          !ref.pendingApprovals?.length &&
+          !terminal &&
+          !state.stopped &&
+          !ref.attachmentsStaged &&
+          !reply.trim()
+        )
+          throw new NonRetryableTurnError("Codex completed without a final response or delivered output");
         for (const thinking of reasoningFromTurn(result))
           await turn.emit({ type: "thinking", payload: { thinking }, scopeLabel: turn.scopeLabel });
         if (reply && !terminal) {
