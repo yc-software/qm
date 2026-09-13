@@ -46,7 +46,7 @@ import {
   type SplitEdge,
 } from "./split-layout";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
-import { preservingFocus } from "./pane-focus";
+import { focusComposerOnPaneClick, preservingFocus } from "./pane-focus";
 import { attachTooltip, tip } from "./tooltip";
 import { icon, workingWave } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
@@ -196,6 +196,7 @@ function buildDock(): DockviewApi {
     singleTabMode: "fullwidth",
     disableFloatingGroups: true,
   });
+  focusComposerOnPaneClick(dockEl, () => paneContents.get(api.activePanel?.id ?? "")?.element ?? null);
   const inner = dockEl.querySelector(":scope > .dv-dockview") as HTMLElement | null;
   const box = (inner ?? dockEl).getBoundingClientRect();
   if (box.width > 0) api.layout(box.width, box.height, true);
