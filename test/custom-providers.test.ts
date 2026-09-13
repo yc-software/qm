@@ -9,7 +9,12 @@ import {
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
-import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import {
+  defaultWebuiModelIds,
+  modelSupportedByHarness,
+  modelServiceable,
+  resolveModel,
+} from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
 
@@ -75,9 +80,11 @@ test("a registered custom model is serviceable regardless of built-in key availa
 test("catalog lists custom models; clearing the registry removes them", () => {
   setCustomProviders([GATEWAY]);
   assert.deepEqual(customModelCatalog(), [{ id: "acme-large", name: "Acme Large", provider: "acme-gateway" }]);
+  assert.ok(defaultWebuiModelIds().includes("acme-large"), "custom models join the default web-UI picker set");
   setCustomProviders([]);
   assert.equal(isCustomModelId("acme-large"), false);
   assert.equal(resolveModel("acme-large"), undefined);
+  assert.ok(!defaultWebuiModelIds().includes("acme-large"));
 });
 
 test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model lists", () => {

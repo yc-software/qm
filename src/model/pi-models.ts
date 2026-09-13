@@ -2,7 +2,7 @@ import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseModelOverlay, type ModelOverlay } from "./model-overlay.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import { isCustomModelId, resolveCustomModel, customModelCatalog } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -282,7 +282,11 @@ export function overlayModelCatalog(): Array<{ id: string; name: string; provide
 }
 
 export function defaultWebuiModelIds(): readonly string[] {
-  return [...DEFAULT_WEBUI_MODEL_IDS, ...[...overlays.values()].filter((m) => m.webui).map((m) => m.id)];
+  return [
+    ...DEFAULT_WEBUI_MODEL_IDS,
+    ...[...overlays.values()].filter((m) => m.webui).map((m) => m.id),
+    ...customModelCatalog().map((m) => m.id),
+  ];
 }
 
 export function fastModeModelIds(): readonly string[] {
