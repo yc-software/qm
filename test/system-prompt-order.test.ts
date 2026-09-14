@@ -18,6 +18,7 @@ import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
+import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -96,6 +97,7 @@ function buildOrchestrator(
     skills?: SkillStore;
     skillBundles?: SkillBundleStore;
     securityScreener?: SecurityScreener;
+    harness?: ReturnType<typeof createMockHarness>;
     managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
@@ -491,6 +493,36 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
     systemOf(first.reply ?? ""),
     "the system prompt must be byte-identical across turns or every cached message block behind it is invalidated",
   );
+});
+
+test("the harness receives the clock and memory as volatile context; the durable note keeps the sender", async () => {
+  const mock = createMockHarness();
+  const received: HarnessTurnInput[] = [];
+  const harness = {
+    ...mock,
+    turns: {
+      ...mock.turns,
+      runTurn: (turn: HarnessTurnInput) => {
+        received.push(turn);
+        return mock.turns.runTurn(turn);
+      },
+    },
+  };
+  const { orchestrator: orch, memory } = buildOrchestrator({ harness });
+  await memory.replace(scopeId("personal", "U1"), "- remembers the chartreuse mug");
+
+  const res = await orch.handleTurn(
+    dm("dm:U1:volatile-split", "hello", {
+      actor: { ...actor, displayName: "Alice" },
+      timezone: "America/New_York",
+    }),
+  );
+  assert.equal(res.status, "ok");
+  const turn = received.at(-1)!;
+  assert.match(turn.environment ?? "", /This message is from @Alice/);
+  assert.doesNotMatch(turn.environment ?? "", /The user's local time|chartreuse/);
+  assert.match(turn.volatileContext ?? "", /^<environment>\n## The user's local time/);
+  assert.match(turn.volatileContext ?? "", /chartreuse/);
 });
 
 test("the cached prefix survives skill-store reordering + a recordUse-style metadata update", async () => {

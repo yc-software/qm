@@ -1,5 +1,4 @@
 import { Type } from "typebox";
-import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +7,7 @@ import {
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
+  SettingsManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -646,6 +646,7 @@ function sumCacheUsage(
 
 interface IsolatedResources {
   resourceLoader: DefaultResourceLoader;
+  settingsManager: SettingsManager;
   cwd: string;
   agentDir: string;
 }
@@ -707,7 +708,7 @@ export function stoppedPartialTapeMessage(
 }
 
 export function withoutVolatileContext(message: unknown, sent: string, durable: string): unknown {
-  if (sent === durable) return message;
+  if (sent === durable || !durable.trim()) return message;
   const m = message as { content?: unknown };
   if (typeof m?.content === "string") return m.content === sent ? { ...m, content: durable } : message;
   if (!Array.isArray(m?.content)) return message;
@@ -1088,21 +1089,19 @@ export function wallClockTurnFailure(
   return !cancelAborted || wallClock === "abandoned";
 }
 
-export function sessionCwdPath(prefix: string, sessionId: string): string {
-  return join(tmpdir(), `${prefix}-cwd-${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}`);
+export function stableCwd(prefix: string): string {
+  return join(tmpdir(), `${prefix}-cwd`);
 }
 
-async function createIsolatedResources(
-  prefix: string,
-  sessionId: string,
-  systemPrompt: string,
-): Promise<IsolatedResources> {
-  const cwd = sessionCwdPath(prefix, sessionId);
+async function createIsolatedResources(prefix: string, systemPrompt: string): Promise<IsolatedResources> {
+  const cwd = stableCwd(prefix);
   mkdirSync(cwd, { recursive: true });
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
+  const settingsManager = SettingsManager.inMemory();
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
+    settingsManager,
     systemPrompt,
     noExtensions: true,
     noSkills: true,
@@ -1111,16 +1110,14 @@ async function createIsolatedResources(
     noContextFiles: true,
   });
   await resourceLoader.reload();
-  return { resourceLoader, cwd, agentDir };
+  return { resourceLoader, settingsManager, cwd, agentDir };
 }
 
-function removeIsolatedDirs(dirs: { cwd: string; agentDir: string }): void {
-  for (const dir of [dirs.cwd, dirs.agentDir]) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch (e) {
-      swallow("pi: temp dir cleanup", e);
-    }
+function removeIsolatedDirs(dirs: { agentDir: string }): void {
+  try {
+    rmSync(dirs.agentDir, { recursive: true, force: true });
+  } catch (e) {
+    swallow("pi: temp dir cleanup", e);
   }
 }
 
@@ -1249,12 +1246,13 @@ export async function oneShot(
   opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
-  const { resourceLoader, cwd, agentDir } = await createIsolatedResources(prefix, randomUUID(), systemPrompt);
+  const { resourceLoader, settingsManager, cwd, agentDir } = await createIsolatedResources(prefix, systemPrompt);
   try {
     const { session } = await createAgentSession({
       model,
       modelRuntime,
       resourceLoader,
+      settingsManager,
       customTools: [],
       noTools: "builtin",
       sessionManager: SessionManager.inMemory(),
@@ -1558,7 +1556,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       systemCacheSplit ? "long" : undefined,
     );
     const ref: ToolContextRef = { current: null };
-    const { resourceLoader, cwd, agentDir } = await createIsolatedResources(tempDirPrefix, sessionId, composedPrompt);
+    const { resourceLoader, settingsManager, cwd, agentDir } = await createIsolatedResources(
+      tempDirPrefix,
+      composedPrompt,
+    );
     const compileMs = Date.now() - compileStart;
 
     let session: AgentSession;
@@ -1567,6 +1568,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         model,
         modelRuntime,
         resourceLoader,
+        settingsManager,
         customTools: createAgentTools(ref, {
           scratchExec,
           ownerAuthExec,
@@ -1590,7 +1592,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         agentDir,
       }));
     } catch (err) {
-      removeIsolatedDirs({ cwd, agentDir });
+      removeIsolatedDirs({ agentDir });
       throw err;
     }
 
@@ -1617,7 +1619,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             scopeLabel: turnScope!,
           });
         } catch (err) {
-          removeIsolatedDirs({ cwd, agentDir });
+          removeIsolatedDirs({ agentDir });
           throw err;
         }
       }
