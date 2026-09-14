@@ -2580,7 +2580,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef);
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote = inputUnscreened || inbound.unscreened.length ? unscreenedNotice("inbound content") : "";
-        const turnEnv = environmentNote(
+        const turnEnvironment = environmentNote(
           [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim()]
             .filter((s) => s && s.trim())
             .join("\n\n"),
@@ -2615,7 +2615,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnInput = partial
           ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume })
           : baseText;
-        const turnEnvironment = turnEnv;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some((e) => e.type === "tool_call");
         if (
@@ -2799,8 +2798,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const runHarnessSegment = (
           harnessInput: string,
           extras: {
-            environment?: string;
-            volatileContext?: string;
             priorTurns?: typeof input.priorTurns;
             overheard?: typeof importedOverheard;
             attachments?: typeof inbound.metas;
@@ -2840,8 +2837,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
-            ...(extras.environment ? { environment: extras.environment } : {}),
-            ...(extras.volatileContext ? { volatileContext: extras.volatileContext } : {}),
+            ...(turnEnvironment ? { environment: turnEnvironment } : {}),
+            ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
             ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
             ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
@@ -3153,8 +3150,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               resumeNote() +
                 "\nRuntime handoff completed. Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request.",
               {
-                ...(turnEnvironment ? { environment: turnEnvironment } : {}),
-                ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
                 ...(inbound.images.length ? { images: inbound.images } : {}),
               },
               { history: resumedHistory, ...(resumedTape ? { tape: resumedTape } : {}) },
@@ -3166,8 +3161,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         const primaryServedTape = !!tapeRows?.serve && history === visibleHistory;
         let result = await runHarnessTurn(turnInput, {
-          ...(turnEnvironment ? { environment: turnEnvironment } : {}),
-          ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
           ...(priorTurns?.length ? { priorTurns } : {}),
           ...(importedOverheard.length ? { overheard: importedOverheard } : {}),
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
@@ -3281,8 +3274,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             result = await runHarnessTurn(
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
               {
-                ...(turnEnvironment ? { environment: turnEnvironment } : {}),
-                ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
                 ...(nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {}),
               },
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },

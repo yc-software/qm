@@ -1097,12 +1097,13 @@ async function createIsolatedResources(prefix: string, systemPrompt: string): Pr
   const cwd = stableCwd(prefix);
   mkdirSync(cwd, { recursive: true });
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
-  const settingsManager = SettingsManager.inMemory();
+  const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
     settingsManager,
     systemPrompt,
+    appendSystemPrompt: [],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
@@ -1274,8 +1275,7 @@ export async function oneShot(
     }
     return piLastAssistantTextOrThrow(session);
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
-    rmSync(agentDir, { recursive: true, force: true });
+    removeIsolatedDirs({ agentDir });
   }
 }
 
