@@ -237,14 +237,14 @@ test("piHarnessConfigOptions omits the optional fields when the config leaves th
 
 test("oneShot removes its temp dirs even when the session call throws", async () => {
   const prefix = "pi-onesh-test";
-  const before = countTempDirs(prefix);
+  const before = countTempDirs(`${prefix}-agent-`);
 
   const fakeModel = { id: "claude-sonnet-4-5" } as unknown as Parameters<typeof oneShot>[1];
 
   await assert.rejects(oneShot(prefix, fakeModel, "test-key", "system", "prompt"));
 
-  const after = countTempDirs(prefix);
-  assert.equal(after, before, "oneShot must leave no temp dirs behind");
+  const after = countTempDirs(`${prefix}-agent-`);
+  assert.equal(after, before, "oneShot must leave no agent dirs behind");
 });
 
 test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {

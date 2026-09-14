@@ -3149,9 +3149,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             segment = await runHarnessSegment(
               resumeNote() +
                 "\nRuntime handoff completed. Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request.",
-              {
-                ...(inbound.images.length ? { images: inbound.images } : {}),
-              },
+              inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory, ...(resumedTape ? { tape: resumedTape } : {}) },
             );
             modelCalls += segment.modelCalls ?? 0;
@@ -3273,9 +3271,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : undefined;
             result = await runHarnessTurn(
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
-              {
-                ...(nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {}),
-              },
+              nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },
             );
             if (primaryStopped && !result.stopped)
