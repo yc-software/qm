@@ -1,4 +1,4 @@
-export const activityIcons = ["schedule", "app", "deck", "people", "calendar", "book"] as const;
+const activityIcons = ["schedule", "app", "deck", "people", "calendar", "book"] as const;
 
 export interface SuggestedActivity {
   id: string;

@@ -2496,20 +2496,20 @@ a.chat-row-open {
 }
 .suggested-activities {
   width: min(var(--content-w), calc(100% - 32px));
-  margin: 0 auto 18px;
+  margin: 0 auto 10px;
   padding: 0 2px;
 }
 .suggested-activity {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 11px;
   width: 100%;
-  min-height: 48px;
-  padding: 12px 10px;
+  min-height: 38px;
+  padding: 8px 10px;
   border: 0;
   border-radius: 12px;
   background: transparent;
-  color: var(--foreground);
+  color: var(--muted-foreground);
   text-align: left;
   font: inherit;
   cursor: pointer;
@@ -2522,15 +2522,24 @@ a.chat-row-open {
   outline-offset: 2px;
 }
 .suggested-activity-title {
-  font-size: 17px;
-  line-height: 1.45;
-  letter-spacing: -0.25px;
+  font-size: 14px;
+  line-height: 1.4;
+  letter-spacing: -0.1px;
   overflow-wrap: anywhere;
 }
 .suggested-activity-icon {
   display: flex;
   flex-shrink: 0;
   color-scheme: light;
+}
+.suggested-activity-icon svg {
+  width: 17px;
+  height: 17px;
+}
+@media (pointer: coarse) {
+  .suggested-activity {
+    min-height: 44px;
+  }
 }
 .dark .suggested-activity-icon {
   color-scheme: dark;

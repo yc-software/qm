@@ -1185,8 +1185,8 @@ const apiRoutes: readonly WebRoute[] = [
         modelAuthConnected: (parsed.connections?.length ?? 0) > 0,
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
-        permissions,
         ...(suggestedActivities.length ? { suggestedActivities } : {}),
+        permissions,
       });
     },
   },
