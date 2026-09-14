@@ -31,6 +31,7 @@ export function resolveIndividualAuthRouting(
   const pick = ((): { provider: "anthropic" | "openai"; cred: UserModelCredential } | null => {
     if (requestedProvider === "anthropic" && anthCred) return { provider: "anthropic", cred: anthCred };
     if (requestedProvider === "openai" && oaiCred) return { provider: "openai", cred: oaiCred };
+    if (requestedProvider) return null;
     if (anthCred) return { provider: "anthropic", cred: anthCred };
     if (oaiCred) return { provider: "openai", cred: oaiCred };
     return null;

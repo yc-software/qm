@@ -1,6 +1,8 @@
-import type { ServerDeps } from "./deps.ts";
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import type { ModelCredentialStore } from "../model/model-credential-store.ts";
+import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { ScopeId } from "../types.ts";
-import { orgScope } from "./routes/shared.ts";
+import { orgScope } from "../config.ts";
 import {
   defaultModelForHarness,
   isHarnessId,
@@ -15,30 +17,32 @@ import {
   thinkingLevelsForHarness,
   harnessSupportsFastMode,
   type HarnessId,
+  type ModelProviderAvailability,
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
+import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 
-export type RuntimeDeps = Pick<
-  ServerDeps,
-  | "config"
-  | "harnessId"
-  | "baseModelDefault"
-  | "providerKeys"
-  | "modelCredentials"
-  | "modelCredentialFetch"
-  | "refreshModels"
->;
+export interface RuntimeDeps {
+  config?: ScopedConfigStore;
+  harnessId?: string;
+  baseModelDefault?: string;
+  providerKeys?: ModelProviderAvailability;
+  modelCredentials?: ModelCredentialStore;
+  modelCredentialFetch?: typeof fetch;
+  refreshModels?: () => Promise<void>;
+  userModelCredentials?: UserModelCredentialStore;
+}
 
 export function runtimeFallback(ctx: { deps: RuntimeDeps }): { harnessId: HarnessId; modelId: string } {
   const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
   return { harnessId, modelId: ctx.deps.baseModelDefault ?? defaultModelForHarness(harnessId) };
 }
 
-export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId) {
+export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId, principalId?: string) {
   const config = ctx.deps.config!;
   const fallback = runtimeFallback(ctx);
-  const org = orgScope(ctx.deps);
+  const org = orgScope();
   const approvedHarnesses = ((await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId]).filter(isHarnessId);
   const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
@@ -87,7 +91,23 @@ export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: Scope
   } else if (legacyModel) {
     scopeOverride = { harnessId: fallback.harnessId, modelId: legacyModel, orgRevision: 0 };
   }
-  const effective = scopeOverride ?? orgDefault;
+  const individualAuth = Boolean(
+    principalId && ctx.deps.userModelCredentials && (await config.getIndividualModelAuthDurable()),
+  );
+  const [anthCred, oaiCred] = individualAuth
+    ? await Promise.all([
+        ctx.deps.userModelCredentials!.get(principalId!, "anthropic"),
+        ctx.deps.userModelCredentials!.get(principalId!, "openai"),
+      ])
+    : [null, null];
+  let effective = scopeOverride ?? orgDefault;
+  if (individualAuth) {
+    const requested = scopeOverride ?? orgDefault;
+    const routing =
+      resolveIndividualAuthRouting(anthCred, oaiCred, requested.modelId, requested.harnessId) ??
+      (scopeOverride ? null : resolveIndividualAuthRouting(anthCred, oaiCred, undefined, fallback.harnessId));
+    if (routing?.model) effective = { ...requested, harnessId: routing.harness, modelId: routing.model };
+  }
   const selected = [orgDefault, scopeOverride, effective].filter((choice) => choice !== null);
   const allowlist = await config.getWebuiModelsDurable(org);
   const modelsByHarness = Object.fromEntries(
@@ -100,6 +120,7 @@ export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: Scope
               .map((model) => model.id);
       for (const choice of selected) {
         if (
+          (!individualAuth || allowlist == null) &&
           allowlist?.length !== 0 &&
           choice.harnessId === harnessId &&
           modelSupportedByHarness(choice.modelId, harnessId) &&
@@ -107,7 +128,15 @@ export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: Scope
         )
           ids.push(choice.modelId);
       }
-      return [harnessId, serviceableModelIds(ids, providersFor(harnessId))];
+      return [
+        harnessId,
+        individualAuth
+          ? ids.filter((modelId) => {
+              const routing = resolveIndividualAuthRouting(anthCred, oaiCred, modelId, harnessId);
+              return routing?.harness === harnessId && routing.model === modelId;
+            })
+          : serviceableModelIds(ids, providersFor(harnessId)),
+      ];
     }),
   );
   const advertisedModelIds = new Set(Object.values(modelsByHarness).flat());
@@ -119,7 +148,9 @@ export async function runtimeConfigBody(ctx: { deps: RuntimeDeps }, scope: Scope
   );
   return {
     scopeId: scope,
-    approvedHarnesses,
+    approvedHarnesses: individualAuth
+      ? approvedHarnesses.filter((id) => modelsByHarness[id]?.length)
+      : approvedHarnesses,
     modelsByHarness,
     modelCatalog,
     orgDefault,
@@ -155,10 +186,10 @@ export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
 export async function webuiModelEnabled(ctx: { deps: RuntimeDeps }, modelId: string): Promise<boolean> {
   modelId = modelId.replace(/^codex\//, "");
   const config = ctx.deps.config!;
-  const picker = await config.getWebuiModelsDurable(orgScope(ctx.deps));
+  const picker = await config.getWebuiModelsDurable(orgScope());
   if (picker == null || picker.includes(modelId)) return true;
   if (picker.length === 0) return false;
-  const org = orgScope(ctx.deps);
+  const org = orgScope();
   const stored = await config.getRuntimeSelectionDurable(org);
   const orgModel = stored?.modelId ?? (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
   return modelId === orgModel;

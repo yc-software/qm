@@ -64,7 +64,7 @@
     "@earendil-works/pi-ai": "0.82.0",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/pi/releases/download/qm-pi-coding-agent-0.82.0-security.3/earendil-works-pi-coding-agent-0.82.0-qm-security.3.tgz",
     "@fly/sprites": "0.0.1",
-    "@openai/codex": "0.144.5",
+    "@openai/codex": "0.153.4",
     "@opencode-ai/plugin": "1.17.18",
     "@opencode-ai/sdk": "1.17.18",
     "@slack/bolt": "^4.7.3",

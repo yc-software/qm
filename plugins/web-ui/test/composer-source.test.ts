@@ -18,7 +18,7 @@ test("composer-right keeps its control order: make default, use org default, mod
     composer.indexOf("return html`", composer.indexOf("const runtimeControls =")),
   );
   const rendered = composer.slice(composer.indexOf('class="composer-right"'));
-  assert.match(rendered, /showRuntimeControls \? runtimeControls : nothing/);
+  assert.match(rendered, /\$\{runtimeControls\}/);
   const right = runtime + rendered;
   const makeDefault = right.indexOf("Make default");
   const orgDefault = right.indexOf("Use org default");

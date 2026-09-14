@@ -405,9 +405,21 @@ rl.on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.method === "initialize") return send({ id: msg.id, result: {} });
   if (msg.method === "initialized") return;
+  if (msg.method === "account/login/start") {
+    const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
+    if (msg.params.type !== "chatgptAuthTokens" || msg.params.accessToken !== auth.tokens.access_token ||
+        msg.params.chatgptAccountId !== auth.tokens.account_id || "refreshToken" in msg.params) {
+      return send({ id: msg.id, error: { code: -1, message: "incorrect external account login" } });
+    }
+    fs.writeFileSync(path.join(process.env.CODEX_HOME, "external-login"), "ready");
+    return send({ id: msg.id, result: { type: "chatgptAuthTokens" } });
+  }
   if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-" + process.pid } } });
   if (msg.method === "turn/start") {
     const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
+    if (auth.tokens.account_id.startsWith("acct-") && !fs.existsSync(path.join(process.env.CODEX_HOME, "external-login"))) {
+      return send({ id: msg.id, error: { code: -1, message: "external account login missing" } });
+    }
     const reply = String(auth.tokens.account_id ?? "none") + ":" + String(Boolean(auth.tokens.refresh_token));
     send({ id: msg.id, result: { turn: { id: "turn-" + process.pid, status: "inProgress", items: [] } } });
     return setTimeout(() => send({ method: "turn/completed", params: { threadId: "thread-" + process.pid, turn: { id: "turn-" + process.pid, status: "completed", items: [{ type: "agentMessage", text: reply, phase: "final_answer" }] } } }), ${delayMs});
