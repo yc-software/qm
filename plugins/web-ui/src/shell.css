@@ -2562,7 +2562,7 @@ a.chat-row-open {
   overflow-wrap: anywhere;
 }
 .dark .suggested-activity-title {
-  color: rgb(139 169 204 / 0.76);
+  color: rgb(94 112 130);
 }
 .suggested-activity-icon {
   display: flex;
