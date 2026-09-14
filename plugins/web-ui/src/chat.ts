@@ -143,6 +143,7 @@ import { workSeconds, workedLabel } from "./work-duration";
 import { decorateTextCodeBlocks, normalizePlainTextFences } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
+import { suggestedActivities } from "./suggested-activities";
 
 installMarkdownSanitizer();
 
@@ -1323,6 +1324,21 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
+            ${
+              emptyChat &&
+              !glanceTier &&
+              (!ctx.pane || tier === "full") &&
+              !chatState.sessionId &&
+              (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
+              !agent.state.isStreaming &&
+              !ctx.composer.state.processingFiles &&
+              !ctx.composer.state.draft &&
+              !ctx.composer.state.attachments.length
+                ? suggestedActivities(appState.me?.suggestedActivities, (activity) =>
+                    ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
+                  )
+                : nothing
+            }
             ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
             ${ctx.composer.composerForm(agent, html`${glanceTier ? nothing : liveWorkStatus(agent)} ${backgroundActivityStrip()}`)}
           </div>

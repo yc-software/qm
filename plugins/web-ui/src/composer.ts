@@ -1615,6 +1615,22 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     focusComposerEnd();
   }
 
+  function fillSuggestedPrompt(prompt: string, agent: Agent): void {
+    if (
+      agent !== ctx.chat.state.agent ||
+      agent.state.isStreaming ||
+      composerState.draft ||
+      composerState.attachments.length ||
+      composerState.processingFiles
+    )
+      return;
+    composerState.draft = prompt;
+    composerState.error = "";
+    persistDraft();
+    ctx.chat.drawActiveChat(agent);
+    focusComposerEnd();
+  }
+
   let pendingComposerFocus = false;
 
   function focusComposerEnd(): void {
@@ -1689,6 +1705,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function onDraftInput(e: InputEvent, agent: Agent): void {
+    const wasEmpty = !composerState.draft;
     composerState.draft = (e.currentTarget as HTMLTextAreaElement).value;
     persistDraft();
     const hadError = Boolean(composerState.error);
@@ -1698,7 +1715,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const armed = slashQuery(composerState.draft) !== null;
     if (armed && skillsCache === null && !skillsLoading) void loadSkills(agent);
     const popoverShown = Boolean(ctx.chat.state.host?.querySelector(".slash-popover"));
-    if (armed || popoverShown || hadError) {
+    if (
+      armed ||
+      popoverShown ||
+      hadError ||
+      (Boolean(appState.me?.suggestedActivities?.length) && wasEmpty !== !composerState.draft)
+    ) {
       ctx.chat.drawActiveChat(agent);
       return;
     }
@@ -2354,6 +2376,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     setQueuedRuns,
     resetComposer,
     focusComposerEnd,
+    fillSuggestedPrompt,
     resizeComposer,
     currentModelOption,
     carryModelPick,

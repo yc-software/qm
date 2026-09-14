@@ -1521,7 +1521,8 @@ a.chat-row-open {
   text-align: center;
 }
 @container chat (min-width: 471px) {
-  .custom-chat-shell.empty-chat .composer-wrap {
+  .custom-chat-shell.empty-chat .composer-wrap,
+  .custom-chat-shell.empty-chat .suggested-activities {
     width: min(calc(var(--content-w) * 0.75), 75%);
     margin-inline: auto;
   }
@@ -2492,6 +2493,69 @@ a.chat-row-open {
   position: relative;
   z-index: 4;
   min-width: 0;
+}
+.suggested-activities {
+  width: min(var(--content-w), calc(100% - 32px));
+  margin: 0 auto 18px;
+  padding: 0 2px;
+}
+.suggested-activity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--foreground);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.suggested-activity:hover {
+  background: var(--muted);
+}
+.suggested-activity:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.suggested-activity-title {
+  font-size: 17px;
+  line-height: 1.45;
+  letter-spacing: -0.25px;
+  overflow-wrap: anywhere;
+}
+.suggested-activity-icon {
+  display: flex;
+  flex-shrink: 0;
+  color-scheme: light;
+}
+.dark .suggested-activity-icon {
+  color-scheme: dark;
+}
+.suggested-activity-icon[data-icon="schedule"],
+.suggested-activity-icon[data-icon="people"] {
+  color: light-dark(#c55b16, #f6a15e);
+}
+.suggested-activity-icon[data-icon="app"] {
+  color: light-dark(#15816e, #53cdb0);
+}
+.suggested-activity-icon[data-icon="deck"] {
+  color: light-dark(#8050c9, #b496f5);
+}
+.suggested-activity-icon[data-icon="calendar"] {
+  color: light-dark(#2d75c7, #71b3fb);
+}
+.suggested-activity-icon[data-icon="book"] {
+  color: light-dark(#c14e79, #ef8db3);
+}
+@media (max-width: 860px) {
+  .suggested-activities {
+    padding: 0 2px;
+    margin-bottom: 12px;
+  }
 }
 .custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {
   margin-top: -16px;

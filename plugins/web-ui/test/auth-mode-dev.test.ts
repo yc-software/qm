@@ -48,6 +48,7 @@ test("a bare principal id — not just an email — can sign in", async () => {
   assert.equal(me.status, 200);
   const body = await me.json();
   assert.equal(body.user, "alice");
+  assert.equal(body.suggestedActivities, undefined);
   assert.equal(body.mode, "dev");
 });
 

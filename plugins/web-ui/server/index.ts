@@ -25,6 +25,8 @@ import {
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import { parseSuggestedActivities } from "../suggested-activities.ts";
+
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -34,6 +36,7 @@ import {
 } from "../../chassis/src/env.ts";
 
 const PORT = portFromEnv(8096);
+const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ALLOW_UNSIGNED_TEST_IDENTITY =
@@ -1183,6 +1186,7 @@ const apiRoutes: readonly WebRoute[] = [
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         permissions,
+        ...(suggestedActivities.length ? { suggestedActivities } : {}),
       });
     },
   },

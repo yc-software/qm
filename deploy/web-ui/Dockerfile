@@ -6,6 +6,7 @@ COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
 RUN npm ci
 COPY plugins/web-ui/index.html plugins/web-ui/shared.html plugins/web-ui/vite.config.ts plugins/web-ui/tsconfig.json ./
 COPY plugins/web-ui/src ./src
+COPY plugins/web-ui/suggested-activities.ts ./
 COPY plugins/chassis/src /chassis/src
 RUN npm run build
 
@@ -15,6 +16,7 @@ COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
 RUN npm ci --omit=dev && rm package-lock.json \
   && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/web-ui/server ./server
+COPY plugins/web-ui/suggested-activities.ts ./
 COPY plugins/admin/src /admin/src
 COPY plugins/admin/public /admin/public
 COPY plugins/chassis/src /chassis/src

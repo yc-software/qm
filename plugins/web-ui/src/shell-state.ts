@@ -1,6 +1,9 @@
+import type { SuggestedActivity } from "../suggested-activities.ts";
+
 export type AuthMode = "portal" | "dev";
 
 export interface Me {
+  suggestedActivities?: SuggestedActivity[];
   individualModelAuth?: boolean;
   modelAuthConnected?: boolean;
   mode?: AuthMode;

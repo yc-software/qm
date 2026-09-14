@@ -43,6 +43,49 @@ Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
 `WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
 and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
+## Suggested activities
+
+Suggested activities are **off by default**. Set `WEB_UI_SUGGESTED_ACTIVITIES` on
+the web service to a JSON array to opt in; unset it or use `[]` to disable it.
+No activity content is bundled into the public application.
+
+```json
+[
+  {
+    "id": "weekly-brief",
+    "title": "Wake up to a fresh briefing",
+    "prompt": "Set up a recurring briefing. Ask me which topics, cadence, timezone, and delivery destination to use.",
+    "icon": "schedule"
+  },
+  {
+    "id": "project-app",
+    "title": "Build a home for my projects",
+    "prompt": "Build a private project tracker app. Start by understanding my workflow and existing data.",
+    "icon": "app"
+  }
+]
+```
+
+The first three entries appear above the empty personal-chat composer with colored
+icons, without a heading or expansion link. Selecting an entry fills and focuses
+an editable draft; it never submits a turn. Suggestions disappear while a draft
+or attachment is present and do not appear in existing chats, shared contexts,
+or compact pane views. Drafts use the normal persistence path.
+
+Each entry requires a unique lowercase alphanumeric/hyphen `id` (up to 64
+characters), `title` (up to 65 characters), `prompt` (up to 1,200 characters), and
+`icon` (`schedule`, `app`, `deck`, `people`, `calendar`, or `book`). Configuration
+accepts up to 12 entries and 20,000 characters. Invalid configuration fails startup
+without printing its contents. Restart the web service after changing it.
+
+The authenticated `/me` response supplies `suggestedActivities` only when configured.
+These are organization-wide starters visible to every signed-in user; keep them
+free of private personal activity or credentials. Deployment-specific content
+belongs in deployment configuration. The typed renderer can also accept future
+personalized suggestions; this feature does not read activity, call a model, or
+schedule background generation. Those providers must authorize their inputs and
+outputs for the current principal and scope.
+
 ## On a phone
 
 Below 860px the same build behaves like an app rather than a shrunken desktop:
