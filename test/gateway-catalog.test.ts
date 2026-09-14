@@ -212,7 +212,10 @@ test("gateway namespace cannot be registered by custom providers even before dis
     models: [{ id: "gateway/future" }],
   };
   assert.throws(() => validateCustomProviderSpec(spec), /already registered/);
-  assert.throws(() => validateCustomProviderSpec({ ...spec, id: "qm:gateway", models: [{ id: "other" }] }), /must match/);
+  assert.throws(
+    () => validateCustomProviderSpec({ ...spec, id: "qm:gateway", models: [{ id: "other" }] }),
+    /must match/,
+  );
 });
 
 test("removed gateway selections never fall back to a different org or direct model", () => {
