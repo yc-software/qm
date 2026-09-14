@@ -8,7 +8,7 @@ import {
   type TurnResult,
 } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import { isDeferred, type CronStore } from "./cron-store.ts";
+import { isDeferred, type CronStore, type DueCron } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
@@ -31,7 +31,7 @@ const FIRE_GC_INTERVAL_MS = 6 * 60 * 60_000;
 const BUSY_DEFER_MS = 30_000;
 const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
 
-type FireResult = { authzFailed: boolean; deferred?: boolean };
+type FireResult = { authzFailed: boolean; deferUntil?: number; disable?: boolean };
 
 type RunNowResult =
   | { started: true; fireKey: string; settled: Promise<void> }
@@ -216,8 +216,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         status: result.status ?? "ok",
         ...(result.note ? { note: truncate(result.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
       });
-      if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
-      return { authzFailed: false };
+      return { authzFailed: false, ...(isOneShotSchedule(cron.schedule) ? { disable: true } : {}) };
     }
     const mentionRoster = await cronMentionRoster(deps, cron).catch(() => undefined);
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
@@ -276,8 +275,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         status: "deferred",
         note: `session busy — retrying at ${utcMinute(deferUntil)}`,
       });
-      await deps.crons.defer(cron.id, deferUntil);
-      return { authzFailed: false, deferred: true };
+      return { authzFailed: false, deferUntil };
     }
     if (outcome.ran || outcome.authzFailed) {
       await deps.crons.recordFire(cron.id, {
@@ -292,12 +290,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
       });
     }
-    if (outcome.authzFailed) {
-      await deps.crons.setEnabled(cron.id, false);
-      return { authzFailed: true };
-    }
-    if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
-    return { authzFailed: false };
+    if (outcome.authzFailed) return { authzFailed: true, disable: true };
+    return { authzFailed: false, ...(isOneShotSchedule(cron.schedule) ? { disable: true } : {}) };
   }
 
   let lastStrandedSweep = 0;
@@ -324,6 +318,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
+  const intervalInFlight = new Set<string>();
   const fireDue = async (t: number): Promise<void> => {
     const due = await deps.crons.due(t);
     let batch = due;
@@ -342,11 +337,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
     }
     for (const cron of batch) {
+      const fireKey = `cron:${cron.id}:${cron.scheduledAt}`;
+      if (intervalInFlight.has(fireKey)) continue;
+      intervalInFlight.add(fireKey);
+      let admitted: DueCron | null = null;
       try {
-        const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
-        if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+        const current = await deps.crons.get(cron.id);
+        if (
+          !current ||
+          current.archived ||
+          !current.enabled ||
+          isDeferred(current, t) ||
+          nextSlot(current) !== cron.scheduledAt
+        )
+          continue;
+        admitted = { ...current, scheduledAt: cron.scheduledAt };
+        const { authzFailed, deferUntil } = await fire(admitted, t, fireKey, cron.scheduledAt);
+        if (authzFailed) await deps.crons.disableDueSlot(cron.id, admitted);
+        else if (deferUntil !== undefined) await deps.crons.deferDueSlot(cron.id, admitted, deferUntil);
+        else await deps.crons.completeDueSlot(cron.id, admitted, t);
       } catch (e) {
         console.error("[scheduler] fire failed:", errMessage(e));
+        if (admitted) {
+          try {
+            await deps.crons.failDueSlot(cron.id, admitted, now());
+          } catch (transitionError) {
+            console.error("[scheduler] failure backoff failed:", errMessage(transitionError));
+          }
+        }
+      } finally {
+        intervalInFlight.delete(fireKey);
       }
     }
   };
@@ -402,17 +422,22 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await deps.jobQueue!.enqueueFire({ ...job, notBefore: cron.deferUntil! });
       return;
     }
-    if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
+    const claim = await deps.crons.claimSlot(job.cronId, slot, t);
+    if (!claim) return;
     try {
-      const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
-      if (authzFailed || deferred) {
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
-        if (deferred) await enqueueNext(job.cronId);
+      const { authzFailed, deferUntil } = await fire(claim.cron, t, `cron:${cron.id}:${slot}`, slot);
+      if (authzFailed || deferUntil !== undefined) {
+        await deps.crons.releaseSlot(job.cronId, claim, deferUntil);
+        if (authzFailed) await deps.crons.setEnabled(job.cronId, false);
+        if (deferUntil !== undefined) await enqueueNext(job.cronId);
         return;
       }
+      await deps.crons.completeSlot(job.cronId, claim);
     } catch (e) {
       console.error("[scheduler] fire failed:", errMessage(e));
-      await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+      const deferUntil = await deps.crons.failSlot(job.cronId, claim, now());
+      if (deferUntil !== undefined) await deps.jobQueue!.enqueueFire({ ...job, notBefore: deferUntil });
+      else await enqueueNext(job.cronId);
       return;
     }
     await enqueueNext(job.cronId);
@@ -466,7 +491,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           : { started: false, reason: "unavailable" };
       }
       const settled = fire(cron, t, fireKey).then(
-        () => undefined,
+        async ({ disable }) => {
+          if (disable) await deps.crons.setEnabled(cronId, false);
+        },
         (e: unknown) => console.error("%s", `[scheduler] manual fire of cron ${cronId} failed:`, errMessage(e)),
       );
       return { started: true, fireKey, settled };

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { runNowSettled } from "./support/settle.ts";
-import { createCronStore } from "../src/cron/cron-store.ts";
+import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -533,7 +533,7 @@ test("a failing interval cron does not starve later due crons across ticks", asy
 
   assert.deepEqual(
     calls.map((call) => call.idempotencyKey),
-    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:3000`],
+    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${succeeding.id}:3000`],
   );
 });
 
@@ -1024,6 +1024,80 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   scheduler.stop();
 });
 
+test("queue mode: one-shot failures and busy releases survive in-flight edits", async () => {
+  for (const transition of ["failure", "busy"] as const) {
+    for (const edit of ["title", "action", "idempotent-enable"] as const) {
+      const crons = createCronStore();
+      const calls: TurnRequest[] = [];
+      const enqueued: Array<{ cronId: string; scheduledAt: number; notBefore?: number }> = [];
+      let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<void>) | undefined;
+      let signalStarted!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => (signalStarted = resolve));
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const scheduler = createScheduler({
+        crons,
+        deliveries: createDeliveryStore(),
+        idempotency: createIdempotencyStore(),
+        identity: createIdentityService(),
+        now: () => 1_000,
+        run: async (req) => {
+          calls.push(req);
+          signalStarted();
+          await released;
+          if (transition === "failure") throw new Error("provider down");
+          return { status: "refused", refusalKind: "session_busy", reason: "busy" };
+        },
+        jobQueue: {
+          async start(handlers) {
+            onFire = handlers.onFire;
+          },
+          async enqueueFire(job) {
+            enqueued.push(job);
+          },
+          healthy: () => true,
+          async stop() {},
+        },
+      });
+      scheduler.start(1_000);
+      for (let i = 0; i < 20 && !onFire; i++) await new Promise((resolve) => setImmediate(resolve));
+      const cron = await crons.create({
+        schedule: { firstFireAt: 1 },
+        action: "original action",
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      });
+      enqueued.length = 0;
+      const firing = onFire!({ cronId: cron.id, scheduledAt: 1 });
+      await started;
+      if (edit === "title") await crons.update(cron.id, { title: "edited title" });
+      else if (edit === "action") await crons.update(cron.id, { action: "edited action" });
+      else await crons.setEnabled(cron.id, true);
+      release();
+      await firing;
+
+      const stored = (await crons.get(cron.id))!;
+      const changed = edit !== "idempotent-enable";
+      assert.equal(stored.enabled, true, `${transition}/${edit}: one-shot remains enabled`);
+      assert.equal(stored.lastFiredAt, undefined, `${transition}/${edit}: claim cursor is restored`);
+      assert.equal(stored.nextFireAt, 1, `${transition}/${edit}: original slot is restored`);
+      assert.equal(stored.activeClaimId, undefined);
+      if (changed) {
+        assert.equal(stored.deferUntil, undefined, `${transition}/${edit}: stale cooldown is discarded`);
+        assert.equal(stored.failureBackoff, undefined);
+        assert.deepEqual(enqueued.at(-1), { cronId: cron.id, scheduledAt: 1 });
+      } else {
+        const notBefore = transition === "failure" ? 6_000 : 31_000;
+        assert.equal(stored.deferUntil, notBefore);
+        assert.deepEqual(enqueued.at(-1), { cronId: cron.id, scheduledAt: 1, notBefore });
+      }
+      assert.equal(calls.length, 1);
+      scheduler.stop();
+    }
+  }
+});
+
 test("queue mode: while the queue runs, the interval scheduler's leader lease is held as a guard", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const heldKeys: string[] = [];
@@ -1282,6 +1356,154 @@ test("a note written by someone other than the fire renders attributed, and mult
   assert.doesNotMatch(input, /Notes from last fire agent/);
 });
 
+test("interval mode backs off thrown failures without delaying healthy crons", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  let clock = 1_000;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async (req) => {
+      calls.push(req);
+      if (req.text.includes("broken task")) throw new Error("provider down");
+      return { status: "ok", reply: "done" };
+    },
+    now: () => clock,
+  });
+  const broken = await crons.create({
+    schedule: { firstFireAt: 1_000 },
+    action: "broken task",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const healthy = await crons.create({
+    schedule: { firstFireAt: 1_000 },
+    action: "healthy task",
+    owner: "U2",
+    createdBy: "U2",
+    ownerScopeId: scopeId("personal", "U2"),
+  });
+
+  await scheduler.tick(clock);
+  assert.equal(calls.length, 2, "the failing fire does not stop its healthy sibling");
+  assert.equal((await crons.get(healthy.id))!.enabled, false);
+  let failed = (await crons.get(broken.id))!;
+  assert.equal(failed.deferUntil, 6_000);
+  assert.deepEqual(failed.failureBackoff, { scheduledAt: 1_000, failures: 1 });
+
+  clock = 5_999;
+  await scheduler.tick(clock);
+  assert.equal(calls.length, 2);
+  clock = 6_000;
+  await scheduler.tick(clock);
+  assert.equal(calls.length, 3);
+  failed = (await crons.get(broken.id))!;
+  assert.equal(failed.deferUntil, 16_000);
+  assert.deepEqual(failed.failureBackoff, { scheduledAt: 1_000, failures: 2 });
+
+  for (const expected of [36_000, 76_000, 156_000, 316_000, 616_000, 916_000]) {
+    clock = failed.deferUntil!;
+    await scheduler.tick(clock);
+    failed = (await crons.get(broken.id))!;
+    assert.equal(failed.deferUntil, expected);
+  }
+  assert.deepEqual(
+    calls.filter((call) => call.text.includes("broken task")).map((call) => call.idempotencyKey),
+    Array(8).fill(`cron:${broken.id}:1000`),
+  );
+});
+
+test("an in-flight interval fire leaves its durable slot recoverable and overlapping ticks do not duplicate it", async () => {
+  const backing = createMemoryMap<Cron>();
+  const crons = createCronStore(backing);
+  let started!: () => void;
+  let finish!: () => void;
+  const runStarted = new Promise<void>((resolve) => (started = resolve));
+  const runFinished = new Promise<void>((resolve) => (finish = resolve));
+  let calls = 0;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => {
+      calls++;
+      started();
+      await runFinished;
+      return { status: "ok", reply: "done" };
+    },
+    now: () => 1_000,
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1_000 },
+    action: "slow task",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  const firstTick = scheduler.tick(1_000);
+  await runStarted;
+  await scheduler.tick(1_001);
+  assert.equal(calls, 1);
+  const reloaded = createCronStore(backing);
+  const stored = (await reloaded.get(cron.id))!;
+  assert.equal(stored.lastFiredAt, undefined);
+  assert.equal(stored.nextFireAt, 1_000);
+  assert.deepEqual(
+    (await reloaded.due(1_001)).map((due) => due.id),
+    [cron.id],
+  );
+
+  finish();
+  await firstTick;
+  const completed = (await reloaded.get(cron.id))!;
+  assert.equal(completed.lastFiredAt, 1_000);
+  assert.equal(completed.enabled, false);
+});
+
+test("a failed interval backoff write leaves the original slot recoverable after reload", async () => {
+  const backing = createMemoryMap<Cron>();
+  const baseCrons = createCronStore(backing);
+  const crons: CronStore = {
+    ...baseCrons,
+    async failDueSlot() {
+      throw new Error("backoff store unavailable");
+    },
+  };
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => {
+      throw new Error("provider down");
+    },
+    now: () => 1_000,
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1_000 },
+    action: "failing task",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+
+  await scheduler.tick(1_000);
+  const reloaded = createCronStore(backing);
+  const stored = (await reloaded.get(cron.id))!;
+  assert.equal(stored.lastFiredAt, undefined);
+  assert.equal(stored.nextFireAt, 1_000);
+  assert.equal(stored.failureBackoff, undefined);
+  assert.deepEqual(
+    (await reloaded.due(1_001)).map((due) => due.id),
+    [cron.id],
+  );
+});
+
 function busyOnce(calls: TurnRequest[]) {
   return async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -1428,5 +1650,74 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
   assert.equal(stored.lastFiredAt, 35_000);
   assert.equal(stored.deferUntil, undefined);
   assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 36_000 }, "the next slot is chained without a hold");
+  scheduler.stop();
+});
+
+test("queue mode keeps early jobs and reconciliation behind durable failure backoff", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  let clock = 1_000;
+  let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<void>) | undefined;
+  let onTick: (() => Promise<void>) | undefined;
+  const enqueued: Array<{ cronId: string; scheduledAt: number; notBefore?: number }> = [];
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async (req) => {
+      calls.push(req);
+      throw new Error("provider down");
+    },
+    now: () => clock,
+    jobQueue: {
+      async start(handlers) {
+        onFire = handlers.onFire;
+        onTick = handlers.onTick;
+      },
+      async enqueueFire(job) {
+        enqueued.push(job);
+      },
+      healthy: () => true,
+      async stop() {},
+    },
+  });
+  scheduler.start(1_000);
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1 },
+    action: "broken queue task",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  for (let i = 0; i < 20 && (!onFire || !onTick); i++) await new Promise((resolve) => setImmediate(resolve));
+
+  await onTick!();
+  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1 });
+  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 6_000 });
+
+  clock = 1_001;
+  await onTick!();
+  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 6_000 });
+  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  assert.equal(calls.length, 1, "an already-queued early job rechecks the fresh hold");
+  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 6_000 });
+
+  clock = 6_000;
+  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 16_000 });
+
+  for (const notBefore of [36_000, 76_000, 156_000, 316_000, 616_000, 916_000]) {
+    clock = (await crons.get(cron.id))!.deferUntil!;
+    await onFire!({ cronId: cron.id, scheduledAt: 1 });
+    assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore });
+  }
+  assert.deepEqual(
+    calls.map((call) => call.idempotencyKey),
+    Array(8).fill(`cron:${cron.id}:1`),
+  );
   scheduler.stop();
 });

@@ -235,11 +235,20 @@ export interface CronFireNote {
   by?: string;
 }
 
+interface CronFailureBackoff {
+  scheduledAt: number;
+  failures: number;
+}
+
 export interface Cron extends TriggerBase {
   schedule: CronSchedule;
   nextFireAt?: number;
   lastAttemptAt?: number;
   deferUntil?: number;
+  failureBackoff?: CronFailureBackoff;
+  failureGeneration?: number;
+  executionRevision?: number;
+  activeClaimId?: string;
   title?: string;
   archived?: boolean;
   action?: string;
