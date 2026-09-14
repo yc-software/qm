@@ -147,10 +147,22 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { matches });
 }
 
+async function channelMembership(ctx: ApiCtx): Promise<void> {
+  return sendJson(ctx.res, 200, {
+    member: await ctx.app.channelMember(ctx.params.channelId!, ctx.params.principalId!),
+  });
+}
+
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
   { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
   { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
+  {
+    method: "GET",
+    path: "/v1/directory/channels/:channelId/members/:principalId",
+    auth: "source",
+    handle: channelMembership,
+  },
   { method: "GET", path: "/v1/directory/resolve", auth: "either", handle: resolveDirectory },
 ];

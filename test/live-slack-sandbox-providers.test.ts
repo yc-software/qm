@@ -98,6 +98,7 @@ for (const failExecution of [false, true]) {
     const actions: Record<string, unknown>[] = [];
     let expected = "";
     const ctx = {
+      env: { qaUserId: "UQA" },
       marker: () => "owned-test-box",
       freshChannel: async () => ({
         id: "test",
@@ -122,6 +123,11 @@ for (const failExecution of [false, true]) {
             ? [{ id: "box", backend: "sprites", name: "owned-test-box" }]
             : [],
         }),
+        waitForChannelMembership: async (channel: string, actor: string) => {
+          assert.equal(channel, "test");
+          assert.equal(actor, "UQA");
+          assert.equal(actions.length, 0);
+        },
         manageSandbox: async (_scope: string, body: Record<string, unknown>) => {
           actions.push(body);
           return { id: "box", backend: "sprites" };
@@ -157,3 +163,26 @@ test("explicit provider selection retains strict coverage without treating defer
   for (const value of ["", "sprites,", "typo", "sprites,sprites", "all,sprites", "constructor", "__proto__"])
     assert.throws(() => selectSandboxProviderScenarios(value));
 });
+
+for (const backend of sandboxProviders) {
+  test(`${backend} does not create or execute a sandbox before directory readiness`, async () => {
+    const ctx = {
+      env: { qaUserId: "UQA" },
+      freshChannel: async () => ({ id: "test", mention: () => assert.fail("agent must not run") }),
+      core: {
+        withSignal() {
+          return this;
+        },
+        listSandboxes: async () => ({ providers: [{ name: backend, actions: ["create", "retire"] }] }),
+        waitForChannelMembership: async () => {
+          throw new Error("directory readiness expired");
+        },
+        manageSandbox: () => assert.fail("sandbox must not be created"),
+      },
+    } as unknown as Ctx;
+    await assert.rejects(
+      sandboxProviderScenarios.find((s) => s.name === `sandbox-execute-${backend}`)!.run(ctx),
+      /directory readiness expired/,
+    );
+  });
+}

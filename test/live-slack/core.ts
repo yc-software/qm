@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { signedRequestHeaders } from "../../src/auth/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
@@ -56,6 +57,40 @@ export class CoreClient {
       "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}`,
       [PORTAL_IDENTITY_HEADER]: identity,
     });
+  }
+
+  async waitForChannelMembership(channelId: string, slackId: string, timeoutMs = 60_000): Promise<void> {
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const signal = this.requestSignal ? AbortSignal.any([deadline, this.requestSignal]) : deadline;
+    const core = this.withSignal(signal);
+    try {
+      while (true) {
+        signal.throwIfAborted();
+        const { matches } = await core.request("GET", `/v1/directory/resolve?q=${encodeURIComponent(slackId)}`);
+        if (!Array.isArray(matches)) throw new Error("invalid directory resolution response");
+        if (matches.length) {
+          if (
+            matches.length !== 1 ||
+            typeof matches[0]?.principalId !== "string" ||
+            (matches[0].slackId !== slackId && matches[0].principalId !== slackId)
+          )
+            throw new Error(`directory did not resolve the exact QA Slack identity ${slackId}`);
+          const { member } = await core.request(
+            "GET",
+            `/v1/directory/channels/${encodeURIComponent(channelId)}/members/${encodeURIComponent(matches[0].principalId)}`,
+          );
+          if (member === true) return;
+          if (member !== false) throw new Error("invalid directory membership response");
+        }
+        await delay(1000, undefined, { signal });
+      }
+    } catch (error) {
+      if (signal.aborted)
+        throw new Error(`directory membership readiness timed out or was aborted for ${slackId} in ${channelId}`, {
+          cause: error,
+        });
+      throw error;
+    }
   }
 
   listSandboxes(scopeId: string): Promise<{

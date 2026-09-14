@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { signedRequestHeaders } from "../src/auth/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -41,6 +42,25 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   });
 
   const get = (path: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
+
+  it("membership reads require source authentication and report only persisted channel members", async () => {
+    await built.app.upsertChannels(
+      [{ channelId: "CPUBLIC", name: "public", isPrivate: false }],
+      [{ channelId: "CPUBLIC", principalId: "carol@acme.com" }],
+    );
+    for (const [channel, principal, member] of [
+      ["CPUBLIC", "carol@acme.com", true],
+      ["CPUBLIC", "alice@acme.com", false],
+      ["CUNKNOWN", "carol@acme.com", false],
+    ] as const) {
+      const path = `/v1/directory/channels/${channel}/members/${encodeURIComponent(principal)}`;
+      assert.equal((await fetch(`${base}${path}`)).status, 401);
+      assert.equal((await get(path)).status, 403);
+      const response = await fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path) });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { member });
+    }
+  });
 
   it("resolves a name to a single match carrying the slackId needed to @-mention", async () => {
     const res = await get("/v1/directory/resolve?q=carol");
