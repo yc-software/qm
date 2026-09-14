@@ -2495,9 +2495,43 @@ a.chat-row-open {
   min-width: 0;
 }
 .suggested-activities {
+  display: grid;
+  grid-template-rows: 1fr;
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto 10px;
   padding: 0 2px;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    grid-template-rows 220ms ease,
+    margin-bottom 220ms ease,
+    opacity 160ms ease,
+    visibility 0s;
+}
+.suggested-activities-list {
+  min-height: 0;
+  overflow: hidden;
+}
+.suggested-activities.is-collapsed {
+  grid-template-rows: 0fr;
+  margin-bottom: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    grid-template-rows 220ms ease,
+    margin-bottom 220ms ease,
+    opacity 140ms ease,
+    visibility 0s 220ms;
+}
+.empty-chat:has(.suggested-activities) .chat-cta {
+  transform: translateY(8px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .suggested-activities,
+  .suggested-activities.is-collapsed {
+    transition: none;
+  }
 }
 .suggested-activity {
   display: flex;
@@ -2519,13 +2553,16 @@ a.chat-row-open {
 }
 .suggested-activity:focus-visible {
   outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 .suggested-activity-title {
   font-size: 14px;
   line-height: 1.4;
   letter-spacing: -0.1px;
   overflow-wrap: anywhere;
+}
+.dark .suggested-activity-title {
+  color: rgb(139 169 204 / 0.76);
 }
 .suggested-activity-icon {
   display: flex;

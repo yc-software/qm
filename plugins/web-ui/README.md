@@ -68,9 +68,11 @@ No activity content is bundled into the public application.
 
 The first three entries appear above the empty personal-chat composer with colored
 icons, without a heading or expansion link. Selecting an entry fills and focuses
-an editable draft; it never submits a turn. Suggestions disappear while a draft
+an editable draft; it never submits a turn. Suggestions fade and collapse while a draft
 or attachment is present and do not appear in existing chats, shared contexts,
-or compact pane views. Drafts use the normal persistence path.
+or compact pane views. Collapsed suggestions are inert and hidden from assistive
+technology; reduced-motion preferences disable the transition. Dark mode uses
+subdued blue-gray suggestion text. Drafts use the normal persistence path.
 
 Each entry requires a unique lowercase alphanumeric/hyphen `id` (up to 64
 characters), `title` (up to 65 characters), `prompt` (up to 1,200 characters), and

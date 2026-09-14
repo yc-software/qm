@@ -87,7 +87,7 @@ test("activity selection fills and persists an editable draft without sending or
     const agent = { state: agentState } as unknown as Agent;
     const draw = () =>
       render(
-        html`${!composer!.state.draft && !composer!.state.attachments.length ? suggestedActivities(appState.me.suggestedActivities, (activity: SuggestedActivity) => composer!.fillSuggestedPrompt(activity.prompt, agent)) : null}${composer!.composerForm(agent)}`,
+        html`${suggestedActivities(appState.me.suggestedActivities, (activity: SuggestedActivity) => composer!.fillSuggestedPrompt(activity.prompt, agent), Boolean(composer!.state.draft || composer!.state.attachments.length))}${composer!.composerForm(agent)}`,
         host,
       );
     const ctx = {
@@ -115,23 +115,32 @@ test("activity selection fills and persists an editable draft without sending or
     assert.equal(host.querySelectorAll(".suggested-activity").length, 3);
     assert.equal(host.querySelector(".suggested-activity-title")?.textContent, activities[0].title);
     assert.equal(host.querySelector("img"), null);
+    const region = host.querySelector(".suggested-activities")!;
     host.querySelector<HTMLButtonElement>(".suggested-activity")!.click();
     await new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve()));
     assert.equal(composer!.state.draft, "Draft request 0");
     assert.equal(storedDraft("web:tester:suggestions"), "Draft request 0");
     assert.equal(storedDraft(newChatDraftKey("tester")), "Draft request 0");
     assert.equal(document.activeElement, host.querySelector("textarea"));
-    assert.equal(host.querySelector(".suggested-activity"), null);
+    assert.equal(host.querySelector(".suggested-activities"), region);
+    assert.equal(region.getAttribute("aria-hidden"), "true");
+    assert.ok(region.hasAttribute("inert"));
+    assert.equal(host.querySelectorAll(".suggested-activity:enabled").length, 0);
     assert.deepEqual(agent.state.messages, []);
     composer!.fillSuggestedPrompt("replacement", agent);
     assert.equal(composer!.state.draft, "Draft request 0");
     const input = host.querySelector<HTMLTextAreaElement>("textarea")!;
     input.value = "";
     input.dispatchEvent(new dom.window.InputEvent("input", { bubbles: true }));
-    assert.equal(host.querySelectorAll(".suggested-activity").length, 3);
+    assert.equal(host.querySelectorAll(".suggested-activity:enabled").length, 3);
+    assert.equal(region.getAttribute("aria-hidden"), "false");
+    assert.equal(region.hasAttribute("inert"), false);
     input.value = "My own draft";
     input.dispatchEvent(new dom.window.InputEvent("input", { bubbles: true }));
-    assert.equal(host.querySelector(".suggested-activity"), null);
+    assert.equal(host.querySelector(".suggested-activities"), region);
+    assert.equal(region.getAttribute("aria-hidden"), "true");
+    assert.ok(region.hasAttribute("inert"));
+    assert.equal(host.querySelectorAll(".suggested-activity:enabled").length, 0);
     assert.equal(storedDraft(newChatDraftKey("tester")), "My own draft");
     composer!.state.draft = "";
     composer!.state.processingFiles = true;

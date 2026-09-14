@@ -1330,12 +1330,15 @@ export function createChatSurface(
               (!ctx.pane || tier === "full") &&
               !chatState.sessionId &&
               (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
-              !agent.state.isStreaming &&
-              !ctx.composer.state.processingFiles &&
-              !ctx.composer.state.draft &&
-              !ctx.composer.state.attachments.length
-                ? suggestedActivities(appState.me?.suggestedActivities, (activity) =>
-                    ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
+              !agent.state.isStreaming
+                ? suggestedActivities(
+                    appState.me?.suggestedActivities,
+                    (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
+                    Boolean(
+                      ctx.composer.state.draft ||
+                      ctx.composer.state.attachments.length ||
+                      ctx.composer.state.processingFiles,
+                    ),
                   )
                 : nothing
             }
