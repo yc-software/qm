@@ -1,5 +1,4 @@
 import type { TurnResult } from "../types.ts";
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
 import { GENERIC_FAILURE_CLAUSE, userFacingFailureText } from "../../plugins/chassis/src/failure-copy.ts";
 
 export { userFacingFailureText } from "../../plugins/chassis/src/failure-copy.ts";
@@ -16,6 +15,7 @@ interface FailureShape {
   status?: string;
   reason?: string;
   refusalKind?: TurnResult["refusalKind"];
+  adminUrl?: string;
 }
 
 export function standaloneFailureText(result: FailureShape): string | undefined {
@@ -23,7 +23,7 @@ export function standaloneFailureText(result: FailureShape): string | undefined 
 }
 
 export function userFacingFailureClause(result: FailureShape): string {
-  if (result.refusalKind === "security_quarantine") return SECURITY_QUARANTINE_REFUSAL_TEXT;
+  if (result.refusalKind === "security_quarantine") return userFacingFailureText(result);
   if (result.refusalKind === "session_busy") return SESSION_BUSY_CLAUSE;
   if (result.status === "failed" || !result.reason) return GENERIC_FAILURE_CLAUSE;
   return result.reason;

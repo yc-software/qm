@@ -80,6 +80,7 @@ test("a lone @ is left as text", () => {
 });
 
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
+const linkified = readFileSync(new URL("../src/linkified-text.ts", import.meta.url), "utf8");
 
 test("expanded pinned items render text and preview through the linkifier", () => {
   assert.match(
@@ -100,7 +101,7 @@ test("the collapsed peek is linkified and lives outside the toggle button", () =
 });
 
 test("pin links stop propagation so a click follows the link instead of toggling", () => {
-  assert.match(chat, /@click=\$\{\(e: Event\) => e\.stopPropagation\(\)\}/);
+  assert.match(linkified, /@click=\$\{\(e: Event\) => e\.stopPropagation\(\)\}/);
 });
 
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");

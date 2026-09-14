@@ -161,7 +161,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     id: "security-posture",
     kind: "enum",
     target: "any",
-    label: "Harness security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
+    label:
+      "Harness security posture. The org value is a floor in the posture ordering. Strict pauses every harness tool call for human approval except the two no-effect turn enders. Auto screens provenance-labelled external data and tool results before they reach the model. Dangerous has no content screening or posture-level pauses. The predeclared command policy's approval rules and hard denials apply in every posture. Moving Auto to Strict replaces content screening with per-tool approvals. Narrower scopes may select a higher-ranked posture but cannot select one below the org floor.",
     readKey: "securityPosture",
     enumValues: SECURITY_POSTURES,
     get: (deps, scope) => deps.config!.getSecurityPostureDurable(scope),

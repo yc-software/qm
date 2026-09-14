@@ -64,9 +64,15 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
 }
 
 test("an approved resume that comes back security-quarantined acks the delivery after the card conveys it", async () => {
+  const adminUrl = "https://portal.example.com/admin/history/s/session-1";
   const f = fixture({
     submit: { status: "queued", runId: "R1" },
-    wait: { status: "refused", refusalKind: "security_quarantine", reason: "quarantined" },
+    wait: {
+      status: "refused",
+      refusalKind: "security_quarantine",
+      reason: "internal screening details",
+      adminUrl,
+    },
   });
   await f.clickApprove();
   await new Promise((resolve) => setImmediate(resolve));
@@ -76,6 +82,10 @@ test("an approved resume that comes back security-quarantined acks the delivery 
   assert.notEqual(cardIndex, -1, "the card conveys the refusal");
   assert.notEqual(ackIndex, -1, "the delivery row is acked so the poller does not re-post the notice");
   assert.ok(ackIndex > cardIndex, "the ack lands only after the card conveys the refusal (post-then-ack)");
+  const card = String(f.updates.at(-1)?.text ?? "");
+  assert.equal(card.split(adminUrl).length - 1, 1);
+  assert.doesNotMatch(card, /internal screening details/);
+  assert.match(card, /review this quarantine in session history/);
   assert.equal(f.flow.inFlightRuns.has("R1"), false, "the pin is released, so nothing leaks until restart");
 });
 
