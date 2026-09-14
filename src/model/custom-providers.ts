@@ -40,7 +40,7 @@ export interface CustomProviderSpec {
 }
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
-const RESERVED = new Set<string>([...PROVIDER_IDS, "mock"]);
+const RESERVED = new Set<string>([...PROVIDER_IDS, "mock", "gateway"]);
 
 export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!SLUG_RE.test(spec.id)) {

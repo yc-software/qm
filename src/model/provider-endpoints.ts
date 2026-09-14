@@ -1,3 +1,4 @@
+import { isGatewayModelId } from "./gateway-models.ts";
 /**
  * Provider endpoint overrides.
  *
@@ -25,6 +26,8 @@ export interface ModelGatewayTransportConfig {
   apiKey: string;
   apiKeyHeader: string;
   models: Readonly<Record<string, string>>;
+  reservedModelIds?: ReadonlySet<string>;
+  refresh?: () => Promise<void>;
 }
 
 /**
@@ -71,14 +74,23 @@ export function providerBaseUrl(provider: string): string | undefined {
   return (PROVIDER_IDS as readonly string[]).includes(provider) ? configured[provider as ProviderId] : undefined;
 }
 
-export function modelGatewayRequest<T extends { id: string; baseUrl: string }>(
+export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
 ): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
   const target = config?.models[model.id];
-  if (!target || !config) return undefined;
+  if (!target || !config) {
+    if (isGatewayModelId(model.id) || config?.reservedModelIds?.has(model.id))
+      throw new Error(`Gateway model is unavailable: ${model.id}`);
+    return undefined;
+  }
   return {
-    model: { ...model, baseUrl: config.url },
+    model: {
+      ...model,
+      baseUrl: isGatewayModelId(model.id)
+        ? `${config.url.replace(/\/v1$/, "")}${model.api === "anthropic-messages" ? "" : "/v1"}`
+        : config.url,
+    },
     target,
     apiKey: config.apiKey,
     headers: { [config.apiKeyHeader]: config.apiKey },

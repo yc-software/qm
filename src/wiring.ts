@@ -1,3 +1,4 @@
+import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
@@ -535,7 +536,10 @@ export function buildApp(
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
-  const gatewayModels = config.modelGateway?.models ?? {};
+  const gatewayCatalog = config.modelGateway
+    ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch)
+    : undefined;
+  const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
   const directModelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
@@ -549,10 +553,11 @@ export function buildApp(
   const modelCredentials: ModelCredentialStore = {
     ...directModelCredentials,
     async availability() {
+      await gatewayCatalog?.refresh();
       const direct = await directModelCredentials.availability();
       return {
         ...direct,
-        modelIds: new Set(Object.keys(gatewayModels)),
+        modelIds: new Set(Object.keys(gatewayTransport?.models ?? {})),
       };
     },
   };
@@ -1096,7 +1101,7 @@ export function buildApp(
   const modelVerifier = createModelVerifier({
     credentials: modelCredentials,
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
-    modelGateway: config.modelGateway,
+    modelGateway: gatewayTransport,
     probe: overrides.modelVerificationProbe,
   });
   const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
@@ -1104,6 +1109,7 @@ export function buildApp(
     setCustomProviders(await customProviders.enabled());
   };
   const refreshModels = async () => {
+    await gatewayCatalog?.refresh();
     await refreshCustomProviders();
     await modelRegistry.refresh();
   };
@@ -1141,12 +1147,22 @@ export function buildApp(
   const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
     configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+  const defaultForHarness = (harness: string) =>
+    defaultModelForHarness(
+      harness,
+      configuredModelForHarness(config, harness),
+      baseModelProviders(config) ??
+        (harness === "pi" && gatewayTransport
+          ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
+          : undefined),
+    );
   const adapters = new Map<HarnessId, Harness>([
     [
       "pi",
       createPiHarness({
         ...piHarnessConfigOptions(config),
-        resolveBaseModelId: orgBaseModelId,
+        modelGateway: gatewayTransport,
+        resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
         resolveProviderKeys: resolveModelProviderKeys,
         signals: runSignals,
         mcpTools,
@@ -1217,11 +1233,7 @@ export function buildApp(
   const fallback = {
     harnessId: fallbackHarness,
     get modelId() {
-      return defaultModelForHarness(
-        fallbackHarness,
-        configuredModelForHarness(config, fallbackHarness),
-        baseModelProviders(config),
-      );
+      return defaultForHarness(fallbackHarness);
     },
   };
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
@@ -1937,7 +1949,9 @@ export function buildApp(
     {
       config: configStore,
       harnessId: fallbackHarness,
-      baseModelDefault: fallback.modelId,
+      get baseModelDefault() {
+        return fallback.modelId;
+      },
       providerKeys: providerKeysPresent(config),
       modelCredentials,
       modelCredentialFetch: overrides.modelCredentialFetch,

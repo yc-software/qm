@@ -933,7 +933,7 @@ function csvPaths(value: string | undefined): string[] | undefined {
 function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
   const names = ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_API_KEY", "MODEL_GATEWAY_API_KEY_HEADER", "MODEL_GATEWAY_MODELS"];
   if (!names.some((name) => env[name]?.trim())) return undefined;
-  for (const name of names) {
+  for (const name of names.filter((name) => name !== "MODEL_GATEWAY_MODELS")) {
     if (!env[name]?.trim()) throw new Error(`${name} is required when model gateway routing is configured`);
   }
   const apiKeyHeader = env.MODEL_GATEWAY_API_KEY_HEADER!.trim();
@@ -941,7 +941,7 @@ function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfi
     throw new Error("MODEL_GATEWAY_API_KEY_HEADER must be a valid HTTP header name");
   }
   const models: Record<string, string> = {};
-  for (const mapping of env.MODEL_GATEWAY_MODELS!.split(",")) {
+  for (const mapping of env.MODEL_GATEWAY_MODELS?.trim() ? env.MODEL_GATEWAY_MODELS.split(",") : []) {
     const separator = mapping.indexOf("=");
     const source = mapping.slice(0, separator).trim();
     const target = mapping.slice(separator + 1).trim();
