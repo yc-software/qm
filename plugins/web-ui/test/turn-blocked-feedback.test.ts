@@ -99,7 +99,5 @@ test("a queued send blocked by a pending approval rejects with the reason instea
 test("a successfully queued send still resolves with its run", async () => {
   stubTurnResponse(202, { status: "queued", runId: "r-9" });
   const queued = await queueTurn("web:u:t", "hello", fakeAgent(), undefined, "key-1");
-  const { onRendered, ...run } = queued;
-  assert.equal(typeof onRendered, "function");
-  assert.deepEqual(run, { runId: "r-9", text: "hello" });
+  assert.deepEqual(queued, { runId: "r-9", text: "hello" });
 });

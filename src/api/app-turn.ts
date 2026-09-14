@@ -1,4 +1,3 @@
-import { createSendTiming } from "../../plugins/chassis/src/send-timing.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
@@ -77,12 +76,9 @@ export function createTurnMethods(
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
   return {
     async turn(req: TurnRequest): Promise<TurnResult> {
-      const timing = createSendTiming(req.traceId, "core");
-      timing("received");
+      const startedAt = performance.now();
       await deps.refreshModels?.();
-      timing("models_ready");
       await deps.identity.refresh();
-      timing("identity_ready");
       const actor: Principal = deps.identity.resolve(req.actor);
       if (!deps.identity.isInternal(actor)) {
         return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
@@ -227,7 +223,6 @@ export function createTurnMethods(
         }
       }
 
-      timing("validation_complete");
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
         projectAudience ??
@@ -304,7 +299,6 @@ export function createTurnMethods(
         }
       }
       const blocked = await pendingApprovalResultForThread(conversation.threadRef, actor.id, { alwaysBlock: true });
-      timing("approvals_checked");
       let request = input;
       if (blocked) {
         const record = req.approval ? await deps.approvals?.get(req.approval.requestId) : undefined;
@@ -494,11 +488,15 @@ export function createTurnMethods(
           maxAttempts: deps.maxAttempts,
           ...(dedupKey ? { dedupKey } : {}),
         });
-      timing("enqueue_start");
+      const enqueueStartedAt = performance.now();
       const enqueued = await withCurrentProjectRoster(enqueue);
       if (!enqueued) return { status: "refused", reason: "project membership changed; retry from the current project" };
-      timing("enqueued");
       const { run, deduped } = enqueued;
+      console.info("[turn] queued", {
+        runId: run.id,
+        preEnqueueMs: Math.round(enqueueStartedAt - startedAt),
+        enqueueMs: Math.round(performance.now() - enqueueStartedAt),
+      });
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (!deduped) {
         deps.sessionStateBus?.emit({

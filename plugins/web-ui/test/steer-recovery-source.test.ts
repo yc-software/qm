@@ -39,7 +39,7 @@ test("a message typed mid-turn is never dropped by the run-slot window — it qu
   assert.match(body, /if \(\(!text && !staged\.length\) \|\| !threadRef\) return;/);
   assert.match(
     body,
-    /if \(!\(await enqueueTurn\(agent, threadRef, text, uploaded, queuedFilesKey\(sendable\), timing\)\)\) \{\s*if \(stillHere\(\)\) restoreStagedOnFailure\(text, sendable, composerState\.error\);/,
+    /if \(!\(await enqueueTurn\(agent, threadRef, text, uploaded, queuedFilesKey\(sendable\)\)\)\) \{\s*if \(stillHere\(\)\) restoreStagedOnFailure\(text, sendable, composerState\.error\);/,
     "a queue core never took goes back in the composer, files included",
   );
   assert.ok(composer.indexOf("function steerWhenLive") < 0, "the held-steer shim is gone with its window");
