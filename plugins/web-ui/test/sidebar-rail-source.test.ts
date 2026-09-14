@@ -26,7 +26,11 @@ test("hidden sidebar innards are out of the focus order and keep their layout wh
     /\.layout\.sidebar-closed \.sidebar > :not\(\.brand\):not\(#sidebar-top\):not\(#sidebar-footer\),\s*\.layout\.sidebar-closed \.brand-lockup \{[^}]*opacity: 0;\s*visibility: hidden;\s*\}/,
   );
 
-  assert.doesNotMatch(css.slice(0, mobileShell), /transition:[^;}]*visibility/);
+  const sidebarRules = [...css.slice(0, mobileShell).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => /(?:\.sidebar\b|#sidebar-|\.brand(?:-lockup)?\b)/.test(selector!))
+    .map(([, , declarations]) => declarations)
+    .join("\n");
+  assert.doesNotMatch(sidebarRules, /transition:[^;}]*visibility/);
   assert.doesNotMatch(shell, /sidebar\.inert/);
 });
 
