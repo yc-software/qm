@@ -132,6 +132,9 @@ body.resizing-sidebar .sidebar {
 .layout.sidebar-closed #sidebar-footer .user-menu {
   display: none;
 }
+.layout:not(.sidebar-closed) .footer-rail-btn {
+  display: none;
+}
 .layout.sidebar-closed #sidebar-top .navrow span,
 .layout.sidebar-closed #sidebar-top .section-label {
   display: none;
@@ -832,6 +835,8 @@ a.chat-row-open {
   font: inherit;
   font-size: 13px;
   text-align: left;
+  text-decoration: none;
+  box-sizing: border-box;
 }
 .session-menu-option:hover {
   background: var(--secondary);
@@ -1502,6 +1507,7 @@ a.chat-row-open {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
 
   /* The space between blocks lives in each row's reserved meta lane (see .message-row), so the
      stack adds none of its own — a hover footer can never overhang the block below. */
@@ -1522,7 +1528,7 @@ a.chat-row-open {
 }
 @container chat (min-width: 471px) {
   .custom-chat-shell.empty-chat .composer-wrap {
-    width: min(calc(var(--content-w) * 0.75), 75%);
+    width: min(var(--content-w), calc(100% - 32px));
     margin-inline: auto;
   }
 }
@@ -4101,6 +4107,25 @@ a.chat-row-open {
 }
 .empty.compact {
   padding: 24px;
+}
+.empty-state-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.empty-title {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 550;
+}
+.empty-hint {
+  margin: 0 0 8px;
+  max-width: 36ch;
+  line-height: 1.45;
+  text-align: center;
+  color: var(--muted-foreground);
 }
 
 .btn {

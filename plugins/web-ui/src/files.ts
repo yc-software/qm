@@ -1,4 +1,4 @@
-import { html, nothing, render } from "lit";
+import { html, nothing, render, type TemplateResult } from "lit";
 import {
   File,
   FileArchive,
@@ -145,56 +145,83 @@ function drawFiles(loading = false): void {
   const status = filesNotice || (loading && !fileRows.length ? "Loading files…" : "");
   const scoped = Boolean(scopedSession.active);
   filesHost.classList.toggle("scoped-view", scoped);
+  const showSearch = Boolean(fileRows.length || filtered);
+  let filesBody: TemplateResult;
+  if (visible.length) {
+    filesBody = html`<div class="file-groups">
+      ${groups.map(
+        (group) =>
+          html`<section class="file-scope-group">
+            <h2>${scopeTitle(group.scope)}</h2>
+            ${listRowsTpl(group.files.map(fileRow), "file-list")}
+          </section>`,
+      )}
+    </div>`;
+  } else if (filtered) {
+    filesBody = html`<div class="empty compact">No files match these filters.</div>`;
+  } else {
+    filesBody = html`<div class="empty compact empty-state-block">
+      <p class="empty-hint">Files you and QM share show up here.</p>
+    </div>`;
+  }
   render(
     html`
       ${scopedViewTopbar("files", drawFiles)}
       <div class="list-page-head">
         <h1 class="pane-title">Files</h1>
-        <label class="list-search"
-          >${icon(Search, 16)}<span class="sr-only">Search files</span
-          ><input
-            type="search"
-            aria-label="Search files"
-            placeholder="Search file names and types…"
-            .value=${filesQuery}
-            @input=${(e: Event) => {
-              filesQuery = (e.currentTarget as HTMLInputElement).value;
-              drawFiles();
-              void loadAllFiles();
-            }}
-        /></label>
+        ${
+          showSearch
+            ? html`<label class="list-search"
+                >${icon(Search, 16)}<span class="sr-only">Search files</span
+                ><input
+                  type="search"
+                  aria-label="Search files"
+                  placeholder="Search file names and types…"
+                  .value=${filesQuery}
+                  @input=${(e: Event) => {
+                    filesQuery = (e.currentTarget as HTMLInputElement).value;
+                    drawFiles();
+                    void loadAllFiles();
+                  }}
+              /></label>`
+            : nothing
+        }
       </div>
-      <div class="list-toolbar">
-        ${selectControl(
-          "Ownership",
-          filesOwnership,
-          [
-            ["all", "All files"],
-            ["owned", "Yours"],
-            ["shared", "Shared"],
-          ],
-          (v) => {
-            filesOwnership = v as typeof filesOwnership;
-            drawFiles();
-            void loadAllFiles();
-          },
-        )}
-        ${selectControl(
-          "Type",
-          filesType,
-          [
-            ["all", "All types"],
-            ["image", "Images"],
-            ["document", "Documents"],
-            ["other", "Other"],
-          ],
-          (v) => {
-            filesType = v as typeof filesType;
-            drawFiles();
-            void loadAllFiles();
-          },
-        )}
-      </div>
+      ${
+        showSearch
+          ? html`<div class="list-toolbar">
+              ${selectControl(
+                "Ownership",
+                filesOwnership,
+                [
+                  ["all", "All files"],
+                  ["owned", "Yours"],
+                  ["shared", "Shared"],
+                ],
+                (v) => {
+                  filesOwnership = v as typeof filesOwnership;
+                  drawFiles();
+                  void loadAllFiles();
+                },
+              )}
+              ${selectControl(
+                "Type",
+                filesType,
+                [
+                  ["all", "All types"],
+                  ["image", "Images"],
+                  ["document", "Documents"],
+                  ["other", "Other"],
+                ],
+                (v) => {
+                  filesType = v as typeof filesType;
+                  drawFiles();
+                  void loadAllFiles();
+                },
+              )}
+            </div>`
+          : nothing
+      }
       ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
       <button
         class="file-drop ${filesDragActive ? "dragging" : ""}"
@@ -208,19 +235,7 @@ function drawFiles(loading = false): void {
       >
         ${icon(Upload, 16)}<span>${dropLabel}</span>
       </button>
-      ${
-        visible.length
-          ? html`<div class="file-groups">
-              ${groups.map(
-                (group) =>
-                  html`<section class="file-scope-group">
-                    <h2>${scopeTitle(group.scope)}</h2>
-                    ${listRowsTpl(group.files.map(fileRow), "file-list")}
-                  </section>`,
-              )}
-            </div>`
-          : html`<div class="empty compact">${filtered ? "No files match these filters." : "No files yet."}</div>`
-      }
+      ${filesBody}
       ${filesNextCursor ? html`<div class="list-footer"><button class="btn" type="button" ?disabled=${filesLoadingMore} @click=${() => void loadMoreFiles()}>${filesLoadingMore ? "Loading…" : "Load more"}</button></div>` : nothing}
     `,
     filesHost,

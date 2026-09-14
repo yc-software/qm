@@ -143,9 +143,12 @@ function drawWebhooksPage(): void {
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((w) => webhookPageRow(w));
   let empty = "No webhooks yet.";
+  let emptyHint: string | undefined;
   if (webhooksNotice) empty = webhooksNotice;
   else if (webhooksLoading && webhookList.length === 0) empty = "Loading webhooks…";
+  else if (webhooksSearch.trim()) empty = "No webhooks match your search.";
   else if (webhooksScope) empty = "No webhooks in this context.";
+  else emptyHint = "Inbound HTTP events that start a turn.";
   const noticeRow = webhooksNoticeSticky ? [html`<div class="action-notice">${webhooksNoticeSticky}</div>`] : [];
   webhooksNoticeSticky = "";
   render(
@@ -167,6 +170,7 @@ function drawWebhooksPage(): void {
       },
       rows: [...noticeRow, ...rows],
       empty,
+      emptyHint,
     }),
     webhooksPageHost,
   );

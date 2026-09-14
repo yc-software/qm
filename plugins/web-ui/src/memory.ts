@@ -21,7 +21,7 @@ let memoryRevision = "";
 let memoryNotice = "";
 let memorySaving = false;
 let memoryLoaded = false;
-let rawEditing = true;
+let rawEditing = false;
 let search = "";
 let historyOpen = false;
 let history: RevisionRow[] = [];
@@ -34,7 +34,7 @@ export function resetMemoryState(): void {
   memoryNotice = "";
   memorySaving = false;
   memoryLoaded = false;
-  rawEditing = true;
+  rawEditing = false;
   search = "";
   historyOpen = false;
   history = [];
@@ -73,6 +73,7 @@ function drawMemory(loading = false): void {
       <div class="list-page-head">
         <div>
           <h1 class="pane-title">Memory</h1>
+          <div class="pane-subtitle">Facts QM keeps across conversations. It also writes here on its own.</div>
         </div>
         <div class="list-page-actions">
           <button

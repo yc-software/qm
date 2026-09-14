@@ -122,6 +122,24 @@ test("a stored key keeps its summary even when the harness also carries auth", a
   assert.equal(elements["onboarding-model-summary"]!.textContent, "claude-opus-5 · admin-managed key");
 });
 
+test("a configured provider is ready even when the named base model belongs to another provider", async () => {
+  const elements = await runLoadOnboarding({
+    providers: [
+      { provider: "anthropic", configured: false, source: "absent" },
+      { provider: "openai", configured: true, source: "admin" },
+      { provider: "openrouter", configured: false, source: "absent" },
+    ],
+    models: [
+      { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+    ],
+  });
+  assert.equal(elements["onboarding-model-badge"]!.textContent, "Ready");
+  assert.equal(elements["onboarding-model-badge"]!.className, "badge ok");
+  assert.equal(elements["onboarding-model-summary"]!.textContent, "OpenAI · admin-managed key");
+  assert.equal(elements["onboarding-model-provider"]!.value, "openai");
+});
+
 test("/admin/onboarding resolves to the onboarding view", () => {
   assert.equal(resolveView("/admin/onboarding", ""), "onboarding");
 });

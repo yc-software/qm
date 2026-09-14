@@ -43,6 +43,7 @@ test("the collapsed rail keeps icon-only navigation instead of going empty", () 
 
   assert.match(css, /\.layout\.sidebar-closed #sidebar-footer \{\s*min-width: 0;\s*justify-content: center;\s*\}/);
   assert.match(css, /\.layout\.sidebar-closed #sidebar-footer \.user-menu \{\s*display: none;\s*\}/);
+  assert.match(css, /\.layout:not\(\.sidebar-closed\) \.footer-rail-btn \{\s*display: none;/);
   // Icon-only rows need tooltips to carry their labels.
   assert.match(shell, /class="navrow[^`]*\$\{tip\(sidebarOpen \? "" : label\)\}/);
 });

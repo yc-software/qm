@@ -27,9 +27,22 @@ export interface ListPageOpts {
   filters?: TemplateResult;
   rows: TemplateResult[];
   empty: string | TemplateResult;
+  emptyHint?: string;
+}
+
+function emptyBlock(o: ListPageOpts): TemplateResult {
+  if (typeof o.empty !== "string" || !o.emptyHint) {
+    return html`<div class="empty compact">${o.empty}</div>`;
+  }
+  return html`<div class="empty compact empty-state-block">
+    <p class="empty-title">${o.empty}</p>
+    <p class="empty-hint">${o.emptyHint}</p>
+  </div>`;
 }
 
 export function listPageTpl(o: ListPageOpts): TemplateResult {
+  const searching = Boolean(o.search?.value.trim());
+  const showSearch = Boolean(o.search) && (o.rows.length > 0 || searching);
   return html`
     <div class="list-page-head">
       <div>
@@ -47,20 +60,20 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
         }
       </div>
       ${
-        o.search
+        showSearch
           ? html`<label class="list-search">
               ${icon(Search, 16)}
               <input
                 type="search"
-                aria-label=${o.search.placeholder.replace(/…$/, "")}
-                placeholder=${o.search.placeholder}
-                .value=${live(o.search.value)}
+                aria-label=${o.search!.placeholder.replace(/…$/, "")}
+                placeholder=${o.search!.placeholder}
+                .value=${live(o.search!.value)}
                 @input=${(e: Event) => o.search!.onInput((e.currentTarget as HTMLInputElement).value)}
               />
             </label>`
           : nothing
       }
     </div>
-    ${o.filters ?? nothing} ${o.rows.length ? listRowsTpl(o.rows) : html`<div class="empty compact">${o.empty}</div>`}
+    ${o.filters ?? nothing} ${o.rows.length ? listRowsTpl(o.rows) : emptyBlock(o)}
   `;
 }

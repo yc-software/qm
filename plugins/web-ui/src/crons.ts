@@ -262,9 +262,12 @@ function drawCronsPage(): void {
     if (!archived.length) rows.push(cronEmptyRow("Nothing archived."));
   }
   let empty = "No crons yet.";
+  let emptyHint: string | undefined;
   if (cronsNotice) empty = cronsNotice;
   else if (cronsLoading && cronList.length === 0 && visibleCronList.length === 0) empty = "Loading crons…";
+  else if (cronsSearch.trim()) empty = "No crons match your search.";
   else if (cronsScope) empty = "No crons in this context.";
+  else emptyHint = "Ask QM to run something on a schedule.";
   const scoped = Boolean(scopedSession.active);
   cronsPageHost.classList.toggle("scoped-view", scoped);
   render(
@@ -281,6 +284,7 @@ function drawCronsPage(): void {
       },
       rows,
       empty,
+      emptyHint,
     })}`,
     cronsPageHost,
   );

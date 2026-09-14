@@ -144,8 +144,8 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     problem(
       res,
       503,
-      "Email delivery isn't configured",
-      "Your administrator needs to configure email delivery before you can request a sign-in link.",
+      "Sign-in is unavailable",
+      "Ask an administrator for access. Email delivery has not been set up on this instance.",
     );
 
   const signInUrl = ((): string | undefined => {

@@ -48,13 +48,20 @@ test("admin shell uses the QM identity with org-injectable branding", () => {
 test("admin shell groups control, logs, and artifacts like the reorganization", () => {
   assert.match(
     html,
-    /const SECTIONS = \[\s*\{ views: \["governance", "models", "credentials", "connectors", "customize", "users"\] \},\s*\{ label: "Logs", views: \["history", "slack", "judgments", "errors", "audit", "egress", "metrics"\] \},\s*\{ label: "Artifacts", views: \["files", "skills", "memory", "deployments", "crons", "retention"\] \},\s*\];/,
+    /const SECTIONS = \[\s*\{ views: \["onboarding", "governance", "models", "credentials", "connectors", "customize", "users"\] \},\s*\{ label: "Logs", views: \["history", "slack", "judgments", "errors", "audit", "egress", "metrics"\] \},\s*\{ label: "Artifacts", views: \["files", "skills", "memory", "deployments", "crons"\] \},\s*\];/,
   );
   assert.match(html, /history: "Sessions"/);
-  assert.match(
-    html,
-    /const VIEWS = \[\.\.\.SECTIONS\.flatMap\(\(s\) => s\.views\), "onboarding", "user", "ackemoji", "keychain"\];/,
-  );
+  assert.match(html, /const VIEWS = \[\.\.\.SECTIONS\.flatMap\(\(s\) => s\.views\), "user", "ackemoji", "keychain"\];/);
+});
+
+test("audit, metrics, and grant org admin are usable without Slack-shaped ids", () => {
+  assert.match(html, /let auditFilter = "all"/);
+  assert.match(html, /\["writes", "Writes"\]/);
+  assert.match(html, /phases = \(d\.phases \|\| \[\]\)\.filter\(\(p\) => p\.count\)/);
+  assert.match(html, /grantDatalist\.id = "grant-suggest"/);
+  assert.match(html, /Email or Slack user id required/);
+  assert.match(html, /No one matched\. Pick someone from the suggestions/);
+  assert.doesNotMatch(html, /Principal id required/);
 });
 
 test("deployment management is presented as Apps", () => {

@@ -58,7 +58,7 @@ test(
       assert.equal(redirect.status, 302);
       const emailPage = await fetch(redirect.headers.get("location")!);
       assert.equal(emailPage.status, 503);
-      assert.match(await emailPage.text(), /Email delivery (?:isn.t|isn&#39;t) configured/);
+      assert.match(await emailPage.text(), /Sign-in is unavailable/);
     });
 
     await t.test("CLI link requires confirmation and establishes the existing QM admin session once", async () => {

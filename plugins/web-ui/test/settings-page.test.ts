@@ -25,6 +25,7 @@ test("the sidebar footer keeps the identity pill, an admin shortcut, and the set
   );
   assert.match(footer, /class="user-pill"/);
   assert.match(footer, /aria-label="Settings"/);
+  assert.match(footer, /openSettingsFromMenu/);
   assert.doesNotMatch(footer, /theme-toggle/, "the theme toggle became the settings button");
   assert.match(
     footer,

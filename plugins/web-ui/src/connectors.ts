@@ -503,17 +503,6 @@ function drawConnectors(): void {
     credentialsContent = html`<div class="kc-empty">
       ${icon(KeyRound, 20)}
       <div><strong>No stored credentials</strong><span>Add one without pasting a secret into chat.</span></div>
-      <button
-        class="btn"
-        type="button"
-        @click=${() => {
-          addingCredential = { service: "", envKey: "", purpose: "" };
-          secureDropUrl = null;
-          drawConnectors();
-        }}
-      >
-        Add credential
-      </button>
     </div>`;
   if (!appState.mainEl) return;
   const section = (

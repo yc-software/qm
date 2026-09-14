@@ -42,6 +42,8 @@ export const ADMIN_LOGIN_SCRIPT = `(function () {
     document.getElementById("admin-confirm").disabled = false;
   } catch (e) {
     document.getElementById("admin-email").textContent = "This link is missing or invalid. Generate a new link with qm admin-login.";
+    var confirm = document.getElementById("admin-confirm");
+    if (confirm) confirm.remove();
   }
 })();`;
 

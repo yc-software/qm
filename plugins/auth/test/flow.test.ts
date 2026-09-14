@@ -144,7 +144,7 @@ test("without email delivery, sign-in pages explain the configuration instead of
     assert.equal(response.status, 503);
     assert.equal(response.headers.get("cache-control"), "no-store");
     const html = await response.text();
-    assert.match(html, /Email delivery isn&#39;t configured/);
+    assert.match(html, /Sign-in is unavailable/);
     assert.doesNotMatch(html, /<form|Check your email|link is on its way/);
   }
   await h.settle();

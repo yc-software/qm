@@ -18,6 +18,14 @@ test("the pinned prompt and composer have elevated solid surfaces", () => {
   assert.match(composer, /box-shadow: var\(--chat-surface-shadow\);/);
 });
 
+test("empty-chat composer matches the thread column", () => {
+  assert.match(
+    css,
+    /\.custom-chat-shell\.empty-chat \.composer-wrap \{\s*width: min\(var\(--content-w\), calc\(100% - 32px\)\);/,
+  );
+  assert.doesNotMatch(css, /content-w\) \* 0\.75/);
+});
+
 test("prompt elevation uses the shared surface shadow only while stuck", () => {
   const root = css.match(/:root \{[^}]*\}/)?.[0] ?? "";
   const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");

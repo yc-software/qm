@@ -648,6 +648,7 @@
       }
       input[type="text"],
       input[type="email"],
+      input[type="url"],
       input[type="date"],
       input:not([type]),
       input[type="password"],
@@ -661,6 +662,11 @@
         border: 1px solid var(--border);
         border-radius: var(--radius);
         padding: 7px 10px;
+      }
+      input::placeholder,
+      textarea::placeholder {
+        color: var(--muted);
+        opacity: 1;
       }
       input[aria-invalid="true"] {
         border-color: var(--danger);
@@ -5740,17 +5746,23 @@
                       id="branding-mark-url"
                       style="max-width: 420px"
                       maxlength="500"
-                      placeholder="https://example.com/icon.png"
+                      placeholder="Optional https URL"
                     />
                     <label for="branding-mark" style="margin-top: 12px">Brand mark (1–2 chars)</label>
-                    <input type="text" id="branding-mark" style="max-width: 200px" maxlength="2" placeholder="A" />
+                    <input
+                      type="text"
+                      id="branding-mark"
+                      style="max-width: 200px"
+                      maxlength="2"
+                      placeholder="Optional"
+                    />
                     <label for="branding-self-label" style="margin-top: 12px">Assistant label</label>
                     <input
                       type="text"
                       id="branding-self-label"
                       style="max-width: 320px"
                       maxlength="40"
-                      placeholder="Agent"
+                      placeholder="Optional"
                     />
                     <label for="branding-org-name" style="margin-top: 12px">Organization name</label>
                     <input
@@ -5758,7 +5770,7 @@
                       id="branding-org-name"
                       style="max-width: 320px"
                       maxlength="40"
-                      placeholder="Acme Corp"
+                      placeholder="Optional"
                     />
                   </div>
                   <div class="foot">
@@ -5770,17 +5782,17 @@
                   <div class="head">
                     <h2>People directory</h2>
                     <p>
-                      Public page or URL where the agent can look up a person's current role or title (e.g.
-                      https://www.example.com/people). Used when getting to know someone. Leave blank to disable.
+                      Public page where the agent can look up a person's current role or title. Used when getting to
+                      know someone. Leave blank to disable.
                     </p>
                   </div>
                   <div class="body">
                     <label for="people-directory-url">Directory URL</label>
                     <input
-                      type="text"
+                      type="url"
                       id="people-directory-url"
                       style="max-width: 480px"
-                      placeholder="https://www.example.com/people"
+                      placeholder="Optional https URL"
                     />
                   </div>
                   <div class="foot">
@@ -6291,12 +6303,12 @@
       const EFFECTS = ["allow", "deny", "require_approval"];
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
       const SECTIONS = [
-        { views: ["governance", "models", "credentials", "connectors", "customize", "users"] },
+        { views: ["onboarding", "governance", "models", "credentials", "connectors", "customize", "users"] },
         { label: "Logs", views: ["history", "slack", "judgments", "errors", "audit", "egress", "metrics"] },
-        { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons", "retention"] },
+        { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
       ];
 
-      const VIEWS = [...SECTIONS.flatMap((s) => s.views), "onboarding", "user", "ackemoji", "keychain"];
+      const VIEWS = [...SECTIONS.flatMap((s) => s.views), "user", "ackemoji", "keychain"];
       const DISABLED_VIEWS = new Set(["retention"]);
       function paritySubsection(card) {
         card.classList.remove("card", "sv-governance", "sv-models", "sv-credentials", "sv-customize");
@@ -9157,24 +9169,48 @@
           (onboardingModels[model.provider] ||= []).push(model);
         });
         const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
-        const baseProvider = onboardingProviderForModel(baseModel);
-        const baseStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
+        const namedProvider = onboardingProviderForModel(baseModel);
+        const namedStatus = onboardingModelStatuses.find((item) => item.provider === namedProvider);
+        const configuredProvider = onboardingModelStatuses.find((item) => item.configured);
         const harnessAuth = models.data.harnessAuth;
-        const baseHarnessAuth = Boolean(harnessAuth && harnessAuth.provider === baseProvider);
-        const baseReady = Boolean(baseModel) && (Boolean(baseStatus?.configured) || baseHarnessAuth);
+        const namedHarness = Boolean(harnessAuth && harnessAuth.provider === namedProvider);
+        const namedReady = Boolean(namedStatus?.configured) || namedHarness;
+        const baseReady = namedReady || Boolean(configuredProvider) || Boolean(harnessAuth);
+        const baseProvider =
+          (namedReady ? namedProvider : "") ||
+          configuredProvider?.provider ||
+          harnessAuth?.provider ||
+          namedProvider ||
+          onboardingModelStatuses[0]?.provider ||
+          "";
         onboardingBadge("onboarding-model-badge", baseReady ? "Ready" : "Needs a key", baseReady);
-        $("onboarding-model-summary").textContent = !baseModel
-          ? "No base model is configured yet. Pick a provider and model below."
-          : baseStatus?.configured
-            ? baseModel + " · " + (baseStatus.source === "admin" ? "admin-managed key" : "deployment key")
-            : baseHarnessAuth
-              ? baseModel + " · authenticated by the " + harnessAuth.harnessId + " harness — no API key needed."
-              : baseModel +
-                " cannot run until its " +
-                (MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider)) +
-                " key is configured.";
+        const selectedStatus = onboardingModelStatuses.find((item) => item.provider === baseProvider);
+        const selectedHarness = Boolean(harnessAuth && harnessAuth.provider === baseProvider);
+        const providerLabel = MODEL_PROVIDER_LABELS[baseProvider] || connectorName(baseProvider);
+        let summary;
+        if (!baseReady) {
+          summary = baseModel
+            ? baseModel +
+              " cannot run until its " +
+              (MODEL_PROVIDER_LABELS[namedProvider] || connectorName(namedProvider)) +
+              " key is configured."
+            : "No base model is configured yet. Pick a provider and model below.";
+        } else if (selectedStatus?.configured) {
+          summary =
+            (namedReady && baseModel ? baseModel + " · " : providerLabel + " · ") +
+            (selectedStatus.source === "admin" ? "admin-managed key" : "deployment key");
+        } else if (selectedHarness) {
+          summary =
+            (namedReady && baseModel ? baseModel + " · " : "") +
+            "authenticated by the " +
+            harnessAuth.harnessId +
+            " harness — no API key needed.";
+        } else {
+          summary = providerLabel + " is configured. Pick a model below.";
+        }
+        $("onboarding-model-summary").textContent = summary;
         renderOnboardingProviderOptions(baseProvider);
-        renderOnboardingModelOptions(baseModel);
+        renderOnboardingModelOptions(namedReady ? baseModel : "");
 
         onboardingBadge(
           "onboarding-slack-badge",
@@ -11438,7 +11474,7 @@
         const phaseSel = urlToState().phase;
         if (phaseSel) return renderPhaseDrill(root, d, phaseSel);
         renderCacheHealth(root, d);
-        const phases = d.phases || [];
+        const phases = (d.phases || []).filter((p) => p.count);
         root.appendChild(
           openableTable(
             ["Phase", "p50", "p95", "p99", "Turns", "Trend"],
@@ -11702,10 +11738,37 @@
         root.appendChild(pager(total, limit, offset, navigate));
       }
 
+      let auditFilter = "all";
+      function auditActionKind(action) {
+        const a = String(action || "");
+        return /\.read$/.test(a) || a === "whoami" || /\.list$/.test(a) ? "read" : "write";
+      }
       function renderAudit(root, d) {
         const all = orgWideView();
-        const events = d.events || [];
-        defaultShell({ count: plural(events.length, "event") });
+        const events = (d.events || []).filter((e) => {
+          if (auditFilter === "all") return true;
+          return auditActionKind(e.action) === (auditFilter === "writes" ? "write" : "read");
+        });
+        const seg = document.createElement("div");
+        seg.className = "segmented";
+        [
+          ["all", "All"],
+          ["writes", "Writes"],
+          ["reads", "Reads"],
+        ].forEach(([value, label]) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "seg" + (auditFilter === value ? " active" : "");
+          b.textContent = label;
+          b.onclick = () => {
+            if (auditFilter === value) return;
+            auditFilter = value;
+            root.replaceChildren();
+            renderAudit(root, d);
+          };
+          seg.appendChild(b);
+        });
+        defaultShell({ count: plural(events.length, "event"), actions: [seg] });
         const rows = events.map((e) => [
           { text: e.principalId, cls: "mono" },
           nodeCell(mutedText(e.action || "event", /revoke|delete|deny|fail/.test(String(e.action || "")) ? "err" : "")),
@@ -11736,6 +11799,7 @@
         const s = document.createElement("span");
         s.textContent = relTime(ts);
         s.title = fmtTime(ts);
+        s.style.whiteSpace = "nowrap";
         return nodeCell(s, "num");
       }
       async function adminErrors(query) {
@@ -13952,31 +14016,59 @@
           f.append(l, control);
           return f;
         };
+        const dirMembers = async (q) => {
+          const r = await api("GET", "/api/directory?q=" + encodeURIComponent(q));
+          if (!r.ok) throw new Error(r.data?.message || "directory lookup failed (" + r.status + ")");
+          return r.data?.members || [];
+        };
         const pInput = document.createElement("input");
         pInput.type = "text";
-        pInput.placeholder = "principal id (e.g. U07ABCD)";
+        pInput.placeholder = "email or Slack user id (e.g. dana@example.com)";
         pInput.spellcheck = false;
         pInput.autocapitalize = "none";
+        pInput.setAttribute("list", "grant-suggest");
+        const grantDatalist = document.createElement("datalist");
+        grantDatalist.id = "grant-suggest";
         const grantBtn = document.createElement("button");
         grantBtn.className = "primary";
         grantBtn.type = "button";
         grantBtn.textContent = "Grant";
         grantBtn.onclick = async () => {
-          const principalId = pInput.value.trim();
-          if (!principalId) return setStatus("st-users", "Principal id required.", "err");
-          const r = await api("POST", "/api/grants", { principalId, role: "org_admin", scopeId: "org:" + orgId });
-          if (r.ok) {
-            pInput.value = "";
-            renderData();
-          } else
-            setStatus(
-              "st-users",
-              r.status === 403 ? "Only an org admin may grant." : r.data?.message || "Grant failed.",
-              "err",
-            );
+          const v = pInput.value.trim();
+          if (!v) return setStatus("st-users", "Email or Slack user id required.", "err");
+          grantBtn.disabled = true;
+          try {
+            const members = await dirMembers(v);
+            if (members.length > 1)
+              return setStatus("st-users", "Matches several people. Pick one from the suggestions.", "err");
+            if (!members[0]) return setStatus("st-users", "No one matched. Pick someone from the suggestions.", "err");
+            const r = await api("POST", "/api/grants", {
+              principalId: members[0].principalId,
+              role: "org_admin",
+              scopeId: "org:" + orgId,
+            });
+            if (r.ok) {
+              pInput.value = "";
+              grantDatalist.textContent = "";
+              renderData();
+            } else
+              setStatus(
+                "st-users",
+                r.status === 403 ? "Only an org admin may grant." : r.data?.message || "Grant failed.",
+                "err",
+              );
+          } catch (e) {
+            setStatus("st-users", "Couldn't resolve that (" + (e?.message || "directory lookup failed") + ").", "err");
+          } finally {
+            grantBtn.disabled = false;
+          }
         };
-        form.append(mkField("grow", "Principal id", pInput), grantBtn);
-        const formCard = dataCard("Grant org admin", "Promote a principal to org admin. Org admins only.", form);
+        form.append(mkField("grow", "Person", pInput), grantBtn, grantDatalist);
+        const formCard = dataCard(
+          "Grant org admin",
+          "Promote someone to org admin by email or Slack user id. Org admins only.",
+          form,
+        );
         const st = document.createElement("p");
         st.className = "status";
         st.id = "st-users";
@@ -14001,11 +14093,30 @@
         let impTimer = null,
           impSeq = 0;
 
-        const dirMembers = async (q) => {
-          const r = await api("GET", "/api/directory?q=" + encodeURIComponent(q));
-          if (!r.ok) throw new Error(r.data?.message || "directory lookup failed (" + r.status + ")");
-          return r.data?.members || [];
-        };
+        let grantTimer = null,
+          grantSeq = 0;
+        pInput.addEventListener("input", () => {
+          const q = pInput.value.trim();
+          clearTimeout(grantTimer);
+          if (q.length < 2) return;
+          grantTimer = setTimeout(async () => {
+            const seq = ++grantSeq;
+            let members;
+            try {
+              members = await dirMembers(q);
+            } catch {
+              return;
+            }
+            if (seq !== grantSeq) return;
+            grantDatalist.textContent = "";
+            members.forEach((m) => {
+              const opt = document.createElement("option");
+              opt.value = m.principalId;
+              opt.label = m.displayName || m.principalId;
+              grantDatalist.appendChild(opt);
+            });
+          }, 200);
+        });
         impInput.addEventListener("input", () => {
           const q = impInput.value.trim();
           clearTimeout(impTimer);
