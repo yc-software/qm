@@ -41,7 +41,12 @@ import {
   getSlackInstallation,
   putSlackInstallation,
 } from "./admin/slack-installation.ts";
-import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
+import {
+  deleteModelProvider,
+  getModelProviders,
+  getProviderModels,
+  putModelProvider,
+} from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
@@ -69,6 +74,7 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PUT", path: "/v1/admin/slack-installation", auth: "either", handle: putSlackInstallation },
   { method: "DELETE", path: "/v1/admin/slack-installation", auth: "either", handle: deleteSlackInstallation },
   { method: "GET", path: "/v1/admin/model-providers", auth: "either", handle: getModelProviders },
+  { method: "GET", path: "/v1/admin/model-providers/:provider/models", auth: "either", handle: getProviderModels },
   { method: "PUT", path: "/v1/admin/model-providers/:provider", auth: "either", handle: putModelProvider },
   { method: "GET", path: "/v1/admin/mcp-servers", auth: "either", handle: getMcpServers },
   { method: "PUT", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: putMcpServer },

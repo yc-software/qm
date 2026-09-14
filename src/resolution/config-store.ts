@@ -7,6 +7,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
+import type { ModelStatus } from "../model/model-classification.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
@@ -89,6 +90,10 @@ export interface PersistedApprovedHarnesses {
 export interface PersistedWebuiModels {
   scopeId: ScopeId;
   ids: string[];
+}
+export interface PersistedModelClassification {
+  scopeId: ScopeId;
+  statuses: Record<string, ModelStatus>;
 }
 export interface PersistedInternalMemberOverrides {
   scopeId: ScopeId;
@@ -228,6 +233,9 @@ export interface ScopedConfigStore {
   getBaseModelOwnDurable(id: ScopeId): Promise<string | null>;
   getWebuiModels(id: ScopeId): string[] | null;
   setWebuiModels(id: ScopeId, ids: string[] | null): void;
+  getModelClassifications(id: ScopeId): Record<string, ModelStatus>;
+  setModelClassification(id: ScopeId, modelId: string, status: ModelStatus): void;
+  getModelClassificationsDurable(id: ScopeId): Promise<Record<string, ModelStatus>>;
   getBaseModelDurable(id: ScopeId): Promise<string | null>;
   getWebuiModelsDurable(id: ScopeId): Promise<string[] | null>;
   getAckEmoji(id: ScopeId): string[] | null;
@@ -279,6 +287,7 @@ export function createMemoryConfigStore(
     interactiveFastMode?: DurableMap<PersistedScopedFlag>;
     individualModelAuth?: DurableMap<PersistedScopedFlag>;
     webuiModels?: DurableMap<PersistedWebuiModels>;
+    modelClassifications?: DurableMap<PersistedModelClassification>;
     peopleDirectoryUrls?: DurableMap<PersistedPeopleDirectoryUrl>;
     ackEmoji?: DurableMap<PersistedAckEmoji>;
     slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
@@ -311,6 +320,7 @@ export function createMemoryConfigStore(
   let interactiveFastMode = false;
   let individualModelAuth = false;
   const webuiModels = new Map<ScopeId, string[]>();
+  const modelClassifications = new Map<ScopeId, Record<string, ModelStatus>>();
   const peopleDirectoryUrls = new Map<ScopeId, string>();
   const ackEmoji = new Map<ScopeId, string[]>();
   const branding = new Map<ScopeId, OrgBranding>();
@@ -336,6 +346,7 @@ export function createMemoryConfigStore(
   const interactiveFastModeStore = opts.interactiveFastMode ?? createMemoryMap<PersistedScopedFlag>();
   const individualModelAuthStore = opts.individualModelAuth ?? createMemoryMap<PersistedScopedFlag>();
   const webuiModelStore = opts.webuiModels ?? createMemoryMap<PersistedWebuiModels>();
+  const modelClassificationStore = opts.modelClassifications ?? createMemoryMap<PersistedModelClassification>();
   const peopleDirectoryUrlStore = opts.peopleDirectoryUrls ?? createMemoryMap<PersistedPeopleDirectoryUrl>();
   const ackEmojiStore = opts.ackEmoji ?? createMemoryMap<PersistedAckEmoji>();
   const slackEmojiCatalogStore = opts.slackEmojiCatalog ?? createMemoryMap<PersistedSlackEmojiCatalog>();
@@ -499,6 +510,7 @@ export function createMemoryConfigStore(
           interactiveFastMode = (await interactiveFastModeStore.get(org))?.on ?? false;
           individualModelAuth = (await individualModelAuthStore.get(org))?.on ?? false;
           for (const r of await webuiModelStore.all()) webuiModels.set(r.scopeId, r.ids);
+          for (const r of await modelClassificationStore.all()) modelClassifications.set(r.scopeId, r.statuses);
           for (const r of await peopleDirectoryUrlStore.all()) peopleDirectoryUrls.set(r.scopeId, r.url);
           for (const r of await ackEmojiStore.all()) ackEmoji.set(r.scopeId, r.names);
           for (const r of await brandingStore.all()) branding.set(r.scopeId, r.branding);
@@ -944,6 +956,23 @@ export function createMemoryConfigStore(
     },
     getWebuiModelsDurable: async (id) =>
       (await webuiModelStore.get(id))?.ids ?? (await webuiModelStore.get(org))?.ids ?? null,
+    getModelClassifications: (id) => modelClassifications.get(id) ?? {},
+    setModelClassification(id, modelId, status) {
+      const merged = { ...modelClassifications.get(id) };
+      if (status === "active") delete merged[modelId];
+      else merged[modelId] = status;
+      if (Object.keys(merged).length === 0) {
+        modelClassifications.delete(id);
+        persist(`modelClassifications:${id}`, "model classifications", () => modelClassificationStore.delete(id));
+      } else {
+        modelClassifications.set(id, merged);
+        persist(`modelClassifications:${id}`, "model classifications", () =>
+          modelClassificationStore.put(id, { scopeId: id, statuses: merged }),
+        );
+      }
+    },
+    getModelClassificationsDurable: async (id) =>
+      (await modelClassificationStore.get(id))?.statuses ?? (await modelClassificationStore.get(org))?.statuses ?? {},
     getAckEmoji: (id) => ackEmoji.get(id) ?? null,
     setAckEmoji(id, names) {
       if (!names || !names.length) {
