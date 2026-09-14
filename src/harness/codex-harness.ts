@@ -358,14 +358,14 @@ export function codexReasoningEffort(value: string | undefined): "low" | "medium
 }
 
 export function codexTurnInputText(
-  turn: Pick<HarnessTurnInput, "history" | "priorTurns" | "input" | "environment">,
+  turn: Pick<HarnessTurnInput, "history" | "priorTurns" | "input" | "environment" | "volatileContext">,
 ): string {
   const prior = turn.history.length
     ? ""
     : seedPriorTurns(turn.priorTurns ?? [])
         .map((message) => message.text)
         .join("\n");
-  return [prior, turn.input, turn.environment].filter((item) => item?.trim()).join("\n\n");
+  return [prior, turn.input, turn.environment, turn.volatileContext].filter((item) => item?.trim()).join("\n\n");
 }
 
 export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {

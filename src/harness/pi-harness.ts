@@ -706,6 +706,21 @@ export function stoppedPartialTapeMessage(
   };
 }
 
+export function withoutVolatileContext(message: unknown, sent: string, durable: string): unknown {
+  if (sent === durable) return message;
+  const m = message as { content?: unknown };
+  if (typeof m?.content === "string") return m.content === sent ? { ...m, content: durable } : message;
+  if (!Array.isArray(m?.content)) return message;
+  return {
+    ...(message as Record<string, unknown>),
+    content: m.content.map((block) =>
+      (block as { type?: unknown; text?: unknown })?.type === "text" && (block as { text?: unknown }).text === sent
+        ? { ...(block as object), text: durable }
+        : block,
+    ),
+  };
+}
+
 export function stripImageBytes(message: unknown, images?: readonly { artifactId?: string }[]): unknown {
   const m = message as { content?: unknown };
   if (!m || !Array.isArray(m.content)) return message;
@@ -1075,50 +1090,6 @@ export function wallClockTurnFailure(
 
 export function sessionCwdPath(prefix: string, sessionId: string): string {
   return join(tmpdir(), `${prefix}-cwd-${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}`);
-}
-
-const ENVIRONMENT_NOTE_RE = /\n*<environment>\n[\s\S]*?\n<\/environment>/g;
-
-function stripEnvironmentNote(content: unknown): unknown {
-  if (typeof content === "string") return content.replace(ENVIRONMENT_NOTE_RE, "");
-  if (!Array.isArray(content)) return content;
-  return content.map((block) => {
-    const text = (block as { type?: unknown; text?: unknown } | null)?.text;
-    if ((block as { type?: unknown } | null)?.type !== "text" || typeof text !== "string") return block;
-    return { ...(block as object), text: text.replace(ENVIRONMENT_NOTE_RE, "") };
-  });
-}
-
-function carriesEnvironmentNote(content: unknown): boolean {
-  if (typeof content === "string") return content.includes("<environment>");
-  return (
-    Array.isArray(content) &&
-    content.some(
-      (block) =>
-        typeof (block as { text?: unknown } | null)?.text === "string" &&
-        (block as { text: string }).text.includes("<environment>"),
-    )
-  );
-}
-
-export function stripStaleEnvironmentNotes(messages: unknown): unknown {
-  if (!Array.isArray(messages)) return messages;
-  let current = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { role?: unknown; content?: unknown } | null;
-    if (m?.role === "user" && carriesEnvironmentNote(m.content)) {
-      current = i;
-      break;
-    }
-  }
-  let changed = false;
-  const out = messages.map((m, i) => {
-    const msg = m as { role?: unknown; content?: unknown } | null;
-    if (i === current || msg?.role !== "user" || !carriesEnvironmentNote(msg.content)) return m;
-    changed = true;
-    return { ...msg, content: stripEnvironmentNote(msg.content) };
-  });
-  return changed ? out : messages;
 }
 
 async function createIsolatedResources(
@@ -1706,8 +1677,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           } catch (e) {
             swallow("pi: transformContext stamp", e);
           }
-          const stripped = stripStaleEnvironmentNotes(messages);
-          return priorTransform ? await priorTransform(stripped, signal) : stripped;
+          return priorTransform ? await priorTransform(messages, signal) : messages;
         };
         agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
         const priorPrepare = agent.prepareNextTurn;
@@ -1832,7 +1802,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
             return "";
           })();
-          const modelPrompt = [goalNote, turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
+          const durablePrompt = [goalNote, turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
+          const modelPrompt = [durablePrompt, turn.volatileContext].filter((s) => s && s.trim()).join("\n\n");
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
@@ -1878,7 +1849,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
-              payload: stripImageBytes(message, isTrigger ? turn.images : undefined),
+              payload: stripImageBytes(
+                isTrigger ? withoutVolatileContext(message, modelPrompt, durablePrompt) : message,
+                isTrigger ? turn.images : undefined,
+              ),
               scopeLabel: resultScope ?? turn.scopeLabel,
               ...(isTrigger
                 ? {

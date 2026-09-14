@@ -480,7 +480,11 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
       `"## ${title}" must not be in the system prompt`,
     );
   }
-  assert.match(environmentOf(first.reply ?? ""), /## The user's local time/);
+  assert.match(
+    environmentOf(first.reply ?? ""),
+    /<environment>\n## The user's local time/,
+    "the clock opens its own environment note, separate from the durable per-message facts",
+  );
   assert.notEqual(environmentOf(second.reply ?? ""), environmentOf(first.reply ?? ""), "the clock moved a minute");
   assert.equal(
     systemOf(second.reply ?? ""),

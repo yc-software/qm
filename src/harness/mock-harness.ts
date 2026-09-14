@@ -102,7 +102,9 @@ export function createMockHarness(): Harness {
           },
           scopeLabel: turn.scopeLabel,
         });
-        const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
+        const modelPrompt = [turn.input, turn.environment, turn.volatileContext]
+          .filter((s) => s && s.trim())
+          .join("\n\n");
 
         turn.recordModelCall({
           model: "mock",
@@ -329,7 +331,7 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!histcount") {
           reply = `history:${turn.history.length}`;
         } else if (command0 === "!sysprompt") {
-          reply = [turn.systemPrompt, turn.environment].filter((s) => s && s.trim()).join("\n\n");
+          reply = [turn.systemPrompt, turn.environment, turn.volatileContext].filter((s) => s && s.trim()).join("\n\n");
         } else if (command0 === "!wallclock") {
           reply = `wallclock:${turn.turnWallClockMs ?? 0}`;
         } else if (command0 === "!surfacename") {

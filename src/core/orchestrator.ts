@@ -2581,10 +2581,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote = inputUnscreened || inbound.unscreened.length ? unscreenedNotice("inbound content") : "";
         const turnEnv = environmentNote(
-          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim(), volatileContext]
+          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim()]
             .filter((s) => s && s.trim())
             .join("\n\n"),
         );
+        const turnVolatile = environmentNote(volatileContext);
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
         const pausedTurnUserEntry = input.approval
           ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
@@ -2799,6 +2800,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           harnessInput: string,
           extras: {
             environment?: string;
+            volatileContext?: string;
             priorTurns?: typeof input.priorTurns;
             overheard?: typeof importedOverheard;
             attachments?: typeof inbound.metas;
@@ -2839,6 +2841,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
             ...(extras.environment ? { environment: extras.environment } : {}),
+            ...(extras.volatileContext ? { volatileContext: extras.volatileContext } : {}),
             ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
             ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
@@ -3151,6 +3154,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 "\nRuntime handoff completed. Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request.",
               {
                 ...(turnEnvironment ? { environment: turnEnvironment } : {}),
+                ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
                 ...(inbound.images.length ? { images: inbound.images } : {}),
               },
               { history: resumedHistory, ...(resumedTape ? { tape: resumedTape } : {}) },
@@ -3163,6 +3167,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const primaryServedTape = !!tapeRows?.serve && history === visibleHistory;
         let result = await runHarnessTurn(turnInput, {
           ...(turnEnvironment ? { environment: turnEnvironment } : {}),
+          ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
           ...(priorTurns?.length ? { priorTurns } : {}),
           ...(importedOverheard.length ? { overheard: importedOverheard } : {}),
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
@@ -3277,6 +3282,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with stay_silent — ending the turn without either is not allowed here.",
               {
                 ...(turnEnvironment ? { environment: turnEnvironment } : {}),
+                ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
                 ...(nudgeTape?.mode !== "serve" && inbound.images.length ? { images: inbound.images } : {}),
               },
               { history: nudgeHistory, ...(nudgeTape ? { tape: nudgeTape } : {}) },

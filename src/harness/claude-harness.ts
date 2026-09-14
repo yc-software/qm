@@ -216,7 +216,9 @@ function promptText(turn: HarnessTurnInput): string {
     : seedPriorTurns(turn.priorTurns ?? [])
         .map((message) => message.text)
         .join("\n");
-  return [replay, prior, turn.input, turn.environment].filter((value) => value?.trim()).join("\n\n");
+  return [replay, prior, turn.input, turn.environment, turn.volatileContext]
+    .filter((value) => value?.trim())
+    .join("\n\n");
 }
 
 function userMessage(text: string, images: HarnessTurnInput["images"] = []): SDKUserMessage {

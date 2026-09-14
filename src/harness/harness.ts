@@ -78,6 +78,7 @@ export interface HarnessTurnInput {
   triggerTs?: string;
   entryTs?: string;
   environment?: string;
+  volatileContext?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardEntryPayload[];
   attachments?: AttachmentMeta[];
