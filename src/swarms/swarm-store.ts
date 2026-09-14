@@ -5,17 +5,10 @@ import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 
+import type { SwarmSettings } from "./swarm-settings.ts";
+import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
+
 export const SWARM_LIMITS = {
-  agents: 32,
-  depth: 4,
-  messages: 128,
-  notifications: 256,
-  spawnRequests: 32,
-  contextBytes: 8_192,
-  textBytes: 8_192,
-  waitMs: 10_000,
-  turnMs: 120_000,
-  lifetimeMs: 60 * 60_000,
   sweepBatch: 16,
   sweepConcurrency: 4,
   reconcileMs: 30_000,
@@ -60,6 +53,8 @@ export interface Swarm {
   createdAt: number;
   expiresAt: number;
   template: OrchestratorInput;
+  settings: SwarmSettings;
+  backend: SandboxBackendName;
   members: SwarmMember[];
   messages: SwarmMessage[];
   spawnRequests: Record<string, { memberIds: string[]; signature: string }>;

@@ -10,12 +10,11 @@ with a `Swarm worker` title. Worker transcripts remain read-only for ordinary me
 
 Use Postgres for production (`DATABASE_URL`, `SESSION_STORE=postgres`, and
 `RUN_STORE=postgres`) and enable the existing sandbox inventory with
-`SANDBOX_RESOURCES_ENABLED=true`. Configure the existing Modal backend with
-`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, and the usual deployment-specific Modal
-image, application, and storage settings. Workers always request Modal; they never
-silently fall back to a different provider. The existing default computer need not
-use Modal. Local development requires `jq` and Linux `prlimit` on the core's PATH;
-the core container includes them.
+`SANDBOX_RESOURCES_ENABLED=true`. Configure a sandbox backend with its required
+credentials and deployment-specific settings. Workers use the provider of the scope's selected computer, or the deployment default when none is selected. An initial
+`backend` override chooses another configured provider that supports creation and
+retirement. That choice is stored once; later default changes never move workers
+to another provider, and the selected computer's files are never copied.
 
 The `swarms` durable-map table has its own registered migration,
 `durable-map/swarms/0001`. Apply registered migrations through the normal QM deploy
@@ -49,6 +48,13 @@ human author. Request bodies cannot set identity, authorization, or provenance.
 }
 ```
 
+Optional `settings` overrides the defaults below at initial spawn. The backend
+can configure defaults with `SWARM_DEFAULTS`, a JSON object such as
+`{"agents":16,"turnMs":900000}`. Values must be positive safe integers within the
+safety bounds; unknown settings are rejected. Resolved settings and the chosen
+`backend` are stored once. Identical initial requests can be retried; subsequent
+spawns inherit the settings and cannot reconfigure the swarm.
+
 Omit `count` to spawn one; `contexts` also determines the count when provided. A
 single `context` supplies the same initial JSON to every worker. Context may be any
 JSON value, not just a role object. `contexts` must match the requested count.
@@ -63,7 +69,7 @@ remove empty sessions; unresolved cleanup remains recorded and retried. Failed
 reservations still consume the finite lifetime agent budget, preventing unlimited
 provider creation/retry loops.
 
-Each worker gets a dedicated **blank** Modal computer owned by the parent's
+Each worker gets a dedicated **blank** computer owned by the parent's
 authorization scope. No parent files are copied. Data access, keychain policy,
 memory resolution, and approval grants continue through QM's existing scope and
 identity rules, with unattended rather than human-attended permissions. Session
@@ -72,7 +78,7 @@ is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.
 
 To add a shared forum, supply `forumSandboxId` naming an existing authorized sandbox
-in the same scope. Every worker still gets its own blank private Modal computer.
+in the same scope. Every worker still gets its own blank private computer.
 The forum ID appears in peer metadata and the worker prompt; select it explicitly
 with `execute`'s `sandbox_id` for commands that should use the shared computer.
 This is not a new filesystem synchronization feature. Workers using a forum share
@@ -81,7 +87,7 @@ never retires the existing forum.
 
 ### Identity, peers, and character
 
-`GET /v1/swarm` returns `id`, `self`, `peers`, `limits`, and `expiresAt`. Peer
+`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, and `expiresAt`. Peer
 records keep trusted IDs, ancestry, session links, storage selection, and lifecycle
 state separate from arbitrary `context` data. Only this swarm is listed, not every
 session with the same owner, and never all private sessions in the organization.
@@ -99,21 +105,16 @@ Setting fields such as `id`, `scopeId`, or `depth` in context changes no authori
 {
   "action": "send",
   "requestId": "review-request",
-  "audience": ".[] | select(.group == \"implementation\" and .role == \"reviewer\")",
+  "audience": ["member-id"],
   "text": "Please check the proposed change and reply with your findings."
 }
 ```
 
 The response includes a durable message `id` and monotonic per-swarm `seq`.
-Filters run over **eligible, ready peers only**. Each input object has the context's
-top-level fields, the original value under `context`, and a trusted `id` that
-overrides any identically named metadata. Emit peer objects (`.[]`), not arbitrary
-IDs. A filter cannot select sessions outside its eligible input set. Duplicate
-selections collapse into one recipient, and an empty selection is valid.
-Stored context is preserved verbatim as JSON, including keys or characters that
-Postgres JSONB otherwise normalizes. The jq view replaces unmatched Unicode
-surrogates with the replacement character so one malformed string cannot prevent
-other peers from receiving messages; stored context is not changed.
+`audience` is either a list of recipient IDs or the string `"all"`. IDs are
+validated against eligible, ready peers. Duplicates collapse into one recipient;
+reordering IDs does not change a retry. `"all"` includes every eligible member,
+including the sender. An empty list records a shared message without waking anyone.
 
 Messages record intended recipients, author kind, authenticated actor, sender
 agent identity (`senderId`), ordinary QM session (`senderSessionId`), and optional
@@ -139,7 +140,8 @@ consumes the same finite notification budget.
 
 `GET /v1/swarm?read=1&after=0&waitMs=0` returns at most 32 messages. Advance `after`
 to the last `seq` to tail without rereading prior pages. `waitMs` may be at most
-10,000; a timeout returns an empty `messages` array, not a fabricated response.
+the stored `settings.waitMs` (10,000 by default); a timeout returns an empty
+`messages` array, not a fabricated response.
 
 To ask, send a message, keep its `id`, then read with `replyTo=<id>&waitMs=10000`.
 The responding agent sends with `replyTo` set to that ID. Replies can use
@@ -189,29 +191,26 @@ resource operations exhaust only this instance's resource capacity until a slot 
 released. Pending selection remains single-flight until its underlying database
 query settles, even when a sweep reports a selection timeout.
 
-## Enforced limits
+## Defaults and safety bounds
 
-| Resource                                             | Per-swarm limit                                             |
-| ---------------------------------------------------- | ----------------------------------------------------------- |
-| Total agents, including root and failed reservations | 32                                                          |
-| Recursive depth below root                           | 4                                                           |
-| Spawn requests                                       | 32                                                          |
-| Messages, including initial work                     | 128                                                         |
-| Notifications, including initial work                | 256                                                         |
-| JSON context / message body                          | 8,192 UTF-8 bytes each                                      |
-| Work window                                          | One hour from first spawn                                   |
-| Per-notification turn                                | 120 seconds; cancellation also enforced by the worker       |
-| Run retries                                          | Two error attempts; no harness execution after three claims |
-| Read page / maximum wait                             | 32 messages / 10 seconds                                    |
-| jq program / input / output                          | 2,048 / 512,000 / 512,000 bytes                             |
-| jq wall time / CPU / address space                   | 500 ms / 1 second / 128 MiB                                 |
-| Concurrent jq processes per core instance            | 4                                                           |
+| Setting                                          | Default              | Maximum     |
+| ------------------------------------------------ | -------------------- | ----------- |
+| `agents` (root and failed reservations included) | 32                   | 64          |
+| `depth` below root                               | 4                    | 8           |
+| `spawnRequests`                                  | 32                   | 64          |
+| `messages` including initial work                | 128                  | 256         |
+| `notifications` including initial work           | 256                  | 1,024       |
+| `contextBytes` / `textBytes`                     | 8,192 each           | 16,384 each |
+| `lifetimeMs` from first spawn                    | 3,600,000            | 86,400,000  |
+| `turnMs` per notification                        | 600,000 (10 minutes) | 3,600,000   |
+| `waitMs` per read                                | 10,000               | 30,000      |
 
-The database atomically reserves budgets with the messages/members that consume
-them. Invalid or exhausted operations do not partially reserve work. jq runs with
-an isolated environment, no file arguments, disabled module loading, bounded
-output, and OS resource limits. Invalid programs, module imports, resource
-exhaustion, and unsupported evaluator hosts fail closed.
+The root and at least one worker require `agents >= 2`. All other settings accept
+positive integers up to their maximum. Read requests can still use `waitMs:0`.
+Per-swarm budgets are reserved atomically with the messages and members consuming
+them. Both the orchestrator and independent worker cancellation honor the stored
+turn deadline; existing organization-wide limits can shorten it. Internal reconciliation limits, the 32-message read page, and
+bounded run retry counts are not swarm configuration.
 
 After expiration, history remains readable, but new work, notifications, and
 character changes are rejected. Human-initiated ordinary session turns remain
@@ -227,6 +226,6 @@ Run `npm run test:pg` against a disposable Postgres database. The swarm suite us
 a separate schema so migration-reset tests cannot invalidate its state.
 Set `SWARM_TEST_DATABASE_URL` when running `test/swarm-orchestrator.test.ts` to
 exercise the HTTP spawn/reply flow across an application restart with real durable
-state. These tests use deterministic model and Modal doubles; live provider and
+state. These tests use deterministic model and sandbox doubles; live provider and
 model acceptance remains a separate deployment check. The agent-board UI is
 intentionally deferred.

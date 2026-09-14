@@ -1,6 +1,6 @@
+import { SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectAudience } from "../src/swarms/audience.ts";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
@@ -76,7 +76,7 @@ test("every agent swarm operation requires a running persisted run with a live l
       () => service.inspect(caller),
       () => service.context(caller, {}),
       () => service.spawn(caller, { requestId: "later", text: "Work" }),
-      () => service.send(caller, { requestId: "later", audience: ".[]", text: "Work" }),
+      () => service.send(caller, { requestId: "later", audience: "all", text: "Work" }),
       () => service.read(caller, {}),
     ])
       await assert.rejects(operation, /active capability run required/, status);
@@ -87,11 +87,7 @@ test("ordinary root and worker turns bypass frozen rosters but swarm notificatio
   const { service, caller, root, sessions, runs, template } = await swarmFixture();
   await service.spawn(caller, { requestId: "initial", text: "Work" });
   await service.sweep();
-  await service.send(caller, {
-    requestId: "notify-root",
-    audience: `.[] | select(.id == "${root.id}")`,
-    text: "Reply",
-  });
+  await service.send(caller, { requestId: "notify-root", audience: [root.id], text: "Reply" });
   await service.sweep();
   const workerRun = (await runs.list()).find((run) => run.request.swarm)!;
   const manual = { ...workerRun.request, swarm: undefined, origin: { kind: "human" as const } };
@@ -271,7 +267,7 @@ test("ready notifications progress while every provider slot remains fenced afte
   await first.service.sweep();
   const message = await healthy.service.send(healthy.caller, {
     requestId: "follow-up",
-    audience: `.[] | select(.id == "${worker!.id}")`,
+    audience: [worker!.id],
     text: "Continue",
   });
   for (const fixture of fixtures.slice(0, -1))
@@ -517,7 +513,7 @@ test("own JSON context stays separate from trusted identity and scoped audience"
   const message = await service.send(caller, {
     requestId: "send",
     text: "Question",
-    audience: '.[] | select(.group == "feature" and .role == "worker")',
+    audience: [workers[0]!.id],
   });
   assert.deepEqual(message.audience, [workers[0]!.id]);
   const observer = await workerCaller(workers[1]!.id);
@@ -528,24 +524,20 @@ test("own JSON context stays separate from trusted identity and scoped audience"
   assert.equal((await service.inspect(worker)).self.context, null);
 });
 
-test("jq rejects invalid, exhausting, module-loading, and fabricated recipients", async () => {
-  const peers = [{ id: "eligible", context: { role: "worker" } }];
-  for (const filter of [
-    "select(",
-    "--help",
-    "--rawfile=/tmp/private",
-    "[range(1000000000)]",
-    "recurse",
-    'include "/tmp/private"; .[]',
-    '{id:"outsider"}',
-    '"eligible"',
-  ]) {
-    await assert.rejects(selectAudience(filter, peers));
-  }
-  assert.deepEqual(await selectAudience("empty", peers), []);
-  assert.deepEqual(await selectAudience(".[], .[]", peers), ["eligible"]);
-  assert.deepEqual(await selectAudience("if env | length == 0 then .[] else empty end", peers), []);
-  await assert.rejects(selectAudience("x".repeat(2_049), peers), /invalid/);
+test("audience selection rejects invalid or ineligible ids", async () => {
+  const { service, caller } = await swarmFixture();
+  const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
+  await service.sweep();
+  await assert.rejects(
+    service.send(caller, { requestId: "bad", audience: ["missing"], text: "Work" }),
+    /invalid audience/,
+  );
+  await assert.rejects(
+    service.send(caller, { requestId: "bad2", audience: [12 as never], text: "Work" }),
+    /invalid audience/,
+  );
+  const ok = await service.send(caller, { requestId: "ok", audience: [worker!.id, worker!.id], text: "Work" });
+  assert.deepEqual(ok.audience, [worker!.id]);
 });
 
 test("unrelated sessions, forged capabilities, and revoked scope membership fail closed", async () => {
@@ -582,7 +574,7 @@ test("eligible recipients exclude a session whose roster changes", async () => {
   await service.sweep();
   const peer = (await service.inspect(caller)).peers.find((item) => item.id === worker!.id)!;
   await sessions.addParticipant(peer.sessionId!, "bob");
-  const message = await service.send(caller, { requestId: "everyone", audience: ".[]", text: "Private work" });
+  const message = await service.send(caller, { requestId: "everyone", audience: "all", text: "Private work" });
   assert.ok(!message.audience.includes(peer.id));
   await assert.rejects(service.read(await workerCaller(peer.id), {}), /roster changed/);
   const run = (await runs.list()).find((entry) => entry.request.swarm)!;
@@ -596,11 +588,26 @@ test("spawn and send retry keys are idempotent and reject conflicting payloads",
   assert.equal(first[0]!.id, second[0]!.id);
   await assert.rejects(service.spawn(caller, { ...request, text: "Different" }), /reused/);
   await service.sweep();
-  const message = { requestId: "message", audience: ".[]", text: "Question" };
+  const message = { requestId: "message", audience: "all" as const, text: "Question" };
   const [sent, resent] = await Promise.all([service.send(caller, message), service.send(caller, message)]);
   assert.equal(sent.id, resent.id);
   await assert.rejects(service.send(caller, { ...message, text: "Different" }), /reused/);
   assert.equal((await store.get(root.id))!.messages.length, 2);
+});
+
+test("swarm settings are fixed at creation and reject conflicting attempts", async () => {
+  const { service, caller, store } = await swarmFixture();
+  const [worker] = await service.spawn(caller, {
+    requestId: "initial",
+    text: "Work",
+    settings: { turnMs: 600_000 },
+  });
+  const swarm = (await store.get(worker!.parentId!))!;
+  assert.equal(swarm.settings.turnMs, 600_000);
+  await assert.rejects(
+    service.spawn(caller, { requestId: "second", text: "Work", settings: { turnMs: 300_000 } }),
+    /settings are only allowed on initial swarm creation/,
+  );
 });
 
 test("concurrent pool reservations enforce a finite total without partial allocation", async () => {
@@ -614,13 +621,13 @@ test("concurrent pool reservations enforce a finite total without partial alloca
   assert.equal((await service.inspect(caller)).peers.length, 21);
   await service.spawn(caller, { requestId: "remaining", count: 11, text: "Work" });
   await assert.rejects(service.spawn(caller, { requestId: "excess", text: "Work" }), /agent budget/);
-  assert.equal((await service.inspect(caller)).peers.length, SWARM_LIMITS.agents);
+  assert.equal((await service.inspect(caller)).peers.length, SWARM_DEFAULTS.agents);
 });
 
 test("recursive spawn depth is enforced independently of arbitrary character", async () => {
   const { service, caller, workerCaller } = await swarmFixture();
   let current: SwarmCaller = caller;
-  for (let depth = 1; depth <= SWARM_LIMITS.depth; depth++) {
+  for (let depth = 1; depth <= SWARM_DEFAULTS.depth; depth++) {
     const [worker] = await service.spawn(current, {
       requestId: `level-${depth}`,
       context: { depth: -100 },
@@ -638,18 +645,18 @@ test("notification and message budgets include initial work and prevent recursio
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   await store.update(root.id, (swarm) => {
-    swarm.notificationCount = SWARM_LIMITS.notifications;
+    swarm.notificationCount = SWARM_DEFAULTS.notifications;
   });
   await assert.rejects(
-    service.send(caller, { requestId: "notify", audience: ".[]", text: "Work" }),
+    service.send(caller, { requestId: "notify", audience: "all", text: "Work" }),
     /notification budget/,
   );
-  await service.send(caller, { requestId: "quiet", audience: ".[]", text: "No wake", notify: false });
-  for (let index = 2; index < SWARM_LIMITS.messages; index++) {
-    await service.send(caller, { requestId: `quiet-${index}`, audience: "empty", text: "Archive", notify: false });
+  await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", notify: false });
+  for (let index = 2; index < SWARM_DEFAULTS.messages; index++) {
+    await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", notify: false });
   }
   await assert.rejects(
-    service.send(caller, { requestId: "excess", audience: "empty", text: "Archive", notify: false }),
+    service.send(caller, { requestId: "excess", audience: [], text: "Archive", notify: false }),
     /message budget/,
   );
   assert.equal((await service.read(caller, {})).length, 32);
@@ -753,13 +760,13 @@ test("correlated bounded waits observe replies without creating extra notificati
   const question = await service.send(caller, {
     requestId: "ask",
     text: "Status?",
-    audience: `.[] | select(.id == ${JSON.stringify(worker!.id)})`,
+    audience: [worker!.id],
   });
   const waiting = service.read(caller, { replyTo: question.id, waitMs: 1_000 });
   const answer = await service.send(await workerCaller(worker!.id), {
     requestId: "answer",
     text: "Finished",
-    audience: ".[]",
+    audience: [caller.claims.sessionId!],
     replyTo: question.id,
     notify: false,
   });
@@ -769,7 +776,7 @@ test("correlated bounded waits observe replies without creating extra notificati
   for (const waitMs of [-1, 10_001, Number.NaN, Infinity])
     await assert.rejects(service.read(caller, { waitMs }), /bounds/);
   await assert.rejects(
-    service.send(caller, { requestId: "bad-reply", text: "Answer", audience: "empty", replyTo: "another-swarm" }),
+    service.send(caller, { requestId: "bad-reply", text: "Answer", audience: [], replyTo: "another-swarm" }),
     /reply target/,
   );
 });
@@ -781,7 +788,7 @@ test("active recipients receive durable queued unattended work rather than human
   const initial = (await runs.list()).find((run) => run.request.swarm)!;
   const claimed = await runs.claimById(initial.id, "worker", 60_000);
   assert.equal(claimed!.status, "running");
-  await service.send(caller, { requestId: "queue", text: "More work", audience: ".[]" });
+  await service.send(caller, { requestId: "queue", text: "More work", audience: "all" });
   await service.sweep();
   const pending = (await runs.inFlightForThread(initial.sessionId)).find((run) => run.id !== initial.id)!;
   assert.equal(pending.status, "pending");
@@ -818,7 +825,7 @@ test("human messages preserve human actor attribution while notifications remain
   await service.sweep();
   const message = await service.send(
     { kind: "human", actorId: "alice", sessionId: root.id },
-    { requestId: "human", audience: ".[]", text: "Review the result" },
+    { requestId: "human", audience: "all", text: "Review the result" },
   );
   assert.equal(message.author, "human");
   assert.equal(message.actorId, "alice");
@@ -833,7 +840,7 @@ test("expired swarms retain readable history but cannot reserve or wake more wor
   });
   await service.sweep();
   await assert.rejects(service.spawn(caller, { requestId: "two", text: "Work" }), /expired/);
-  await assert.rejects(service.send(caller, { requestId: "message", text: "Work", audience: ".[]" }), /expired/);
+  await assert.rejects(service.send(caller, { requestId: "message", text: "Work", audience: "all" }), /expired/);
   assert.equal((await service.read(caller, {})).length, 1);
   assert.equal((await runs.list()).length, 1);
 });
@@ -943,7 +950,7 @@ test("swarm work cancellation has a hard worker deadline independent of the harn
     },
   } as unknown as Orchestrator;
   const work = processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, claimed);
-  context.mock.timers.tick(SWARM_LIMITS.turnMs - 1);
+  context.mock.timers.tick(SWARM_DEFAULTS.turnMs - 1);
   assert.equal(cancelled, false);
   context.mock.timers.tick(1);
   await work;
@@ -965,7 +972,7 @@ for (const action of ["spawn", "send", "context"] as const) {
     };
     const operations = {
       spawn: () => fixture.service.spawn(fixture.caller, { requestId: "later", text: "Work" }),
-      send: () => fixture.service.send(fixture.caller, { requestId: "later", audience: ".[]", text: "Work" }),
+      send: () => fixture.service.send(fixture.caller, { requestId: "later", audience: "all", text: "Work" }),
       context: () => fixture.service.context(fixture.caller, { role: "changed" }),
     };
     await assert.rejects(operations[action], /active capability run required/);

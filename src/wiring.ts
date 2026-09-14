@@ -1258,6 +1258,7 @@ export function buildApp(
   const swarms =
     config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
       ? createSwarmService({
+          defaults: config.swarmDefaults,
           store: createSwarmStore(artifactMap<SwarmStorage>("swarms"), {
             runs,
             sessions,

@@ -31,7 +31,10 @@ import {
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
 
+import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
+
 export interface Config {
+  swarmDefaults?: SwarmSettings;
   production: boolean;
   allowUnauthenticatedCore: boolean;
   port: number;
@@ -985,6 +988,9 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const swarmDefaults = resolveSwarmSettings(
+    env.SWARM_DEFAULTS === undefined ? undefined : JSON.parse(env.SWARM_DEFAULTS),
+  );
   const harness = harnessEnvStrict(env.HARNESS);
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
@@ -1300,6 +1306,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     execTimeoutMaxMs:
       (numEnvStrict("EXEC_TIMEOUT_MAX_SEC", env.EXEC_TIMEOUT_MAX_SEC) ?? CONFIG_DEFAULTS.execTimeoutMaxSec) * 1000,
     turnWallClockMs,
+    swarmDefaults,
     runMaxAgeMs,
     runWaitMs: (turnWallClockMs > 0 ? turnWallClockMs : runMaxAgeMs) + 60_000,
     backgroundJobTtlMs:

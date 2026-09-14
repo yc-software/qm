@@ -38,6 +38,7 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
       ...(body.action === "context" ? ["context"] : ["requestId", "text"]),
       ...(body.action === "spawn" ? ["count", "context", "contexts", "forumSandboxId"] : []),
       ...(body.action === "send" ? ["audience", "replyTo", "notify"] : []),
+      ...(body.action === "spawn" ? ["settings", "backend"] : []),
     ]);
     if (Object.keys(body).some((key) => !allowed.has(key))) throw new Error("unsupported swarm request field");
     if (body.action === "context") {
@@ -51,6 +52,8 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
       if (body.contexts !== undefined && !Array.isArray(body.contexts)) throw new Error("invalid contexts");
       if (body.forumSandboxId !== undefined && typeof body.forumSandboxId !== "string")
         throw new Error("invalid forumSandboxId");
+      if (body.settings !== undefined && !isObj(body.settings)) throw new Error("invalid settings");
+      if (body.backend !== undefined && typeof body.backend !== "string") throw new Error("invalid backend");
       const members = await app.swarms.spawn(caller, {
         requestId: body.requestId,
         text: body.text,
@@ -58,12 +61,14 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
         ...("context" in body ? { context: body.context } : {}),
         ...(Array.isArray(body.contexts) ? { contexts: body.contexts } : {}),
         ...(typeof body.forumSandboxId === "string" ? { forumSandboxId: body.forumSandboxId } : {}),
+        ...(isObj(body.settings) ? { settings: body.settings } : {}),
+        ...(typeof body.backend === "string" ? { backend: body.backend } : {}),
       });
       return sendJson(res, 202, { members });
     }
     if (body.action === "send") {
       if (
-        typeof body.audience !== "string" ||
+        !(Array.isArray(body.audience) || body.audience === "all") ||
         (body.notify !== undefined && typeof body.notify !== "boolean") ||
         (body.replyTo !== undefined && typeof body.replyTo !== "string")
       )

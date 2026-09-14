@@ -286,7 +286,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
     const session = await restoredSessions.get(recovered.members[1]!.sessionId!);
     assert.equal(session?.scopeId, initial.scopeId);
     assert.ok(await restoredSessions.getForParticipant(session!.id, "alice"));
-    const message = { requestId: "message", audience: ".[]", text: "Question" };
+    const message = { requestId: "message", audience: "all" as const, text: "Question" };
     const sent = await Promise.all([
       fixture.service.send(fixture.caller, message),
       sibling.send(fixture.caller, message),
@@ -298,7 +298,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
     assert.deepEqual((await fixture.service.inspect(fixture.caller)).self.context, arbitrary);
     const binaryText = await sibling.send(fixture.caller, {
       requestId: "unicode",
-      audience: "empty",
+      audience: [],
       text: "body\u0000\ud800",
       notify: false,
     });

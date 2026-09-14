@@ -62,6 +62,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null | undefined>;
   get(id: string): Promise<SandboxResource>;
+  defaultBackend(): SandboxBackendName;
   withLegacyMutation<T>(scopeId: string, action: () => Promise<T>): Promise<T>;
   recordLegacy(scopeId: string, backend: SandboxBackendName, handle: SandboxHandle): Promise<string>;
 }
@@ -194,6 +195,7 @@ export function createSandboxResources(opts: {
     return id;
   };
   return {
+    defaultBackend: () => opts.defaultBackend,
     initialize,
     get,
     recordLegacy: (scopeId, backend, handle) =>

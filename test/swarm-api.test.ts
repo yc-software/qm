@@ -44,7 +44,7 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
         const body =
           action === "context"
             ? { action, context: {} }
-            : { action, requestId: "forged", text: "Work", ...(action === "send" ? { audience: ".[]" } : {}) };
+            : { action, requestId: "forged", text: "Work", ...(action === "send" ? { audience: "all" } : {}) };
         const response = await post({ ...body, [field]: "foreign" });
         assert.equal(response.status, 400, field);
       }
@@ -61,7 +61,7 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
     assert.equal(await fixture.runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" }), true);
     for (const body of [
       { action: "spawn", requestId: "completed", text: "Work" },
-      { action: "send", requestId: "completed", text: "Work", audience: ".[]" },
+      { action: "send", requestId: "completed", text: "Work", audience: "all" },
       { action: "context", context: {} },
     ])
       assert.equal((await post(body)).status, 400);
@@ -117,7 +117,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const badAudience = await fetch(`${base}/v1/swarm`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ action: "send", requestId: "bad", audience: "select(", text: "Bad" }),
+      body: JSON.stringify({ action: "send", requestId: "bad", audience: ["missing"], text: "Bad" }),
     });
     assert.equal(badAudience.status, 400);
     const forgedToken = await mintCapabilityToken({ ...fixture.caller.claims, actorId: "bob" }, capabilitySecret);
@@ -128,7 +128,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const body = JSON.stringify({
       action: "send",
       requestId: "human",
-      audience: ".[]",
+      audience: "all",
       text: "Review",
     });
     const human = await fetch(`${base}${path}`, {
