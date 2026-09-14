@@ -130,6 +130,14 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
+import { createGrokBridge, type GrokBridge } from "./grok-bridge/service.ts";
+import { createPairingStore } from "./grok-bridge/pairing-store.ts";
+import { createJobStore } from "./grok-bridge/job-store.ts";
+import { createDurableSecretVault, type StoredInboundSecret } from "./grok-bridge/durable-vault.ts";
+import { createHttpOutbound } from "./grok-bridge/http-outbound.ts";
+import { createSessionAccess } from "./grok-bridge/session-access.ts";
+import { createSessionProjector } from "./grok-bridge/session-projector.ts";
+import type { GrokJob, GrokPairing } from "./grok-bridge/types.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
@@ -436,6 +444,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
+  grokBridge: GrokBridge;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -1949,6 +1958,14 @@ export function buildApp(
     directory,
     currentScopeMembers,
   });
+  const grokBridge = createGrokBridge({
+    pairings: createPairingStore(artifactMap<GrokPairing>("grok_bridge_pairings")),
+    jobs: createJobStore(artifactMap<GrokJob>("grok_bridge_jobs")),
+    secrets: createDurableSecretVault(artifactMap<StoredInboundSecret>("grok_bridge_secrets")),
+    sessions: createSessionAccess(sessions, { canReadScope }),
+    outbound: createHttpOutbound(),
+    projector: createSessionProjector(sessions),
+  });
   const instanceRegistry: InstanceRegistry =
     config.buildSha && pgArtifactMap
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
@@ -2112,6 +2129,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
+    grokBridge,
     admin,
     rateLimiter,
     errors,
@@ -2238,6 +2256,7 @@ export function serverDeps(
     ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
+    grokBridge: built.grokBridge,
     identity: built.identity,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,

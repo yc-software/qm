@@ -41,6 +41,7 @@ import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
+import type { GrokBridge } from "../grok-bridge/types.ts";
 import type {
   ConnectorTokenStore,
   Keychain,
@@ -99,6 +100,7 @@ export interface ServerDeps {
   credentialUsage?: CredentialUsageSink;
   deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
+  grokBridge?: GrokBridge;
   egressAudit?: EgressAuditSink;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;

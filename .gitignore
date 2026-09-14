@@ -21,3 +21,6 @@ __pycache__/
 docs/master.html
 
 .context/
+
+adrs/qm-grok-bridge.md
+films/
