@@ -352,3 +352,135 @@ test("Postgres rolls back a swarm mutation whose run expires while waiting for t
     await factory.pool.close();
   }
 });
+
+for (const scenario of ["same request", "distinct requests", "conflicting settings"] as const) {
+  test(`Postgres complete initial pools race safely across independent clients: ${scenario}`, { skip }, async () => {
+    const first = createPostgresMapFactory(databaseUrl!);
+    const second = createPostgresMapFactory(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const stores = [first, second].map((factory) =>
+      createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+        runs: runtime.runs,
+        sessions,
+        pg: factory.pool,
+      }),
+    );
+    try {
+      const f = await swarmFixture({ store: stores[0]!, sessions, runs: runtime.runs });
+      const sibling = createSwarmService({ ...f.serviceOptions, store: stores[1]! });
+      const ready = Promise.withResolvers<void>();
+      let arrivals = 0;
+      for (const store of stores) {
+        const create = store.create.bind(store);
+        store.create = async (...args) => {
+          if (++arrivals === 2) ready.resolve();
+          await ready.promise;
+          return create(...args);
+        };
+      }
+      const results = await Promise.allSettled([
+        f.service.spawn(f.caller, { requestId: "initial", text: "work", settings: { turnMs: 777 } }),
+        sibling.spawn(f.caller, {
+          requestId: scenario === "same request" ? "initial" : "other",
+          text: "work",
+          settings: { turnMs: scenario === "conflicting settings" ? 888 : 777 },
+        }),
+      ]);
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, scenario === "conflicting settings" ? 1 : 2);
+      const swarm = (await stores[0]!.get(f.root.id))!;
+      const pools = scenario === "distinct requests" ? 2 : 1;
+      assert.equal(swarm.members.length, pools + 1);
+      assert.equal(swarm.messages.length, pools);
+      assert.equal(Object.keys(swarm.spawnRequests).length, pools);
+      assert.equal(swarm.notificationCount, pools);
+      assert.equal(swarm.pending, true);
+      assert.equal(swarm.template.turnWallClockMs, swarm.settings.turnMs);
+      if (scenario === "same request") assert.deepEqual(results[0], results[1]);
+      await first.map<SwarmStorage>("swarms").delete(f.root.id);
+    } finally {
+      await runtime.close();
+      await Promise.all([first.pool.close(), second.pool.close()]);
+    }
+  });
+}
+
+test(
+  "Postgres lost initial acknowledgment leaves one complete pool that a new client can retry",
+  { skip },
+  async () => {
+    const first = createPostgresMapFactory(databaseUrl!);
+    const second = createPostgresMapFactory(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
+    try {
+      const f = await swarmFixture({ store, sessions, runs: runtime.runs });
+      const create = store.create.bind(store);
+      store.create = async (...args) => {
+        await create(...args);
+        throw new Error("lost acknowledgment");
+      };
+      const request = { requestId: "initial", text: "work", settings: { turnMs: 777 } };
+      await assert.rejects(f.service.spawn(f.caller, request), /lost acknowledgment/);
+      const restartedStore = createSwarmStore(second.map<SwarmStorage>("swarms"), {
+        runs: runtime.runs,
+        sessions,
+        pg: second.pool,
+      });
+      const restarted = createSwarmService({ ...f.serviceOptions, store: restartedStore });
+      const committed = (await restartedStore.get(f.root.id))!;
+      assert.equal(committed.members.length, 2);
+      assert.equal(committed.messages.length, 1);
+      assert.equal(committed.pending, true);
+      const workers = await restarted.spawn(f.caller, request);
+      assert.equal(workers[0]!.id, committed.members[1]!.id);
+      assert.deepEqual(await restartedStore.get(f.root.id), committed);
+      await first.map<SwarmStorage>("swarms").delete(f.root.id);
+    } finally {
+      await runtime.close();
+      await Promise.all([first.pool.close(), second.pool.close()]);
+    }
+  },
+);
+
+test("Postgres initial pool expires atomically while waiting for the write lock", { skip }, async (context) => {
+  const factory = createPostgresMapFactory(databaseUrl!);
+  const runtime = createPostgresRunStore(databaseUrl!);
+  const sessions = createPostgresSessionStore(databaseUrl!);
+  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+    runs: runtime.runs,
+    sessions,
+    pg: factory.pool,
+  });
+  const f = await swarmFixture({ store, sessions, runs: runtime.runs });
+  const client = await (await factory.pool.pool()).connect();
+  const entered = Promise.withResolvers<void>();
+  const create = store.create.bind(store);
+  store.create = async (...args) => {
+    entered.resolve();
+    return create(...args);
+  };
+  try {
+    await store.get(f.root.id);
+    await client.query("INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT DO NOTHING");
+    await client.query("BEGIN");
+    await client.query("SELECT v FROM durable_map_versions WHERE tbl='swarms' FOR UPDATE");
+    context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const rejected = assert.rejects(
+      f.service.spawn(f.caller, { requestId: "initial", text: "work", settings: { lifetimeMs: 10_000 } }),
+      /work window expired/,
+    );
+    await entered.promise;
+    context.mock.timers.tick(20_000);
+    await client.query("COMMIT");
+    await rejected;
+    assert.equal(await store.get(f.root.id), null);
+  } finally {
+    context.mock.timers.reset();
+    await client.query("ROLLBACK");
+    client.release();
+    await runtime.close();
+    await factory.pool.close();
+  }
+});

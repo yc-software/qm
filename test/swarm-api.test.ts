@@ -206,3 +206,53 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("HTTP retry after a lost initial response exposes only a complete pool and reads it once", async () => {
+  const f = await swarmFixture();
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  const capabilitySecret = "swarm-atomic-http-test-secret";
+  const server = createServer({ swarms: f.service, authorizesCapabilityScope: async () => true } as unknown as App, {
+    signingSecret: "swarm-atomic-http-source-secret-distinct",
+    capabilitySecret,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
+  const headers = {
+    "x-agent-capability": await mintCapabilityToken(f.caller.claims, capabilitySecret),
+    "content-type": "application/json",
+  };
+  const request = { action: "spawn", requestId: "initial", text: "work", count: 2, settings: { turnMs: 777 } };
+  const spawn = () => fetch(base, { method: "POST", headers, body: JSON.stringify(request) });
+  const create = f.store.create.bind(f.store);
+  f.store.create = async (...args) => {
+    await create(...args);
+    throw new Error("simulated lost commit acknowledgment");
+  };
+  try {
+    assert.equal((await spawn()).status, 400);
+    const get = f.store.get.bind(f.store);
+    let reads = 0;
+    f.store.get = async (id) => {
+      reads++;
+      return get(id);
+    };
+    const history = await fetch(`${base}?read=1`, { headers });
+    assert.equal(history.status, 200);
+    const { messages } = (await history.json()) as { messages: Array<{ audience: string[] }> };
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0]!.audience.length, 2);
+    assert.equal(reads, 1);
+    const retry = await spawn();
+    assert.equal(retry.status, 202);
+    const { members } = (await retry.json()) as { members: Array<{ id: string }> };
+    assert.deepEqual(
+      members.map((m) => m.id),
+      messages[0]!.audience,
+    );
+    assert.equal((await get(f.root.id))!.settings.turnMs, 777);
+    await f.service.sweep();
+    assert.equal((await f.runs.list()).filter((r) => r.request.swarm).length, 2);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});

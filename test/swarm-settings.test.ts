@@ -126,21 +126,25 @@ test("worker cancellation honors the persisted override instead of the backend d
   assert.equal(cancelled, true);
 });
 
-test("initial configuration remains retryable after initialization commits but reservation fails", async () => {
+test("failed initial persistence leaves no configuration and a complete pool can be retried", async () => {
   const f = await swarmFixture();
-  const update = f.store.update.bind(f.store);
+  const create = f.store.create.bind(f.store);
   let interrupted = false;
-  f.store.update = async (...args) => {
+  f.store.create = async (...args) => {
     if (!interrupted) {
       interrupted = true;
       throw new Error("simulated reservation interruption");
     }
-    return update(...args);
+    return create(...args);
   };
   const request = { requestId: "initial", text: "work", backend: "modal", settings: { turnMs: 700_000 } };
   await assert.rejects(f.service.spawn(f.caller, request), /interruption/);
-  await assert.rejects(f.service.spawn(f.caller, { ...request, settings: { turnMs: 800_000 } }));
+  assert.equal(await f.store.get(f.root.id), null);
   const [worker] = await f.service.spawn(f.caller, request);
   assert.ok(worker);
-  assert.equal((await f.store.get(f.root.id))!.members.length, 2);
+  await assert.rejects(f.service.spawn(f.caller, { ...request, settings: { turnMs: 800_000 } }), /reused/);
+  const swarm = (await f.store.get(f.root.id))!;
+  assert.equal(swarm.members.length, 2);
+  assert.equal(swarm.messages.length, 1);
+  assert.equal(swarm.settings.turnMs, 700_000);
 });
