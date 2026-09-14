@@ -1,4 +1,5 @@
 import { loadGeneratedActivities } from "./generated-activities";
+import type { SwarmTranscriptLabel } from "../../../src/swarms/swarm-board-view";
 import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -1545,12 +1546,14 @@ export function createChatSurface(
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
       const steered = Boolean((message as { steered?: boolean }).steered);
+      const swarm = (message as { swarm?: SwarmTranscriptLabel }).swarm;
       const speaker = speakerLabelFor(message);
       const deleted = Boolean((message as { deleted?: boolean }).deleted);
       const edited = !deleted && Boolean((message as { edited?: boolean }).edited);
       return html`
         <article class="message-row user-row ${steered ? "steered-row" : ""}" data-index=${index}>
-          ${steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
+          ${swarm ? html`<div class="steer-label">${swarm.visibility === "org" ? "Organization-public" : "Private swarm"} agent message from ${swarm.senderName} · <a href=${withBase(`/board/${encodeURIComponent(swarm.messageId)}`) + (swarm.visibility === "org" ? "" : `?visibility=private&session=${encodeURIComponent(swarm.swarmId)}`)}>Inspect on board</a></div>` : nothing}
+          ${!swarm && steered ? html`<div class="steer-label">↪ steered the running task</div>` : nothing}
           ${speaker ? html`<div class="speaker-label">${speaker}</div>` : nothing}
           <div class="message-bubble user-bubble ${deleted ? "deleted-bubble" : ""}">
             <div class="pin-content">
@@ -2236,6 +2239,7 @@ export function createChatSurface(
   }
 
   function liveWorkSummary(work: WorkBlock): { icon: IconNode; label: string; detail: string } | null {
+    if (work.queued) return { icon: Clock3, label: "Queued — waiting for execution", detail: "" };
     if (work.stale) {
       const active = activeToolRow(work);
       const call = (active?.call?.payload ?? {}) as ToolPayload;
@@ -2292,6 +2296,7 @@ export function createChatSurface(
   }
 
   function workLabel(work: WorkBlock): string {
+    if (work.queued) return "Queued — waiting for execution";
     if (work.stale && (work.status === "thinking" || work.status === "working")) return "Interrupted, resuming…";
     if (work.status === "thinking") return "Thinking";
     const secs = workSeconds(work);

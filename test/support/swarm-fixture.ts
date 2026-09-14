@@ -1,3 +1,4 @@
+import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import { randomUUID } from "node:crypto";
 import { createMemoryMap } from "../../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
@@ -15,6 +16,7 @@ import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 
 export async function swarmFixture(
   options: {
+    actorId?: string;
     store?: SwarmStore;
     sessions?: SessionStore;
     runs?: RunStore;
@@ -29,7 +31,7 @@ export async function swarmFixture(
   const records = createMemoryMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
-  const state = { allowed: true, failProvision: false };
+  const state = { allowed: true, failProvision: false, manageable: true, blockedActors: new Set<string>() };
   const backend: Sandbox = options.backend ?? {
     profile: { backend: "modal", writablePersistence: "resident_disk", processSessions: false },
     async provision(layers) {
@@ -79,11 +81,11 @@ export async function swarmFixture(
     routes,
     resources: sandboxes,
   });
-  const actor = { id: "alice", type: "internal" as const };
+  const actor = { id: options.actorId ?? "alice", type: "internal" as const };
   const root = await sessions.getOrCreateByThread(
-    `web:alice:${randomUUID()}`,
+    `web:${actor.id}:${randomUUID()}`,
     "dm",
-    "personal:alice",
+    `personal:${actor.id}`,
     undefined,
     "web",
   );
@@ -112,7 +114,26 @@ export async function swarmFixture(
       exp: Date.now() + 60_000,
     },
   };
-  const serviceOptions = { store, sessions, runs, sandboxes, lock, authorize: async () => state.allowed };
+  const signals = createMemoryRunSignalStore();
+  const serviceOptions = {
+    signals,
+    store,
+    sessions,
+    runs,
+    sandboxes,
+    lock,
+    authorize: async (
+      claims: Pick<
+        import("../../src/auth/capability-token.ts").CapabilityClaims,
+        "actorId" | "scopeId" | "scopeVersion" | "members"
+      >,
+    ) =>
+      state.allowed &&
+      !state.blockedActors.has(claims.actorId) &&
+      !(claims.members ?? []).some((member) => state.blockedActors.has(member.id)),
+    managesScope: async (actorId: string, scopeId: string) =>
+      state.manageable && actorId === actor.id && scopeId === root.scopeId,
+  };
   const service = createSwarmService(serviceOptions);
   const workerCaller = async (id: string): Promise<SwarmCaller> => {
     const swarm = (await store.get(root.id))!;

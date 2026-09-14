@@ -1146,3 +1146,22 @@ test("attachment fallback preserves participant windows and repeated calls in an
     );
   }
 });
+
+test("host-verified swarm labels survive native tape projection with their public display text", async () => {
+  const sim = await simSession();
+  await simTurn(sim, { input: "Automation wrapper", display: "Public review", reply: "Done" });
+  const label = {
+    swarmId: "recipient-root",
+    messageId: "message",
+    recipientId: "recipient",
+    visibility: "org" as const,
+    senderName: "Public sender",
+  };
+  const rows = (await sim.store.getTape(sim.session.id)).map((row) =>
+    row.meta?.bareText === "Automation wrapper" ? { ...row, meta: { ...row.meta, swarm: label } } : row,
+  );
+  const projected = projectTapeEntries(sim.session.id, rows)!;
+  const user = projected.entries.find((entry) => entry.type === "user")!;
+  assert.deepEqual((user.payload as { swarm: unknown }).swarm, label);
+  assert.equal((user.payload as { display: string }).display, "Public review");
+});

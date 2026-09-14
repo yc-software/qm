@@ -421,3 +421,32 @@ test("OpenCode advertises aliases only for tools available on the turn", async (
     else assert.match(systemPrompt, /workspace_execute is execute/);
   }
 });
+
+for (const sandboxResources of [false, true])
+  for (const readOnly of [false, true]) {
+    test(`OpenCode native delegation obeys existing sandbox policy resources=${sandboxResources} readOnly=${readOnly}`, async (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "qm-opencode-policy-"));
+      const handlers = `
+      if (req.method === "POST" && message) {
+        const body = JSON.parse(await readBody(req));
+        const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
+        if (config.tools.task !== ${!sandboxResources} || config.agent.qm.tools.task !== ${!sandboxResources} ||
+          (${sandboxResources} && config.permission.task !== "deny") || body.tools.task !== ${!sandboxResources && !readOnly})
+          return json(res, ${erroredAssistant('{ name: "PolicyError", data: { message: "native delegation policy mismatch" } }')});
+        await capture(message[1], { system: "s", messages: [{ role: "user" }] });
+        return json(res, ${okAssistant});
+      }
+      if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+    `;
+      const harness = createOpenCodeHarness({
+        binaryPath: fakeSidecar(dir, "native-policy", handlers),
+        sandboxResources,
+      });
+      t.after(async () => {
+        await harness.turns.close?.();
+        rmSync(dir, { recursive: true, force: true });
+      });
+      const result = await harness.turns.runTurn({ ...turnInput([], []), readOnly });
+      assert.equal(result.reply, "hello from fake");
+    });
+  }

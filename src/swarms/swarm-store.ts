@@ -1,3 +1,6 @@
+import type { SwarmPublicIdentity } from "./swarm-board-view.ts";
+export type { SwarmPublicIdentity } from "./swarm-board-view.ts";
+import type { SwarmControl } from "./swarm-control.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
@@ -11,6 +14,8 @@ import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 
 export const SWARM_LIMITS = {
   sweepBatch: 16,
+  discoveryBatch: 32,
+  discoveryScan: 512,
   sweepConcurrency: 4,
   reconcileMs: 30_000,
   provisionMs: 10_000,
@@ -24,12 +29,37 @@ export interface SwarmMember {
   parentId?: string;
   depth: number;
   context: unknown;
+  publicIdentity?: SwarmPublicIdentity;
+  control?: SwarmControl;
+  descendantLimit?: number;
   sandboxId?: string;
   forumSandboxId?: string;
   state: "reserved" | "ready" | "failed";
   attempts: number;
   cleanupPending?: boolean;
   error?: string;
+}
+
+interface SwarmPublication {
+  sender: SwarmPublicIdentity;
+  audience: SwarmPublicIdentity[];
+  destinations: Record<string, { swarmId: string; memberId: string }>;
+}
+
+export interface SwarmPublicMessage {
+  id: string;
+  visibility: "org";
+  sender: SwarmPublicIdentity;
+  audience: SwarmPublicIdentity[];
+  author: "agent" | "human";
+  text: string;
+  replyTo?: string;
+  createdAt: number;
+  notifications: Record<string, { state: "pending" | "queued" | "failed" }>;
+}
+
+export function publicMessageCursor(message: Pick<SwarmMessage, "id" | "createdAt">): string {
+  return `${String(message.createdAt).padStart(16, "0")}:${message.id}`;
 }
 
 export interface SwarmMessage {
@@ -44,6 +74,7 @@ export interface SwarmMessage {
   replyTo?: string;
   createdAt: number;
   notifications: Record<string, { state: "pending" | "queued" | "failed"; runId?: string }>;
+  publication?: SwarmPublication;
 }
 
 export interface Swarm {
@@ -61,7 +92,9 @@ export interface Swarm {
   spawnRequests: Record<string, { memberIds: string[]; signature: string }>;
   messageRequests: Record<string, { messageId: string; signature: string }>;
   notificationCount: number;
+  receivedRequests?: Record<string, true>;
   pending: boolean;
+  controlsPending?: boolean;
 }
 
 export function assertSwarmOpen(swarm: Swarm): void {
@@ -73,6 +106,11 @@ export interface SwarmStore {
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
   pending(afterId?: string): Promise<Swarm[]>;
+  published(
+    afterId?: string,
+    ids?: string[],
+  ): Promise<Array<{ swarmId: string; memberId: string; identity: SwarmPublicIdentity }>>;
+  publicMessages(options: { after?: string; id?: string }): Promise<Array<{ swarmId: string; message: SwarmMessage }>>;
 }
 
 export interface SwarmStorage extends Omit<Swarm, "members" | "messages"> {
@@ -175,6 +213,7 @@ export function createSwarmStore(
         const next = decode(value);
         mutate(next);
         next.pending =
+          Boolean(next.controlsPending) ||
           next.members.some((member) => member.state === "reserved" || member.cleanupPending) ||
           next.messages.some((message) =>
             Object.values(message.notifications).some((item) => item.state === "pending"),
@@ -184,6 +223,74 @@ export function createSwarmStore(
       const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update!(id, apply);
       if (!updated) throw new Error("swarm not found");
       return decode(updated);
+    },
+    async published(afterId = "", ids) {
+      if (ids?.length === 0) return [];
+      if (authority?.pg) {
+        await backing.select({ limit: 0 });
+        const result = await (
+          await authority.pg.pool()
+        ).query<{ swarmId: string; memberId: string; identity: SwarmPublicIdentity }>(
+          `SELECT swarms.id AS "swarmId", member->>'id' AS "memberId", member->'publicIdentity' AS identity FROM swarms CROSS JOIN LATERAL jsonb_array_elements(json->'members') member WHERE member->'publicIdentity'->>'id' COLLATE "C" > $1 AND ($3::text[] IS NULL OR member->'publicIdentity'->>'id' = ANY($3)) ORDER BY member->'publicIdentity'->>'id' COLLATE "C" LIMIT $2`,
+          [afterId, ids?.length ?? SWARM_LIMITS.discoveryBatch, ids ?? null],
+        );
+        return result.rows;
+      }
+      const swarms = await backing.select({ omit: ["messages", "template", "spawnRequests", "messageRequests"] });
+      return swarms
+        .flatMap((swarm) =>
+          swarm.members.flatMap((member) =>
+            member.publicIdentity &&
+            member.publicIdentity.id > afterId &&
+            (!ids || ids.includes(member.publicIdentity.id))
+              ? [{ swarmId: swarm.id, memberId: member.id, identity: structuredClone(member.publicIdentity) }]
+              : [],
+          ),
+        )
+        .sort((left, right) => {
+          if (left.identity.id < right.identity.id) return -1;
+          if (left.identity.id > right.identity.id) return 1;
+          return 0;
+        })
+        .slice(0, ids?.length ?? SWARM_LIMITS.discoveryBatch);
+    },
+    async publicMessages(options) {
+      if (authority?.pg) {
+        await backing.select({ limit: 0 });
+        const result = await (
+          await authority.pg.pool()
+        ).query<{
+          swarmId: string;
+          message: SwarmStorage["messages"][number];
+        }>(
+          `SELECT swarms.id AS "swarmId", message FROM swarms
+           CROSS JOIN LATERAL jsonb_array_elements(json->'messages') message
+           WHERE message->'publication' IS NOT NULL
+             AND ($1::text IS NULL OR message->>'id' = $1)
+             AND ($2::text IS NULL OR (lpad(message->>'createdAt',16,'0') || ':' || (message->>'id')) COLLATE "C" < $2)
+           ORDER BY (lpad(message->>'createdAt',16,'0') || ':' || (message->>'id')) COLLATE "C" DESC LIMIT $3`,
+          [options.id ?? null, options.after ?? null, SWARM_LIMITS.discoveryBatch],
+        );
+        return result.rows.map(({ swarmId, message: { textJson, ...message } }) => ({
+          swarmId,
+          message: { ...message, text: JSON.parse(textJson) as string },
+        }));
+      }
+      const swarms = await backing.select({ omit: ["members", "template", "spawnRequests", "messageRequests"] });
+      return swarms
+        .flatMap((swarm) =>
+          swarm.messages.flatMap(({ textJson, ...message }) => {
+            if (
+              !message.publication ||
+              (options.id && message.id !== options.id) ||
+              (options.after && publicMessageCursor(message) >= options.after)
+            )
+              return [];
+            return [{ swarmId: swarm.id, message: { ...message, text: JSON.parse(textJson) as string } }];
+          }),
+        )
+        .sort((a, b) => publicMessageCursor(b.message).localeCompare(publicMessageCursor(a.message)))
+        .slice(0, SWARM_LIMITS.discoveryBatch);
     },
     async pending(afterId) {
       return (

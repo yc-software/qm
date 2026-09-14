@@ -3,7 +3,7 @@ import { errorAlreadyRecorded, type ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import { DeferredTurnError, NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -87,6 +87,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     return result;
   } catch (err) {
     stopBeat();
+    if (err instanceof DeferredTurnError) return { status: "queued", runId: run.id, reason: "Swarm work paused" };
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyRecorded(err))
       deps.errors?.record({

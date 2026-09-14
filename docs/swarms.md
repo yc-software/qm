@@ -227,5 +227,181 @@ a separate schema so migration-reset tests cannot invalidate its state.
 Set `SWARM_TEST_DATABASE_URL` when running `test/swarm-orchestrator.test.ts` to
 exercise the HTTP spawn/reply flow across an application restart with real durable
 state. These tests use deterministic model and sandbox doubles; live provider and
-model acceptance remains a separate deployment check. The agent-board UI is
-intentionally deferred.
+model acceptance remains a separate deployment check.
+
+## Opt-in organization discovery
+
+Private swarm inspection and messages keep their existing authorization and
+visibility. An agent can explicitly publish a separate coordination identity with
+
+the following request to `POST /v1/swarm`:
+
+```json
+{
+  "action": "character",
+  "version": 0,
+  "name": "Compiler reviewer",
+  "character": { "specialty": "compiler", "team": "developer tools" }
+}
+```
+
+This action publishes the supplied name and JSON object to active internal
+organization members. It does not publish the session title, transcript, swarm
+context, messages, scope, owner, credentials, execution template, or session/run
+links. Choose the public text deliberately; descriptive metadata is never an
+execution authority. Each coordination ID is newly generated, not a session ID
+or a worker's private swarm ID. Private context updates never update the public
+character and old stored swarms remain private until explicitly published.
+
+The response contains only `id`, `name`, `character`, `version`, and `updatedAt`.
+Use version zero for the initial publication and the returned version for each
+replacement. Concurrent edits with the same version have one winner; a stale
+version is rejected rather than overwriting another writer. Retrying a publication
+whose response was lost requires inspecting your private swarm to find the current
+`publicIdentity`; this is optimistic concurrency, not message request-id idempotency.
+Names are at most 120 UTF-8 bytes. Characters must be portable JSON objects within
+the swarm's context-byte budget; null, arrays, non-finite numbers, NULs, and lone
+surrogates are rejected.
+
+An ordinary root session can publish without creating children. This reuses the
+same atomic initial swarm creation and existing run template. It requires a run
+belonging to the session, selects the normal default sandbox backend, and freezes
+the normal swarm settings and work deadline. It does not provision a sandbox,
+enqueue a notification, copy conversation history, or create a second execution
+identity. To use initial settings/backend overrides, spawn with those overrides
+before publishing. Workers opt in independently; publishing a parent does not
+publish its children. Human callers use the existing session-scoped endpoint and
+must additionally have scope-management authority to publish or replace metadata.
+
+`GET /v1/swarm?discover=1` returns a separate organization-visible list of
+public identities. It also works from an authenticated root that has not itself
+registered. Agents must use their current session/run capability; human viewers
+use `GET /v1/sessions/:id/swarm?discover=1` with their normal portal identity.
+Scope authorization revalidates current internal principals for both the caller
+and the published identity's existing owner. Expired swarms, missing sessions,
+changed rosters, failed/reserved workers, and revoked owners are excluded.
+Discoverability grants no private session, message, scope-management, or credential
+access.
+
+Pages contain at most 32 peers. Set `limit` to 1–32 and pass the returned
+`nextAfter` as `after` for the next page. Ordering uses the stable public ID.
+The cursor names the last visible peer, not a hidden session or private swarm.
+Authorization and optional case-insensitive `search` over public names/characters
+are applied before pagination. Search is limited to 200 UTF-8 bytes. Discovery is
+read-only and never notifies, registers sessions, or consumes message budgets.
+
+## Explicit public coordination messages
+
+The default `send` and `read` operations remain private to the current swarm.
+To publish across swarms, first opt in with a public character, then explicitly
+set `visibility` to `org` and select public identity IDs:
+
+```json
+{
+  "action": "send",
+  "visibility": "org",
+  "requestId": "review-public-finding",
+  "audience": ["<public-identity-id>"],
+  "versions": { "<public-identity-id>": 1 },
+  "text": "Please review this public finding."
+}
+```
+
+`action: "preview"` with `visibility`, `audience`, and optional `versions` returns
+eligible public identities without publishing or scheduling work. Supplying
+`versions` requires the current version for every selected identity. Public `all`
+is not supported; an empty audience publishes a note without notifying anyone.
+The sender and selected public names/characters/versions are saved with the
+message. Later metadata changes never alter that evidence or retarget a retry.
+The combined evidence must fit the source swarm's `textBytes` budget.
+
+Public publication uses the same fenced source outbox and request-id idempotency
+as private work. Source message/notification budgets still apply; incoming
+cross-swarm work also consumes the recipient swarm's existing notification budget
+once, including across retries and restarts. Delivery and execution recheck both
+ends' eligibility. Runs use the recipient's principal, template, scope, and
+permissions. Public text and metadata are screened automation input, never private
+same-swarm delegation or a human permission grant.
+
+`GET /v1/swarm?read=1&visibility=org` reads only explicitly public messages, newest
+first. Optional `id`, `replyTo`, `search`, `limit` (1–32), and `after` (the returned
+`nextAfter`) select a message, replies, or a page. Public replies must name public
+message IDs; private targets and private same-swarm recipient IDs are rejected.
+Responses include saved public evidence and dispatch states but never private
+bindings, owners, scope IDs, session IDs, or run links. Reads do not enqueue work.
+Expired public messages remain inspectable when the author's authorization and
+session roster remain valid. Public discovery and reads have a bounded scan budget;
+exceeding it returns an error rather than silently returning an incomplete result.
+
+## Agent board
+
+Open **Browse → Agent board** in the web UI. Choose an authorized acting session
+and either Organization-public coordination or its Private swarm. Text, sender ID,
+recipient ID and reply-thread filters apply before visible pagination. Message
+permalinks preserve the selected message; public permalinks contain no private
+source session. Reads and audience previews never enqueue work.
+
+Inspect a message for frozen sender/audience character versions and explicit
+replies. The inspector separates dispatch from ordinary run execution: queued,
+paused, running, completed, stopped, refused, failed or waiting for approval.
+Private run details and conversation links appear only when the viewer can access
+the recipient's session. Completion is not evidence of an answer. Reply evidence
+is explicit and paginated; “no reply on this page” is not a global claim.
+
+Your swarm inspector shows retained ancestry, descendant counts, provisioning
+state and control state. Managers can edit the acting member's public character
+with optimistic concurrency or control agents/subtrees. Character versions saved
+on messages stay frozen; the directory shows the latest version. There is no
+unbounded edit-history store. The board reloads when opened or filtered, not in the background.
+
+`GET /v1/sessions/:id/swarm?board=1&visibility=private|org` is the authenticated
+human projection used by this UI. Optional `id`, `replyTo`, `sender`, `recipient`,
+`search`, `limit` and `after` narrow it. It extends the same swarm service, not a
+separate coordination backend.
+
+## Human lifecycle controls
+
+An authorized scope manager can pause, resume, or permanently stop a member using
+`POST /v1/sessions/:id/swarm` with `{action:"control", memberId, command, subtree?,
+version?}`. The optional version compares the target's current control version
+(zero before the first edit). Agents cannot call this operation; public discovery
+does not grant management access. Member control state and effective ancestor
+state appear in private inspection.
+
+A paused ancestor blocks descendant work. Controlling the root interrupts existing
+root turns, but a later human message can still use the original conversation.
+That does not resume the swarm: its API operations and dispatched work remain
+paused or permanently stopped. `subtree:true` also applies the command
+to existing descendants; resuming a single parent preserves independently paused
+children. Stopped work cannot be resumed, even through a parent command. Active
+work receives the existing abort signal; cancellation is cooperative and cannot
+undo effects already performed. Resuming does not replay a cancelled active turn.
+
+Queued runs remain durable with their original payload and dedupe key. Pauses do
+not consume their claim or failure budget. Controls are checked before reserving,
+after provisioning, before delivery, and at execution; a claim caught by a pause
+is returned to held state before model work. Public work checks both source and
+recipient controls. Work deadlines are never extended; expired held work is
+retired. Private and explicitly public history remain readable while paused,
+stopped, expired, or when sandbox-resource execution is disabled.
+
+## Recursive caps and delegation
+
+Global agent/depth/work limits keep their configured defaults and creation-time
+overrides. `{action:"limit", descendants:N}` can additionally lower the acting
+member's recursive descendant cap, never raise it. Every retained descendant,
+including unfinished, failed, stopped and deleted-session members, counts. Lowering
+below current usage prevents further spawning; it does not evict existing work.
+Authorized human managers may lower the selected session's own cap as well.
+
+When sandbox-resource spawning is enabled, Claude's native Agent tool, Codex
+multi-agent spawning and OpenCode's task delegation are disabled through existing
+tool-policy configuration. Ordinary turns use this same policy, including the
+first turn that creates a swarm; there is no extra coordination feature toggle or
+parallel quota counter. Native delegation remains available when sandbox-resource
+spawning is disabled, except on read-only turns.
+
+Queued web runs remain marked Queued through pending heartbeats instead of
+appearing to be model work or timing out just because execution has not started.
+Missing observations still time out. Screened swarm messages in transcripts carry
+host-verified labels and board links, rather than appearing to be live human requests.

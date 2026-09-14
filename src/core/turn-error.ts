@@ -1,3 +1,5 @@
+export class DeferredTurnError extends Error {}
+
 export class NonRetryableTurnError extends Error {
   constructor(message: string) {
     super(message);

@@ -6,6 +6,8 @@ import type { ApiCtx, Route } from "./route.ts";
 
 async function swarmRequest(ctx: ApiCtx): Promise<void> {
   const { app, res, body, capability, actor, params, method, url } = ctx;
+  const query = new URLSearchParams(url.searchParams);
+  query.delete("_sourceAuthNonce");
   if (!app.swarms) return sendJson(res, 503, { error: "swarm service unavailable" });
   let caller: SwarmCaller;
   if (capability && !params.id) caller = { kind: "agent", claims: capability };
@@ -21,17 +23,165 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
   } else return sendJson(res, 403, { error: "session-bound authentication required" });
   try {
     if (method === "GET") {
-      if (url.searchParams.get("read") === "1") {
+      if (query.get("board") === "1") {
+        if (caller.kind !== "human") return sendJson(res, 403, { error: "human session required" });
+        if (
+          [...query.keys()].some(
+            (key) =>
+              !["board", "visibility", "after", "id", "replyTo", "sender", "recipient", "search", "limit"].includes(
+                key,
+              ) || query.getAll(key).length !== 1,
+          )
+        )
+          throw new Error("invalid board parameters");
+        return sendJson(
+          res,
+          200,
+          await app.swarms.board(caller, {
+            ...Object.fromEntries([...query].filter(([key]) => key !== "board" && key !== "limit")),
+            visibility: (query.get("visibility") ?? "private") as "private" | "org",
+            ...(query.has("limit") ? { limit: Number(query.get("limit")) } : {}),
+          }),
+        );
+      }
+      if (query.get("discover") === "1") {
+        if (
+          [...query.keys()].some(
+            (key) => !["discover", "after", "limit", "search"].includes(key) || query.getAll(key).length !== 1,
+          )
+        )
+          throw new Error("unsupported discovery parameter");
+        return sendJson(
+          res,
+          200,
+          await app.swarms.discover(caller, {
+            ...(query.has("after") ? { after: query.get("after")! } : {}),
+            ...(query.has("limit") ? { limit: Number(query.get("limit")) } : {}),
+            ...(query.has("search") ? { search: query.get("search")! } : {}),
+          }),
+        );
+      }
+      if (query.has("visibility")) {
+        if (
+          query.get("visibility") !== "org" ||
+          query.get("read") !== "1" ||
+          [...query.keys()].some(
+            (key) =>
+              !["read", "visibility", "after", "id", "replyTo", "limit", "search"].includes(key) ||
+              query.getAll(key).length !== 1,
+          )
+        )
+          throw new Error("invalid public read parameters");
+        return sendJson(
+          res,
+          200,
+          await app.swarms.readPublic(caller, {
+            ...(query.has("after") ? { after: query.get("after")! } : {}),
+            ...(query.has("id") ? { id: query.get("id")! } : {}),
+            ...(query.has("replyTo") ? { replyTo: query.get("replyTo")! } : {}),
+            ...(query.has("limit") ? { limit: Number(query.get("limit")) } : {}),
+            ...(query.has("search") ? { search: query.get("search")! } : {}),
+          }),
+        );
+      }
+      if (query.get("read") === "1") {
         const messages = await app.swarms.read(caller, {
-          after: Number(url.searchParams.get("after") ?? 0),
-          waitMs: Number(url.searchParams.get("waitMs") ?? 0),
-          ...(url.searchParams.has("replyTo") ? { replyTo: url.searchParams.get("replyTo")! } : {}),
+          after: Number(query.get("after") ?? 0),
+          waitMs: Number(query.get("waitMs") ?? 0),
+          ...(query.has("replyTo") ? { replyTo: query.get("replyTo")! } : {}),
         });
         return sendJson(res, 200, { messages });
       }
       return sendJson(res, 200, await app.swarms.inspect(caller));
     }
     if (!isObj(body)) throw new Error("expected an object");
+    if (body.action === "limit") {
+      if (
+        Object.keys(body).some((key) => !["action", "descendants"].includes(key)) ||
+        typeof body.descendants !== "number"
+      )
+        throw new Error("invalid descendant limit request");
+      return sendJson(res, 200, await app.swarms.limit(caller, body.descendants));
+    }
+    if (body.action === "control") {
+      if (caller.kind !== "human") return sendJson(res, 403, { error: "human scope management required" });
+      if (
+        Object.keys(body).some((key) => !["action", "memberId", "command", "subtree", "version"].includes(key)) ||
+        typeof body.memberId !== "string" ||
+        !["pause", "resume", "stop"].includes(String(body.command)) ||
+        (body.subtree !== undefined && typeof body.subtree !== "boolean") ||
+        (body.version !== undefined && typeof body.version !== "number")
+      )
+        throw new Error("invalid control request");
+      return sendJson(res, 200, {
+        peers: await app.swarms.control(caller, {
+          memberId: body.memberId,
+          command: body.command as "pause" | "resume" | "stop",
+          ...(typeof body.subtree === "boolean" ? { subtree: body.subtree } : {}),
+          ...(typeof body.version === "number" ? { version: body.version } : {}),
+        }),
+      });
+    }
+    if (body.action === "character") {
+      const allowed = new Set([
+        "action",
+        "version",
+        "name",
+        "character",
+        ...(caller.kind === "human" ? ["runId"] : []),
+      ]);
+      if (
+        Object.keys(body).some((key) => !allowed.has(key)) ||
+        typeof body.version !== "number" ||
+        typeof body.name !== "string" ||
+        !("character" in body)
+      )
+        throw new Error("invalid character request");
+      return sendJson(
+        res,
+        200,
+        await app.swarms.character(caller, { version: body.version, name: body.name, character: body.character }),
+      );
+    }
+    if (body.visibility === "org" || body.action === "preview") {
+      const preview = body.action === "preview";
+      const allowed = [
+        "action",
+        "visibility",
+        "audience",
+        "versions",
+        ...(caller.kind === "human" ? ["runId"] : []),
+        ...(preview ? [] : ["requestId", "text", "replyTo", "notify"]),
+      ];
+      if (
+        body.visibility !== "org" ||
+        (!preview && body.action !== "send") ||
+        Object.keys(body).some((key) => !allowed.includes(key)) ||
+        !Array.isArray(body.audience) ||
+        (body.versions !== undefined && !isObj(body.versions))
+      )
+        throw new Error("invalid public message request");
+      const audience = body.audience as string[];
+      const versions = body.versions as Record<string, number> | undefined;
+      if (preview) return sendJson(res, 200, { audience: await app.swarms.preview(caller, { audience, versions }) });
+      if (
+        typeof body.requestId !== "string" ||
+        typeof body.text !== "string" ||
+        (body.notify !== undefined && typeof body.notify !== "boolean") ||
+        (body.replyTo !== undefined && typeof body.replyTo !== "string")
+      )
+        throw new Error("invalid public message parameters");
+      return sendJson(res, 202, {
+        message: await app.swarms.publish(caller, {
+          requestId: body.requestId,
+          text: body.text,
+          audience,
+          versions,
+          ...(typeof body.notify === "boolean" ? { notify: body.notify } : {}),
+          ...(typeof body.replyTo === "string" ? { replyTo: body.replyTo } : {}),
+        }),
+      });
+    }
     const allowed = new Set([
       "action",
       ...(caller.kind === "human" ? ["runId"] : []),

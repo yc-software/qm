@@ -31,13 +31,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/swarm",
         summary:
-          "own identity and all peers with editable JSON context, session IDs and sandbox IDs; ?read=1&after=0&waitMs=0&replyTo=... reads scoped messages, not only intended audience",
+          "own identity and all peers with editable JSON context, session IDs and sandbox IDs; ?read=1&after=0&waitMs=0&replyTo=... reads scoped messages, not only intended audience. ?discover=1&limit=32&after=<public-id>&search=... separately lists explicit org-public coordination identities, never private context or session links. ?read=1&visibility=org&id=<message-id>&after=<cursor>&search=... reads explicit org-public messages and frozen audience evidence.",
       },
       {
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?} sends to explicit peer ids or all. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?} spawns one or an initial pool; {action:'context',context} updates own private JSON; {action:'send',requestId,text,audience,replyTo?,notify?} sends to explicit peer ids or all. Retry the same requestId and payload for idempotency. {action:'character',version,name,character} explicitly publishes org-visible metadata, using version 0 initially or the current version to replace it. This can register a root without spawning; private context is never published automatically. {action:preview,visibility:org,audience:[publicIds],versions?} previews without notifying. Add visibility:org to send with explicit public IDs (never all) and optional expected versions to publish cross-swarm; replies must target a public message. Public work is screened and executes with each recipient’s own authority. {action:'limit',descendants:N} only lowers your recursive descendant cap; retained reservations and deleted-session descendants still count.",
       },
     ],
   },

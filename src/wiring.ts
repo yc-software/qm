@@ -1274,6 +1274,9 @@ export function buildApp(
     config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
       ? createSwarmService({
           defaults: config.swarmDefaults,
+          enabled: () => config.sandboxResourcesEnabled,
+          signals: runSignals,
+          managesScope: (actorId, scopeId) => app.managesScope(actorId, scopeId),
           store: createSwarmStore(artifactMap<SwarmStorage>("swarms"), {
             runs,
             sessions,

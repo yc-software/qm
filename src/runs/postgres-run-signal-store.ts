@@ -103,6 +103,13 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return rows.length > 0;
     },
 
+    async discard(runId, dedupePrefix) {
+      await q(
+        "UPDATE run_signals SET consumed_at=$3 WHERE run_id=$1 AND left(dedupe_key,length($2))=$2 AND consumed_at IS NULL",
+        [runId, dedupePrefix, Date.now()],
+      );
+    },
+
     async hasDedupeKey(dedupeKey) {
       const { rows } = await q(`SELECT 1 FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
       return rows.length > 0;

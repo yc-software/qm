@@ -12,6 +12,7 @@ export interface RunSignal {
 
 export interface RunSignalStore {
   send(runId: string, signal: RunSignal): Promise<boolean>;
+  discard(runId: string, dedupePrefix: string): Promise<void>;
   hasDedupeKey(dedupeKey: string): Promise<boolean>;
   takePending(runId: string): Promise<RunSignal[]>;
   takeLive(runId: string): Promise<RunSignal[]>;
@@ -43,6 +44,11 @@ export function createMemoryRunSignalStore(): RunSignalStore {
       if (author) authors.set(runId, [...(authors.get(runId) ?? []), { at: Date.now(), author }]);
       for (const cb of listeners.get(runId) ?? []) cb();
       return true;
+    },
+    async discard(runId, dedupePrefix) {
+      const remaining = (pending.get(runId) ?? []).filter((signal) => !signal.dedupeKey?.startsWith(dedupePrefix));
+      if (remaining.length) pending.set(runId, remaining);
+      else pending.delete(runId);
     },
     async hasDedupeKey(dedupeKey) {
       return dedupeKeys.has(dedupeKey);

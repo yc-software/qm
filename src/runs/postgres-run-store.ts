@@ -26,6 +26,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     id: r.id as string,
     sessionId: r.session_id as string,
     status: r.status as Run["status"],
+    ...(r.held === true ? { held: true } : {}),
     request: { ...request, origin: resolveTurnOrigin(request) },
     result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
     deliveryState: r.delivery_state != null ? (JSON.parse(r.delivery_state as string) as RunDeliveryState) : null,
@@ -106,6 +107,13 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         statements: [
           `SET LOCAL lock_timeout = '3s'`,
           `ALTER TABLE runs ADD COLUMN IF NOT EXISTS retry_after BIGINT NOT NULL DEFAULT 0`,
+        ],
+      },
+      {
+        id: "runs/store/0005",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS held BOOLEAN NOT NULL DEFAULT FALSE`,
         ],
       },
     ],
@@ -218,8 +226,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
              SELECT id FROM runs WHERE status='pending'
-               AND retry_after <= $4
-               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND retry_after > $4))
+               AND NOT held AND retry_after <= $4
+               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND NOT held AND retry_after > $4))
              ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
           [token, now + ttlMs, workerId, now],
@@ -240,8 +248,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
              attempts=attempts+1, started_at=COALESCE(started_at,$4)
            WHERE id = (
              SELECT id FROM runs WHERE id=$5 AND status='pending'
-               AND retry_after <= $4
-               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND retry_after > $4))
+               AND NOT held AND retry_after <= $4
+               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND NOT held AND retry_after > $4))
              FOR UPDATE SKIP LOCKED LIMIT 1
            ) RETURNING *`,
           [token, now + ttlMs, workerId, now, runId],
@@ -258,6 +266,30 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         "UPDATE runs SET lease_expires_at=$1 WHERE id=$2 AND lease_token=$3 AND status='running'",
         [Date.now() + ttlMs, runId, leaseToken],
       );
+      return rowCount > 0;
+    },
+
+    async setHeld(runId, held, unstartedLeaseToken) {
+      if (unstartedLeaseToken !== undefined && !held) return false;
+      const { rowCount } =
+        unstartedLeaseToken === undefined
+          ? await q("UPDATE runs SET held=$2 WHERE id=$1 AND status='pending'", [runId, held])
+          : await q(
+              `UPDATE runs SET held=TRUE, status='pending', lease_token=NULL, lease_expires_at=NULL,
+            worker_id=NULL, attempts=attempts-1, started_at=CASE WHEN attempts=1 THEN NULL ELSE started_at END
+          WHERE id=$1 AND status='running' AND lease_token=$2 AND lease_expires_at > $3`,
+              [runId, unstartedLeaseToken, Date.now()],
+            );
+      return rowCount > 0;
+    },
+
+    async cancelPending(runId, reason) {
+      const { rowCount } = await q(
+        `UPDATE runs SET status='done', held=FALSE, result=$2, finished_at=$3
+        WHERE id=$1 AND status='pending'`,
+        [runId, JSON.stringify({ status: "ok", stopped: true, reason }), Date.now()],
+      );
+      if (rowCount > 0) settle(await getRun(runId));
       return rowCount > 0;
     },
 

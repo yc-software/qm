@@ -25,7 +25,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     for (const r of runs.values()) {
       if (
         r.sessionId === sessionId &&
-        (r.status === "running" || (r.status === "pending" && (retryAfter.get(r.id) ?? 0) > now))
+        (r.status === "running" || (r.status === "pending" && !r.held && (retryAfter.get(r.id) ?? 0) > now))
       )
         return true;
     }
@@ -76,7 +76,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     async claim(workerId, ttlMs) {
       const now = Date.now();
       const pending = [...runs.values()]
-        .filter((r) => r.status === "pending" && !sessionUnavailable(r.sessionId, now))
+        .filter((r) => r.status === "pending" && !r.held && !sessionUnavailable(r.sessionId, now))
         .sort((a, b) => a.createdAt - b.createdAt);
       const run = pending[0];
       if (!run) return null;
@@ -85,7 +85,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claimById(runId, workerId, ttlMs) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending" || sessionUnavailable(run.sessionId, Date.now())) return null;
+      if (!run || run.status !== "pending" || run.held || sessionUnavailable(run.sessionId, Date.now())) return null;
       return lease(run, workerId, ttlMs);
     },
 
@@ -93,6 +93,40 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const run = runs.get(runId);
       if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
       run.leaseExpiresAt = Date.now() + ttlMs;
+      return true;
+    },
+
+    async setHeld(runId, held, unstartedLeaseToken) {
+      const run = runs.get(runId);
+      if (!run) return false;
+      if (unstartedLeaseToken !== undefined) {
+        if (
+          !held ||
+          run.status !== "running" ||
+          run.leaseToken !== unstartedLeaseToken ||
+          run.leaseExpiresAt === null ||
+          run.leaseExpiresAt <= Date.now()
+        )
+          return false;
+        run.status = "pending";
+        run.leaseToken = null;
+        run.leaseExpiresAt = null;
+        run.workerId = null;
+        run.attempts--;
+        if (run.attempts === 0) run.startedAt = null;
+      } else if (run.status !== "pending") return false;
+      run.held = held;
+      return true;
+    },
+
+    async cancelPending(runId, reason) {
+      const run = runs.get(runId);
+      if (!run || run.status !== "pending") return false;
+      run.status = "done";
+      run.result = { status: "ok", stopped: true, reason };
+      run.held = false;
+      run.finishedAt = Date.now();
+      settle(run);
       return true;
     },
 

@@ -68,7 +68,7 @@ test("Codex replay keeps paired tool ids within the provider's 64-character limi
   assert.equal(codexReplayCallId("short-id"), "short-id");
 });
 
-function fakeCodexBinary(dir: string): string {
+function fakeCodexBinary(dir: string, expectedNative?: boolean): string {
   const path = join(dir, "fake-codex");
   writeFileSync(
     path,
@@ -87,6 +87,9 @@ rl.on("line", (line) => {
         process.env.CORE_SIGNING_SECRET || process.env.DATABASE_URL || process.env.HOME !== msg.params.cwd ||
         !process.env.CODEX_HOME?.startsWith(msg.params.cwd)) {
       return send({ id: msg.id, error: { code: -1, message: "unsafe or missing adapter settings" } });
+    }
+    if (${expectedNative !== undefined} && msg.params.config.features.multi_agent !== ${JSON.stringify(expectedNative)}) {
+      return send({ id: msg.id, error: { code: -1, message: "native delegation policy mismatch" } });
     }
     return send({ id: msg.id, result: { thread: { id: "thread-1" }, model: "fake-model" } });
   }
@@ -1725,3 +1728,33 @@ test(
     assert.deepEqual(requests, []);
   },
 );
+
+for (const sandboxResources of [false, true])
+  for (const readOnly of [false, true]) {
+    test(`Codex native delegation obeys existing sandbox policy resources=${sandboxResources} readOnly=${readOnly}`, async (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "qm-codex-policy-"));
+      const harness = createCodexHarness({
+        binaryPath: fakeCodexBinary(dir, !sandboxResources && !readOnly),
+        env: testHarnessEnv(dir),
+        sandboxResources,
+      });
+      t.after(async () => {
+        await harness.turns.close?.();
+        rmSync(dir, { recursive: true, force: true });
+      });
+      const scope = "personal:policy" as ScopeId;
+      const result = await harness.turns.runTurn({
+        session: { id: "policy" } as Session,
+        input: "hi",
+        systemPrompt: "policy",
+        history: [],
+        readOnly,
+        tools: {} as HarnessTurnInput["tools"],
+        scopeLabel: scope,
+        orgScopeId: scope,
+        emit: async (entry) => ({ ...entry, sessionId: "policy", seq: 1, createdAt: Date.now() }) as SessionEntry,
+        recordModelCall: () => {},
+      });
+      assert.equal(result.reply, "hello");
+    });
+  }

@@ -484,3 +484,462 @@ test("Postgres initial pool expires atomically while waiting for the write lock"
     await factory.pool.close();
   }
 });
+
+test(
+  "Postgres public identities survive new connections, preserve private context, and serialize version updates",
+  { skip },
+  async () => {
+    const first = createPostgresMapFactory(databaseUrl!);
+    const second = createPostgresMapFactory(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
+    const otherStore = createSwarmStore(second.map<SwarmStorage>("swarms"), {
+      runs: runtime.runs,
+      sessions,
+      pg: second.pool,
+    });
+    try {
+      const fixture = await swarmFixture({ store, sessions, runs: runtime.runs });
+      const other = createSwarmService({ ...fixture.serviceOptions, store: otherStore });
+      const input = { version: 0, name: "Public researcher", character: { role: "research", emoji: "🧪" } };
+      const results = await Promise.allSettled([
+        fixture.service.character(fixture.caller, input),
+        other.character(fixture.caller, input),
+      ]);
+      assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+      assert.equal(
+        results.filter((result) => result.status === "rejected" && /version conflict/.test(String(result.reason)))
+          .length,
+        1,
+      );
+      const firstIdentity = (await other.discover(fixture.caller, { search: "Public researcher" })).peers[0]!;
+      assert.deepEqual(firstIdentity.character, input.character);
+      await fixture.service.context(fixture.caller, { secret: "never-public", nul: "\u0000", surrogate: "\ud800" });
+      const changes = await Promise.allSettled([
+        fixture.service.character(fixture.caller, { ...input, version: 1, name: "Edit A" }),
+        other.character(fixture.caller, { ...input, version: 1, name: "Edit B" }),
+      ]);
+      assert.equal(changes.filter((result) => result.status === "fulfilled").length, 1);
+      assert.equal(changes.filter((result) => result.status === "rejected").length, 1);
+      const latest = (await other.discover(fixture.caller, { search: "Edit" })).peers.find(
+        (peer) => peer.id === firstIdentity.id,
+      )!;
+      assert.equal(latest.version, 2);
+      assert.ok(!JSON.stringify(latest).includes("never-public"));
+      assert.deepEqual((await otherStore.get(fixture.root.id))!.members[0]!.context, {
+        secret: "never-public",
+        nul: "\u0000",
+        surrogate: "\ud800",
+      });
+      assert.equal((await otherStore.get(fixture.root.id))!.messages.length, 0);
+      assert.equal((await otherStore.get(fixture.root.id))!.pending, false);
+      await first.pool.close();
+      assert.deepEqual(
+        (await other.discover(fixture.caller, { search: latest.name })).peers.find((peer) => peer.id === latest.id),
+        latest,
+      );
+    } finally {
+      await runtime.close();
+      await Promise.all([first.pool.close(), second.pool.close()]);
+    }
+  },
+);
+
+test("Postgres public discovery filters foreign revoked roots before the visible page cursor", { skip }, async () => {
+  const factory = createPostgresMapFactory(databaseUrl!);
+  const runtime = createPostgresRunStore(databaseUrl!);
+  const sessions = createPostgresSessionStore(databaseUrl!);
+  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+    runs: runtime.runs,
+    sessions,
+    pg: factory.pool,
+  });
+  try {
+    const viewer = await swarmFixture({ store, sessions, runs: runtime.runs });
+    const bob = await swarmFixture({ actorId: "bob", store, sessions, runs: runtime.runs });
+    const carol = await swarmFixture({ actorId: "carol", store, sessions, runs: runtime.runs });
+    await bob.service.character(bob.caller, { version: 0, name: "Cross-scope Bob", character: {} });
+    const visible = await carol.service.character(carol.caller, {
+      version: 0,
+      name: "Cross-scope Carol",
+      character: {},
+    });
+    viewer.state.blockedActors.add("bob");
+    assert.deepEqual(await viewer.service.discover(viewer.caller, { limit: 1, search: "Cross-scope" }), {
+      peers: [visible],
+    });
+    await assert.rejects(
+      viewer.service.read({ kind: "human", actorId: "alice", sessionId: carol.root.id }, {}),
+      /access denied/,
+    );
+    await store.update(carol.root.id, (swarm) => {
+      swarm.expiresAt = Date.now() - 1;
+    });
+    assert.deepEqual(await viewer.service.discover(viewer.caller, { limit: 1, search: "Cross-scope" }), { peers: [] });
+  } finally {
+    await runtime.close();
+    await factory.pool.close();
+  }
+});
+
+test(
+  "Postgres public character rolls back when its source lease expires at the write lock",
+  { skip },
+  async (context) => {
+    const factory = createPostgresMapFactory(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+      runs: runtime.runs,
+      sessions,
+      pg: factory.pool,
+    });
+    const fixture = await swarmFixture({ store, sessions, runs: runtime.runs });
+    const client = await (await factory.pool.pool()).connect();
+    const observer = await (await factory.pool.pool()).connect();
+    try {
+      await fixture.service.character(fixture.caller, { version: 0, name: "Before", character: {} });
+      await client.query("BEGIN");
+      await client.query("SELECT v FROM durable_map_versions WHERE tbl='swarms' FOR UPDATE");
+      context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+      const rejected = assert.rejects(
+        fixture.service.character(fixture.caller, { version: 1, name: "After", character: {} }),
+        /active capability run required/,
+      );
+      const blockerId = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      let waiting = false;
+      for (let attempt = 0; attempt < 100 && !waiting; attempt++) {
+        const observed = await observer.query<{ waiting: boolean }>(
+          "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'INSERT INTO durable_map_versions%') AS waiting",
+          [blockerId],
+        );
+        waiting = observed.rows[0]!.waiting;
+        if (!waiting) await sleep(5);
+      }
+      assert.ok(waiting, "publication must wait for the write lock after validating its active run");
+      context.mock.timers.tick(120_000);
+      await client.query("COMMIT");
+      await rejected;
+      const identity = (await store.get(fixture.root.id))!.members[0]!.publicIdentity!;
+      assert.equal(identity.name, "Before");
+      assert.equal(identity.version, 1);
+    } finally {
+      context.mock.timers.reset();
+      await client.query("ROLLBACK");
+      client.release();
+      observer.release();
+      await runtime.close();
+      await factory.pool.close();
+    }
+  },
+);
+
+test(
+  "Postgres public outbox survives independent writers, lost acknowledgment, and recipient metadata edits",
+  { skip },
+  async () => {
+    const first = createPostgresMapFactory(databaseUrl!);
+    const second = createPostgresMapFactory(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
+    const otherStore = createSwarmStore(second.map<SwarmStorage>("swarms"), {
+      runs: runtime.runs,
+      sessions,
+      pg: second.pool,
+    });
+    try {
+      const alice = await swarmFixture({
+        store,
+        sessions,
+        runs: runtime.runs,
+        lock: createPostgresAdvisoryLock(first.pool),
+      });
+      const bob = await swarmFixture({ actorId: "pg-bob", store, sessions, runs: runtime.runs });
+      const sender = await alice.service.character(alice.caller, {
+        version: 0,
+        name: "PG public source",
+        character: {},
+      });
+      const recipient = await bob.service.character(bob.caller, {
+        version: 0,
+        name: "PG public recipient",
+        character: { before: true },
+      });
+      const restart = createSwarmService({
+        ...alice.serviceOptions,
+        store: otherStore,
+        lock: createPostgresAdvisoryLock(second.pool),
+      });
+      const input = {
+        requestId: "pg-public",
+        audience: [recipient.id],
+        versions: { [recipient.id]: 1 },
+        text: "Durable public work 🧪",
+      };
+      const [message, replay] = await Promise.all([
+        alice.service.publish(alice.caller, input),
+        restart.publish(alice.caller, input),
+      ]);
+      assert.deepEqual(message, replay);
+      await bob.service.character(bob.caller, { version: 1, name: "Changed PG recipient", character: { after: true } });
+      assert.deepEqual(await restart.publish(alice.caller, input), message);
+      const enqueue = runtime.runs.enqueue.bind(runtime.runs);
+      let lostAck = false;
+      runtime.runs.enqueue = async (input) => {
+        const result = await enqueue(input);
+        if (!lostAck && input.request.swarm?.messageId === message.id) {
+          lostAck = true;
+          throw new Error("injected public enqueue acknowledgment loss");
+        }
+        return result;
+      };
+      await alice.service.sweep();
+      assert.equal(lostAck, true);
+      await first.pool.close();
+      await restart.sweep();
+      const queued = (await runtime.runs.getByDedupKey(`swarm:${message.id}:${recipient.id}`))!;
+      assert.ok(queued);
+      assert.equal(queued.request.actor.id, "pg-bob");
+      assert.equal(queued.request.swarm?.swarmId, bob.root.id);
+      assert.ok(!JSON.stringify(queued.request).includes(alice.root.id));
+      assert.equal((await otherStore.get(bob.root.id))!.notificationCount, 1);
+      const read = await restart.readPublic(alice.caller, { id: message.id });
+      assert.equal(read.messages.length, 1);
+      assert.deepEqual(read.messages[0]!.sender, sender);
+      assert.deepEqual(read.messages[0]!.audience, [recipient]);
+      assert.equal(read.messages[0]!.text, input.text);
+      assert.equal(read.messages[0]!.notifications[recipient.id]!.state, "queued");
+      assert.ok(!JSON.stringify(read).includes(bob.root.id));
+      await runtime.runs.complete(bob.caller.claims.runId!, bob.caller.claims.runLeaseToken!, {
+        status: "ok",
+        reply: "Done",
+      });
+      const claimed = (await runtime.runs.claimById(queued.id, "public-pg", 60_000))!;
+      assert.equal(
+        (
+          await restart.binding({
+            ...claimed.request,
+            runId: claimed.id,
+            runLeaseToken: claimed.leaseToken!,
+            attempt: claimed.attempts,
+          })
+        )?.publicMessage,
+        true,
+      );
+    } finally {
+      await runtime.close();
+      await Promise.all([first.pool.close(), second.pool.close()]);
+    }
+  },
+);
+
+test("Postgres public reads use visible chronological cursors and never return private targets", { skip }, async () => {
+  const factory = createPostgresMapFactory(databaseUrl!);
+  const runtime = createPostgresRunStore(databaseUrl!);
+  const sessions = createPostgresSessionStore(databaseUrl!);
+  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+    runs: runtime.runs,
+    sessions,
+    pg: factory.pool,
+  });
+  try {
+    const fixture = await swarmFixture({ store, sessions, runs: runtime.runs });
+    await fixture.service.character(fixture.caller, { version: 0, name: "PG page author", character: {} });
+    const privateMessage = await fixture.service.send(fixture.caller, {
+      requestId: "private-page",
+      audience: [],
+      text: "Never public",
+    });
+    const first = await fixture.service.publish(fixture.caller, {
+      requestId: "public-page-a",
+      audience: [],
+      text: "PG chronological paging A",
+    });
+    await sleep(2);
+    const second = await fixture.service.publish(fixture.caller, {
+      requestId: "public-page-b",
+      audience: [],
+      text: "PG chronological paging B",
+    });
+    const page = await fixture.service.readPublic(fixture.caller, { limit: 1, search: "PG chronological paging" });
+    assert.deepEqual(page.messages, [second]);
+    assert.ok(page.nextAfter?.endsWith(second.id));
+    const older = await fixture.service.readPublic(fixture.caller, {
+      after: page.nextAfter,
+      limit: 1,
+      search: "PG chronological paging",
+    });
+    assert.deepEqual(older.messages, [first]);
+    assert.equal(older.nextAfter, undefined);
+    assert.deepEqual(await fixture.service.readPublic(fixture.caller, { id: privateMessage.id }), { messages: [] });
+  } finally {
+    await runtime.close();
+    await factory.pool.close();
+  }
+});
+
+test(
+  "Postgres controls and held runs survive independent connections without losing payloads, dedupe, or claim budgets",
+  { skip },
+  async () => {
+    const first = createPostgresMapFactory(databaseUrl!);
+    const second = createPostgresMapFactory(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const otherRuntime = createPostgresRunStore(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
+    const otherStore = createSwarmStore(second.map<SwarmStorage>("swarms"), {
+      runs: otherRuntime.runs,
+      sessions,
+      pg: second.pool,
+    });
+    const { createPostgresRunSignalStore } = await import("../src/runs/postgres-run-signal-store.ts");
+    const signals = createPostgresRunSignalStore(databaseUrl!);
+    try {
+      const fixture = await swarmFixture({
+        store,
+        sessions,
+        runs: runtime.runs,
+        lock: createPostgresAdvisoryLock(first.pool, { pollMs: 5 }),
+      });
+      const service = createSwarmService({ ...fixture.serviceOptions, signals });
+      const restarted = createSwarmService({
+        ...fixture.serviceOptions,
+        signals,
+        runs: otherRuntime.runs,
+        store: otherStore,
+        lock: createPostgresAdvisoryLock(second.pool, { pollMs: 5 }),
+      });
+      const caller = { kind: "human" as const, actorId: "alice", sessionId: fixture.root.id };
+      const [member] = await service.spawn(fixture.caller, {
+        requestId: "pg-control",
+        text: "Durable controlled work",
+      });
+      await service.sweep();
+      const pending = (await runtime.runs.inFlightForThread(member!.threadRef))[0]!;
+      const original = structuredClone(pending);
+      const claims = await Promise.all([
+        runtime.runs.claimById(pending.id, "one", 60_000),
+        otherRuntime.runs.claimById(pending.id, "two", 60_000),
+      ]);
+      assert.equal(claims.filter(Boolean).length, 1);
+      const claimed = claims.find(Boolean)!;
+      const changes = await Promise.allSettled([
+        service.control(caller, { memberId: member!.id, command: "pause", version: 0 }),
+        restarted.control(caller, { memberId: member!.id, command: "pause", version: 0 }),
+      ]);
+      assert.equal(changes.filter((result) => result.status === "fulfilled").length, 1);
+      assert.equal(changes.filter((result) => result.status === "rejected").length, 1);
+      await assert.rejects(
+        restarted.binding({
+          ...claimed.request,
+          runId: claimed.id,
+          runLeaseToken: claimed.leaseToken!,
+          attempt: claimed.attempts,
+        }),
+        /paused/,
+      );
+      const held = (await otherRuntime.runs.get(pending.id))!;
+      assert.equal(held.status, "pending");
+      assert.equal(held.held, true);
+      assert.equal(held.attempts, 0);
+      assert.equal(held.errorAttempts, 0);
+      assert.deepEqual(held.request, original.request);
+      assert.equal(await otherRuntime.runs.claimById(pending.id, "blocked", 60_000), null);
+      assert.equal(
+        await otherRuntime.runs.setHeld(pending.id, true, claimed.leaseToken!),
+        false,
+        "old lease cannot refund twice",
+      );
+      await first.pool.close();
+      await runtime.close();
+      await restarted.control(caller, { memberId: member!.id, command: "resume", version: 1 });
+      assert.equal((await otherRuntime.runs.get(pending.id))!.held, undefined);
+      await signals.send(pending.id, {
+        kind: "abort",
+        dedupeKey: `swarm-control:${fixture.root.id}:${pending.id}:crash`,
+      });
+      await signals.send(pending.id, { kind: "abort", dedupeKey: "pg-user-stop" });
+      const resumed = (await otherRuntime.runs.claimById(pending.id, "resumed", 60_000))!;
+      assert.equal(resumed.attempts, 1);
+      assert.ok(
+        await restarted.binding({
+          ...resumed.request,
+          runId: resumed.id,
+          runLeaseToken: resumed.leaseToken!,
+          attempt: resumed.attempts,
+        }),
+      );
+      assert.deepEqual(
+        (await signals.takePending(pending.id)).map((signal) => signal.dedupeKey),
+        ["pg-user-stop"],
+      );
+      assert.ok(await otherRuntime.runs.setHeld(resumed.id, true, resumed.leaseToken!));
+      await restarted.control(caller, { memberId: member!.id, command: "stop" });
+      const cancelled = (await otherRuntime.runs.get(pending.id))!;
+      assert.equal(cancelled.result?.stopped, true);
+      assert.equal(cancelled.errorAttempts, 0);
+      assert.equal((await otherRuntime.runs.getByDedupKey(original.dedupKey!))!.id, pending.id);
+      await assert.rejects(restarted.control(caller, { memberId: member!.id, command: "resume" }), /cannot resume/);
+    } finally {
+      await signals.close?.();
+      await runtime.close();
+      await otherRuntime.close();
+      await Promise.all([first.pool.close(), second.pool.close()]);
+    }
+  },
+);
+
+test(
+  "Postgres lowered descendant caps persist and serialize concurrent reservations without a second counter",
+  { skip },
+  async () => {
+    const a = createPostgresMapFactory(databaseUrl!);
+    const b = createPostgresMapFactory(databaseUrl!);
+    const runtime = createPostgresRunStore(databaseUrl!);
+    const sessions = createPostgresSessionStore(databaseUrl!);
+    try {
+      const options = { runs: runtime.runs, sessions };
+      const f = await swarmFixture({
+        ...options,
+        store: createSwarmStore(a.map<SwarmStorage>("swarms"), { ...options, pg: a.pool }),
+        lock: createPostgresAdvisoryLock(a.pool),
+      });
+      const other = createSwarmService({
+        ...f.serviceOptions,
+        store: createSwarmStore(b.map<SwarmStorage>("swarms"), { ...options, pg: b.pool }),
+        lock: createPostgresAdvisoryLock(b.pool),
+      });
+      await f.service.character(f.caller, { version: 0, name: "Capped", character: {} });
+      await f.service.limit(f.caller, 1);
+      const results = await Promise.allSettled([
+        f.service.spawn(f.caller, { requestId: "a", text: "Work" }),
+        other.spawn(f.caller, { requestId: "b", text: "Work" }),
+      ]);
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+      assert.equal(results.filter((r) => r.status === "rejected").length, 1);
+      assert.equal((await other.inspect(f.caller)).self.descendantLimit, 1);
+      await other.sweep();
+      const caller = { kind: "human" as const, actorId: "alice", sessionId: f.root.id };
+      const listing = await other.board(caller, { visibility: "private" });
+      assert.equal(listing.members.length, 2);
+      assert.equal(listing.members[0]!.descendantLimit, 1);
+      assert.equal(listing.messages.length, 1);
+      const detail = await other.board(caller, { visibility: "private", id: listing.messages[0]!.id });
+      assert.equal(detail.deliveries![0]!.execution, "queued");
+      assert.ok(detail.deliveries![0]!.sessionId);
+      assert.ok(detail.deliveries![0]!.runId);
+      await assert.rejects(other.limit(f.caller, 2), /only be lowered/);
+      const live = (await runtime.runs.get(f.caller.claims.runId!))!;
+      assert.ok(await runtime.runs.complete(live.id, live.leaseToken!, { status: "ok" }));
+      await assert.rejects(other.limit(f.caller, 0), /active|lease/);
+      assert.equal((await f.store.get(f.root.id))!.members[0]!.descendantLimit, 1);
+    } finally {
+      await runtime.close();
+      await a.pool.close();
+      await b.pool.close();
+    }
+  },
+);

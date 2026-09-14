@@ -393,3 +393,28 @@ for (const backend of backends) {
     assert.equal(await runs.noteTurnUserSeq("missing-run", 1), false);
   });
 }
+
+test("held work preserves FIFO identity and budget without blocking unrelated or live user work", async () => {
+  const { runs } = createMemoryRunStore();
+  const held = (await runs.enqueue({ sessionId: "hold", request: turn("held"), dedupKey: "held-work" })).run;
+  const next = (await runs.enqueue({ sessionId: "hold", request: turn("human") })).run;
+  assert.equal(await runs.setHeld(held.id, true), true);
+  assert.equal((await runs.claim("user", 60_000))!.id, next.id);
+  const running = (await runs.get(next.id))!;
+  assert.equal(await runs.setHeld(next.id, true, "wrong-lease"), false);
+  assert.equal(await runs.cancelPending(next.id, "Stopped"), false);
+  assert.ok(await runs.complete(next.id, running.leaseToken!, { status: "ok", reply: "Done" }));
+  assert.equal(await runs.setHeld(held.id, false), true);
+  const claimed = (await runs.claim("resumed", 60_000))!;
+  const token = claimed.leaseToken!;
+  assert.equal(claimed.id, held.id);
+  assert.equal(claimed.attempts, 1);
+  assert.equal(await runs.setHeld(claimed.id, true, token), true);
+  assert.equal(await runs.setHeld(claimed.id, true, token), false);
+  assert.equal((await runs.get(claimed.id))!.attempts, 0);
+  assert.equal(claimed.errorAttempts, 0);
+  assert.equal(await runs.cancelPending(claimed.id, "Stopped"), true);
+  assert.equal(await runs.setHeld(claimed.id, false), false);
+  assert.equal((await runs.getByDedupKey("held-work"))!.id, held.id);
+  assert.equal((await runs.get(claimed.id))!.result?.stopped, true);
+});

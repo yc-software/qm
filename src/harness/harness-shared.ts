@@ -26,6 +26,10 @@ export interface HarnessToolPlumbing {
   backgroundJobTtlMaxMs?: number;
 }
 
+export function nativeDelegationAllowed(opts: HarnessToolPlumbing, turn?: Pick<HarnessTurnInput, "readOnly">): boolean {
+  return !opts.sandboxResources && !turn?.readOnly;
+}
+
 export type BridgedTool = {
   name: string;
   description: string;

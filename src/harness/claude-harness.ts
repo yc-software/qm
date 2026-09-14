@@ -42,6 +42,7 @@ import {
   bridgedToolText,
   harnessToolContext,
   harnessToolOptions,
+  nativeDelegationAllowed,
   oneShotModelUtilities,
   oneShotRunner,
   tapeReplyCheckpoint,
@@ -304,7 +305,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const childToolNames = bridged
       .filter((definition) => CHILD_TOOL_NAMES.has(definition.name))
       .map((definition) => `mcp__qm__${definition.name}`);
-    const allowSubagents = !turn.readOnly;
+    const allowSubagents = nativeDelegationAllowed(opts, turn);
     const childPolicy = `${turn.systemPrompt}\n\nComplete only the delegated task. Do not contact people, schedule work, change standing configuration, or suppress the parent reply.`;
     const childAgents = {
       research: {

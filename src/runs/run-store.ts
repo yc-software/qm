@@ -20,6 +20,7 @@ export interface Run {
   id: string;
   sessionId: string;
   status: RunStatus;
+  held?: boolean;
   request: OrchestratorInput;
   result: TurnResult | null;
   deliveryState: RunDeliveryState | null;
@@ -59,6 +60,10 @@ export interface RunStore {
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
+
+  setHeld(runId: string, held: boolean, unstartedLeaseToken?: string): Promise<boolean>;
+
+  cancelPending(runId: string, reason: string): Promise<boolean>;
 
   releaseLease(runId: string, leaseToken: string): Promise<boolean>;
 

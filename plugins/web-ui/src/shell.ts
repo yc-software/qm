@@ -1,3 +1,4 @@
+import { renderBoardPage, boardPath, routeBoardHistory, resetBoardState } from "./board";
 import { openModelConnectManager, renderModelConnectGate } from "./model-connect";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -146,7 +147,10 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const fromState =
     sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
   const sessionId = splitState.active ? null : fromState;
-  const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
+  const next =
+    appState.currentView === "board"
+      ? boardPath()
+      : deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }
 
@@ -232,6 +236,7 @@ export async function signOut(): Promise<void> {
   exitSplitIfActive();
   mainConversation().resetChatState();
   resetSessionsState();
+  resetBoardState();
   appState.currentView = "chats";
   clearSkillsCache();
   resetMemoryState();
@@ -689,6 +694,9 @@ export function switchView(v: View): void {
       else void renderChatsPage();
       renderList();
       break;
+    case "board":
+      void renderBoardPage();
+      break;
     case "inbox":
       void renderInbox();
       break;
@@ -752,6 +760,9 @@ function refreshActiveView(v: View): void {
     case "chats":
       if (splitState.active) void refreshSessions({ silent: true, refreshContexts: true });
       else void renderChatsPage();
+      break;
+    case "board":
+      void renderBoardPage();
       break;
     case "inbox":
       void renderInbox();
@@ -908,11 +919,12 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 }
 
 window.addEventListener("popstate", () => {
-  const routed = ["crons", "webhooks", "inbox", "skills"];
+  const routed = ["crons", "webhooks", "inbox", "skills", "board"];
   if (!routed.includes(appState.currentView)) return;
   const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
   if (view !== appState.currentView) return;
-  if (view === "crons") routeCronsHistory(item);
+  if (view === "board") routeBoardHistory(item);
+  else if (view === "crons") routeCronsHistory(item);
   else if (view === "webhooks") routeWebhooksHistory(item);
   else if (view === "skills") routeSkillsHistory(item);
   else routeInboxHistory(item);
@@ -1067,6 +1079,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
+    if (wanted === "board") routeBoardHistory(wantedItem);
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);
     if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
     if (wanted === "inbox" && wantedItem) openInboxItemById(wantedItem);

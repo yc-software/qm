@@ -1,5 +1,18 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Box, Brain, Clock, Files, Folder, KeyRound, Repeat, Rocket, ShieldUser, Webhook, type IconNode } from "lucide";
+import {
+  Box,
+  Brain,
+  Clock,
+  Files,
+  Folder,
+  KeyRound,
+  Repeat,
+  Rocket,
+  ShieldUser,
+  Webhook,
+  UsersRound,
+  type IconNode,
+} from "lucide";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { nextGridIndex } from "./grid-nav";
 import { setScopedSession } from "./session-scope";
@@ -30,6 +43,7 @@ function destinations(): Destination[] {
     blurb,
   });
   const list: Destination[] = [
+    to("board", UsersRound, "Agent board", "Public coordination and your swarm’s work"),
     to("contexts", Folder, "Projects", "Group chats, files, and automations"),
     to("files", Files, "Files", "Everything you and QM have shared"),
     to("crons", Clock, "Crons", "Work that runs on a schedule"),

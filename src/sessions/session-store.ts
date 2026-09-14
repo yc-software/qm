@@ -1,3 +1,4 @@
+import type { SwarmTranscriptLabel } from "../swarms/swarm-board-view.ts";
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType } from "../types.ts";
 import { sleep } from "../util/async.ts";
@@ -212,6 +213,7 @@ export async function appendEntryOutsideTurn(
 export const TAPE_IMPORT_MAX_ENTRIES = 500;
 
 export interface TapeMeta {
+  swarm?: SwarmTranscriptLabel;
   bareText?: string;
   ts?: string;
   changeTime?: string;
