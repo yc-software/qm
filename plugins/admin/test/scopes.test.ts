@@ -3,15 +3,19 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
-const calls: { method: string; url: string; actor: string | null; signed: boolean }[] = [];
+const calls: { method: string; url: string; actor: string | null; signed: boolean; body: string }[] = [];
 const core = createServer((req: IncomingMessage, res) => {
-  req.on("data", () => {});
+  let body = "";
+  req.on("data", (chunk: Buffer) => {
+    body += chunk.toString();
+  });
   req.on("end", () => {
     calls.push({
       method: req.method ?? "",
       url: req.url ?? "",
       actor: (req.headers["x-admin-actor"] as string) ?? null,
       signed: Boolean(req.headers["x-timestamp"] && req.headers["x-signature"]),
+      body,
     });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ scopeId: "org:acme", scopes: [] }));
@@ -85,4 +89,38 @@ test("the scope directory requires a signed-in cookie → 401 (no core hop)", as
   const before = calls.length;
   assert.equal((await fetch(`${base}/api/scopes`)).status, 401);
   assert.equal(calls.length, before, "a signed-out request is rejected at the surface, never forwarded");
+});
+
+test("runtime set and inherit preserve the selected scope, body, actor and signature", async () => {
+  for (const scope of ["org:acme", "channel:C1", "group:web-project-1", "personal:alice", "team:T1"]) {
+    for (const body of [
+      { harnessId: "pi", modelId: "custom-deepseek", effortLevel: "high", fastMode: false },
+      { inherit: true },
+    ]) {
+      const response = await fetch(`${base}/api/scopes/${encodeURIComponent(scope)}/runtime`, {
+        method: "PUT",
+        headers: { cookie: ADMIN, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 200);
+      const call = calls.at(-1)!;
+      assert.equal(call.method, "PUT");
+      assert.equal(call.url, `/v1/admin/scopes/${encodeURIComponent(scope)}/runtime`);
+      assert.equal(call.actor, "U-admin@acme");
+      assert.equal(call.signed, true);
+      assert.deepEqual(JSON.parse(call.body), body);
+    }
+  }
+});
+
+test("signed-out runtime writes and manifest reads never reach core", async () => {
+  const before = calls.length;
+  const response = await fetch(`${base}/api/scopes/channel%3AC1/runtime`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ inherit: true }),
+  });
+  assert.equal(response.status, 401);
+  assert.equal((await fetch(`${base}/api/resources`)).status, 401);
+  assert.equal(calls.length, before);
 });
