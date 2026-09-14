@@ -124,7 +124,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     modelCatalog: {
       alpha: model("alpha", "Alpha"),
       beta: model("beta", "Beta", "openai"),
-      gamma: model("gamma", "Gamma"),
+      gamma: model("gamma", "Gamma", "openai"),
       delta: model("delta", "Delta"),
       epsilon: model("epsilon", "Epsilon"),
     },
@@ -237,6 +237,9 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     button(".loadout-button").click();
     await tick();
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
+    assert.ok(pick("Beta").querySelector('[aria-label="Codex"]'));
+    assert.ok(pick("Gamma").querySelector('[aria-label="OpenAI"]'));
+    assert.equal(pick("Gamma").querySelector('[aria-label="Codex"]'), null);
     assert.equal(pick("Alpha").querySelector(".loadout-harness")?.textContent, "Claude Code");
     assert.equal(host.querySelectorAll(".loadout-default").length, 1);
     assert.equal(pick("Alpha").querySelector(".loadout-default")?.textContent, "my default");
