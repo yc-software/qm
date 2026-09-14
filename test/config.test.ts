@@ -703,8 +703,8 @@ test("sandbox resource rollout requires explicit activation", () => {
   );
 });
 
-test("suggestion generation is explicitly opt-in", () => {
-  assert.equal(loadConfig({}).suggestedActivitiesEnabled, false);
+test("suggestion generation defaults on and can be explicitly disabled", () => {
+  assert.equal(loadConfig({}).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "false" }).suggestedActivitiesEnabled, false);
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));

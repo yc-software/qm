@@ -45,10 +45,11 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
 ## Suggested activities
 
-Suggested activities are **off by default**. Set `WEB_UI_SUGGESTED_ACTIVITIES` on
-the web service to a JSON array for fixed starters. Set `SUGGESTED_ACTIVITIES_ENABLED=true`
-on the core service to generate personalized activities; both settings are unset by default.
-No activity content is bundled into the public application.
+Suggested activity generation is **on by default** when the configured harness supports
+it. Set `SUGGESTED_ACTIVITIES_ENABLED=false` on core to disable generation. Optionally
+set `WEB_UI_SUGGESTED_ACTIVITIES` on web to a JSON array for fixed fallback starters;
+unset it as well to hide suggestions entirely. No deployment-specific activity content
+is bundled into the public application.
 
 ```json
 [
