@@ -1,5 +1,5 @@
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import type { SwarmRunFence } from "./swarm-fence.ts";
+import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
@@ -187,6 +187,7 @@ export function createSwarmService(deps: {
     if (!session) throw new Error("session not found");
     const participants = await sessions.participantsOf(session.id);
     if (!participants.includes(actorId)) throw new Error("session access denied");
+    let fence: SwarmRunFence | undefined;
     if (caller.kind === "agent") {
       if (caller.claims.scopeId !== session.scopeId || !caller.claims.runId)
         throw new Error("session-bound capability required");
@@ -200,15 +201,17 @@ export function createSwarmService(deps: {
         conversationScope(run.request.conversation, actorId) !== session.scopeId
       )
         throw new Error("capability run mismatch");
-      if (
-        run.status !== "running" ||
-        !run.leaseToken ||
-        !run.leaseExpiresAt ||
-        run.leaseExpiresAt <= Date.now() ||
-        run.attempts !== caller.claims.runAttempt ||
-        run.leaseToken !== caller.claims.runLeaseToken
-      )
-        throw new Error("active capability run required");
+      fence = {
+        runId: caller.claims.runId!,
+        attempt: caller.claims.runAttempt!,
+        leaseToken: caller.claims.runLeaseToken!,
+        sessionId: session.id,
+        threadRef: session.threadRef,
+        actorId,
+        scopeId: session.scopeId,
+      };
+      if (!run.leaseExpiresAt) throw new Error("active capability run required");
+      assertSwarmRun(fence, run);
     }
     const identity = threadIdentity(session.threadRef, session.id);
     const swarm = await store.get(identity.rootId);
@@ -230,18 +233,7 @@ export function createSwarmService(deps: {
       if (!swarm.members.some((member) => member.id === identity.memberId && member.sessionId === session.id))
         throw new Error("session is not a swarm member");
     } else if (identity.rootId !== session.id) throw new Error("swarm not found");
-    const result: Authority = { ...identity, sessionId: session.id, actorId };
-    if (caller.kind === "agent")
-      result.fence = {
-        runId: caller.claims.runId!,
-        attempt: caller.claims.runAttempt!,
-        leaseToken: caller.claims.runLeaseToken!,
-        sessionId: session.id,
-        threadRef: session.threadRef,
-        actorId,
-        scopeId: session.scopeId,
-      };
-    return { auth: result, swarm };
+    return { auth: { ...identity, sessionId: session.id, actorId, fence }, swarm };
   }
 
   async function load(caller: SwarmCaller): Promise<{ auth: Authority; swarm: Swarm; self: SwarmMember }> {
@@ -325,47 +317,6 @@ export function createSwarmService(deps: {
       notificationCount: 0,
       pending: true,
     };
-  }
-
-  async function reserveMessage(
-    auth: Authority,
-    author: SwarmCaller["kind"],
-    input: MessageInput,
-    audience: string[],
-  ): Promise<SwarmMessage> {
-    const key = signature([auth.memberId, auth.actorId, author, input.requestId]);
-    const fingerprint = signature(input);
-    const id = randomUUID();
-    const updated = await update(auth, (swarm) => {
-      const previous = swarm.messageRequests[key];
-      if (previous) {
-        if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
-        return;
-      }
-      assertSwarmOpen(swarm);
-      if (swarm.messages.length >= swarm.settings.messages) throw new Error("swarm message budget exhausted");
-      if (input.replyTo && !swarm.messages.some((message) => message.id === input.replyTo))
-        throw new Error("reply target is not in this swarm");
-      const recipients = input.notify === false ? [] : audience.filter((peer) => peer !== auth.memberId);
-      if (swarm.notificationCount + recipients.length > swarm.settings.notifications)
-        throw new Error("swarm notification budget exhausted");
-      swarm.notificationCount += recipients.length;
-      swarm.messages.push({
-        id,
-        seq: swarm.messages.length + 1,
-        senderId: auth.memberId,
-        senderSessionId: auth.sessionId,
-        author,
-        actorId: auth.actorId,
-        text: input.text,
-        audience,
-        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
-        createdAt: Date.now(),
-        notifications: Object.fromEntries(recipients.map((peer) => [peer, { state: "pending" as const }])),
-      });
-      swarm.messageRequests[key] = { messageId: id, signature: fingerprint };
-    });
-    return updated.messages.find((message) => message.id === updated.messageRequests[key]!.messageId)!;
   }
 
   function dispatchRequest(swarm: Swarm, message: SwarmMessage, recipient: SwarmMember): OrchestratorInput {
@@ -694,9 +645,11 @@ export function createSwarmService(deps: {
       const { auth, swarm } = await load(caller);
       boundedText(input.text, swarm.settings.textBytes, "text");
       input = { ...input, audience: canonicalAudience(input.audience, swarm.settings.agents) };
-      const previous = swarm.messageRequests[signature([auth.memberId, auth.actorId, caller.kind, input.requestId])];
+      const key = signature([auth.memberId, auth.actorId, caller.kind, input.requestId]);
+      const fingerprint = signature(input);
+      const previous = swarm.messageRequests[key];
       if (previous) {
-        if (previous.signature !== signature(input)) throw new Error("requestId reused with different content");
+        if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
         return swarm.messages.find((message) => message.id === previous.messageId)!;
       }
       const eligible: SwarmMember[] = [];
@@ -708,7 +661,37 @@ export function createSwarmService(deps: {
           eligible.push(member);
       }
       const audience = resolveAudience(input.audience, eligible);
-      return reserveMessage(auth, caller.kind, input, audience);
+      const id = randomUUID();
+      const updated = await update(auth, (swarm) => {
+        const previous = swarm.messageRequests[key];
+        if (previous) {
+          if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
+          return;
+        }
+        assertSwarmOpen(swarm);
+        if (swarm.messages.length >= swarm.settings.messages) throw new Error("swarm message budget exhausted");
+        if (input.replyTo && !swarm.messages.some((message) => message.id === input.replyTo))
+          throw new Error("reply target is not in this swarm");
+        const recipients = input.notify === false ? [] : audience.filter((peer) => peer !== auth.memberId);
+        if (swarm.notificationCount + recipients.length > swarm.settings.notifications)
+          throw new Error("swarm notification budget exhausted");
+        swarm.notificationCount += recipients.length;
+        swarm.messages.push({
+          id,
+          seq: swarm.messages.length + 1,
+          senderId: auth.memberId,
+          senderSessionId: auth.sessionId,
+          author: caller.kind,
+          actorId: auth.actorId,
+          text: input.text,
+          audience,
+          ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+          createdAt: Date.now(),
+          notifications: Object.fromEntries(recipients.map((peer) => [peer, { state: "pending" as const }])),
+        });
+        swarm.messageRequests[key] = { messageId: id, signature: fingerprint };
+      });
+      return updated.messages.find((message) => message.id === updated.messageRequests[key]!.messageId)!;
     },
     async read(caller, options) {
       let { swarm } = await load(caller);
@@ -763,28 +746,26 @@ export function createSwarmService(deps: {
           throw new NonRetryableTurnError("swarm session access denied");
         return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
       }
-      if (input.swarm) {
-        assertSwarmOpen(swarm);
-        const message = swarm.messages.find((item) => item.id === input.swarm!.messageId);
-        const dedup = message ? await runs.getByDedupKey(`swarm:${message.id}:${member.id}`) : null;
-        const expected = message && dedup ? dispatchRequest(swarm, message, member) : null;
-        if (
-          input.swarm.swarmId !== swarm.id ||
-          input.swarm.recipientId !== member.id ||
-          !message?.audience.includes(member.id) ||
-          !dedup ||
-          dedup.id !== input.runId ||
-          input.origin.kind !== "automation" ||
-          input.actor.id !== swarm.ownerId ||
-          input.surface !== "swarm" ||
-          input.deliveryTarget ||
-          input.surfaceTools ||
-          input.origin.useOwnerKeychain ||
-          !expected ||
-          !matchesDispatch(input, expected)
-        )
-          throw new NonRetryableTurnError("forged swarm provenance");
-      }
+      assertSwarmOpen(swarm);
+      const message = swarm.messages.find((item) => item.id === input.swarm!.messageId);
+      const dedup = message ? await runs.getByDedupKey(`swarm:${message.id}:${member.id}`) : null;
+      const expected = message && dedup ? dispatchRequest(swarm, message, member) : null;
+      if (
+        input.swarm.swarmId !== swarm.id ||
+        input.swarm.recipientId !== member.id ||
+        !message?.audience.includes(member.id) ||
+        !dedup ||
+        dedup.id !== input.runId ||
+        input.origin.kind !== "automation" ||
+        input.actor.id !== swarm.ownerId ||
+        input.surface !== "swarm" ||
+        input.deliveryTarget ||
+        input.surfaceTools ||
+        input.origin.useOwnerKeychain ||
+        !expected ||
+        !matchesDispatch(input, expected)
+      )
+        throw new NonRetryableTurnError("forged swarm provenance");
       const participants = await sessions.participantsOf(swarm.id);
       const recipientParticipants = await sessions.participantsOf(session.id);
       if (
