@@ -1364,17 +1364,17 @@ class GroupActions implements IHeaderActionsRenderer {
           single
             ? html`<span class="split-single-tools">
                 ${PANE_TOOLS.map((t) => {
-                const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
-                return html`<button
-                  class="session-tool"
-                  type="button"
-                  aria-label=${t.label}
-                  ${tip(t.label)}
-                  @click=${() => runTool(t.tool)}
-                >
-                  ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
-                </button>`;
-              })}
+                  const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
+                  return html`<button
+                    class="session-tool"
+                    type="button"
+                    aria-label=${t.label}
+                    ${tip(t.label)}
+                    @click=${() => runTool(t.tool)}
+                  >
+                    ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
+                  </button>`;
+                })}
               </span>`
             : nothing
         }
