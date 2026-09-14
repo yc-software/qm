@@ -7567,6 +7567,7 @@ h3.ambient-field-label {
 }
 
 .split-canvas {
+  container: pane-canvas / inline-size;
   position: relative;
   flex: 1;
   min-height: 0;
@@ -7616,7 +7617,7 @@ h3.ambient-field-label {
   gap: 4px;
 }
 
-@media (max-width: 900px) {
+@container pane-canvas (max-width: 700px) {
   .split-single-tools {
     display: none;
   }
