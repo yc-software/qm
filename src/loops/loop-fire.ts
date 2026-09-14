@@ -49,7 +49,13 @@ interface ItemTurnResult {
 
 export interface LoopFireService {
   fire(loopId: string, fireKey: string): Promise<LoopFireResult>;
-  followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null>;
+  followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    conversationId?: string,
+  ): Promise<LoopItem | null>;
   itemAction(loop: Loop, item: LoopItem, kind: string, args: Record<string, unknown>): Promise<ItemTurnResult>;
   shipOutput(loopId: string, outputId: string, actorId: string, note?: string): Promise<LoopOutput | null>;
   returnOutput(loopId: string, outputId: string, actorId: string, note: string): Promise<LoopOutput | null>;
@@ -60,8 +66,8 @@ function loopFireThreadRef(loopId: string, fireKey: string): string {
   return `loop:${loopId}:fire:${hashId([fireKey], 12)}`;
 }
 
-function loopItemThreadRef(loopId: string, itemId: string): string {
-  return `loop:${loopId}:item:${hashId([itemId], 12)}`;
+function loopItemThreadRef(loopId: string, item: LoopItem): string {
+  return `loop:${loopId}:item:${hashId(item.conversationId ? [item.id, item.conversationId] : [item.id], 12)}`;
 }
 
 const ITEM_THREAD_CONTEXT = 12;
@@ -73,10 +79,13 @@ function itemContextBlock(item: LoopItem): string {
     ...(item.source ? { source: item.source } : {}),
     sourcePayload: item.sourcePayload ?? {},
     ...(item.proposal ? { proposal: item.proposal.data } : {}),
-    thread: (item.thread ?? []).slice(-ITEM_THREAD_CONTEXT).map((message) => ({
-      role: message.role,
-      text: message.text,
-    })),
+    thread: (item.thread ?? [])
+      .filter((message) => (message.conversationId ?? "") === (item.conversationId ?? ""))
+      .slice(-ITEM_THREAD_CONTEXT)
+      .map((message) => ({
+        role: message.role,
+        text: message.text,
+      })),
   });
 }
 
@@ -633,7 +642,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function itemTurn(loop: Loop, item: LoopItem, input: string, fireKey: string): Promise<ItemTurnResult> {
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input);
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item), input);
     const failure = stageFailure("item turn", outcome);
     if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
     return {
@@ -643,30 +652,44 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     };
   }
 
-  async function followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null> {
-    await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
-    const asked = (await deps.items.get(item.id)) ?? item;
-    const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
+  async function followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    conversationId = item.conversationId ?? "",
+  ): Promise<LoopItem | null> {
+    await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId, conversationId }]);
+    const asked = { ...((await deps.items.get(item.id)) ?? item), conversationId };
+    const fireKey = `loop:${loop.id}:item:${item.id}:followup:${conversationId}:${Date.now()}`;
     const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
-        { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
+        {
+          role: "system",
+          text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}`,
+          conversationId,
+        },
       ]);
       return deps.items.get(item.id);
     }
     const { text, proposal } = splitProposalReply(turn.reply ?? "");
     if (text) {
-      await deps.items.appendThread(item.id, [{ role: "agent", text: excerptReply(text) }]);
+      await deps.items.appendThread(item.id, [{ role: "agent", text: excerptReply(text), conversationId }]);
     }
     if (proposal) {
       const adapter = adapterForItem(asked);
       const data = adapter ? adapter.parseProposal(proposal) : proposal;
       if (data) {
-        await deps.items.setProposal(item.id, {
-          data,
-          by: "agent",
-          ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
-        });
+        await deps.items.setProposal(
+          item.id,
+          {
+            data,
+            by: "agent",
+            ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
+          },
+          { expectedConversationId: item.conversationId ?? "" },
+        );
       }
     }
     return deps.items.get(item.id);

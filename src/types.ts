@@ -356,6 +356,7 @@ export interface LoopProposal {
 
 export interface LoopThreadMessage {
   id: string;
+  conversationId?: string;
   role: "human" | "agent" | "system";
   text: string;
   at: number;
@@ -374,6 +375,7 @@ export interface LoopItem {
   agentDrafts?: LoopProposal[];
   agentMentionKeys?: string[];
   thread?: LoopThreadMessage[];
+  conversationId?: string;
   status: LoopItemStatus;
   attempts: number;
   runIds: string[];

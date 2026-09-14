@@ -188,13 +188,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/action",
         summary:
-          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, "replied" ({args:{text}}) closes an item the person already answered themselves outside QM and never demotes one sent from here, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
+          'act on a held item — body {kind, args?}. kind "restart_conversation" ({args:{conversationId}} with the current ID or an empty string for legacy) starts fresh while keeping the draft and previous conversations; a busy or stale request returns 409. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, "replied" ({args:{text}}) closes an item the person already answered themselves outside QM and never demotes one sent from here, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
       },
       {
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/followup",
         summary:
-          "chat about one held item — body {message}; the reply lands on the item's thread and may revise its proposal",
+          "chat about one held item — body {message, conversationId}; read the current conversationId from GET item (use an empty string for a legacy conversation). A stale conversationId returns 409; refresh the item before retrying. The reply lands on that conversation and may revise its proposal",
       },
     ],
   },

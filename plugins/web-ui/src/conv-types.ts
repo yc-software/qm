@@ -30,6 +30,10 @@ export interface ConvHost {
   ensureDeliveryStream(): void;
   onState?(state: PaneState): void;
   onExpand?(): void;
+  turnOptions?(): Pick<TurnOptions, "inboxView">;
+  emptyState?(): TemplateResult;
+  thinkingIndicator?(): TemplateResult;
+  composerPlaceholder?(): string;
 }
 
 export interface ConvCtx extends ConvHost {

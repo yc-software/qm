@@ -354,3 +354,31 @@ test("draft identity ignores key order, as stored JSON does not preserve it", as
   assert.equal(after.proposal!.at, at);
   assert.equal(after.agentDrafts!.length, 1);
 });
+
+test("restarting a conversation preserves its draft and history and rejects stale resets and late drafts", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry({ proposal: { data: { body: "Keep this draft" }, by: "human" } })]);
+  const before = (await ledger.byLoop(LOOP))[0]!;
+  await ledger.appendThread(before.id, [{ role: "human", text: "Old conversation" }]);
+  const restarted = (await ledger.restartConversation(before.id, ""))!;
+  assert.ok(restarted.conversationId);
+  assert.deepEqual(restarted.proposal, before.proposal);
+  assert.deepEqual(restarted.sourcePayload, before.sourcePayload);
+  assert.equal(restarted.thread?.[0]?.text, "Old conversation");
+  assert.equal(await ledger.restartConversation(before.id, ""), null);
+  assert.equal(
+    await ledger.setProposal(
+      before.id,
+      { data: { body: "Late old response" }, by: "agent" },
+      { expectedConversationId: "" },
+    ),
+    null,
+  );
+  await ledger.appendThread(before.id, [{ role: "human", text: "Fresh conversation" }]);
+  assert.equal((await ledger.get(before.id))?.thread?.at(-1)?.conversationId, restarted.conversationId);
+  const token = await ledger.acquireDecision(before.id);
+  assert.ok(token);
+  assert.equal(await ledger.restartConversation(before.id, restarted.conversationId!), null);
+  await ledger.releaseDecision(before.id, token);
+  assert.ok(await ledger.restartConversation(before.id, restarted.conversationId!));
+});

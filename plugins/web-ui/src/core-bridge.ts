@@ -439,6 +439,7 @@ export interface RunPoll {
   finishedAt?: number | null;
 }
 export interface TurnOptions {
+  inboxView?: "all" | "gmail" | "slack";
   effortLevel?: string;
   fastMode?: boolean;
   harness?: string;
@@ -722,6 +723,7 @@ export function hasLiveRun(slot: RunSlot): boolean {
 export type SignalOutcome = { ok: true } | { ok: false; reason: string; replayed?: boolean };
 
 export interface SteerContext {
+  inboxView?: TurnOptions["inboxView"];
   threadRef: string | null;
   scopeId?: string | null;
   channelName?: string | null;
@@ -741,6 +743,7 @@ export async function signalLiveRun(
           threadRef: context.threadRef,
           ...(context.scopeId ? { scopeId: context.scopeId } : {}),
           ...(context.channelName ? { channelName: context.channelName } : {}),
+          ...(context.inboxView ? { inboxView: context.inboxView } : {}),
         }
       : {};
   try {
@@ -1005,6 +1008,7 @@ function turnRequestBody(
   return {
     text,
     threadRef,
+    ...(turnOptions.inboxView ? { inboxView: turnOptions.inboxView } : {}),
     ...(turnOptions.harness ? { harness: turnOptions.harness } : {}),
     model: model.id,
     ...(thinkingLevel ? { thinkingLevel } : {}),

@@ -59,9 +59,14 @@ interface RecordActionInput {
 export interface LoopItemLedger {
   enqueue(input: EnqueueItemInput): Promise<EnqueueResult>;
   ingest(entries: IngestEntryInput[]): Promise<IngestOutcome>;
-  setProposal(id: string, proposal: Omit<LoopProposal, "at">, opts?: { expectedAt?: number }): Promise<LoopItem | null>;
+  setProposal(
+    id: string,
+    proposal: Omit<LoopProposal, "at">,
+    opts?: { expectedAt?: number; expectedConversationId?: string },
+  ): Promise<LoopItem | null>;
   annotate(id: string, patch: LoopSourcePayload): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
+  restartConversation(id: string, expectedConversationId: string): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
   reopen(id: string): Promise<LoopItem | null>;
   prune(loopId: string, options: PruneOptions): Promise<number>;
@@ -252,6 +257,8 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         if (item.status === "shipped") return item;
         if (opts?.expectedAt !== undefined && item.proposal?.at !== opts.expectedAt) return item;
+        if (opts?.expectedConversationId !== undefined && (item.conversationId ?? "") !== opts.expectedConversationId)
+          return item;
         applied = true;
         const now = Date.now();
         const stamped = { ...proposal, at: now };
@@ -282,13 +289,32 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         applied = true;
         const now = Date.now();
-        const added = messages.map((message) => ({ ...message, id: randomUUID(), at: now }));
+        const added = messages.map((message) => ({
+          ...message,
+          ...(message.conversationId === undefined && item.conversationId
+            ? { conversationId: item.conversationId }
+            : {}),
+          id: randomUUID(),
+          at: now,
+        }));
         const thread = [...(item.thread ?? []), ...added];
         return {
           ...item,
           thread: thread.length > LEDGER_THREAD_MAX ? thread.slice(thread.length - LEDGER_THREAD_MAX) : thread,
           updatedAt: now,
         };
+      });
+      if (applied) emit(after, "thread");
+      return applied ? after : null;
+    },
+    async restartConversation(id, expectedConversationId) {
+      let applied = false;
+      const after = await update(id, (item) => {
+        if ((item.conversationId ?? "") !== expectedConversationId) return item;
+        const now = Date.now();
+        if (item.decisionToken && now - (item.decisionAt ?? 0) < DECISION_LEASE_MS) return item;
+        applied = true;
+        return { ...item, conversationId: randomUUID(), updatedAt: now };
       });
       if (applied) emit(after, "thread");
       return applied ? after : null;

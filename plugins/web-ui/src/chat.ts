@@ -502,6 +502,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof entriesToMessages>,
   ): boolean {
+    if (ctx.pane) return false;
     if (proactiveOpenerStarted || sessionId !== null || scopeId !== null || messages.length > 0) return false;
     if (!sessionsState.loaded) return false;
     if (sessionsState.list.some((s) => s.id)) return false;
@@ -541,6 +542,7 @@ export function createChatSurface(
       harness,
       scopeId: chatState.scopeId,
       channelName: chatState.contextName,
+      ...ctx.turnOptions?.(),
     };
   }
 
@@ -816,7 +818,7 @@ export function createChatSurface(
     initialRun?: RunPoll,
     onStarted?: () => void,
   ): Promise<boolean> {
-    if (agent !== chatState.agent || appState.currentView !== "chats" || agent.state.isStreaming) return false;
+    if (agent !== chatState.agent || !ctx.visible() || agent.state.isStreaming) return false;
     // Pull the transcript before attaching so the turn's triggering user message
     // (written by core, not by this tab) is on screen while the run streams.
     await refreshTranscriptFromEntries(agent);
@@ -1239,7 +1241,7 @@ export function createChatSurface(
   ctx.onDensityChange(() => drawActiveChat());
 
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
-    if (!agent || agent !== chatState.agent || !chatState.host || appState.currentView !== "chats") return;
+    if (!agent || agent !== chatState.agent || !chatState.host || !ctx.visible()) return;
     const currentMessages = visibleMessages(agent);
     const messages = chatState.inheritedExpanded
       ? [...chatState.inheritedMessages, ...currentMessages]
@@ -1252,6 +1254,8 @@ export function createChatSurface(
       messageContent = messages.map((m, i) =>
         settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage),
       );
+    } else if (ctx.emptyState) {
+      messageContent = ctx.emptyState();
     } else if (isNewUser) {
       messageContent = welcomeGreeting();
     }
@@ -1282,7 +1286,7 @@ export function createChatSurface(
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat && !ctx.emptyState ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
@@ -2142,6 +2146,7 @@ export function createChatSurface(
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     const stopping = runSlot.stopGeneration === runSlot.generation;
     const summary = stopping ? null : liveWorkSummary(work);
+    if (!stopping && !summary && ctx.thinkingIndicator) return ctx.thinkingIndicator();
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
     let title = "";
@@ -2245,12 +2250,11 @@ export function createChatSurface(
     const rows = timeline.length
       ? html`<div class="work-rows">${timeline.map((it) => renderTimelineItem(it, work))}</div>`
       : nothing;
-    const body = html`<div class="work-divider"></div>
-      ${rows}`;
+
     if (isStreaming || work.status === "working" || work.status === "thinking") {
       return html`<div class="work work-working">
         <div class="work-head">${sheenLabel(workLabel(work), isStreaming)}</div>
-        ${body}
+        ${rows}
       </div>`;
     }
     const openFolds = !!work.pendingApprovals?.length;
@@ -2263,7 +2267,6 @@ export function createChatSurface(
       parts.push(
         html`<details class="work-fold" ?open=${openFolds}>
           <summary class="work-head">${segmentSummaryLabel(items, work)}${icon(ChevronRight, 14)}</summary>
-          <div class="work-divider"></div>
           <div class="work-rows">${items.map((it) => renderTimelineItem(it, work))}</div>
         </details>`,
       );
@@ -2714,6 +2717,7 @@ export function createChatSurface(
         threadRef: chatState.threadRef,
         scopeId: chatState.scopeId,
         channelName: chatState.contextName,
+        ...ctx.turnOptions?.(),
       }),
     stopLiveRun,
     isStopping: () => runSlot.stopGeneration === runSlot.generation,

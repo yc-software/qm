@@ -28,6 +28,11 @@ function closeComposerMenus(keepOpenWithin: Element | null): boolean {
 
 document.addEventListener("click", (e) => {
   const target = e.target as Element | null;
+  target
+    ?.closest<HTMLAnchorElement>(
+      ":is(.assistant-body markdown-block, .assistant-body .slack-wire-text, .inbox-chat-msg.agent) a[href]:not(:has(img, svg))",
+    )
+    ?.setAttribute("target", "_self");
   const inside = target?.closest(".menu-control, .composer-wrap") ?? null;
   closeComposerMenus(inside);
   if (!target?.closest(".form-menu-control")) closeFormMenus();

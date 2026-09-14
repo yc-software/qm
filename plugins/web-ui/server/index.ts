@@ -1,3 +1,4 @@
+import { inboxAssistantContext } from "./inbox-assistant.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -349,6 +350,28 @@ function webTurnBase(
     deliveryTarget: threadRef,
     text,
   };
+}
+
+async function inboxTurnFields(
+  user: string,
+  threadRef: string,
+  scope: string | undefined,
+  view: unknown,
+): Promise<{ conversationHeader?: string } | { status: number; error: string; message: string }> {
+  if (view !== "all" && view !== "gmail" && view !== "slack") return {};
+  if (!isInboxUser(user) || (scope && scope !== `personal:${user}`) || !threadRef.startsWith(`web:${user}:`))
+    return { status: 403, error: "forbidden", message: "Inbox assistance requires your personal context." };
+  try {
+    return {
+      conversationHeader: await inboxAssistantContext((path) => coreFetch("GET", path), user, view, PUBLIC_URL),
+    };
+  } catch (error) {
+    return {
+      status: 503,
+      error: "inbox_unavailable",
+      message: error instanceof Error ? error.message : "Could not load your inbox.",
+    };
+  }
 }
 
 interface Identity {
@@ -2088,6 +2111,7 @@ const apiRoutes: readonly WebRoute[] = [
       let timezone: string | undefined;
       let scope: string | undefined;
       let channelName: string | undefined;
+      let inboxView: string | undefined;
       const attachments: CoreAttachment[] = [];
       let approval: { requestId: string; approved: boolean; scope?: string } | undefined;
       let proactiveOpener = false;
@@ -2095,6 +2119,7 @@ const apiRoutes: readonly WebRoute[] = [
       try {
         const p = JSON.parse(await readBody(req));
         text = String(p.text ?? "");
+        if (p.inboxView === "all" || p.inboxView === "gmail" || p.inboxView === "slack") inboxView = p.inboxView;
         idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
         if (
           !idempotencyKey &&
@@ -2142,8 +2167,11 @@ const apiRoutes: readonly WebRoute[] = [
       const resolved = resolveWebConversation(user, threadRef, scope, channelName);
       if ("error" in resolved) return json(res, 403, resolved);
 
+      const inboxFields = await inboxTurnFields(user, threadRef, scope, inboxView);
+      if ("error" in inboxFields) return json(res, inboxFields.status, inboxFields);
       const turn = {
         ...webTurnBase(req, user, resolved.conversation, threadRef, text),
+        ...inboxFields,
         ...(harness ? { harness } : {}),
         ...(model ? { model } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -2249,6 +2277,7 @@ const apiRoutes: readonly WebRoute[] = [
         threadRef?: unknown;
         scopeId?: unknown;
         channelName?: unknown;
+        inboxView?: unknown;
       }>(req, res, false);
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
@@ -2261,7 +2290,11 @@ const apiRoutes: readonly WebRoute[] = [
           typeof p.channelName === "string" && p.channelName.trim() ? p.channelName.trim().slice(0, 200) : undefined;
         const resolved = resolveWebConversation(user, threadRef, scope, channelName);
         if ("error" in resolved) return json(res, 403, resolved);
-        steerFields = { request: webTurnBase(req, user, resolved.conversation, threadRef, text) };
+        const inboxFields = await inboxTurnFields(user, threadRef, scope, p.inboxView);
+        if ("error" in inboxFields) return json(res, inboxFields.status, inboxFields);
+        steerFields = {
+          request: { ...webTurnBase(req, user, resolved.conversation, threadRef, text), ...inboxFields },
+        };
       }
       return relayCore(
         res,

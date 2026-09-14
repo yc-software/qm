@@ -37,6 +37,7 @@ export interface LedgerItemView {
   sourceAt?: number;
   proposal?: LoopProposal;
   thread: LoopThreadMessage[];
+  conversationId?: string;
   attempts: number;
   parkedReason?: string;
   guidance?: string;
@@ -56,6 +57,7 @@ export function ledgerItemView(item: LoopItem): LedgerItemView {
     state: ledgerState(item),
     sourcePayload: item.sourcePayload ?? {},
     thread: item.thread ?? [],
+    ...(item.conversationId ? { conversationId: item.conversationId } : {}),
     attempts: item.attempts,
     outputIds: item.outputIds,
     createdAt: item.createdAt,

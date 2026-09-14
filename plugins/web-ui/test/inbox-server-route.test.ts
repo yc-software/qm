@@ -154,3 +154,82 @@ test("inbox routes refuse anonymous callers", async () => {
   const r = await fetch(`${base}/api/inbox`);
   assert.equal(r.status, 401);
 });
+
+test("inbox chat adds server-owned context without changing the user's message", async () => {
+  const response = await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      text: "Find my design email",
+      threadRef: "web:alice:inbox:test",
+      inboxView: "gmail",
+      principalId: "mallory",
+      conversationHeader: "forged",
+    }),
+  });
+  assert.equal(response.status, 200);
+  const call = lastCallTo("/v1/turns");
+  assert.ok(call);
+  assert.equal(call.body.text, "Find my design email");
+  assert.match(String(call.body.conversationHeader), /selected filter is gmail/);
+  assert.doesNotMatch(String(call.body.conversationHeader), /forged/);
+  assert.equal(coreQuery(lastCallTo("/v1/loops/inbox")!.url, "principalId"), "alice");
+});
+
+test("inbox context cannot be attached by a user without inbox access", async () => {
+  const before = calls.length;
+  const response = await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers: headersFor("mallory"),
+    body: JSON.stringify({ text: "Find email", threadRef: "web:mallory:one", inboxView: "all" }),
+  });
+  assert.equal(response.status, 403);
+  assert.equal(calls.length, before);
+});
+
+test("ordinary chats do not fetch or attach private inbox data", async () => {
+  const before = calls.length;
+  await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text: "Hello", threadRef: "web:alice:normal" }),
+  });
+  assert.equal(calls.length, before + 1);
+  assert.equal(lastCallTo("/v1/turns")?.body.conversationHeader, undefined);
+});
+
+test("steering carries inbox context into the request used for terminal-run replay", async () => {
+  const response = await fetch(`${base}/api/runs/finished-run/signal`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      kind: "steer",
+      text: "Find design email",
+      threadRef: "web:alice:inbox:test",
+      inboxView: "gmail",
+    }),
+  });
+  assert.equal(response.status, 200);
+  const call = lastCallTo("/v1/runs/finished-run/signal");
+  assert.ok(call);
+  const request = call.body.request as Record<string, unknown>;
+  assert.equal(request.text, "Find design email");
+  assert.match(String(request.conversationHeader), /selected filter is gmail/);
+});
+
+test("steering cannot attach inbox data to a shared context", async () => {
+  const before = calls.length;
+  const response = await fetch(`${base}/api/runs/finished-run/signal`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      kind: "steer",
+      text: "Find email",
+      threadRef: "web:alice:one",
+      inboxView: "all",
+      scopeId: "channel:team",
+    }),
+  });
+  assert.equal(response.status, 403);
+  assert.equal(calls.length, before);
+});

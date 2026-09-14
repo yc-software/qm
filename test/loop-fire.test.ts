@@ -541,3 +541,55 @@ test("a paused loop refuses to fire", async () => {
   assert.equal(result.status, "silent");
   assert.equal(s.turns.length, 0);
 });
+
+test("restarted item conversations use a fresh agent session and exclude previous chat context", async () => {
+  const { loops, items, fire, turns } = service(() => "Noted.");
+  const loop = await makeLoop(loops);
+  await items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "email-1",
+      sourcePayload: { title: "Keep email context" },
+      proposal: { data: { body: "Keep current draft" }, by: "human" },
+    },
+  ]);
+  const item = (await items.byLoop(loop.id))[0]!;
+  await fire.followUp(loop, item, "Old conversation marker", "josh");
+  const restarted = (await items.restartConversation(item.id, ""))!;
+  await fire.followUp(loop, restarted, "Fresh request", "josh");
+  assert.equal(turns.length, 2);
+  assert.notEqual(turns[0]!.conversation.threadRef, turns[1]!.conversation.threadRef);
+  assert.doesNotMatch(turns[1]!.text ?? "", /Old conversation marker/);
+  assert.match(turns[1]!.text ?? "", /Keep email context/);
+  assert.match(turns[1]!.text ?? "", /Keep current draft/);
+  const after = (await items.get(item.id))!;
+  assert.equal(after.thread?.length, 4);
+  assert.equal(after.thread?.at(-1)?.conversationId, restarted.conversationId);
+});
+
+test("continuing past item chats reuses their session and only their conversation context", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_800_000_000_000 });
+  const { loops, items, fire, turns } = service(
+    () => 'Updated.\n```json\n{"proposal":{"body":"Revised from history"}}\n```',
+  );
+  const loop = await makeLoop(loops);
+  await items.ingest([{ loopId: loop.id, dedupeKey: "email-history", sourcePayload: { title: "Email context" } }]);
+  const item = (await items.byLoop(loop.id))[0]!;
+  await fire.followUp(loop, item, "Original discussion marker", "josh");
+  const restarted = (await items.restartConversation(item.id, ""))!;
+  await fire.followUp(loop, restarted, "Separate discussion marker", "josh");
+  const current = (await items.get(item.id))!;
+  t.mock.timers.tick(1);
+  await fire.followUp(loop, current, "Continue the original", "josh", "");
+  const resumed = turns[2]!;
+  assert.equal(resumed.conversation.threadRef, turns[0]!.conversation.threadRef);
+  assert.notEqual(resumed.conversation.threadRef, turns[1]!.conversation.threadRef);
+  assert.match(resumed.text ?? "", /Original discussion marker/);
+  assert.doesNotMatch(resumed.text ?? "", /Separate discussion marker/);
+  const after = (await items.get(item.id))!;
+  assert.equal(after.conversationId, current.conversationId);
+  assert.equal(after.thread?.at(-1)?.conversationId, "");
+  assert.equal(after.thread?.filter((entry) => entry.conversationId === current.conversationId).length, 2);
+  assert.deepEqual(after.proposal?.data, { body: "Revised from history" });
+  assert.equal(after.proposal?.sessionId, "s3");
+});

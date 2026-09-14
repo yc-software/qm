@@ -249,6 +249,18 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       message: "the draft changed since you last saw it; review the new draft before sending",
     });
 
+  if (kind === "restart_conversation") {
+    if (typeof args.conversationId !== "string")
+      return sendJson(ctx.res, 400, { error: "bad_request", message: "conversationId required" });
+    const next = await deps.items.restartConversation(item.id, args.conversationId);
+    if (!next)
+      return sendJson(ctx.res, 409, {
+        error: "conflict",
+        message: "The conversation changed or the agent is still responding. Refresh and try again.",
+      });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
+  }
+
   if (kind === "edit") {
     const data = proposalFrom(item, args.proposal ?? args);
     if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
@@ -332,17 +344,26 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
-  const turn = await deps.fire.itemAction(loop, item, kind, args);
-  if (!turn.ok) {
-    return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
+  const token = await deps.items.acquireDecision(item.id);
+  if (!token)
+    return sendJson(ctx.res, 409, { error: "conflict", message: "The agent is already responding to this item." });
+  try {
+    const current = (await deps.items.get(item.id)) ?? item;
+    const conversationId = current.conversationId ?? "";
+    const turn = await deps.fire.itemAction(loop, current, kind, args);
+    if (!turn.ok) {
+      return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
+    }
+    await deps.items.appendThread(item.id, [{ role: "agent", text: turn.reply ?? `Did "${kind}".`, conversationId }]);
+    const next = await deps.items.recordAction(item.id, {
+      kind,
+      outcome: "actioned",
+      ...(turn.reply ? { result: turn.reply } : {}),
+    });
+    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? current) });
+  } finally {
+    await deps.items.releaseDecision(item.id, token);
   }
-  await deps.items.appendThread(item.id, [{ role: "agent", text: turn.reply ?? `Did "${kind}".` }]);
-  const next = await deps.items.recordAction(item.id, {
-    kind,
-    outcome: "actioned",
-    ...(turn.reply ? { result: turn.reply } : {}),
-  });
-  sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
 }
 
 async function followUpOnItem(ctx: ApiCtx): Promise<void> {
@@ -359,11 +380,29 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
     });
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  const token = await deps.items.acquireDecision(item.id);
+  if (!token)
+    return sendJson(ctx.res, 409, { error: "conflict", message: "The agent is already responding to this item." });
   try {
-    const next = await deps.fire.followUp(loop, item, message, loaded.actorId);
+    const current = (await deps.items.get(item.id)) ?? item;
+    if ((body.conversationId ?? "") !== (current.conversationId ?? ""))
+      return sendJson(ctx.res, 409, {
+        error: "conflict",
+        message: "The conversation changed. Review the current conversation and try again.",
+      });
+    const historyId = body.historyConversationId;
+    if (
+      historyId !== undefined &&
+      (typeof historyId !== "string" || !current.thread?.some((entry) => (entry.conversationId ?? "") === historyId))
+    ) {
+      return sendJson(ctx.res, 400, { error: "bad_request", message: "Unknown past conversation for this item." });
+    }
+    const next = await deps.fire.followUp(loop, current, message, loaded.actorId, historyId);
     sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
+  } finally {
+    await deps.items.releaseDecision(item.id, token);
   }
 }
 

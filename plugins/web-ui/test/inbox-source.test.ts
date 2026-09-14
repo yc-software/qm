@@ -118,11 +118,11 @@ test("the inbox reads the loop's ledger, not a bespoke inbox endpoint", () => {
 });
 
 test("each item carries a follow-up chat with the agent", () => {
-  assert.match(inbox, /export function chatTpl\(item: InboxItem\): TemplateResult/);
+  assert.match(inbox, /export function chatTpl\(\s*item: InboxItem,/);
   assert.match(inbox, /actionPath\(item, "followup"\)/);
-  assert.match(inbox, /body: JSON\.stringify\(\{ message: text \}\)/);
+  assert.match(inbox, /conversationId: item\.conversationId \?\? ""/);
   assert.match(inbox, /\$\{chatTpl\(item\)\}/, "the chat pane hangs off the draft editor");
-  assert.match(inbox, /item\.thread\.map\(/, "the thread transcript renders");
+  assert.match(inbox, /thread\.map\(/, "the thread transcript renders");
   assert.match(inbox, /draftEdits\.delete\(item\.id\);/, "a revised proposal supersedes the local edit");
   assert.match(css, /\.inbox-chat-log \{/);
   assert.match(css, /\.inbox-chat-msg\.human \{/);
