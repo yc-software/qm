@@ -1200,11 +1200,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         if (e.key === "ArrowLeft" || e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          const previous = loadoutSection;
           closeLoadoutSection();
-          requestAnimationFrame(() =>
-            ctx.chat.state.host?.querySelector<HTMLElement>(`[data-loadout-section="${previous}"]`)?.focus(),
-          );
         } else menuArrowKeys(e);
       }}
     >
@@ -1512,6 +1508,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     e.stopPropagation();
     const at = buttons.indexOf(target);
     let next = at + (e.key === "ArrowUp" ? -1 : 1);
+    if (at < 0 && e.key === "ArrowUp") next = buttons.length - 1;
     if (e.key === "Home") next = 0;
     if (e.key === "End") next = buttons.length - 1;
     buttons[(next + buttons.length) % buttons.length]?.focus();
