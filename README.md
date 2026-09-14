@@ -174,7 +174,7 @@ Populate it once, then clone it to work in:
 gh repo create <org>/qm-private --private
 
 git clone --bare git@github.com:yc-software/qm qm-seed.git
-git -C qm-seed.git push --mirror git@github.com:<org>/qm-private
+git -C qm-seed.git push git@github.com:<org>/qm-private main
 rm -rf qm-seed.git
 
 git clone git@github.com:<org>/qm-private
@@ -191,6 +191,11 @@ organizations disallow forking private repositories as well. A plain clone has n
 these problems, and it costs one thing: the clone is an ordinary repository, so upstream's
 CI workflows run live in your own account. Expect to supply the secrets those workflows
 need, or disable the ones you do not want running.
+
+Push `main` alone. A `--mirror` push copies every upstream branch and tag into the empty
+repository, and GitHub then makes the alphabetically first branch the default, so pull
+requests, clones, and tooling land on a stale feature branch instead of `main`. The
+`update-qm` skill fetches everything else it needs from the `upstream` remote.
 
 Everything specific to your organization goes in `deploy/layers/<org>/` — config, sandbox
 tools and skills, plugin images, infrastructure — in the same shape `qm init` produces. See

@@ -122,9 +122,10 @@ fork never received will fail until those are supplied.
 
 ## Never do these
 
-- `git push --mirror` to an existing private fork. It deletes refs the destination has and the
-  source does not, discarding the organization's own branches. It is safe only for the
-  first population of an empty repository.
+- `git push --mirror` to a private fork. It deletes refs the destination has and the
+  source does not, discarding the organization's own branches, and into an empty
+  repository it copies every upstream branch, leaving GitHub to pick the default among
+  them. Seed a fork by pushing `main` alone, as the README shows.
 - Pushing a branch whose history contains organization commits to upstream. The
   `upstream-pr` skill pushes upstream only from branches cut fresh from `upstream/main`
   and scrubbed.
