@@ -21,7 +21,7 @@ test("Fast is a stateful toggle row without a trailing checkmark", () => {
 test("the Fast toggle names itself and hides its decorative track", () => {
   assert.match(fast, /aria-label="Fast"/);
   assert.match(fast, /aria-hidden="true"/);
-  assert.match(fast, /class="loadout-shortcut">⌘⇧E/);
+  assert.match(fast, /fastAvailable \? "⌘⇧E" : fastUnsupportedReason/);
 });
 
 test("the toggle track and knob carry their own state styling", () => {

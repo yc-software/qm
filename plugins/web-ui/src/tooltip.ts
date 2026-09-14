@@ -9,6 +9,7 @@ function ensureEl(): HTMLDivElement {
     tipEl = document.createElement("div");
     tipEl.className = "qm-tooltip";
     tipEl.setAttribute("role", "tooltip");
+    tipEl.setAttribute("popover", "manual");
     document.body.appendChild(tipEl);
   }
   return tipEl;
@@ -27,10 +28,12 @@ function showTooltip(target: Element, text: string): void {
   el.textContent = text;
   el.classList.toggle("beside", !!target.closest('[data-tip-placement="right"]'));
   el.classList.add("visible");
+  el.showPopover?.();
 }
 
 export function hideTooltip(target?: Element): void {
   if (target && anchor && target !== anchor) return;
+  tipEl?.hidePopover?.();
   tipEl?.classList.remove("visible");
   anchor?.removeAttribute("data-qm-tooltip-anchor");
   anchor = null;

@@ -10,13 +10,13 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
-  Settings,
   Plus,
   Sparkles,
   CornerDownRight,
   FileText,
   Paperclip,
   Square,
+  Star,
   X,
   Zap,
 } from "lucide";
@@ -52,9 +52,7 @@ import {
   defaultEffortForModel,
   defaultModelValue,
   effortLabel,
-  getHarnessOptions,
   getModelOptions,
-  getModelOptionsForHarness,
   harnessSupportsEffort,
   harnessSupportsFastMode,
   harnessSupportsSteer,
@@ -71,17 +69,21 @@ import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
+  LOADOUT_CAP,
   parseLoadout,
   reconcileLoadout,
   upsertLoadout,
   reorderLoadout,
   effortLevelsForHarness,
-  harnessTarget,
-  isPeakEffort,
+  compatibleHarnessOptions,
+  loadoutModelId,
+  modelLoadoutOptions,
   type LoadoutEntry,
 } from "./composer-loadout";
 
-export type ComposerMenu = "effort" | "harness" | "model" | "settings" | "loadout";
+import { burstEffortConfetti } from "./effort-confetti";
+
+export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
 const LEGACY_MODEL_STORAGE_KEY = "web-ui:model";
 const THREAD_PICKS_STORAGE_KEY = "web-ui:model-picks";
@@ -89,7 +91,6 @@ const THREAD_PICKS_CAP = 50;
 const FAST_MODE_STORAGE_KEY = "web-ui:fast-mode";
 const EFFORT_STORAGE_KEY = "web-ui:effort";
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
-const LOADOUT_CAP = 5;
 
 function loadLoadout(): LoadoutEntry[] {
   try {
@@ -223,9 +224,12 @@ export function clearSkillsCache(): void {
 
 const SLASH_TOKEN = /(^|\s)\/([a-zA-Z0-9_-]*)$/;
 
+const EFFORT_PEAK_FLOOR = EFFORT_LEVELS.findIndex((option) => option.value === "xhigh");
+
 function effortText(level: EffortLevel | string): TemplateResult | string {
   const label = effortLabel(level as EffortLevel);
-  return isPeakEffort(level) ? html`<span class="effort-peak">${label}</span>` : label;
+  const rank = EFFORT_LEVELS.findIndex((option) => option.value === level);
+  return rank >= EFFORT_PEAK_FLOOR ? html`<span class="effort-peak">${label}</span>` : label;
 }
 
 export function slashQuery(draft: string): string | null {
@@ -362,8 +366,18 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       config.effective,
       config.modelCatalog,
     );
-    const selected = currentModelOption();
     loadout = loadLoadout();
+    let selected = currentModelOption();
+    const threadRef = ctx.chat.state.threadRef;
+    if (restoreSaved && selected && threadRef && !threadModelPicks.has(threadRef)) {
+      const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout, selected.harnessId).find(
+        (option) => option.model.id === selected!.model.id,
+      );
+      if (preferred && preferred.value !== selected.value) {
+        rememberThreadPick(threadRef, preferred.value);
+        selected = preferred;
+      }
+    }
     const saved = restoreSaved ? loadout.find((entry) => entry.value === selected?.value) : undefined;
     const effort = saved?.effort ?? (config.effective.effortLevel as EffortLevel | undefined);
     composerState.effortLevel =
@@ -374,6 +388,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       (saved?.fast ?? config.effective.fastMode) === true &&
       harnessSupportsFastMode(selected?.harnessId ?? "") &&
       modelSupportsFastMode(scopeKey(), selected?.model.id);
+    if (selected) {
+      const normalized = normalizeLoadoutEntry(activeLoadoutEntry(selected), selected);
+      composerState.effortLevel = normalized.effort;
+      composerState.fastMode = normalized.fast;
+    }
     if (agent && selected) agent.state.model = selected.model;
     ctx.chat.drawActiveChat(agent);
     if (pendingComposerFocus) focusComposerEnd();
@@ -389,6 +408,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       keep?: boolean;
     },
     agent: Agent,
+    preserveSelection = false,
   ): Promise<void> {
     const request = ++runtimeRequest;
     const scopeId = ctx.chat.state.scopeId;
@@ -396,11 +416,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       const config = await updateRuntimeConfig(scopeId, change);
       if (request !== runtimeRequest || scopeId !== ctx.chat.state.scopeId) return;
       seededRuntime = null;
+      const current = preserveSelection ? currentModelOption() : undefined;
+      if (current) rememberActiveTweaks(current);
       if (ctx.chat.state.threadRef) {
-        if (change.inherit) forgetThreadPick(ctx.chat.state.threadRef);
+        if (current) rememberThreadPick(ctx.chat.state.threadRef, current.value);
+        else if (change.inherit) forgetThreadPick(ctx.chat.state.threadRef);
         else rememberThreadPick(ctx.chat.state.threadRef, `${config.effective.harnessId}:${config.effective.modelId}`);
       }
-      applySelectedRuntime(config, agent, false);
+      applySelectedRuntime(config, agent, preserveSelection);
       const selected = currentModelOption();
       if (selected) rememberActiveTweaks(selected);
     } catch (e) {
@@ -472,12 +495,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
     const compact = Boolean(ctx.pane) || isPhone();
     const showRuntimeControls = !appState.me?.individualModelAuth;
-    const runtimeControls = html`${loadoutControl(agent, selectedModel, inputBlocked)}${harnessControl(agent, selectedModel, inputBlocked)}`;
+    const runtimeControls = loadoutControl(agent, selectedModel, inputBlocked);
     return html`
       <form
         class="composer-wrap ${compact ? "compact" : ""}"
         @submit=${(e: Event) => submitComposer(e, agent)}
-        @keydown=${(e: KeyboardEvent) => composerShortcut(e, agent, selectedModel, inputBlocked)}
+        @keydown=${(e: KeyboardEvent) => composerShortcut(e, agent, inputBlocked)}
       >
         ${header} ${slashMenu(agent)}
         ${
@@ -570,7 +593,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               @change=${(e: Event) => void onFilesSelected(e, agent)}
             />
             <button
-              class="icon-btn"
+              class="icon-btn composer-attach"
               type="button"
               aria-label="Attach files"
               ${tip("Attach files")}
@@ -801,8 +824,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   let loadout = loadLoadout();
-  let loadoutSection: "effort" | "add" | null = null;
-  let loadoutEditing = false;
+  let loadoutSection: "effort" | "add" | "harness" | null = null;
+  let loadoutSectionHovered = false;
+  let loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
   let draggedModel: string | null = null;
 
   function activeLoadoutEntry(selected: ModelOption): LoadoutEntry {
@@ -816,16 +840,32 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     };
   }
 
+  function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
+    const levels = effortLevelsForHarness(option.harnessId);
+    const defaultEffort = defaultEffortForModel(option.model);
+    const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : "auto";
+    return {
+      value: option.value,
+      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : fallbackEffort,
+      fast:
+        entry.fast && harnessSupportsFastMode(option.harnessId) && modelSupportsFastMode(scopeKey(), option.model.id),
+    };
+  }
+
   function seededLoadout(selected: ModelOption): LoadoutEntry[] {
     const latest = loadLoadout();
     if (latest.length) loadout = latest;
     const active = activeLoadoutEntry(selected);
     if (!loadout.length) {
       loadout = [active];
-      const other = getModelOptions(scopeKey()).find((option) => option.harnessId !== selected.harnessId);
+      const other = getModelOptions(scopeKey()).find(
+        (option) => option.model.id !== selected.model.id && option.model.provider !== selected.model.provider,
+      );
       if (other) loadout.push({ value: other.value, effort: defaultEffortForModel(other.model), fast: false });
     }
-    return reconcileLoadout(loadout, getModelOptions(scopeKey()), active);
+    return reconcileLoadout(loadout, getModelOptions(scopeKey()), active).map((entry) =>
+      normalizeLoadoutEntry(entry, modelOptionFor(entry.value, scopeKey())!),
+    );
   }
 
   function rememberActiveTweaks(selected: ModelOption): void {
@@ -840,11 +880,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (previous) rememberActiveTweaks(previous);
     const wasOpen = composerState.openMenu === "loadout";
     selectModel(entry.value, agent);
-    composerState.effortLevel = effortLevelsForHarness(option.harnessId).some((level) => level.value === entry.effort)
-      ? entry.effort
-      : defaultEffortForModel(option.model);
-    composerState.fastMode =
-      entry.fast && harnessSupportsFastMode(option.harnessId) && modelSupportsFastMode(scopeKey(), option.model.id);
+    const normalized = normalizeLoadoutEntry(entry, option);
+    composerState.effortLevel = normalized.effort;
+    composerState.fastMode = normalized.fast;
     persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
     persistPreference(FAST_MODE_STORAGE_KEY, composerState.fastMode ? "1" : "0");
     loadout = upsertLoadout(loadout, activeLoadoutEntry(option));
@@ -855,27 +893,11 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     placeLoadout();
   }
 
-  function cycleEffort(agent: Agent, selected: ModelOption): void {
-    const levels = effortLevelsForHarness(selected.harnessId);
-    const at = levels.findIndex((level) => level.value === composerState.effortLevel);
-    const next = levels[(at + 1) % levels.length];
-    if (next) selectEffort(next.value, agent);
-  }
-
-  function composerShortcut(e: KeyboardEvent, agent: Agent, selected: ModelOption, disabled: boolean): void {
+  function composerShortcut(e: KeyboardEvent, agent: Agent, disabled: boolean): void {
     if (disabled || e.defaultPrevented || !e.metaKey) return;
-    const digit = Number.parseInt(e.key, 10);
-    if (e.ctrlKey && !e.shiftKey && digit >= 1 && digit <= LOADOUT_CAP) {
-      const entry = seededLoadout(selected)[digit - 1];
-      if (!entry) return;
-      e.preventDefault();
-      applyLoadout(entry, agent);
-    } else if (e.shiftKey && e.code === "KeyE") {
+    if (e.shiftKey && e.code === "KeyE") {
       e.preventDefault();
       toggleFastMode(agent);
-    } else if (e.shiftKey && e.code === "Slash") {
-      e.preventDefault();
-      cycleEffort(agent, selected);
     }
   }
 
@@ -888,10 +910,22 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function removeLoadoutEntry(value: string, selected: ModelOption): void {
     if (value === selected.value) return;
-    loadout = seededLoadout(selected).filter((entry) => entry.value !== value);
+    const entries = seededLoadout(selected);
+    const index = entries.findIndex((entry) => entry.value === value);
+    loadout = entries.filter((entry) => entry.value !== value);
     saveLoadout(loadout);
     ctx.chat.drawActiveChat();
     placeLoadout();
+    requestAnimationFrame(() => {
+      const rows = ctx.chat.state.host?.querySelectorAll<HTMLButtonElement>(".loadout-pick");
+      rows?.[Math.max(0, Math.min(index, loadout.length - 1))]?.focus();
+    });
+  }
+
+  function clearLoadoutDropTargets(): void {
+    ctx.chat.state.host?.querySelectorAll(".loadout-row.drop-target").forEach((row) => {
+      row.classList.remove("drop-target", "drop-after");
+    });
   }
 
   function moveLoadout(value: string, targetValue: string, selected: ModelOption): void {
@@ -919,21 +953,38 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (!option) return nothing;
     const active = entry.value === selected.value;
     const settings = active ? activeLoadoutEntry(selected) : entry;
+    const isDefault = entry.value === defaultModelValue(scopeKey());
+    const canMakeDefault =
+      activeRuntimeConfig !== null &&
+      (!isDefault ||
+        settings.effort !== (activeRuntimeConfig.effective.effortLevel ?? defaultEffortForModel(option.model)) ||
+        settings.fast !== (activeRuntimeConfig.effective.fastMode === true));
     return html` <div
-      class="loadout-row ${active ? "active" : ""}"
+      class="loadout-row ${active ? "active" : ""} ${canMakeDefault || isDefault ? "has-default-action" : ""}"
       @dragover=${(e: DragEvent) => {
         if (!draggedModel || draggedModel === entry.value) return;
         e.preventDefault();
         e.stopPropagation();
         if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-        (e.currentTarget as HTMLElement).classList.add("drop-target");
+        clearLoadoutDropTargets();
+        const row = e.currentTarget as HTMLElement;
+        row.classList.add("drop-target");
+        row.classList.toggle(
+          "drop-after",
+          seededLoadout(selected).findIndex((item) => item.value === draggedModel) < at,
+        );
       }}
-      @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("drop-target")}
+      @dragleave=${(e: DragEvent) => {
+        const row = e.currentTarget as HTMLElement;
+        if (!(e.relatedTarget instanceof Node) || !row.contains(e.relatedTarget)) {
+          row.classList.remove("drop-target", "drop-after");
+        }
+      }}
       @drop=${(e: DragEvent) => {
         if (!draggedModel) return;
         e.preventDefault();
         e.stopPropagation();
-        (e.currentTarget as HTMLElement).classList.remove("drop-target");
+        clearLoadoutDropTargets();
         moveLoadout(draggedModel, entry.value, selected);
         draggedModel = null;
       }}
@@ -952,6 +1003,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         }}
         @dragend=${(e: DragEvent) => {
           draggedModel = null;
+          clearLoadoutDropTargets();
           (e.currentTarget as HTMLElement).closest(".loadout-row")?.classList.remove("dragging");
         }}
         @keydown=${(e: KeyboardEvent) => {
@@ -975,23 +1027,62 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         type="button"
         role="menuitemradio"
         aria-checked=${active ? "true" : "false"}
-        @click=${() => applyLoadout(entry, agent)}
+        @click=${(event: MouseEvent) => {
+          burstEffortConfetti(event, settings.effort, option.harnessId);
+          applyLoadout(entry, agent);
+        }}
       >
         ${modelGlyph(option)}
-        <span class="loadout-name">${option.label}</span>
-        <span class="loadout-meta">${effortText(settings.effort)}</span>
-        ${settings.fast ? html`<span class="loadout-bolt" aria-label="Fast">${icon(Zap, 13)}</span>` : nothing}
-        <span class="loadout-end"
-          >${active ? icon(Check, 15) : html`<span class="loadout-shortcut">⌃⌘${at + 1}</span>`}</span
-        >
+        <span class="loadout-model-copy">
+          <span class="loadout-title">
+            <span class="loadout-name">${option.label}</span>
+            ${isDefault ? html`<span class="loadout-default">my default</span>` : nothing}
+          </span>
+          <span class="loadout-details">
+            <span class="loadout-harness">${option.harnessLabel}</span>
+            <span>${effortText(settings.effort)}</span>
+            ${settings.fast ? html`<span class="loadout-bolt" aria-label="Fast">${icon(Zap, 10)}</span>` : nothing}
+          </span>
+        </span>
+        <span class="loadout-end">${active ? icon(Check, 15) : nothing}</span>
       </button>
       ${
-        loadoutEditing
+        canMakeDefault
+          ? html`<button
+              class="loadout-make-default"
+              data-default=${isDefault ? "true" : "false"}
+              type="button"
+              role="menuitem"
+              aria-label=${`Make ${option.label} default`}
+              ${tip("Make default")}
+              @click=${async (event: MouseEvent) => {
+                const row = (event.currentTarget as HTMLElement).closest(".loadout-row");
+                await changeScopeRuntime(
+                  {
+                    harnessId: option.harnessId,
+                    modelId: option.model.id,
+                    effortLevel: settings.effort,
+                    fastMode: settings.fast,
+                  },
+                  agent,
+                  true,
+                );
+                row?.querySelector<HTMLElement>(".loadout-pick")?.focus();
+                placeLoadout();
+              }}
+            >
+              ${icon(Star, 14)}
+            </button>`
+          : nothing
+      }
+      ${isDefault && !canMakeDefault ? html`<span class="loadout-default-star" role="img" aria-label="My default" ${tip("My default")}>${icon(Star, 14)}</span>` : nothing}
+      ${
+        !active
           ? html`<button
               class="loadout-remove"
               type="button"
-              aria-label=${`Remove ${option.label}`}
-              ?disabled=${active}
+              aria-label=${`Remove ${option.label} from presets`}
+              ${tip("Remove from presets")}
               @click=${() => removeLoadoutEntry(entry.value, selected)}
             >
               ${icon(X, 14)}
@@ -1001,7 +1092,36 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     </div>`;
   }
 
-  function openLoadoutSection(section: "effort" | "add", keyboard = false): void {
+  function cancelLoadoutClose(): void {
+    if (loadoutCloseTimer === null) return;
+    clearTimeout(loadoutCloseTimer);
+    loadoutCloseTimer = null;
+  }
+
+  function loadoutSubmenuHasFocus(): boolean {
+    return ctx.chat.state.host?.querySelector<HTMLElement>(".loadout-submenu")?.matches(":focus-within") === true;
+  }
+
+  function queueLoadoutClose(): void {
+    if (isPhone() || !loadoutSectionHovered || !loadoutSection || loadoutSubmenuHasFocus()) return;
+    const section = loadoutSection;
+    cancelLoadoutClose();
+    loadoutCloseTimer = setTimeout(() => {
+      loadoutCloseTimer = null;
+      if (loadoutSection === section && !loadoutSubmenuHasFocus()) closeLoadoutSection(false);
+    }, 140);
+  }
+
+  function trackLoadoutHover(e: MouseEvent): void {
+    if (isPhone() || !loadoutSection) return;
+    const target = e.target as HTMLElement;
+    if (target.closest(".loadout-submenu") || target.closest(`[data-loadout-section="${loadoutSection}"]`))
+      cancelLoadoutClose();
+    else queueLoadoutClose();
+  }
+
+  function openLoadoutSection(section: "effort" | "add" | "harness", keyboard = false): void {
+    cancelLoadoutClose();
     if (loadoutSection === section && !keyboard) return;
     loadoutSection = section;
     ctx.chat.drawActiveChat();
@@ -1018,12 +1138,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       });
   }
 
-  function closeLoadoutSection(): void {
+  function closeLoadoutSection(refocus = true): void {
+    cancelLoadoutClose();
     const previous = loadoutSection;
     loadoutSection = null;
+    loadoutSectionHovered = false;
     ctx.chat.drawActiveChat();
     placeLoadout();
-    if (previous)
+    if (previous && refocus)
       requestAnimationFrame(() =>
         ctx.chat.state.host?.querySelector<HTMLElement>(`[data-loadout-section="${previous}"]`)?.focus(),
       );
@@ -1034,15 +1156,17 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const effort = loadoutSection === "effort";
     const entries = seededLoadout(selected);
     const query = composerState.menuQuery.trim().toLocaleLowerCase();
-    const catalog = getModelOptions(scopeKey()).filter(
+    const catalog = modelLoadoutOptions(getModelOptions(scopeKey()), entries, selected.harnessId).filter(
       (option) =>
-        !entries.some((entry) => entry.value === option.value) &&
+        !entries.some((entry) => loadoutModelId(entry.value) === option.model.id) &&
         (!query || `${option.harnessLabel} ${option.label}`.toLocaleLowerCase().includes(query)),
     );
     return html`<div
       class="loadout-submenu"
       role="menu"
-      aria-label=${effort ? "Effort levels" : "Add models"}
+      aria-label=${{ effort: "Effort levels", harness: "Run with", add: "Add models" }[loadoutSection]}
+      @mouseenter=${() => cancelLoadoutClose()}
+      @mouseleave=${() => queueLoadoutClose()}
       @keydown=${(e: KeyboardEvent) => {
         if (e.key === "ArrowLeft" || e.key === "Escape") {
           e.preventDefault();
@@ -1067,7 +1191,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   type="button"
                   role="menuitemradio"
                   aria-checked=${composerState.effortLevel === level.value ? "true" : "false"}
-                  @click=${() => {
+                  @click=${(event: MouseEvent) => {
+                    burstEffortConfetti(event, level.value, selected.harnessId);
                     selectEffort(level.value, agent);
                     closeLoadoutSection();
                   }}
@@ -1076,7 +1201,33 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   >${composerState.effortLevel === level.value ? icon(Check, 15) : nothing}
                 </button>`,
             )
-          : html` <label class="loadout-search"
+          : nothing
+      }
+      ${
+        loadoutSection === "harness"
+          ? compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id).map(
+              (option) =>
+                html`<button
+                  class="loadout-effort"
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked=${option.harnessId === selected.harnessId ? "true" : "false"}
+                  @click=${() => {
+                    closeLoadoutSection();
+                    selectHarness(option.harnessId, agent);
+                  }}
+                >
+                  <span class="loadout-harness-option"
+                    >${modelMark(option.harnessId, 15) ?? nothing}<span>${option.harnessLabel}</span></span
+                  >
+                  ${option.harnessId === selected.harnessId ? icon(Check, 15) : nothing}
+                </button>`,
+            )
+          : nothing
+      }
+      ${
+        loadoutSection === "add"
+          ? html` <label class="loadout-search"
                 ><span class="sr-only">Search models</span>
                 <input
                   type="search"
@@ -1095,80 +1246,67 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                     class="menu-option"
                     type="button"
                     role="menuitem"
+                    aria-label=${`Add ${option.label} to presets`}
                     @click=${() => addLoadoutEntry(option, agent)}
                   >
                     ${modelGlyph(option)}<span class="menu-option-copy"
                       ><span>${option.label}</span><span class="loadout-meta">${option.harnessLabel}</span></span
-                    >${icon(Plus, 13)}
+                    ><span class="loadout-add-label" aria-hidden="true">Add</span>
                   </button>`,
               )}
               ${catalog.length ? nothing : html`<div class="loadout-empty">No models found</div>`}`
+          : nothing
       }
     </div>`;
   }
 
-  function harnessControl(agent: Agent, selected: ModelOption, disabled: boolean): TemplateResult | typeof nothing {
-    const harnesses = getHarnessOptions(scopeKey());
-    if (harnesses.length < 2) return nothing;
-    const open = composerState.openMenu === "harness";
-    return html`<div class="menu-control harness-control" data-align="left">
+  function loadoutHarnessControl(selected: ModelOption): TemplateResult {
+    const options = compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id);
+    const value = html`<span class="loadout-harness-option"
+      >${modelMark(selected.harnessId, 15) ?? nothing}<span>${selected.harnessLabel}</span></span
+    >`;
+    if (options.length < 2)
+      return html`<div class="loadout-setting loadout-setting-static">
+        <span class="loadout-setting-label">Run with</span><span class="loadout-setting-value">${value}</span>
+      </div>`;
+    return html`<div class="loadout-submenu-anchor">
       <button
-        class="menu-button harness-button"
+        class="loadout-setting ${loadoutSection === "harness" ? "open" : ""}"
         type="button"
-        aria-label=${`Harness: ${selected.harnessLabel}`}
+        role="menuitem"
+        data-loadout-section="harness"
         aria-haspopup="menu"
-        aria-expanded=${open ? "true" : "false"}
-        ?disabled=${disabled}
-        ${tip("Harness")}
-        @click=${(e: Event) => {
-          e.stopPropagation();
-          composerState.openMenu = open ? null : "harness";
-          ctx.chat.drawActiveChat(agent);
+        aria-expanded=${loadoutSection === "harness" ? "true" : "false"}
+        @mouseenter=${() => {
+          if (isPhone()) return;
+          loadoutSectionHovered = true;
+          openLoadoutSection("harness");
+        }}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key === "ArrowRight") {
+            e.preventDefault();
+            loadoutSectionHovered = false;
+            openLoadoutSection("harness", true);
+          }
+        }}
+        @click=${(e: MouseEvent) => {
+          loadoutSectionHovered = e.detail !== 0 && !isPhone();
+          openLoadoutSection("harness", e.detail === 0);
         }}
       >
-        ${modelMark(selected.harnessId, 15) ?? nothing}<span class="menu-label">${selected.harnessLabel}</span
-        >${icon(ChevronDown, 13)}
+        <span class="loadout-setting-label">Run with</span>
+        <span class="loadout-setting-value">${value}<span class="loadout-end">${icon(ChevronRight, 14)}</span></span>
       </button>
-      ${
-        open
-          ? html`<div class="menu-popover harness-popover" role="menu" @click=${(e: Event) => e.stopPropagation()}>
-              <div class="menu-title">Harness</div>
-              ${harnesses.map(
-                (harness) =>
-                  html`<button
-                    class="menu-option ${harness.value === selected.harnessId ? "active" : ""}"
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked=${harness.value === selected.harnessId ? "true" : "false"}
-                    @click=${() => selectHarness(harness.value, agent)}
-                  >
-                    <span class="harness-option-copy"
-                      >${modelMark(harness.value, 15) ?? html`<span class="harness-mark-slot"></span>`}<span
-                        >${harness.label}</span
-                      ></span
-                    >
-                    ${harness.value === selected.harnessId ? icon(Check, 15) : nothing}
-                  </button>`,
-              )}
-            </div>`
-          : nothing
-      }
     </div>`;
   }
 
   function loadoutControl(agent: Agent, selected: ModelOption, disabled: boolean): TemplateResult {
     const open = composerState.openMenu === "loadout";
     const entries = seededLoadout(selected);
-    const fastAvailable =
-      harnessSupportsFastMode(selected.harnessId) && modelSupportsFastMode(scopeKey(), selected.model.id);
+    const modelSupportsFast = modelSupportsFastMode(scopeKey(), selected.model.id);
+    const fastAvailable = harnessSupportsFastMode(selected.harnessId) && modelSupportsFast;
+    const fastUnsupportedReason = modelSupportsFast ? "Not supported by this harness" : "Not supported by this model";
     const fastOn = fastAvailable && effectiveFastMode();
-    const effective =
-      (activeRuntimeConfig?.effective.effortLevel as EffortLevel | undefined) ?? defaultEffortForModel(selected.model);
-    const runtimeToggled =
-      activeRuntimeConfig !== null &&
-      (selected.value !== defaultModelValue(scopeKey()) ||
-        composerState.effortLevel !== effective ||
-        fastOn !== (activeRuntimeConfig.effective.fastMode === true && fastAvailable));
     return html`<div class="menu-control loadout-control" data-align="left">
       <button
         class="menu-button loadout-button"
@@ -1181,6 +1319,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         @keydown=${(e: KeyboardEvent) => {
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
+            cancelLoadoutClose();
+            loadoutSection = null;
+            loadoutSectionHovered = false;
             composerState.openMenu = "loadout";
             ctx.chat.drawActiveChat();
             placeLoadout();
@@ -1189,8 +1330,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         }}
         @click=${(e: Event) => {
           e.stopPropagation();
+          cancelLoadoutClose();
           loadoutSection = null;
-          loadoutEditing = false;
+          loadoutSectionHovered = false;
           composerState.menuQuery = "";
           composerState.openMenu = open ? null : "loadout";
           ctx.chat.drawActiveChat();
@@ -1210,11 +1352,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               role="menu"
               aria-label="Model settings"
               @click=${(e: Event) => e.stopPropagation()}
+              @mouseover=${(e: MouseEvent) => trackLoadoutHover(e)}
+              @mouseleave=${() => queueLoadoutClose()}
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
                   e.stopPropagation();
-                  composerState.openMenu = null;
+                  closeMenus();
                   ctx.chat.drawActiveChat();
                   requestAnimationFrame(() =>
                     ctx.chat.state.host?.querySelector<HTMLElement>(".loadout-button")?.focus(),
@@ -1223,8 +1367,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               }}
             >
               <div class="loadout-panel">
+                <div class="loadout-head">Presets</div>
                 <div class="loadout-list">${entries.map((entry, at) => loadoutRow(entry, at, selected, agent))}</div>
-                <div class="loadout-submenu-anchor">
+                <div
+                  class="loadout-submenu-anchor"
+                  ${tip(entries.length >= LOADOUT_CAP ? "Remove a preset to add another." : "")}
+                >
                   <button
                     class="loadout-add ${loadoutSection === "add" ? "open" : ""}"
                     type="button"
@@ -1234,24 +1382,27 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                     aria-expanded=${loadoutSection === "add" ? "true" : "false"}
                     ?disabled=${entries.length >= LOADOUT_CAP}
                     @mouseenter=${() => {
-                      if (!isPhone() && entries.length < LOADOUT_CAP) openLoadoutSection("add");
+                      if (isPhone() || entries.length >= LOADOUT_CAP) return;
+                      loadoutSectionHovered = true;
+                      openLoadoutSection("add");
                     }}
                     @keydown=${(e: KeyboardEvent) => {
                       if (e.key === "ArrowRight") {
                         e.preventDefault();
+                        loadoutSectionHovered = false;
                         openLoadoutSection("add", true);
                       }
                     }}
-                    @click=${() => {
-                      if (loadoutSection === "add") closeLoadoutSection();
-                      else openLoadoutSection("add", true);
+                    @click=${(e: MouseEvent) => {
+                      loadoutSectionHovered = e.detail !== 0 && !isPhone();
+                      openLoadoutSection("add", e.detail === 0);
                     }}
                   >
                     ${icon(Plus, 16)}<span>Add models</span><span class="loadout-end">${icon(ChevronRight, 14)}</span>
                   </button>
                 </div>
-                ${loadoutEditing && entries.length >= LOADOUT_CAP ? html`<div class="loadout-empty">Remove a model to add another.</div>` : nothing}
                 <div class="loadout-divider"></div>
+                ${loadoutHarnessControl(selected)}
                 ${
                   harnessSupportsEffort(selected.harnessId)
                     ? html`<div class="loadout-submenu-anchor">
@@ -1263,69 +1414,51 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                           aria-haspopup="menu"
                           aria-expanded=${loadoutSection === "effort" ? "true" : "false"}
                           @mouseenter=${() => {
-                            if (!isPhone()) openLoadoutSection("effort");
+                            if (isPhone()) return;
+                            loadoutSectionHovered = true;
+                            openLoadoutSection("effort");
                           }}
                           @keydown=${(e: KeyboardEvent) => {
                             if (e.key === "ArrowRight") {
                               e.preventDefault();
+                              loadoutSectionHovered = false;
                               openLoadoutSection("effort", true);
                             }
                           }}
-                          @click=${() => openLoadoutSection("effort", true)}
+                          @click=${(e: MouseEvent) => {
+                            loadoutSectionHovered = e.detail !== 0 && !isPhone();
+                            openLoadoutSection("effort", e.detail === 0);
+                          }}
                         >
                           <span class="loadout-setting-label">Effort</span
                           ><span class="loadout-setting-value"
-                            >${effortText(composerState.effortLevel)}${icon(ChevronRight, 14)}</span
+                            >${effortText(composerState.effortLevel)}<span class="loadout-end"
+                              >${icon(ChevronRight, 14)}</span
+                            ></span
                           >
                         </button>
                       </div>`
                     : nothing
                 }
-                ${
-                  fastAvailable
-                    ? html`<button
-                        class="loadout-setting"
-                        type="button"
-                        role="menuitemcheckbox"
-                        aria-label="Fast"
-                        aria-checked=${fastOn ? "true" : "false"}
-                        @click=${() => toggleFastMode(agent)}
-                      >
-                        <span class="loadout-setting-label">Fast</span
-                        ><span class="loadout-setting-value"
-                          ><span class="loadout-shortcut">⌘⇧E</span>
-                          <span class="loadout-toggle ${fastOn ? "on" : ""}" aria-hidden="true"
-                            ><span class="loadout-knob"></span
-                          ></span>
-                        </span>
-                      </button>`
-                    : nothing
-                }
-              </div>
-              <div class="loadout-foot">
                 <button
-                  class="loadout-foot-btn"
+                  class="loadout-setting"
                   type="button"
-                  @click=${() => {
-                    loadoutEditing = !loadoutEditing;
-                    loadoutSection = null;
-                    ctx.chat.drawActiveChat();
-                    placeLoadout();
-                  }}
+                  role="menuitemcheckbox"
+                  aria-label="Fast"
+                  aria-checked=${fastOn ? "true" : "false"}
+                  ?disabled=${!fastAvailable}
+                  @click=${() => toggleFastMode(agent)}
                 >
-                  ${icon(Settings, 13)}${loadoutEditing ? "Done" : "Edit"}
+                  <span class="loadout-setting-label">Fast</span>
+                  <span class="loadout-setting-value">
+                    <span class="loadout-shortcut">${fastAvailable ? "⌘⇧E" : fastUnsupportedReason}</span>
+                    <span class="loadout-toggle ${fastOn ? "on" : ""}" aria-hidden="true">
+                      <span class="loadout-knob"></span>
+                    </span>
+                  </span>
                 </button>
-                ${harnessSupportsEffort(selected.harnessId) ? html`<button class="loadout-foot-cycle" type="button" @click=${() => cycleEffort(agent, selected)}><kbd class="loadout-kbd">⌘⇧/</kbd> Cycle effort</button>` : nothing}
               </div>
-              ${
-                loadoutEditing
-                  ? html`<div class="loadout-edit-actions">
-                      <span>Drag to reorder, or use ↑ ↓ on a handle.</span>
-                      ${runtimeToggled ? html`<button type="button" @click=${() => changeScopeRuntime({ harnessId: selected.harnessId, modelId: selected.model.id, effortLevel: composerState.effortLevel, fastMode: fastOn }, agent)}>Make default</button>` : nothing}
-                      ${activeRuntimeConfig?.scopeOverride ? html`<button type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>Use org default</button>` : nothing}
-                    </div>`
-                  : nothing
-              }
+              ${activeRuntimeConfig?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>Use org default</button></div>` : nothing}
               ${loadoutSubmenu(agent, selected)}
             </div>`
           : nothing
@@ -1382,7 +1515,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       const width = Math.min(260, right - left);
       const roomRight = right - menuRect.right - 4;
       const roomLeft = menuRect.left - left - 4;
-      const inline = isPhone() || Math.max(roomLeft, roomRight) < width;
+      const inline = Math.max(roomLeft, roomRight) < width;
       submenu.classList.toggle("inline", inline);
       if (inline) {
         submenu.style.width = "";
@@ -2117,24 +2250,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function selectHarness(harnessId: string, agent: Agent): void {
     const selected = currentModelOption();
-    if (!selected || selected.harnessId === harnessId) {
-      composerState.openMenu = null;
-      ctx.chat.drawActiveChat(agent);
-      return;
-    }
-    const target = harnessTarget(getModelOptionsForHarness(harnessId, scopeKey()), selected.model.id, loadout);
+    if (!selected || selected.harnessId === harnessId) return;
+    const target = compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id).find(
+      (option) => option.harnessId === harnessId,
+    );
     if (!target) return;
-    selectModel(target.value, agent);
-    if (!effortLevelsForHarness(harnessId).some((level) => level.value === composerState.effortLevel)) {
-      composerState.effortLevel = defaultEffortForModel(target.model);
-      persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
-    }
-    if (!harnessSupportsFastMode(harnessId) || !modelSupportsFastMode(scopeKey(), target.model.id)) {
-      composerState.fastMode = false;
-      persistPreference(FAST_MODE_STORAGE_KEY, "0");
-    }
-    composerState.openMenu = null;
-    ctx.chat.drawActiveChat(agent);
+    const active = activeLoadoutEntry(selected);
+    applyLoadout({ ...active, value: target.value }, agent);
   }
 
   function selectEffort(level: EffortLevel, agent: Agent): void {
@@ -2203,6 +2325,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   function closeMenus(): boolean {
     let changed = false;
     if (composerState.openMenu) {
+      cancelLoadoutClose();
+      loadoutSection = null;
+      loadoutSectionHovered = false;
       composerState.openMenu = null;
       changed = true;
     }
@@ -2214,6 +2339,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function dispose(): void {
+    cancelLoadoutClose();
     autosizeObserver?.disconnect();
     autosizeObserver = null;
     autosizedTa = null;

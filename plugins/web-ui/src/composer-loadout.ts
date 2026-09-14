@@ -6,13 +6,19 @@ export interface LoadoutEntry {
   fast: boolean;
 }
 
-const LOADOUT_CAP = 5;
+export const LOADOUT_CAP = 4;
+
+export function loadoutModelId(value: string): string {
+  const separator = value.indexOf(":");
+  return separator < 0 ? value : value.slice(separator + 1);
+}
 
 function uniqueLoadout(entries: readonly LoadoutEntry[]): LoadoutEntry[] {
   const seen = new Set<string>();
   return entries.filter(({ value }) => {
-    if (seen.has(value)) return false;
-    seen.add(value);
+    const modelId = loadoutModelId(value);
+    if (seen.has(modelId)) return false;
+    seen.add(modelId);
     return true;
   });
 }
@@ -41,7 +47,7 @@ export function parseLoadout(raw: string | null): LoadoutEntry[] {
 
 export function upsertLoadout(entries: readonly LoadoutEntry[], entry: LoadoutEntry): LoadoutEntry[] {
   const next = uniqueLoadout(entries).slice(0, LOADOUT_CAP);
-  const index = next.findIndex(({ value }) => value === entry.value);
+  const index = next.findIndex(({ value }) => loadoutModelId(value) === loadoutModelId(entry.value));
   if (index >= 0) next[index] = { ...entry };
   else if (next.length === LOADOUT_CAP) next[LOADOUT_CAP - 1] = { ...entry };
   else next.push({ ...entry });
@@ -54,7 +60,11 @@ export function reconcileLoadout(
   active: LoadoutEntry,
 ): LoadoutEntry[] {
   const available = new Set(options.map(({ value }) => value));
-  const next = uniqueLoadout(entries).filter(({ value }) => available.has(value));
+  const next = uniqueLoadout(entries).flatMap((entry) => {
+    if (available.has(entry.value)) return [entry];
+    const replacement = options.find(({ model }) => model.id === loadoutModelId(entry.value));
+    return replacement ? [{ ...entry, value: replacement.value }] : [];
+  });
   return available.has(active.value) ? upsertLoadout(next, active) : next.slice(0, LOADOUT_CAP);
 }
 
@@ -77,19 +87,30 @@ export function effortLevelsForHarness(harnessId: string): Array<{ value: Effort
   }).map((option) => ({ ...option, label: option.value === "xhigh" ? "Extra high" : option.label }));
 }
 
-const PEAK_EFFORTS: ReadonlySet<string> = new Set(["xhigh", "max", "ultracode"]);
-
-export function isPeakEffort(level: EffortLevel | string | undefined): boolean {
-  return typeof level === "string" && PEAK_EFFORTS.has(level);
+export function compatibleHarnessOptions<T extends { harnessId: string; model: { id: string } }>(
+  options: readonly T[],
+  modelId: string,
+): T[] {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    if (option.model.id !== modelId || seen.has(option.harnessId)) return false;
+    seen.add(option.harnessId);
+    return true;
+  });
 }
 
-export function harnessTarget<T extends { value: string; model: { id: string } }>(
-  options: readonly T[],
-  currentModelId: string,
-  loadout: ReadonlyArray<{ value: string }>,
-): T | undefined {
-  const sameModel = options.find((option) => option.model.id === currentModelId);
-  if (sameModel) return sameModel;
-  const saved = loadout.find((entry) => options.some((option) => option.value === entry.value));
-  return options.find((option) => option.value === saved?.value) ?? options[0];
+export function modelLoadoutOptions(
+  options: readonly ModelOption[],
+  entries: readonly LoadoutEntry[],
+  preferredHarnessId?: string,
+): ModelOption[] {
+  const saved = new Map(uniqueLoadout(entries).map((entry) => [loadoutModelId(entry.value), entry.value]));
+  return [...new Set(options.map(({ model }) => model.id))].flatMap((modelId) => {
+    const compatible = compatibleHarnessOptions(options, modelId);
+    const preferred =
+      compatible.find(({ value }) => value === saved.get(modelId)) ??
+      compatible.find(({ harnessId }) => harnessId === preferredHarnessId) ??
+      compatible[0];
+    return preferred ? [preferred] : [];
+  });
 }

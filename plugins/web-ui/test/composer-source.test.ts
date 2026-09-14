@@ -4,35 +4,23 @@ import test from "node:test";
 
 const composer = readFileSync(new URL("../src/composer.ts", import.meta.url), "utf8");
 
-test("Edit exposes changed runtime defaults and always allows an existing override to inherit", () => {
+test("preset default actions live on the row while inheritance remains in the footer", () => {
+  const row = composer.slice(composer.indexOf("function loadoutRow"), composer.indexOf("function cancelLoadoutClose"));
   const loadout = composer.slice(
     composer.indexOf("function loadoutControl"),
     composer.indexOf("function menuArrowKeys"),
   );
-  assert.ok(/const runtimeToggled =\s*activeRuntimeConfig !== null/.test(loadout));
-  assert.ok(loadout.includes("selected.value !== defaultModelValue(scopeKey())"));
-  assert.ok(loadout.includes("composerState.effortLevel !== effective"));
-  assert.ok(loadout.includes("fastOn !== (activeRuntimeConfig.effective.fastMode"));
-  assert.ok(/loadoutEditing\s*\? html`<div class="loadout-edit-actions">/.test(loadout), "defaults belong under Edit");
-  assert.ok(/runtimeToggled\s*\? html`<button[^`]*>\s*Make default\s*<\/button>/.test(loadout));
-  assert.ok(
-    /activeRuntimeConfig\?\.scopeOverride\s*\? html`<button[^`]*>\s*Use org default\s*<\/button>/.test(loadout),
-    "inherit remains available when the selected setup already matches the personal default",
-  );
+  assert.ok(row.includes('class="loadout-make-default"'));
+  assert.ok(row.includes("effortLevel: settings.effort"));
+  assert.ok(row.includes("fastMode: settings.fast"));
+  assert.ok(!loadout.includes("Make default"));
   assert.ok(loadout.includes("changeScopeRuntime({ inherit: true }, agent)"));
 });
 
 test("compact and full composers share one left-side picker with Fast inside its menu", () => {
-  const runtimeControls = /const runtimeControls = ([^\n]*)/.exec(composer)?.[1] ?? "";
-  assert.match(
-    runtimeControls,
-    /loadoutControl\(agent, selectedModel, inputBlocked\)/,
+  assert.ok(
+    /const runtimeControls = loadoutControl\(agent, selectedModel, inputBlocked\)/.test(composer),
     "compact surfaces must retain the full model and effort picker",
-  );
-  assert.match(
-    runtimeControls,
-    /harnessControl\(agent, selectedModel, inputBlocked\)/,
-    "the harness picker rides beside it on both surfaces",
   );
   const leftStart = composer.indexOf('class="composer-left"');
   const rightStart = composer.indexOf('class="composer-right"');
@@ -44,19 +32,27 @@ test("compact and full composers share one left-side picker with Fast inside its
     composer.indexOf("function menuArrowKeys"),
   );
   assert.ok(/role="menuitemcheckbox"\s+aria-label="Fast"/.test(loadout));
-  assert.ok(/fastAvailable\s*\? html`<button/.test(loadout));
   assert.equal((composer.match(/@click=\$\{\(\) => toggleFastMode\(agent\)\}/g) ?? []).length, 1);
 });
 
 test("switching setups preserves prior tweaks and validates effort and Fast for the selected model", () => {
-  const apply = composer.slice(composer.indexOf("function applyLoadout"), composer.indexOf("function cycleEffort"));
+  const apply = composer.slice(
+    composer.indexOf("function applyLoadout"),
+    composer.indexOf("function composerShortcut"),
+  );
   const remember = apply.indexOf("rememberActiveTweaks(previous)");
   const select = apply.indexOf("selectModel(entry.value, agent)");
   assert.ok(remember >= 0 && select > remember, "save the prior model's tweaks before switching");
-  assert.ok(/effortLevelsForHarness\(option.harnessId\).some\([\s\S]*?\? entry.effort/.test(apply));
+  const normalize = composer.slice(
+    composer.indexOf("function normalizeLoadoutEntry"),
+    composer.indexOf("function seededLoadout"),
+  );
+  assert.ok(normalize.includes("effortLevelsForHarness(option.harnessId)"));
+  assert.ok(/levels.some\([\s\S]*?\? entry.effort/.test(normalize));
+  assert.ok(apply.includes("normalizeLoadoutEntry(entry, option)"));
   assert.ok(
     /entry.fast && harnessSupportsFastMode\(option.harnessId\) && modelSupportsFastMode\(scopeKey\(\), option.model.id\)/.test(
-      apply,
+      normalize,
     ),
     "a stored Fast preference cannot enable an unsupported model",
   );
@@ -97,12 +93,22 @@ test("a steer whose run already ended is recovered, never silently dropped", () 
 });
 
 test("scope runtime defaults include effort and fast mode", () => {
-  assert.ok(/effortLevel: composerState\.effortLevel/.test(composer));
-  assert.ok(/fastMode: fastOn/.test(composer));
+  assert.ok(/effortLevel: settings\.effort/.test(composer));
+  assert.ok(/fastMode: settings\.fast/.test(composer));
   const restore = composer.slice(
     composer.indexOf("function applySelectedRuntime"),
     composer.indexOf("async function changeScopeRuntime"),
   );
   assert.ok(/saved\?\.effort \?\? \(config\.effective\.effortLevel/.test(restore));
   assert.ok(/\(saved\?\.fast \?\? config\.effective\.fastMode\) === true/.test(restore));
+});
+
+test("a mouse click opens a submenu without the autofocus that pins it through hover-out", () => {
+  const clickOpens = composer.match(/openLoadoutSection\("(?:add|harness|effort)", e\.detail === 0\)/g) ?? [];
+  assert.equal(clickOpens.length, 3, "every submenu click gates autofocus on e.detail");
+  assert.match(composer, /loadoutSectionHovered = e\.detail !== 0 && !isPhone\(\)/);
+  assert.match(
+    composer,
+    /if \(isPhone\(\) \|\| !loadoutSectionHovered \|\| !loadoutSection \|\| loadoutSubmenuHasFocus\(\)\) return;/,
+  );
 });
