@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
+import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import {
   deriveKey,
   seal,
@@ -203,6 +204,12 @@ const DEV_SECRET = "dev-only-insecure-portal-session-secret";
 const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
+const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
+const trustedEntry = trustedOidc
+  ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, (key, expiresAt) =>
+      claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt),
+    )
+  : null;
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 
 const TMP_TTL_S = 600;
@@ -491,7 +498,10 @@ ${CARD_STYLE}
 </html>`;
 }
 
-export function signInErrorHtml(detail: string): string {
+export function signInErrorHtml(
+  detail: string,
+  retryPath: "/auth/login" | "/auth/trusted/login" = "/auth/login",
+): string {
   return cardPage({
     title: "Sign-in failed",
     heading: "We couldn't sign you in",
@@ -499,9 +509,9 @@ export function signInErrorHtml(detail: string): string {
     icon: ALERT_ICON,
     warn: true,
     extra: `<p class="reason"><strong>Details</strong>${escapeHtml(detail)}</p>`,
-    actions: `<a class="btn primary" href="/auth/login">Try signing in again</a>
+    actions: `<a class="btn primary" href="${retryPath}">Try signing in again</a>
         <a class="btn ghost" href="/">Back to start</a>`,
-    help: "Still stuck? Make sure you're a member of the approved workspace, then contact your admin.",
+    help: "Still stuck? Check that your account has access, then contact your admin.",
   });
 }
 
@@ -897,6 +907,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (pathname === "/auth/login" && method === "GET") return authLogin(req, res, url);
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
+  if (pathname.startsWith("/auth/trusted/") && method === "GET") return trustedAuth(req, res, url);
   if (pathname === "/auth/admin-login") return adminLogin(req, res);
   if (pathname === "/auth/logout" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
@@ -1244,6 +1255,35 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
   res.end();
 }
 
+async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  if (!trustedEntry) return json(res, 404, { error: "not_found" });
+  const cookieName = "portal_trusted_tmp";
+  const path = "/auth/trusted";
+  if (url.pathname === `${path}/login`) {
+    const login = trustedEntry.start(sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN));
+    setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
+    res.writeHead(302, { location: login.location, "cache-control": "no-store" });
+    return void res.end();
+  }
+  if (url.pathname !== `${path}/callback`) return json(res, 404, { error: "not_found" });
+  setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
+  try {
+    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url);
+    setAuthenticatedSession(res, identity.sub, identity.name);
+    res.writeHead(302, {
+      location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN),
+      "cache-control": "no-store",
+    });
+    res.end();
+  } catch {
+    sendHtml(
+      res,
+      400,
+      signInErrorHtml("Trusted sign-in failed. Please start again from your provider.", "/auth/trusted/login"),
+    );
+  }
+}
+
 function setAuthenticatedSession(res: ServerResponse, sub: string, name = ""): void {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
@@ -1257,6 +1297,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = ""): v
   };
   setSession(res, [
     ...sessionCookieSet(seal(session, sessionKey)),
+    clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
     clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),
   ]);
