@@ -17,7 +17,7 @@ export async function verificationUpstream() {
       raw += chunk;
     });
     req.on("end", () => {
-      const body = JSON.parse(raw);
+      const body = raw ? JSON.parse(raw) : {};
       requests.push({
         path: req.url!,
         body,
@@ -35,6 +35,10 @@ export async function verificationUpstream() {
             error: { message: `${status} private-provider-detail`, type: "invalid_request_error" },
           }),
         );
+      }
+      if (req.method === "GET" && req.url?.endsWith("/models")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ data: [] }));
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       const text = behavior.empty ? "" : "VERIFIED MODEL REPLY";

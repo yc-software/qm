@@ -5,6 +5,7 @@ import {
   resolveCustomModel,
   isCustomModelId,
   customModelCatalog,
+  customModelsJson,
   validateCustomProviderSpec,
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
@@ -49,6 +50,21 @@ test("anthropic-protocol providers produce anthropic-messages models with defaul
   assert.equal(model.api, "anthropic-messages");
   assert.equal(model.contextWindow, 128_000);
   assert.equal(model.cost.input, 0);
+});
+
+test("openai-responses survives both custom model mappings", () => {
+  setCustomProviders([
+    {
+      id: "responses-gateway",
+      name: "Responses Gateway",
+      protocol: "openai-responses",
+      baseUrl: "https://responses.example.com/v1",
+      models: [{ id: "responses-model" }],
+    },
+  ]);
+  assert.equal(resolveCustomModel("responses-model")?.api, "openai-responses");
+  const generated = customModelsJson() as { providers: Record<string, { api: string }> };
+  assert.equal(generated.providers["responses-gateway"]?.api, "openai-responses");
 });
 
 test("resolveModel falls back to custom models; built-ins shadow custom ids", () => {

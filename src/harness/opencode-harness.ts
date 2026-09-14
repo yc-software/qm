@@ -7,8 +7,8 @@ import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { isCustomModelId } from "../model/custom-providers.ts";
-import type { CustomProviderSpec } from "../model/custom-providers.ts";
+import { customProviderApi, isCustomModelId } from "../model/custom-providers.ts";
+import type { CustomProviderProtocol, CustomProviderSpec } from "../model/custom-providers.ts";
 import { DEFAULT_AGENT_MODEL_ID, modelServiceable, modelSupportedByHarness, resolveModel } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
@@ -41,6 +41,13 @@ import { countTokens } from "../util/tokens.ts";
 const OPENCODE_VERSION = "1.17.18";
 const OPENCODE_IDLE_WAIT_MS = 30 * 60_000;
 export const OPENCODE_STARTUP_TIMEOUT_MS = 90_000;
+
+function customProviderNpm(protocol: CustomProviderProtocol): string {
+  const api = customProviderApi(protocol);
+  if (api === "anthropic-messages") return "@ai-sdk/anthropic";
+  if (api === "openai-responses") return "@ai-sdk/openai";
+  return "@ai-sdk/openai-compatible";
+}
 
 export interface OpenCodeHarnessOptions extends HarnessToolPlumbing {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -643,7 +650,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           custom.map(({ spec, apiKey }) => [
             spec.id,
             {
-              npm: spec.protocol === "anthropic" ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible",
+              npm: customProviderNpm(spec.protocol),
               name: spec.name,
               options: { baseURL: spec.baseUrl, ...(apiKey ? { apiKey } : {}) },
               models: Object.fromEntries(

@@ -375,6 +375,16 @@ test("custom providers materialize into the opencode config (enabled + provider 
         },
         apiKey: "sk-lite",
       },
+      {
+        spec: {
+          id: "responses-proxy",
+          name: "Responses Proxy",
+          protocol: "openai-responses" as const,
+          baseUrl: "http://responses.internal/v1",
+          models: [{ id: "responses-model" }],
+        },
+        apiKey: "sk-responses",
+      },
     ],
   });
   const entries: SessionEntry[] = [];
@@ -383,11 +393,14 @@ test("custom providers materialize into the opencode config (enabled + provider 
     await harness.turns.runTurn(turnInput(entries, llmRows));
     const config = JSON.parse(readFileSync(dump, "utf8"));
     assert.ok(config.enabled_providers.includes("litellm"));
+    assert.ok(config.enabled_providers.includes("responses-proxy"));
     const litellm = config.provider.litellm;
     assert.equal(litellm.npm, "@ai-sdk/openai-compatible");
     assert.equal(litellm.options.baseURL, "http://litellm.internal:4000/v1");
     assert.equal(litellm.options.apiKey, "sk-lite");
     assert.deepEqual(litellm.models["deepseek-chat"], { name: "DeepSeek", limit: { context: 128000, output: 8192 } });
+    assert.equal(config.provider["responses-proxy"].npm, "@ai-sdk/openai");
+    assert.equal(config.provider["responses-proxy"].options.apiKey, "sk-responses");
   } finally {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });

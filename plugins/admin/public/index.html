@@ -6232,7 +6232,7 @@
       <div class="project-dialog-head">
         <div>
           <h2 id="custom-provider-title">Add custom provider</h2>
-          <p>Connect any OpenAI- or Anthropic-compatible endpoint.</p>
+          <p>Connect an OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages endpoint.</p>
         </div>
         <button class="project-icon-button" type="button" id="custom-provider-close" aria-label="Close">×</button>
       </div>
@@ -6241,8 +6241,9 @@
         <label>Display name<input id="custom-provider-name" autocomplete="off" placeholder="LiteLLM" /></label>
         <label
           >Protocol<select id="custom-provider-protocol">
-            <option value="openai">OpenAI-compatible</option>
-            <option value="anthropic">Anthropic-compatible</option>
+            <option value="openai">OpenAI Chat Completions</option>
+            <option value="openai-responses">OpenAI Responses</option>
+            <option value="anthropic">Anthropic Messages</option>
           </select></label
         >
         <label
@@ -6290,6 +6291,11 @@
       const $ = (id) => document.getElementById(id);
       const EFFECTS = ["allow", "deny", "require_approval"];
       const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
+      const CUSTOM_PROVIDER_PROTOCOL_LABELS = {
+        openai: "OpenAI Chat Completions",
+        "openai-responses": "OpenAI Responses",
+        anthropic: "Anthropic Messages",
+      };
       const SECTIONS = [
         { views: ["governance", "models", "credentials", "connectors", "customize", "users"] },
         { label: "Logs", views: ["history", "slack", "judgments", "errors", "audit", "egress", "metrics"] },
@@ -6336,7 +6342,7 @@
         providers.className = "card sv-models";
         providers.id = "card-custom-providers";
         providers.innerHTML =
-          '<div class="head"><h2>Custom providers</h2><p>Any OpenAI- or Anthropic-compatible endpoint. Its models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div>';
+          '<div class="head"><h2>Custom providers</h2><p>OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers above and below.</p></div><div class="body"><div class="tablewrap" id="model-custom-provider-table"><table><thead><tr><th>Provider</th><th>Protocol</th><th>Endpoint</th><th>Models</th><th>Key</th><th></th></tr></thead><tbody id="model-custom-provider-rows"></tbody></table></div><div id="custom-provider-summary" class="hint">Loading providers…</div></div><div class="foot"><button type="button" id="add-custom-provider">+ Add provider</button></div>';
 
         const governanceAmbient = document.createElement("section");
         governanceAmbient.className = "card sv-governance hidden";
@@ -9657,7 +9663,7 @@
           const tr = document.createElement("tr");
           [
             provider.name + " (" + provider.id + ")",
-            provider.protocol === "anthropic" ? "Anthropic" : "OpenAI",
+            CUSTOM_PROVIDER_PROTOCOL_LABELS[provider.protocol] || provider.protocol,
             provider.baseUrl,
             String(provider.models.length),
             provider.hasKey ? "Set (write-only)" : "None",
@@ -9682,7 +9688,7 @@
           const tr = document.createElement("tr");
           const cells = [
             provider.name + " (" + provider.id + ")",
-            provider.protocol === "anthropic" ? "Anthropic" : "OpenAI",
+            CUSTOM_PROVIDER_PROTOCOL_LABELS[provider.protocol] || provider.protocol,
             provider.baseUrl,
             provider.models.map((model) => model.id).join(", "),
             provider.hasKey ? "set (write-only)" : "none",

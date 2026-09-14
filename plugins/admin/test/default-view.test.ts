@@ -503,6 +503,9 @@ test("custom providers share one in-place editor instead of linking to onboardin
   assert.match(html, /\$\("add-custom-provider"\)\.onclick = \(\) => openCustomProviderEditor\(\)/);
   assert.match(html, /\$\("onboarding-add-custom-provider"\)\.onclick = \(\) => openCustomProviderEditor\(\)/);
   assert.match(html, /edit\.onclick = \(\) => openCustomProviderEditor\(provider\)/);
+  assert.match(html, /<option value="openai-responses">OpenAI Responses<\/option>/);
+  assert.match(html, /CUSTOM_PROVIDER_PROTOCOL_LABELS\[provider\.protocol\] \|\| provider\.protocol/);
+  assert.match(html, /\$\("custom-provider-protocol"\)\.value = provider\?\.protocol \|\| "openai"/);
   assert.match(html, /actions\.append\(edit, customProviderRemoveButton\(provider\)\)/);
   assert.match(html, /if \(view === "models"\) await loadScope\(\)/);
   assert.doesNotMatch(html, /\$\("add-custom-provider"\)\.onclick = \(\) => \{[\s\S]*?setView\("onboarding"\)/);
