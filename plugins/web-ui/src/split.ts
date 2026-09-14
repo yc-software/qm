@@ -196,7 +196,6 @@ function buildDock(): DockviewApi {
     singleTabMode: "fullwidth",
     disableFloatingGroups: true,
   });
-  focusComposerOnPaneClick(dockEl, () => paneContents.get(api.activePanel?.id ?? "")?.element ?? null);
   const inner = dockEl.querySelector(":scope > .dv-dockview") as HTMLElement | null;
   const box = (inner ?? dockEl).getBoundingClientRect();
   if (box.width > 0) api.layout(box.width, box.height, true);
@@ -941,6 +940,7 @@ class PaneContent implements IContentRenderer {
     this.panel = p.containerApi.getPanel(p.api.id) ?? null;
     this.params = (p.params ?? {}) as PaneParams;
     this.element.dataset.paneId = this.panelId;
+    focusComposerOnPaneClick(this.element, () => p.api.isActive);
     paneContents.set(this.panelId, this);
     this.resize.observe(this.element);
     this.syncZones();

@@ -57,10 +57,11 @@ function clickFixture(secondContent = '<textarea class="composer-input">draft</t
   const first = doc.querySelector<HTMLElement>("#first")!;
   const second = doc.querySelector<HTMLElement>("#second")!;
   let active = first;
-  focusComposerOnPaneClick(host, () => active);
+  focusComposerOnPaneClick(second, () => active === second);
   first.querySelector("textarea")!.focus();
   function click(target: Element, options: MouseEventInit = {}, intervening?: () => void) {
     target.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, ...options }));
+    second.focus();
     active = second;
     intervening?.();
     target.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true, ...options }));
@@ -88,7 +89,7 @@ test("clicking the already active pane does not pull focus back to its composer"
   click(second.querySelector("p")!);
   composer.blur();
   click(second.querySelector("p")!);
-  assert.equal(doc.activeElement, doc.body);
+  assert.equal(doc.activeElement, second);
 });
 
 for (const control of [
@@ -102,33 +103,34 @@ for (const control of [
   '<div role="button"><span>action</span></div>',
 ]) {
   test(`switching panes does not steal focus from ${control}`, () => {
-    const { doc, first, second, click } = clickFixture(
+    const { doc, second, click } = clickFixture(
       `<div class="control">${control}</div><textarea class="composer-input"></textarea>`,
     );
     const target = second.querySelector(".control")!.firstElementChild!;
-    click(target.querySelector("span, summary") ?? target);
-    assert.equal(doc.activeElement, first.querySelector("textarea"));
+    (target as HTMLElement).tabIndex = 0;
+    click(target.querySelector("span, summary") ?? target, {}, () => (target as HTMLElement).focus());
+    assert.equal(doc.activeElement, target);
   });
 }
 
 for (const options of [{ button: 2 }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }]) {
   test(`modified pointer click does not focus composer: ${JSON.stringify(options)}`, () => {
-    const { doc, first, second, click } = clickFixture();
+    const { doc, second, click } = clickFixture();
     click(second, options);
-    assert.equal(doc.activeElement, first.querySelector("textarea"));
+    assert.equal(doc.activeElement, second);
   });
 }
 
 for (const event of ["pointercancel", "dragstart"]) {
   test(`${event} prevents a subsequent click from focusing the composer`, () => {
-    const { doc, dom, first, second, click } = clickFixture();
+    const { doc, dom, second, click } = clickFixture();
     click(second, {}, () => second.dispatchEvent(new dom.window.Event(event, { bubbles: true })));
-    assert.equal(doc.activeElement, first.querySelector("textarea"));
+    assert.equal(doc.activeElement, second);
   });
 }
 
 test("selecting transcript text while switching panes leaves the selection intact", () => {
-  const { doc, first, second, click } = clickFixture();
+  const { doc, second, click } = clickFixture();
   click(second.querySelector("p")!, {}, () => {
     const range = doc.createRange();
     range.selectNodeContents(second.querySelector("p")!);
@@ -136,22 +138,23 @@ test("selecting transcript text while switching panes leaves the selection intac
     doc.getSelection()!.addRange(range);
   });
   assert.equal(doc.getSelection()!.toString(), "message");
-  assert.equal(doc.activeElement, first.querySelector("textarea"));
+  assert.equal(doc.activeElement, second);
 });
 
 for (const content of ["", '<textarea class="composer-input" disabled></textarea>']) {
   test(`panes without an enabled composer do not receive input focus: ${content}`, () => {
-    const { doc, first, second, click } = clickFixture(content);
+    const { doc, second, click } = clickFixture(content);
     click(second);
-    assert.equal(doc.activeElement, first.querySelector("textarea"));
+    assert.equal(doc.activeElement, second);
   });
 }
 
 test("a prevented click does not focus the composer", () => {
-  const { doc, first, second, click } = clickFixture();
-  second.addEventListener("click", (event) => event.preventDefault());
-  click(second);
-  assert.equal(doc.activeElement, first.querySelector("textarea"));
+  const { doc, second, click } = clickFixture();
+  const target = second.querySelector("p")!;
+  target.addEventListener("click", (event) => event.preventDefault());
+  click(target);
+  assert.equal(doc.activeElement, second);
 });
 
 test("keyboard-generated clicks do not reuse the last pointer activation", () => {
@@ -160,4 +163,13 @@ test("keyboard-generated clicks do not reuse the last pointer activation", () =>
   first.querySelector("textarea")!.focus();
   second.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   assert.equal(doc.activeElement, first.querySelector("textarea"));
+});
+
+test("switching panes preserves focus on an unfamiliar keyboard control", () => {
+  const { doc, second, click } = clickFixture(
+    '<div tabindex="0">custom control</div><textarea class="composer-input"></textarea>',
+  );
+  const control = second.querySelector<HTMLElement>("[tabindex]")!;
+  click(control, {}, () => control.focus());
+  assert.equal(doc.activeElement, control);
 });

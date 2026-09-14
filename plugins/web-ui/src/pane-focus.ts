@@ -50,35 +50,28 @@ export function preservingFocus(doc: Document, mutate: () => void): void {
   applySelection(view, active, selection);
 }
 
-export function focusComposerOnPaneClick(host: HTMLElement, activePane: () => HTMLElement | null): void {
-  let previousPane: HTMLElement | null = null;
-  let pointerClick = false;
-  host.addEventListener(
+export function focusComposerOnPaneClick(pane: HTMLElement, isActive: () => boolean): void {
+  let switching = false;
+  pane.tabIndex = -1;
+  pane.addEventListener(
     "pointerdown",
     (event) => {
-      previousPane = activePane();
-      pointerClick = event.button === 0 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+      switching =
+        !isActive() && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
     },
     true,
   );
   const cancel = (): void => {
-    pointerClick = false;
+    switching = false;
   };
-  host.addEventListener("pointercancel", cancel);
-  host.addEventListener("dragstart", cancel);
-  host.addEventListener("click", (event) => {
-    const switched = pointerClick && activePane() !== previousPane;
+  pane.addEventListener("pointercancel", cancel);
+  pane.addEventListener("dragstart", cancel);
+  pane.addEventListener("click", (event) => {
+    const focus = switching;
     cancel();
-    const target = event.target;
-    const doc = host.ownerDocument;
-    if (!switched || event.defaultPrevented || !(target instanceof doc.defaultView!.Element)) return;
-    if (
-      target.closest(
-        'a, button, input, textarea, select, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="textbox"], [role="combobox"], [role="checkbox"], [role="slider"]',
-      ) ||
-      doc.getSelection()?.isCollapsed === false
-    )
+    const doc = pane.ownerDocument;
+    if (!focus || event.defaultPrevented || doc.activeElement !== pane || doc.getSelection()?.isCollapsed === false)
       return;
-    activePane()?.querySelector<HTMLTextAreaElement>(".composer-input:not(:disabled)")?.focus({ preventScroll: true });
+    pane.querySelector<HTMLTextAreaElement>(".composer-input:not(:disabled)")?.focus({ preventScroll: true });
   });
 }
