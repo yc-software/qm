@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -443,6 +443,7 @@ interface TurnSession {
   composedPromptTokens: number;
   cwd: string;
   agentDir: string;
+  ephemeralCwd?: string;
 }
 
 interface PerCallStat {
@@ -649,6 +650,7 @@ interface IsolatedResources {
   settingsManager: SettingsManager;
   cwd: string;
   agentDir: string;
+  ephemeralCwd?: string;
 }
 
 const MAX_CAPTURED_PAYLOAD_CHARS = 2_000_000;
@@ -1094,8 +1096,16 @@ export function stableCwd(prefix: string): string {
 }
 
 async function createIsolatedResources(prefix: string, systemPrompt: string): Promise<IsolatedResources> {
-  const cwd = stableCwd(prefix);
-  mkdirSync(cwd, { recursive: true });
+  let cwd = stableCwd(prefix);
+  let ephemeralCwd: string | undefined;
+  try {
+    mkdirSync(cwd, { recursive: true });
+    if (!statSync(cwd).isDirectory()) throw new Error(`${cwd} is not a directory`);
+  } catch (e) {
+    swallow("pi: shared cwd unavailable; using a per-turn cwd (prompt cache prefix changes)", e);
+    cwd = mkdtempSync(join(tmpdir(), `${prefix}-cwd-`));
+    ephemeralCwd = cwd;
+  }
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
   const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
   const resourceLoader = new DefaultResourceLoader({
@@ -1111,14 +1121,17 @@ async function createIsolatedResources(prefix: string, systemPrompt: string): Pr
     noContextFiles: true,
   });
   await resourceLoader.reload();
-  return { resourceLoader, settingsManager, cwd, agentDir };
+  return { resourceLoader, settingsManager, cwd, agentDir, ...(ephemeralCwd ? { ephemeralCwd } : {}) };
 }
 
-function removeIsolatedDirs(dirs: { agentDir: string }): void {
-  try {
-    rmSync(dirs.agentDir, { recursive: true, force: true });
-  } catch (e) {
-    swallow("pi: temp dir cleanup", e);
+function removeIsolatedDirs(dirs: { agentDir: string; ephemeralCwd?: string }): void {
+  for (const dir of [dirs.agentDir, dirs.ephemeralCwd]) {
+    if (!dir) continue;
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      swallow("pi: temp dir cleanup", e);
+    }
   }
 }
 
@@ -1247,7 +1260,10 @@ export async function oneShot(
   opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
-  const { resourceLoader, settingsManager, cwd, agentDir } = await createIsolatedResources(prefix, systemPrompt);
+  const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
+    prefix,
+    systemPrompt,
+  );
   try {
     const { session } = await createAgentSession({
       model,
@@ -1275,7 +1291,7 @@ export async function oneShot(
     }
     return piLastAssistantTextOrThrow(session);
   } finally {
-    removeIsolatedDirs({ agentDir });
+    removeIsolatedDirs({ agentDir, ephemeralCwd });
   }
 }
 
@@ -1556,7 +1572,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       systemCacheSplit ? "long" : undefined,
     );
     const ref: ToolContextRef = { current: null };
-    const { resourceLoader, settingsManager, cwd, agentDir } = await createIsolatedResources(
+    const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       composedPrompt,
     );
@@ -1592,7 +1608,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         agentDir,
       }));
     } catch (err) {
-      removeIsolatedDirs({ agentDir });
+      removeIsolatedDirs({ agentDir, ephemeralCwd });
       throw err;
     }
 
@@ -1619,7 +1635,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             scopeLabel: turnScope!,
           });
         } catch (err) {
-          removeIsolatedDirs({ agentDir });
+          removeIsolatedDirs({ agentDir, ephemeralCwd });
           throw err;
         }
       }
@@ -1700,6 +1716,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       composedPromptTokens: countTokens(composedPrompt),
       cwd,
       agentDir,
+      ...(ephemeralCwd ? { ephemeralCwd } : {}),
     };
     return { entry, compileMs };
   }
@@ -1838,6 +1855,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               entryCreatedAt: steer!.entryCreatedAt,
             };
           };
+          const tapedTrigger = (message: unknown): unknown => {
+            const taped = withoutVolatileContext(message, modelPrompt, durablePrompt);
+            if (taped === message && durablePrompt.trim() && modelPrompt !== durablePrompt) {
+              console.error(`[pi] taped trigger kept its volatile context session=${turn.session.id}`);
+            }
+            return taped;
+          };
           const tapeMessage = async (message: unknown): Promise<void> => {
             if (!turn.tape || tapeError) return;
             const role = (message as { role?: string }).role;
@@ -1852,7 +1876,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               kind: "message",
               harness: "pi",
               payload: stripImageBytes(
-                isTrigger ? withoutVolatileContext(message, modelPrompt, durablePrompt) : message,
+                isTrigger ? tapedTrigger(message) : message,
                 isTrigger ? turn.images : undefined,
               ),
               scopeLabel: resultScope ?? turn.scopeLabel,
