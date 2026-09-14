@@ -29,17 +29,16 @@ export class CoreClient {
     return new CoreClient(this.baseUrl, this.signingSecret, this.orgScope, signal);
   }
 
-  private async request(
-    method: string,
-    pathWithQuery: string,
-    body?: unknown,
-    extra: Record<string, string> = {},
-  ): Promise<any> {
+  private async request(method: string, pathWithQuery: string, body?: unknown): Promise<any> {
+    const orgId = this.orgScope.split(":")[1] ?? "acme";
+    const portalSecret = process.env.PORTAL_IDENTITY_SECRET || this.signingSecret;
+    const identity = await mintPortalIdentity({ p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 }, portalSecret);
     const raw = body === undefined ? "" : JSON.stringify(body);
     const salted = `${pathWithQuery}${pathWithQuery.includes("?") ? "&" : "?"}_nonce=${crypto.randomUUID()}`;
     const headers = signedRequestHeaders(this.signingSecret, method, salted, raw, {
       "content-type": "application/json",
-      ...extra,
+      "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}`,
+      [PORTAL_IDENTITY_HEADER]: identity,
     });
     const deadline = AbortSignal.timeout(120_000);
     const signal = this.requestSignal ? AbortSignal.any([deadline, this.requestSignal]) : deadline;
@@ -49,16 +48,6 @@ export class CoreClient {
     return data;
   }
 
-  private async admin(method: string, pathWithQuery: string, body?: unknown): Promise<any> {
-    const orgId = this.orgScope.split(":")[1] ?? "acme";
-    const portalSecret = process.env.PORTAL_IDENTITY_SECRET || this.signingSecret;
-    const identity = await mintPortalIdentity({ p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 }, portalSecret);
-    return this.request(method, pathWithQuery, body, {
-      "x-admin-actor": `${ADMIN_PRINCIPAL}@${orgId}`,
-      [PORTAL_IDENTITY_HEADER]: identity,
-    });
-  }
-
   async waitForChannelMembership(channelId: string, slackId: string, timeoutMs = 60_000): Promise<void> {
     const deadline = AbortSignal.timeout(timeoutMs);
     const signal = this.requestSignal ? AbortSignal.any([deadline, this.requestSignal]) : deadline;
@@ -66,7 +55,7 @@ export class CoreClient {
     try {
       while (true) {
         signal.throwIfAborted();
-        const { matches } = await core.admin("GET", `/v1/directory/resolve?q=${encodeURIComponent(slackId)}`);
+        const { matches } = await core.request("GET", `/v1/directory/resolve?q=${encodeURIComponent(slackId)}`);
         if (!Array.isArray(matches)) throw new Error("invalid directory resolution response");
         if (matches.length) {
           if (
@@ -75,7 +64,7 @@ export class CoreClient {
             (matches[0].slackId !== slackId && matches[0].principalId !== slackId)
           )
             throw new Error(`directory did not resolve the exact QA Slack identity ${slackId}`);
-          const { member } = await core.admin(
+          const { member } = await core.request(
             "GET",
             `/v1/directory/channels/${encodeURIComponent(channelId)}/members/${encodeURIComponent(matches[0].principalId)}`,
           );
@@ -97,23 +86,26 @@ export class CoreClient {
     providers: Array<{ name: string; actions: string[] }>;
     sandboxes: Array<{ id: string; name: string; backend: string; state: string }>;
   }> {
-    return this.admin("GET", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`);
+    return this.request("GET", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`);
   }
 
   manageSandbox(scopeId: string, body: Record<string, unknown>): Promise<{ id: string; backend: string }> {
-    return this.admin("POST", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`, body);
+    return this.request("POST", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`, body);
   }
 
   listSessions(): Promise<{ sessions: SessionSummary[] }> {
-    return this.admin("GET", `/v1/admin/sessions?scope=${encodeURIComponent(this.orgScope)}&limit=200`);
+    return this.request("GET", `/v1/admin/sessions?scope=${encodeURIComponent(this.orgScope)}&limit=200`);
   }
 
   getSession(id: string): Promise<{ session: { threadRef?: string; scopeId?: string }; entries: unknown[] }> {
-    return this.admin("GET", `/v1/admin/sessions/${encodeURIComponent(id)}?scope=${encodeURIComponent(this.orgScope)}`);
+    return this.request(
+      "GET",
+      `/v1/admin/sessions/${encodeURIComponent(id)}?scope=${encodeURIComponent(this.orgScope)}`,
+    );
   }
 
   getSessionLlm(id: string): Promise<{ session: unknown; requests: unknown[] }> {
-    return this.admin(
+    return this.request(
       "GET",
       `/v1/admin/sessions/${encodeURIComponent(id)}/llm?scope=${encodeURIComponent(this.orgScope)}`,
     );
@@ -129,17 +121,17 @@ export class CoreClient {
       createdBy?: string;
     }>;
   }> {
-    return this.admin("GET", `/v1/admin/crons?scope=${encodeURIComponent(this.orgScope)}`);
+    return this.request("GET", `/v1/admin/crons?scope=${encodeURIComponent(this.orgScope)}`);
   }
 
   listErrors(): Promise<{
     errors: Array<{ ts: number; category: string; code: string; message: string; sessionId?: string }>;
   }> {
-    return this.admin("GET", `/v1/admin/errors?scope=${encodeURIComponent(this.orgScope)}`);
+    return this.request("GET", `/v1/admin/errors?scope=${encodeURIComponent(this.orgScope)}`);
   }
 
   resolveDirectory(q: string): Promise<{ members: Array<{ principalId: string; displayName: string }> }> {
-    return this.admin("GET", `/v1/admin/directory?q=${encodeURIComponent(q)}`);
+    return this.request("GET", `/v1/admin/directory?q=${encodeURIComponent(q)}`);
   }
 
   async deleteCron(cron: { id: string; ownerScopeId: string; owner?: string; createdBy?: string }): Promise<void> {
