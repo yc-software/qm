@@ -323,7 +323,10 @@ test("governance keeps effective-state summaries synchronized after focused save
 
 test("stale governance reads cannot overwrite a newer scope", () => {
   assert.match(html, /const requestId = \+\+governanceReq/);
-  assert.match(html, /if \(requestId !== governanceReq \|\| requestedScope !== scope\) return;/);
+  assert.match(
+    html,
+    /if \(requestId !== governanceReq \|\| requestedScope !== scope \|\| requestedView !== view\) return;/,
+  );
   assert.match(html, /encodeURIComponent\(requestedScope\) \+ "\/" \+ key/);
 });
 

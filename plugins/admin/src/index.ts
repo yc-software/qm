@@ -121,6 +121,8 @@ async function forward(
       },
       ...(body ? { body } : {}),
     });
+    const timing = r.headers.get("server-timing");
+    if (timing) res.setHeader("server-timing", timing);
     if (r.body && gzipAccepted(req)) {
       res.writeHead(r.status, {
         "content-type": "application/json",
@@ -413,7 +415,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         );
       }
       const scopeId = decodeURIComponent(rest);
-      return forward(req, res, principal, "GET", `/v1/admin/scopes/${encodeURIComponent(scopeId)}`);
+      return forward(req, res, principal, "GET", `/v1/admin/scopes/${encodeURIComponent(scopeId)}${url.search}`);
     }
     if (method === "POST" && rest.endsWith("/auto-flagger/test")) {
       const scope = decodeURIComponent(rest.slice(0, -"/auto-flagger/test".length));

@@ -15,6 +15,7 @@ import {
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
+  cachedModelCatalog,
   selectableCatalogForHarness,
   selectableModelCatalog,
   type ModelCatalogEntry,
@@ -238,26 +239,59 @@ async function scopeEnvironmentMetadata(deps: ApiCtx["deps"], targetScope: strin
   return metadata;
 }
 
-export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
-  const { res, deps, params } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
-  const targetScope = params.scope!;
-  if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
-  const actor = await authorizeAdmin(ctx, targetScope);
-  if (!actor) return;
-  await deps.refreshModels?.();
-  await deps.config.refreshScope(targetScope);
-  audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
-  const environmentMetadata = await scopeEnvironmentMetadata(deps, targetScope);
-  const serviceCredentials = await Promise.all(
+const SETTINGS_RESOURCES = {
+  governance: [
+    "baseModel",
+    "runtime",
+    "securityPosture",
+    "sharingPosture",
+    "autoFlagger",
+    "approvalGrantModes",
+    "commandPolicy",
+    "ambientPolicy",
+    "egress",
+    "externalSlackParticipants",
+    "internalMemberOverrides",
+    "orgAmbient",
+  ],
+  customize: [
+    "soul",
+    "branding",
+    "peopleDirectoryUrl",
+    "ackEmoji",
+    "turnWallClockSec",
+    "featureFlags",
+    "orgAmbient",
+    "channelHeaderPinDefault",
+  ],
+  models: [
+    "baseModel",
+    "runtime",
+    "approvedHarnesses",
+    "webuiModels",
+    "interactiveFastMode",
+    "individualModelAuth",
+    "browseModel",
+    "browseMaxSteps",
+  ],
+  credentials: [],
+  connectors: ["connectors"],
+  onboarding: ["baseModel", "runtime"],
+} satisfies Record<string, string[]>;
+
+type SettingsView = keyof typeof SETTINGS_RESOURCES;
+
+async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string) {
+  return Promise.all(
     (deps.serviceCreds ? await deps.serviceCreds.listServiceCredentials(targetScope) : []).map(async (c) => {
-      const usage = (await deps.credentialUsage?.list({ slug: c.slug, limit: 5000 })) ?? [];
+      const [usage, grants] = await Promise.all([
+        deps.credentialUsage?.list({ slug: c.slug, limit: 5000 }) ?? [],
+        deps.acl?.grantsFor(targetScope, encodeRef(serviceCredRef(c.slug))) ?? [],
+      ]);
       const successful = usage.filter((u) => u.status === "ok");
       return {
         ...c,
-        grantees: deps.acl
-          ? (await deps.acl.grantsFor(targetScope, encodeRef(serviceCredRef(c.slug)))).map((g) => g.granteeScopeId)
-          : [],
+        grantees: grants.map((g) => g.granteeScopeId),
         usageCount: successful.length,
         usageTruncated: usage.length === 5000,
         usageSince: successful.length ? Math.min(...successful.map((u) => u.ts)) : null,
@@ -266,11 +300,9 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       };
     }),
   );
-  const values: Record<string, unknown> = {};
-  for (const r of ADMIN_RESOURCES) {
-    if (r.readKey && r.get) values[r.readKey] = await r.get(deps, targetScope);
-  }
-  values.sharingPostureOverride = await deps.config.getSharingPostureOwnDurable(targetScope);
+}
+
+async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
   const scopeProfile = (await deps.sandbox?.profileFor?.(targetScope)) ?? deps.sandbox?.profile;
   const declaredEgress =
     scopeProfile?.egressEnforcement ?? deps.egressDeclaredEnforcement ?? deps.egressEnforcement ?? "none";
@@ -279,8 +311,8 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   let egressReason = "ready";
   if (declaredEgress !== "domain") egressReason = "backend_unsupported";
   else if (effectiveEgressFidelity !== "domain") egressReason = "control_plane_unconfigured";
-  const orgEgress = deps.config.getEgress(orgScope(deps));
-  const targetEgress = deps.config.getEgress(targetScope);
+  const orgEgress = deps.config!.getEgress(orgScope(deps));
+  const targetEgress = deps.config!.getEgress(targetScope);
   const effectiveEgressPolicy = {
     deniedHosts: [...new Set([...(orgEgress?.deniedHosts ?? []), ...(targetEgress?.deniedHosts ?? [])])],
     allowedHosts: [] as string[],
@@ -288,40 +320,58 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   effectiveEgressPolicy.allowedHosts = [
     ...new Set([...(orgEgress?.allowedHosts ?? []), ...(targetEgress?.allowedHosts ?? [])]),
   ].filter((host) => !isHostDenied(host, effectiveEgressPolicy.deniedHosts));
+  return {
+    egressEnforcement: {
+      backend: scopeProfile?.backend ?? deps.sandboxBackend ?? "unknown",
+      declaredFidelity: declaredEgress,
+      effectiveFidelity: effectiveEgressFidelity,
+      fidelity: effectiveEgressFidelity,
+      active: effectiveEgressFidelity === "domain",
+      reason: egressReason,
+    },
+    egressEffective: effectiveEgressPolicy,
+  };
+}
+
+async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, unknown>, nonblocking: boolean) {
   const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
   const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
+  const cached =
+    deps.modelCredentials && managedKeys.openrouter && nonblocking
+      ? cachedModelCatalog(deps.modelCredentialFetch)
+      : undefined;
   const catalog =
-    deps.modelCredentials && managedKeys.openrouter
+    cached?.models ??
+    (deps.modelCredentials && managedKeys.openrouter
       ? await selectableModelCatalog(deps.modelCredentialFetch)
-      : builtInModelCatalog();
+      : builtInModelCatalog());
   const runtime = values.runtime as { harnessId?: unknown; modelId?: unknown } | null | undefined;
-  const approvedHarnesses = (await deps.config.getApprovedHarnessesDurable()) ?? [deps.harnessId ?? "pi"];
-  const resolvedCurrent = runtime && typeof runtime.modelId === "string" ? resolveModel(runtime.modelId) : null;
-  const currentProvider = resolvedCurrent?.provider;
-  const currentModel =
-    runtime &&
-    typeof runtime.modelId === "string" &&
-    (currentProvider === "anthropic" || currentProvider === "openai" || currentProvider === "openrouter")
-      ? ({ id: runtime.modelId, name: resolvedCurrent!.name, provider: currentProvider } satisfies ModelCatalogEntry)
-      : null;
+  const approvedHarnesses = (await deps.config!.getApprovedHarnessesDurable()) ?? [deps.harnessId ?? "pi"];
+  let currentId = defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault);
+  if (typeof values.baseModel === "string") currentId = values.baseModel;
+  if (typeof runtime?.modelId === "string") currentId = runtime.modelId;
+  const currentHarness = typeof runtime?.harnessId === "string" ? runtime.harnessId : (deps.harnessId ?? "pi");
+  const resolvedCurrent = resolveModel(currentId);
+  const preserveCurrent =
+    typeof runtime?.modelId === "string" || (nonblocking && !resolvedCurrent && currentId.includes("/"));
+  const currentModel: ModelCatalogEntry = {
+    id: currentId,
+    name: resolvedCurrent?.name ?? currentId + " (configured)",
+    provider: resolvedCurrent?.provider ?? (currentId.includes("/") ? "openrouter" : ""),
+  };
   const modelsFor = (harnessId: string) => {
     const models = selectableCatalogForHarness(catalog, harnessId);
-    if (currentModel && runtime?.harnessId === harnessId && !models.some((model) => model.id === currentModel.id))
+    if (preserveCurrent && currentHarness === harnessId && !models.some((model) => model.id === currentModel.id))
       models.push(currentModel);
     return models.filter(
       (model) =>
         modelServiceable(model.id, providersFor(harnessId)) ||
-        (runtime?.harnessId === harnessId && currentModel?.id === model.id),
+        (preserveCurrent && currentHarness === harnessId && currentModel.id === model.id),
     );
   };
-  return sendJson(res, 200, {
-    scopeId: targetScope,
-    ...environmentMetadata,
-    ...values,
-    soulVersion: deps.config.soulVersion(targetScope),
-    soulHistory: deps.config.soulHistory(targetScope),
-    directoryMembers: parseScopeId(targetScope).kind === "org" ? ((await deps.directory?.list()) ?? []) : [],
+  return {
+    ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
     baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
     baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
     harnessDefault: deps.harnessId ?? "pi",
@@ -338,16 +388,95 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     browseModelOptions: selectableBaseModels().filter((m) =>
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),
-    egressEnforcement: {
-      backend: scopeProfile?.backend ?? deps.sandboxBackend ?? "unknown",
-      declaredFidelity: declaredEgress,
-      effectiveFidelity: effectiveEgressFidelity,
-      fidelity: effectiveEgressFidelity,
-      active: effectiveEgressFidelity === "domain",
-      reason: egressReason,
-    },
-    egressEffective: effectiveEgressPolicy,
+  };
+}
+
+export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
+  const { res, deps, params, url } = ctx;
+  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
+  const targetScope = params.scope!;
+  if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
+  const requestedView = url.searchParams.get("view");
+  if (requestedView !== null && !Object.hasOwn(SETTINGS_RESOURCES, requestedView))
+    return sendJson(res, 400, { error: "bad_request", message: "Unknown settings view" });
+  const started = performance.now();
+  const timings: Record<string, number> = {};
+  const read = async <T>(name: string, load: () => T | Promise<T>): Promise<T> => {
+    const start = performance.now();
+    try {
+      return await load();
+    } finally {
+      timings[name] = performance.now() - start;
+    }
+  };
+  const actor = await read("authorize", () => authorizeAdmin(ctx, targetScope));
+  if (!actor) return;
+  const view = requestedView as SettingsView | null;
+  const includes = (...views: SettingsView[]) => view === null || views.includes(view);
+  const needsModels = includes("models", "governance", "onboarding");
+  const needsConfig = view !== "credentials" && view !== "connectors";
+  await Promise.all([
+    needsConfig ? read("config", () => deps.config!.refreshScope(targetScope)) : undefined,
+    needsModels ? read("modelRegistry", () => deps.refreshModels?.()) : undefined,
+  ]);
+  audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
+  const selectedKeys: readonly string[] | undefined = view === null ? undefined : SETTINGS_RESOURCES[view];
+  const resources = ADMIN_RESOURCES.filter(
+    (r) => r.readKey && r.get && (!selectedKeys || selectedKeys.includes(r.readKey)),
+  );
+  const [
+    entries,
+    environmentMetadata,
     serviceCredentials,
+    directoryMembers,
+    directoryChannels,
+    sharingPostureOverride,
+    egress,
+  ] = await Promise.all([
+    Promise.all(
+      resources.map(async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope))] as const),
+    ),
+    view === "connectors" ? {} : read("environment", () => scopeEnvironmentMetadata(deps, targetScope)),
+    includes("credentials") ? read("credentials", () => scopeServiceCredentials(deps, targetScope)) : undefined,
+    includes("credentials") && parseScopeId(targetScope).kind === "org"
+      ? read("people", () => deps.directory?.list())
+      : undefined,
+    includes("credentials") && parseScopeId(targetScope).kind === "org"
+      ? read("channels", () => deps.directory?.listChannels?.())
+      : undefined,
+    includes("governance") ? deps.config.getSharingPostureOwnDurable(targetScope) : undefined,
+    includes("governance") ? scopeEgress(deps, targetScope) : undefined,
+  ]);
+  const values = Object.fromEntries(entries);
+  const modelOptions = needsModels
+    ? await read("modelOptions", () =>
+        scopeModelOptions(deps, values, view !== null && url.searchParams.get("catalog") !== "refresh"),
+      )
+    : undefined;
+  res.setHeader(
+    "server-timing",
+    Object.entries(timings)
+      .map(([name, duration]) => `${name};dur=${duration.toFixed(1)}`)
+      .join(", "),
+  );
+  const elapsed = performance.now() - started;
+  if (view && url.searchParams.get("catalog") !== "refresh" && elapsed > 500)
+    console.warn(
+      "[admin-settings] load budget exceeded",
+      JSON.stringify({ view, durationMs: Math.round(elapsed), timings }),
+    );
+  return sendJson(res, 200, {
+    scopeId: targetScope,
+    ...environmentMetadata,
+    ...values,
+    ...(includes("customize")
+      ? { soulVersion: deps.config.soulVersion(targetScope), soulHistory: deps.config.soulHistory(targetScope) }
+      : {}),
+    ...(includes("credentials")
+      ? { serviceCredentials, directoryMembers: directoryMembers ?? [], directoryChannels: directoryChannels ?? [] }
+      : {}),
+    ...(includes("governance") ? { sharingPostureOverride, ...egress } : {}),
+    ...modelOptions,
   });
 }
 

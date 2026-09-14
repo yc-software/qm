@@ -208,3 +208,17 @@ export function selectableCatalogForHarness(
       modelSupportedByHarness(model.id, harness),
   );
 }
+
+export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
+  models: ModelCatalogEntry[];
+  refreshing: boolean;
+} {
+  void selectableModelCatalog(fetcher);
+  const models = builtInModelCatalog();
+  const known = new Set(models.map((model) => model.id));
+  const entry = cache.get(fetcher);
+  return {
+    models: [...models, ...(entry?.dynamic ?? []).filter((model) => !known.has(model.id))],
+    refreshing: !!entry?.inFlight,
+  };
+}

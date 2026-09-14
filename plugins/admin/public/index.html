@@ -7037,7 +7037,6 @@
         showView("app-view", "Signed in as " + me.data.principal);
 
         if (!new URLSearchParams(location.search).get("scope")) scope = "org:" + orgId;
-        loadScopeDirectory();
         route();
       }
       const signOut = async () => {
@@ -7218,6 +7217,7 @@
         document.body.dataset.subview = isGovLike(view) ? view : view === "connectors" ? "connectors" : "";
         document.body.classList.toggle("context-fullpage", view === "history" && !!st.session && st.turn != null);
         document.body.classList.toggle("design-view", view === "design");
+        if (!isGovLike(view) && view !== "connectors" && view !== "onboarding" && !scopeDir) void loadScopeDirectory();
         defaultShell();
         renderTabs();
         $("view-governance").classList.toggle("hidden", !isGovLike(view));
@@ -7720,7 +7720,7 @@
       const FOCUS_REFRESH_EXEMPT = new Set(["governance", "connectors", "user"]);
       window.addEventListener("focus", () => {
         if ($("app-view").classList.contains("hidden")) return;
-        if (FOCUS_REFRESH_EXEMPT.has(view)) return;
+        if (isGovLike(view) || FOCUS_REFRESH_EXEMPT.has(view)) return;
         if (Date.now() - (viewLoadedAt[view] || 0) < FOCUS_STALE_MS) return;
         if (view === "memory" && !(orgWideView() && urlToState().mem !== "edit")) return;
         if (view === "history" && urlToState().session) return;
@@ -7737,6 +7737,7 @@
         else renderData();
       });
 
+      let webuiModelIds = [];
       let loadedGovernanceScope = null;
       let loadedCommandPolicyPresent = false;
       let governanceOverviewData = {};
@@ -7744,6 +7745,7 @@
       let soulSaved = "";
       let soulHistory = [];
       let serviceCredDirectory = [];
+      let serviceCredChannels = [];
       function updateSoulWorkbench() {
         const draft = $("soul").value;
         $("soul-preview").textContent = soulSaved || "No saved instructions";
@@ -7946,10 +7948,14 @@
       let governanceReq = 0;
       async function loadScope() {
         const requestedScope = scope;
+        const requestedView = view;
         const requestId = ++governanceReq;
         const scopeChanged = scope !== loadedGovernanceScope;
-        const r = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
-        if (requestId !== governanceReq || requestedScope !== scope) return;
+        const r = await api(
+          "GET",
+          "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(requestedView),
+        );
+        if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
         if (!r.ok) {
           setStatus(
             "st-policy",
@@ -7958,6 +7964,7 @@
           );
           return;
         }
+        const refreshModelChoices = [];
         renderEnvironmentNotice(r.data);
         renderGovernanceOverview(r.data);
         syncGovernanceSectionNav();
@@ -8006,6 +8013,7 @@
             model.value = options.some((entry) => entry.id === prior) ? prior : (options[0] || {}).id || "";
           };
           harness.oninput = syncAutoFlaggerModels;
+          refreshModelChoices.push(syncAutoFlaggerModels);
           syncAutoFlaggerModels();
           $("auto-flagger-rubric").value = current.rubric;
         }
@@ -8134,17 +8142,19 @@
             syncFastMode();
           };
           harness.oninput = syncModels;
+          refreshModelChoices.push(syncModels);
           syncModels();
         }
         const showWebuiModels = scope.startsWith("org:") && opts.length > 0;
         $("card-webui-models").classList.toggle("hidden", !showWebuiModels);
         if (showWebuiModels) {
-          const catalogModels = Object.values(modelsByHarness)
-            .flat()
-            .concat(opts)
-            .filter((m, i, all) => m && m.id && all.findIndex((x) => x && x.id === m.id) === i);
+          const catalogModels = () =>
+            Object.values(modelsByHarness)
+              .flat()
+              .concat(opts)
+              .filter((m, i, all) => m && m.id && all.findIndex((x) => x && x.id === m.id) === i);
           const modelLabel = (id) => {
-            const m = catalogModels.find((x) => x.id === id);
+            const m = catalogModels().find((x) => x.id === id);
             return m && m.name && m.name !== id ? m.name + " (" + id + ")" : id;
           };
           const configured = Array.isArray(r.data.webuiModels) ? r.data.webuiModels.filter(Boolean) : [];
@@ -8181,7 +8191,7 @@
             placeholder.value = "";
             placeholder.textContent = "Choose a model…";
             addSelect.appendChild(placeholder);
-            catalogModels
+            catalogModels()
               .filter((m) => !webuiModelIds.includes(m.id))
               .forEach((m) => {
                 const o = document.createElement("option");
@@ -8202,6 +8212,7 @@
           };
           addSelect.onchange = () => (addButton.disabled = !addSelect.value);
           addButton.onclick = addModel;
+          refreshModelChoices.push(renderChips);
           renderChips();
         }
         function autoSaveAckEmoji() {
@@ -8407,6 +8418,7 @@
         $("card-turn-wall-clock").classList.toggle("hidden", !showTurnWallClock);
         if (showTurnWallClock) $("turn-wall-clock").value = r.data.turnWallClockSec ?? "";
         serviceCredDirectory = r.data.directoryMembers || [];
+        serviceCredChannels = r.data.directoryChannels || [];
         const options = $("sc-people-options");
         options.textContent = "";
         serviceCredDirectory.forEach((member) => {
@@ -8425,10 +8437,41 @@
         loadedGovernanceScope = scope;
         initCustomDropdowns($("view-governance"));
         captureGovernanceSnapshots();
+        if (r.data.modelCatalogRefreshing) {
+          void api(
+            "GET",
+            "/api/scopes/" +
+              encodeURIComponent(requestedScope) +
+              "?view=" +
+              encodeURIComponent(requestedView) +
+              "&catalog=refresh",
+          )
+            .then((fresh) => {
+              if (!fresh.ok || requestId !== governanceReq || requestedScope !== scope || requestedView !== view)
+                return;
+              const append = (target, incoming) => {
+                for (const model of incoming || []) {
+                  const existing = target.findIndex((candidate) => candidate.id === model.id);
+                  if (existing < 0) target.push(model);
+                  else target[existing] = model;
+                }
+              };
+              append(opts, fresh.data.baseModelOptions);
+              for (const [harness, models] of Object.entries(fresh.data.modelsByHarness || {})) {
+                append((modelsByHarness[harness] ||= []), models);
+              }
+              refreshModelChoices.forEach((refresh) => refresh());
+              initCustomDropdowns($("view-governance"));
+            })
+            .catch(() => {});
+        }
       }
       async function refreshSoulConflict() {
         const draft = $("soul").value;
-        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
+        const fresh = await api(
+          "GET",
+          "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view),
+        );
         if (!fresh.ok) return false;
         soulVersion = fresh.data.soulVersion || 0;
         soulSaved = fresh.data.soul || "";
@@ -8442,9 +8485,13 @@
         return true;
       }
       async function refreshServiceCredentialConflict() {
-        const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
+        const fresh = await api(
+          "GET",
+          "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view),
+        );
         if (!fresh.ok) return false;
         serviceCredDirectory = fresh.data.directoryMembers || [];
+        serviceCredChannels = fresh.data.directoryChannels || [];
         const options = $("sc-people-options");
         options.textContent = "";
         serviceCredDirectory.forEach((member) => {
@@ -8741,7 +8788,14 @@
           more.textContent = "…" + (candidates.length - 30) + " more — keep typing";
           list.appendChild(more);
         }
-        const channels = (scopeDir || []).filter((s) => {
+        const channelScopes = new Map((scopeDir || []).map((s) => [s.scopeId, s]));
+        serviceCredChannels.forEach((channel) =>
+          channelScopes.set("channel:" + channel.channelId, {
+            scopeId: "channel:" + channel.channelId,
+            label: channel.name,
+          }),
+        );
+        const channels = [...channelScopes.values()].filter((s) => {
           if (!s.scopeId.startsWith("channel:") || selSet.has(s.scopeId)) return false;
           if (!q) return true;
           return s.scopeId.toLowerCase().includes(q) || (s.label || "").toLowerCase().includes(q);
@@ -8752,7 +8806,9 @@
           h.textContent = "Channels";
           list.appendChild(h);
           channels.slice(0, 15).forEach((s) => {
-            list.appendChild(item(s.scopeId, s.label ? "#" + s.label + " (" + s.scopeId + ")" : s.scopeId, false));
+            list.appendChild(
+              item(s.scopeId, s.label ? "#" + s.label.replace(/^#/, "") + " (" + s.scopeId + ")" : s.scopeId, false),
+            );
           });
           if (channels.length > 15) {
             const more = document.createElement("div");
@@ -9084,6 +9140,7 @@
       };
 
       let onboardingModels = {};
+      let onboardingRequest = 0;
       let onboardingModelStatuses = [];
       function onboardingBadge(id, text, ready, optional = false) {
         const el = $(id);
@@ -9139,13 +9196,16 @@
           : "Write-only API key";
       }
       async function loadOnboarding() {
-        await loadModelRegistry();
+        const requestId = ++onboardingRequest;
+        const requestedView = view;
+        void loadModelRegistry().catch(() => {});
         const [models, slack, catalog, config] = await Promise.all([
-          api("GET", "/api/model-providers"),
+          api("GET", "/api/model-providers?catalog=cached"),
           api("GET", "/api/slack-installation"),
           api("GET", "/api/connector-catalog"),
-          api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
+          api("GET", "/api/scopes/" + encodeURIComponent(orgScope()) + "?view=onboarding"),
         ]);
+        if (requestId !== onboardingRequest || requestedView !== view) return;
         if (!models.ok || !slack.ok || !catalog.ok || !config.ok) {
           setStatus("st-onboarding-model", "Setup status could not be loaded. Try again.", "err", true);
           renderOnboardingProviderOptions();
@@ -9153,8 +9213,14 @@
         }
         onboardingModelStatuses = models.data.providers || [];
         onboardingModels = {};
-        (models.data.models || []).forEach((model) => {
-          (onboardingModels[model.provider] ||= []).push(model);
+        [
+          ...(models.data.models || []),
+          ...(config.data.baseModelOptions || []),
+          ...Object.values(config.data.modelsByHarness || {}).flat(),
+        ].forEach((model) => {
+          if (!model.provider) return;
+          const options = (onboardingModels[model.provider] ||= []);
+          if (!options.some((option) => option.id === model.id)) options.push(model);
         });
         const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
         const baseProvider = onboardingProviderForModel(baseModel);
@@ -9198,6 +9264,19 @@
           ? configured.map((item) => connectorName(item.provider)).join(", ") + " available in the web UI."
           : "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.";
         viewLoadedAt.onboarding = Date.now();
+        if (models.data.modelCatalogRefreshing) {
+          void api("GET", "/api/model-providers")
+            .then((fresh) => {
+              if (!fresh.ok || requestId !== onboardingRequest || requestedView !== view) return;
+              const selected = $("onboarding-model-id").value;
+              for (const model of fresh.data.models || []) {
+                const options = (onboardingModels[model.provider] ||= []);
+                if (!options.some((option) => option.id === model.id)) options.push(model);
+              }
+              renderOnboardingModelOptions(selected);
+            })
+            .catch(() => {});
+        }
       }
       $("onboarding-model-provider").onchange = () => renderOnboardingModelOptions();
       $("onboarding-model-save").onclick = async () => {
@@ -9625,21 +9704,10 @@
         });
       }
       async function loadPersonalKeychainSummary() {
-        const res = await api("GET", "/api/keychain");
-        if (!res.ok || res.data?.enabled === false) {
-          $("keychain-user-count").textContent = "—";
-          $("keychain-standing-count").textContent = "—";
-          return;
-        }
-        const users = new Set((res.data?.credentials || []).map((credential) => credential.ownerId));
-        const standing = (res.data?.grants || []).filter(
-          (grant) =>
-            grant.mode === "standing" &&
-            grant.status === "active" &&
-            (!grant.expiresAt || grant.expiresAt > Date.now()),
-        );
-        $("keychain-user-count").textContent = String(users.size);
-        $("keychain-standing-count").textContent = String(standing.length);
+        const res = await api("GET", "/api/keychain?summary=1");
+        $("keychain-user-count").textContent = res.ok && res.data?.enabled !== false ? String(res.data.users) : "—";
+        $("keychain-standing-count").textContent =
+          res.ok && res.data?.enabled !== false ? String(res.data.standing) : "—";
       }
       $("custom-provider-save").onclick = async () => {
         const id = $("custom-provider-id").value.trim();
@@ -9927,7 +9995,7 @@
       async function loadConnectors() {
         const [catalog, r] = await Promise.all([
           api("GET", "/api/connector-catalog"),
-          api("GET", "/api/scopes/" + encodeURIComponent(orgScope())),
+          api("GET", "/api/scopes/" + encodeURIComponent(orgScope()) + "?view=connectors"),
         ]);
         if (!catalog.ok) {
           setStatus("st-connectors", catalog.data?.message || "Failed to load connector setup.", "err");
@@ -10984,7 +11052,10 @@
           if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
           if (r.ok) {
             if (key === "security-posture" || key === "sharing-posture" || key === "ambient-policy") {
-              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(scope));
+              const fresh = await api(
+                "GET",
+                "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view),
+              );
               if (!fresh.ok) {
                 updateSectionDirty(key);
                 setStatus(SAVE_ST[key], "Saved, but could not refresh the applied value.", "err");
@@ -10996,7 +11067,10 @@
               else renderAmbientPolicy(fresh.data.ambientPolicy);
               captureSection(key);
             } else if (key === "branding") {
-              location.reload();
+              sectionSnapshots.set(key, JSON.stringify(body));
+              updateSectionDirty(key);
+              setStatus(SAVE_ST[key], "Saved", "ok");
+              if (!hasGovernanceDraft()) location.reload();
               return;
             } else if (SAVE_RELOADS.has(key)) await loadScope();
             else {

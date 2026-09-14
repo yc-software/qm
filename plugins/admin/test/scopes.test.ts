@@ -86,3 +86,12 @@ test("the scope directory requires a signed-in cookie → 401 (no core hop)", as
   assert.equal((await fetch(`${base}/api/scopes`)).status, 401);
   assert.equal(calls.length, before, "a signed-out request is rejected at the surface, never forwarded");
 });
+
+test("settings view projections survive the signed admin proxy", async () => {
+  for (const view of ["customize", "governance", "models", "credentials", "connectors", "onboarding"]) {
+    const r = await fetch(`${base}/api/scopes/org%3Aacme?view=${view}`, { headers: { cookie: ADMIN } });
+    assert.equal(r.status, 200);
+    assert.equal(calls.at(-1)!.url, `/v1/admin/scopes/org%3Aacme?view=${view}`);
+    assert.equal(calls.at(-1)!.signed, true);
+  }
+});

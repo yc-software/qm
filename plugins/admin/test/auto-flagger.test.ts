@@ -66,6 +66,7 @@ class Element {
 function fixture(data: Record<string, unknown> = {}, scope = "org:example") {
   const elements: Record<string, Element> = {};
   const context = vm.createContext({
+    refreshModelChoices: [],
     scope,
     scopeChanged: true,
     r: { data },

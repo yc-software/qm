@@ -238,6 +238,17 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   if (!deps.keychain)
     return sendJson(res, 200, { scopeId: scope, people: [], credentials: [], grants: [], asks: [], enabled: false });
 
+  if (ctx.url.searchParams.get("summary") === "1") {
+    const [credentials, grants] = await Promise.all([deps.keychain.listAllMetadata(), deps.keychain.listGrants({})]);
+    return sendJson(res, 200, {
+      users: new Set(credentials.map((credential) => credential.ownerId)).size,
+      standing: grants.filter(
+        (grant) =>
+          grant.mode === "standing" && grant.status === "active" && (!grant.expiresAt || grant.expiresAt > Date.now()),
+      ).length,
+    });
+  }
+
   const [credentials, grants, asks, participantIds, adminGrants] = await Promise.all([
     deps.keychain.listAllMetadata(),
     deps.keychain.listGrants({}),

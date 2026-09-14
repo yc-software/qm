@@ -40,14 +40,17 @@ interface FakeElement {
   appendChild(option: { value?: string; textContent?: string }): void;
 }
 
-async function runLoadOnboarding(modelProviders: unknown): Promise<Record<string, FakeElement>> {
+async function runLoadOnboarding(
+  modelProviders: unknown,
+  scopeConfig: unknown = { baseModel: "claude-opus-5" },
+): Promise<Record<string, FakeElement>> {
   const src = slice("let onboardingModels = {};", '$("onboarding-model-provider").onchange') + "\nloadOnboarding();";
   const elements: Record<string, FakeElement> = {};
   const fixtures: Record<string, unknown> = {
-    "/api/model-providers": modelProviders,
+    "/api/model-providers?catalog=cached": modelProviders,
     "/api/slack-installation": { configured: false },
     "/api/connector-catalog": { catalog: [] },
-    "/api/scopes/org%3Adefault-org": { baseModel: "claude-opus-5" },
+    "/api/scopes/org%3Adefault-org?view=onboarding": scopeConfig,
   };
   const context = vm.createContext({
     $: (id: string) =>
@@ -70,6 +73,7 @@ async function runLoadOnboarding(modelProviders: unknown): Promise<Record<string
     setStatus: () => {},
     connectorName: (id: string) => id,
     viewLoadedAt: {},
+    view: "onboarding",
     Date,
     document: { createElement: () => ({}) },
   });
@@ -163,4 +167,14 @@ test("model setup starts with two inputs, separates missing fields and discards 
   assert.match(code, /JSON\.stringify\(identity\) !== JSON\.stringify\(lookup.identity\)/);
   assert.match(code, /Choose a compatible template/);
   assert.match(code, /source/);
+});
+
+test("cold catalog preserves the configured dynamic model and its provider", async () => {
+  const model = { id: "future/configured-model", name: "Configured model", provider: "openrouter" };
+  const elements = await runLoadOnboarding(
+    { providers: UNCONFIGURED_PROVIDERS.map((p) => ({ ...p, configured: true })), models: ANTHROPIC_MODELS },
+    { baseModel: model.id, baseModelOptions: [model] },
+  );
+  assert.equal(elements["onboarding-model-provider"].value, "openrouter");
+  assert.equal(elements["onboarding-model-id"].value, model.id);
 });
