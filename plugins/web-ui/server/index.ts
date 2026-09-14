@@ -25,7 +25,7 @@ import {
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
-import { parseSuggestedActivities } from "../suggested-activities.ts";
+import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -1156,12 +1156,15 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       res.setHeader("set-cookie", sessionCookie(user));
-      const [allPermissions, workspaceUrl, authStatus] = await Promise.all([
+      const [allPermissions, workspaceUrl, authStatus, activityConfig] = await Promise.all([
         userPermissions(),
         slackWorkspaceUrl(),
         coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
           () => null,
         ),
+        coreFetch("GET", "/v1/suggested-activities", "", 2_000)
+          .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
+          .catch(() => false),
       ]);
       if (authStatus === null || authStatus.status !== 200) {
         return json(res, 503, {
@@ -1186,6 +1189,7 @@ const apiRoutes: readonly WebRoute[] = [
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         ...(suggestedActivities.length ? { suggestedActivities } : {}),
+        ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
         permissions,
       });
     },
@@ -1387,6 +1391,19 @@ const apiRoutes: readonly WebRoute[] = [
       const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
       if (!q) return json(res, 400, { error: "bad_request", message: "q required" });
       return relayCore(res, "GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}`);
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/suggested-activities",
+    handle: async (c) => {
+      const response = await coreFetch(
+        "POST",
+        "/v1/suggested-activities",
+        JSON.stringify({ principalId: c.user, seeds: suggestedActivities }),
+        60_000,
+      );
+      return json(c.res, response.status, JSON.parse(response.text));
     },
   },
   {

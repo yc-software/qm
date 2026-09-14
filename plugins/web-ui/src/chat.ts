@@ -1,3 +1,4 @@
+import { loadGeneratedActivities } from "./generated-activities";
 import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -493,6 +494,12 @@ export function createChatSurface(
     container.replaceChildren(chatState.host);
     const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
     drawActiveChat(agent, { forceScroll: true });
+    const me = appState.me;
+    if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
+      void loadGeneratedActivities(me).then(() => {
+        if (appState.me === me && chatState.agent === agent && !chatState.sessionId) drawActiveChat(agent);
+      });
+    }
     ctx.composer.focusComposerEnd();
     ctx.ensureDeliveryStream();
     if (!opening) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
@@ -508,6 +515,7 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof entriesToMessages>,
   ): boolean {
+    if (appState.me?.suggestedActivitiesGeneration || appState.me?.suggestedActivities?.length) return false;
     if (proactiveOpenerStarted || sessionId !== null || scopeId !== null || messages.length > 0) return false;
     if (!sessionsState.loaded) return false;
     if (sessionsState.list.some((s) => s.id)) return false;

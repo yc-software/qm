@@ -2566,36 +2566,20 @@ a.chat-row-open {
 }
 .suggested-activity-icon {
   display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  color-scheme: light;
-}
-.suggested-activity-icon svg {
-  width: 17px;
-  height: 17px;
+  width: 20px;
+  font:
+    17px/1 "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    sans-serif;
 }
 @media (pointer: coarse) {
   .suggested-activity {
     min-height: 44px;
   }
-}
-.dark .suggested-activity-icon {
-  color-scheme: dark;
-}
-.suggested-activity-icon[data-icon="schedule"],
-.suggested-activity-icon[data-icon="people"] {
-  color: light-dark(#c55b16, #f6a15e);
-}
-.suggested-activity-icon[data-icon="app"] {
-  color: light-dark(#15816e, #53cdb0);
-}
-.suggested-activity-icon[data-icon="deck"] {
-  color: light-dark(#8050c9, #b496f5);
-}
-.suggested-activity-icon[data-icon="calendar"] {
-  color: light-dark(#2d75c7, #71b3fb);
-}
-.suggested-activity-icon[data-icon="book"] {
-  color: light-dark(#c14e79, #ef8db3);
 }
 @media (max-width: 860px) {
   .suggested-activities {
@@ -11383,4 +11367,17 @@ h3.ambient-field-label {
   .effort-confetti {
     display: none;
   }
+}
+
+.suggested-activity-yc {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  background: #ff6600;
+  color: white;
+  font:
+    14px/1 Arial,
+    sans-serif;
 }

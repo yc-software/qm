@@ -4,7 +4,7 @@ import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
-import type { SuggestedActivity } from "../suggested-activities.ts";
+import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
 test("activity selection fills and persists an editable draft without sending or overwriting work", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main></main>', {
@@ -79,7 +79,7 @@ test("activity selection fills and persists an editable draft without sending or
       id: `idea-${i}`,
       title: i === 0 ? "<img src=x onerror=alert(1)>" : `Activity ${i}`,
       prompt: `Draft request ${i}`,
-      icon: "app",
+      icon: ["🛠️", "yc", "app", "app"][i]!,
     }));
     appState.me = { user: "tester", org: "test", suggestedActivities: activities };
     const host = document.querySelector<HTMLElement>("main")!;
@@ -116,6 +116,8 @@ test("activity selection fills and persists an editable draft without sending or
     assert.equal(host.querySelector(".suggested-activity-title")?.textContent, activities[0].title);
     assert.equal(host.querySelector("img"), null);
     const region = host.querySelector(".suggested-activities")!;
+    assert.equal(host.querySelector(".suggested-activity-yc")?.textContent, "Y");
+    assert.match(host.querySelector(".suggested-activity-icon")?.textContent ?? "", /🛠️/);
     host.querySelector<HTMLButtonElement>(".suggested-activity")!.click();
     await new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve()));
     assert.equal(composer!.state.draft, "Draft request 0");

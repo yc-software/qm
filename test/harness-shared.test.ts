@@ -136,3 +136,11 @@ test("shared harness security screens use auxiliary coordinates", async () => {
   assert.equal(recorded[0]!.step, SECURITY_SCREEN_STEP);
   assert.equal(recorded[0]!.model, "claude-oneshot");
 });
+
+test("oneShot utility forwards cancellation to its isolated turn", async () => {
+  const { turns, runPrompt } = capturingRunPrompt();
+  const utilities = oneShotModelUtilities(oneShotRunner(runPrompt));
+  const signal = new AbortController().signal;
+  await utilities.oneShot!("system", "prompt", signal);
+  assert.equal(turns[0]?.cancel, signal);
+});

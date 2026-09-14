@@ -6,7 +6,13 @@ import type { AddressInfo } from "node:net";
 const activities = [
   { id: "app", title: "Build a home for my projects", prompt: "Build a private project tracker.", icon: "app" },
 ];
-const core = createServer((_req, res) => {
+let generatedRequest: unknown;
+const core = createServer(async (req, res) => {
+  if (req.method === "POST" && req.url?.startsWith("/v1/suggested-activities")) {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    generatedRequest = JSON.parse(body);
+  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end("{}");
 });
@@ -32,4 +38,15 @@ test("only signed-in users receive configured suggestions", async () => {
   const signedIn = await fetch(`${base}/me`, { headers: { cookie: "webuiuser=alice" } });
   assert.equal(signedIn.status, 200);
   assert.deepEqual((await signedIn.json()).suggestedActivities, activities);
+});
+
+test("generation requires sign-in and derives identity and seeds server-side", async () => {
+  assert.equal((await fetch(`${base}/api/suggested-activities`, { method: "POST" })).status, 401);
+  const result = await fetch(`${base}/api/suggested-activities`, {
+    method: "POST",
+    headers: { cookie: "webuiuser=alice", "content-type": "application/json" },
+    body: JSON.stringify({ principalId: "bob", seeds: [] }),
+  });
+  assert.equal(result.status, 200);
+  assert.deepEqual(generatedRequest, { principalId: "alice", seeds: activities });
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseSuggestedActivities } from "../suggested-activities.ts";
+import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 
 const activity = {
   id: "weekly-brief",
@@ -39,5 +39,14 @@ test("invalid configuration fails without echoing its contents", () => {
       message:
         "WEB_UI_SUGGESTED_ACTIVITIES must be a JSON array of up to 12 unique activities with id, title, prompt, and icon",
     });
+  }
+});
+
+test("icons accept a single emoji or the YC mark, never arbitrary text or markup", () => {
+  for (const icon of ["🛠️", "👩🏽‍💻", "📊", "🇺🇸", "1️⃣", "yc"]) {
+    assert.equal(parseSuggestedActivities(JSON.stringify([{ ...activity, icon }]))[0]?.icon, icon);
+  }
+  for (const icon of ["hello", "📊📚", "<img src=x>", "https://example.com/logo.svg", "📊 text"]) {
+    assert.throws(() => parseSuggestedActivities(JSON.stringify([{ ...activity, icon }])));
   }
 });

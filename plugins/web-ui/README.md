@@ -46,7 +46,8 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 ## Suggested activities
 
 Suggested activities are **off by default**. Set `WEB_UI_SUGGESTED_ACTIVITIES` on
-the web service to a JSON array to opt in; unset it or use `[]` to disable it.
+the web service to a JSON array for fixed starters. Set `SUGGESTED_ACTIVITIES_ENABLED=true`
+on the core service to generate personalized activities; both settings are unset by default.
 No activity content is bundled into the public application.
 
 ```json
@@ -76,17 +77,29 @@ subdued blue-gray suggestion text. Drafts use the normal persistence path.
 
 Each entry requires a unique lowercase alphanumeric/hyphen `id` (up to 64
 characters), `title` (up to 65 characters), `prompt` (up to 1,200 characters), and
-`icon` (`schedule`, `app`, `deck`, `people`, `calendar`, or `book`). Configuration
+`icon` (one emoji or `yc` for the orange YC mark; legacy `schedule`, `app`, `deck`,
+`people`, `calendar`, and `book` values also render as emoji). Configuration
 accepts up to 12 entries and 20,000 characters. Invalid configuration fails startup
 without printing its contents. Restart the web service after changing it.
 
-The authenticated `/me` response supplies `suggestedActivities` only when configured.
-These are organization-wide starters visible to every signed-in user; keep them
-free of private personal activity or credentials. Deployment-specific content
-belongs in deployment configuration. The typed renderer can also accept future
-personalized suggestions; this feature does not read activity, call a model, or
-schedule background generation. Those providers must authorize their inputs and
-outputs for the current principal and scope.
+The authenticated `/me` response supplies the configured fallback and whether generation is enabled.
+Fixed starters are organization-wide; keep them free of personal activity or credentials.
+
+When enabled, opening a new personal chat requests three activities from the configured
+harness's tool-free model utility. The system prompt in `src/suggestions/activities.ts`
+defines the title, editable request, icon, and JSON format, including app creation and
+recurring work. Set `SUGGESTED_ACTIVITIES_CONTEXT` on core for rollout guidance (up to
+8,000 characters); for a YC rollout, describe WaaS sourcing, investor CRM, deck review,
+office hours, and Bookface advice there and optionally supply fixed fallback starters.
+Public QM has no YC context by default.
+
+Generation uses only the current person's recent private-chat titles and configured
+seeds, not transcripts or shared-chat activity. Titles are treated as untrusted data.
+Validated results are cached per person in the core artifact store for six hours,
+invalidated when the input context changes. A durable five-minute retry cooldown
+limits concurrent/repeated model calls. Calls have a 45-second cancellation deadline;
+missing or invalid output falls back to the configured starters. Loading never blocks
+the composer. This does not execute the proposed activities or create a recurring job.
 
 ## On a phone
 

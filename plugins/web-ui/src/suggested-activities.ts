@@ -1,15 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { AppWindow, BookOpen, Calendar, CalendarClock, PanelsTopLeft, Users } from "lucide";
-import type { SuggestedActivity } from "../suggested-activities.ts";
-import { icon } from "./ui";
+import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
-const icons = {
-  schedule: CalendarClock,
-  app: AppWindow,
-  deck: PanelsTopLeft,
-  people: Users,
-  calendar: Calendar,
-  book: BookOpen,
+const icons: Record<string, string> = {
+  schedule: "⏰",
+  app: "🛠️",
+  deck: "📊",
+  people: "👥",
+  calendar: "📅",
+  book: "📚",
 };
 
 export function suggestedActivities(
@@ -34,7 +32,7 @@ export function suggestedActivities(
             @click=${() => onSelect(activity)}
           >
             <span class="suggested-activity-icon" data-icon=${activity.icon} aria-hidden="true"
-              >${icon(icons[activity.icon], 20)}</span
+              >${activity.icon === "yc" ? html`<span class="suggested-activity-yc">Y</span>` : (icons[activity.icon] ?? activity.icon)}</span
             >
             <span class="suggested-activity-title">${activity.title}</span>
           </button>`,

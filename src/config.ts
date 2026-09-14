@@ -34,6 +34,8 @@ import {
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
 
 export interface Config {
+  suggestedActivitiesEnabled?: boolean;
+  suggestedActivitiesContext?: string;
   swarmDefaults?: SwarmSettings;
   production: boolean;
   allowUnauthenticatedCore: boolean;
@@ -1206,6 +1208,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   return {
+    suggestedActivitiesEnabled:
+      boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? false,
+    ...(env.SUGGESTED_ACTIVITIES_CONTEXT
+      ? { suggestedActivitiesContext: env.SUGGESTED_ACTIVITIES_CONTEXT.slice(0, 8000) }
+      : {}),
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,

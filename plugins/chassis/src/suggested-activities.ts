@@ -4,7 +4,16 @@ export interface SuggestedActivity {
   id: string;
   title: string;
   prompt: string;
-  icon: (typeof activityIcons)[number];
+  icon: string;
+}
+
+function validIcon(value: string): boolean {
+  if ([...activityIcons, "yc"].includes(value)) return true;
+  return (
+    value.length <= 32 &&
+    [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value)].length === 1 &&
+    /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u.test(value)
+  );
 }
 
 export function parseSuggestedActivities(value: string | undefined): SuggestedActivity[] {
@@ -36,10 +45,10 @@ export function parseSuggestedActivities(value: string | undefined): SuggestedAc
       !prompt.trim() ||
       prompt.length > 1200 ||
       typeof icon !== "string" ||
-      !activityIcons.includes(icon as SuggestedActivity["icon"])
+      !validIcon(icon)
     )
       throw invalid();
     ids.add(id);
-    return { id, title: title.trim(), prompt: prompt.trim(), icon: icon as SuggestedActivity["icon"] };
+    return { id, title: title.trim(), prompt: prompt.trim(), icon };
   });
 }

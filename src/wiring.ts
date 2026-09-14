@@ -1,4 +1,5 @@
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
+import { createSuggestedActivityService, type SuggestedActivityCache } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
@@ -398,6 +399,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
@@ -2193,6 +2195,16 @@ export function buildApp(
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
+    ...(config.suggestedActivitiesEnabled && harness.models.oneShot
+      ? {
+          suggestedActivities: createSuggestedActivityService({
+            store: artifactMap<SuggestedActivityCache>("suggested_activities"),
+            sessions,
+            oneShot: (system, prompt, signal) => harness.models.oneShot!(system, prompt, signal),
+            ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
+          }),
+        }
+      : {}),
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:
@@ -2310,6 +2322,7 @@ export function serverDeps(
     ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
     ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
     channelPolicy: built.channelPolicy,
+    ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
     ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
