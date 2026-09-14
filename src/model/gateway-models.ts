@@ -1,6 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 
-export const GATEWAY_PROVIDER = "gateway";
+export const GATEWAY_PROVIDER = "qm:gateway";
 export const GATEWAY_MODEL_PREFIX = "gateway/";
 
 let models = new Map<string, Model<Api>>();

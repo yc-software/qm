@@ -194,6 +194,15 @@ test("malformed and oversized catalogs cannot grant access", async () => {
 });
 
 test("gateway namespace cannot be registered by custom providers even before discovery", () => {
+  assert.doesNotThrow(() =>
+    validateCustomProviderSpec({
+      id: "gateway",
+      name: "Existing gateway",
+      protocol: "openai",
+      baseUrl: config.url,
+      models: [{ id: "old-model" }],
+    }),
+  );
   assert.equal(modelIdReserved("gateway/future"), true);
   const spec = {
     id: "custom",
@@ -203,7 +212,7 @@ test("gateway namespace cannot be registered by custom providers even before dis
     models: [{ id: "gateway/future" }],
   };
   assert.throws(() => validateCustomProviderSpec(spec), /already registered/);
-  assert.throws(() => validateCustomProviderSpec({ ...spec, id: "gateway", models: [{ id: "other" }] }), /reserved/);
+  assert.throws(() => validateCustomProviderSpec({ ...spec, id: "qm:gateway", models: [{ id: "other" }] }), /must match/);
 });
 
 test("removed gateway selections never fall back to a different org or direct model", () => {

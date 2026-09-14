@@ -23,6 +23,7 @@ const HARNESS_LABELS: Record<string, string> = {
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
+  "qm:gateway": "Gateway",
   anthropic: "Anthropic",
   openai: "OpenAI",
   openrouter: "OpenRouter",
