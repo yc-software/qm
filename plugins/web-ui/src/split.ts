@@ -74,7 +74,7 @@ import {
   syncWorkingPulse,
 } from "./sessions";
 import { conversationBackground, type RowIndicators } from "./session-list";
-import { setScopedSession, type SessionTool } from "./session-scope";
+import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
 import {
   fetchTranscript,
   fetchUiState,
@@ -220,6 +220,11 @@ function buildDock(): DockviewApi {
   });
   const guarded = new WeakSet<IDockviewGroupPanel>();
   api.onDidLayoutChange(() => {
+    const wasSingle = host.classList.contains("single-pane");
+    host.classList.toggle("single-pane", api.panels.length === 1);
+    if (wasSingle !== host.classList.contains("single-pane")) {
+      for (const actions of groupActions) actions.draw();
+    }
     for (const group of api.groups) {
       if (guarded.has(group)) continue;
       guarded.add(group);
@@ -1280,6 +1285,8 @@ class GroupActions implements IHeaderActionsRenderer {
       return g?.activePanel ?? g?.panels[0] ?? null;
     };
     const panel = activePanel();
+    const scope = panel ? paneScopeId(panel) : null;
+    const single = dockApi?.panels.length === 1;
     const sessionId =
       panel && !paneKindEntry(panelParams(panel)) ? (panelParams(panel).sessionId ?? paneSession(panel)?.id) : null;
     const maximized = props.api.isMaximized();
@@ -1353,7 +1360,25 @@ class GroupActions implements IHeaderActionsRenderer {
       },
     ];
     render(
-      html`<span class="split-tools">
+      html`${
+          single
+            ? html`<span class="split-single-tools">
+                ${PANE_TOOLS.map((t) => {
+                const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
+                return html`<button
+                  class="session-tool"
+                  type="button"
+                  aria-label=${t.label}
+                  ${tip(t.label)}
+                  @click=${() => runTool(t.tool)}
+                >
+                  ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
+                </button>`;
+              })}
+              </span>`
+            : nothing
+        }
+        <span class="split-tools">
           <button
             class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
             type="button"
@@ -1390,6 +1415,7 @@ class GroupActions implements IHeaderActionsRenderer {
   dispose(): void {
     document.removeEventListener("click", this.onDocClick);
     groupActions.delete(this);
+    this.props = null;
   }
 }
 

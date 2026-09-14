@@ -1098,13 +1098,8 @@ export function createChatSurface(
     return html`
       <article class="message-row assistant-row welcome-greeting">
         <div class="assistant-body">
-          <div class="streaming-text">
-            ${markdown(
-              "Hi, I'm your AI teammate 👋\n\n" +
-                "I run tasks on a computer of my own and work across your connected tools (Slack, Google Workspace, GitHub, Linear, and the open web), and I remember what we work on together.\n\n" +
-                "Want to get set up? Tell me your name and what you're working on, and I'll take it from there, or just ask me anything to dive straight in.",
-            )}
-          </div>
+          <h1>Hi, I'm your AI teammate 👋</h1>
+          <p>Tell me what you're working on, or pick a task below to get started.</p>
         </div>
       </article>
     `;
@@ -1327,7 +1322,7 @@ export function createChatSurface(
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${emptyChat ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat && !isNewUser ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>

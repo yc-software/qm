@@ -1521,6 +1521,11 @@ a.chat-row-open {
   text-align: center;
 }
 @container chat (min-width: 471px) {
+  .empty-stack:has(.welcome-greeting) {
+    width: min(calc(var(--content-w) * 0.75), 75%);
+    padding-inline: 0;
+  }
+
   .custom-chat-shell.empty-chat .composer-wrap,
   .custom-chat-shell.empty-chat .suggested-activities {
     width: min(calc(var(--content-w) * 0.75), 75%);
@@ -1533,14 +1538,25 @@ a.chat-row-open {
   }
 }
 
-.welcome-greeting {
+.message-row.welcome-greeting {
   align-self: center;
   width: 100%;
   max-width: var(--content-w);
+  padding-bottom: 24px;
 }
 .welcome-greeting .assistant-body {
   font-size: 15px;
   line-height: 1.55;
+}
+.welcome-greeting h1 {
+  margin: 0 0 12px;
+  font-size: 26px;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+}
+.welcome-greeting p {
+  margin: 0;
+  color: var(--muted-foreground);
 }
 .message-row {
   display: flex;
@@ -7566,6 +7582,46 @@ h3.ambient-field-label {
   box-sizing: border-box;
 }
 
+.split-canvas.single-pane .split-dock {
+  padding: 0;
+}
+
+.split-canvas.single-pane .dockview-theme-qm {
+  --dv-tabs-and-actions-container-height: 56px;
+}
+
+.split-canvas.single-pane .dv-groupview {
+  border: 0;
+  border-radius: 0;
+}
+
+.split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container {
+  padding: 0 16px;
+  border-bottom-color: color-mix(in srgb, var(--border) 68%, transparent);
+  background: color-mix(in srgb, var(--background) 94%, var(--secondary));
+}
+
+.split-canvas.single-pane .dv-render-overlay {
+  border-radius: 0;
+}
+
+.split-canvas.single-pane .dv-tab .split-pane-title {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.split-single-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+@media (max-width: 900px) {
+  .split-single-tools {
+    display: none;
+  }
+}
+
 .split-dock > .dv-dockview {
   width: 100%;
   height: 100%;
@@ -7605,7 +7661,7 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-groupview.dv-active-group {
-  border-color: color-mix(in srgb, var(--brand-accent) 55%, var(--border));
+  border-color: color-mix(in srgb, var(--brand-accent) 20%, var(--border));
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container {
@@ -7620,7 +7676,7 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-groupview.dv-active-group .dv-tabs-and-actions-container {
-  border-bottom-color: color-mix(in srgb, var(--brand-accent) 55%, var(--border));
+  border-bottom-color: color-mix(in srgb, var(--brand-accent) 20%, var(--border));
 }
 
 /* Empty auxiliary action containers must not occupy a flex-gap slot. */
