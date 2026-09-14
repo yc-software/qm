@@ -26,7 +26,9 @@ test("phone approval actions use full-width touch targets", () => {
 
 test("approval panel caps to the pane viewport and scrolls instead of clipping", () => {
   const panel = css.match(/\.composer-approval-panel \{[^}]*\}/)?.[0] ?? "";
-  assert.match(panel, /max-height: calc\(100dvh - \d+px\);/, "panel needs a viewport-relative height cap");
+  assert.match(panel, /max-height: min\(calc\(100dvh - 130px\), calc\(100cqh - 130px\)\);/);
+  const pane = css.match(/\.split-pane-content \{[^}]*\}/)?.[0] ?? "";
+  assert.match(pane, /container-type: size;/, "approval height must follow the pane, not the whole window");
   assert.match(panel, /overflow-y: auto;/, "panel must scroll once the cap binds");
 });
 
@@ -39,4 +41,18 @@ test("pane glance renders no placeholder text for an empty chat", () => {
     /\$\{snippet \? html`<div class="pane-card-last" dir="auto">\$\{snippet\}<\/div>` : nothing\}/,
     "card omits the last-reply row when empty",
   );
+});
+
+test("approval grid tracks cannot grow wider than their container", () => {
+  for (const selector of [".composer-approval-panel", ".composer-approval-copy"]) {
+    const rule = css.slice(css.indexOf(`${selector} {`)).split("}")[0];
+    assert.match(rule, /grid-template-columns: minmax\(0, 1fr\);/, selector);
+  }
+});
+
+test("long approval text wraps in both the composer and transcript", () => {
+  for (const selector of [".composer-approval-copy", ".approval-text"]) {
+    const rule = css.slice(css.indexOf(`${selector} {`)).split("}")[0];
+    assert.match(rule, /overflow-wrap: anywhere;/, selector);
+  }
 });
