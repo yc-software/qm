@@ -75,8 +75,8 @@ Run every command from this directory.
 3. After the target prerequisites are complete, \`npm exec qm -- up\` brings the
    deployment up and prints the URLs. An AWS directory must first complete the
    edge and authenticated-portal steps in its AWS bootstrap section below.
-   \`--build-from <path to a QM checkout>\` is reserved for contributors
-   testing unreleased runtime code.
+   \`--build-from <path to a QM checkout>\` builds modified runtime code
+   from your source fork or a contributor checkout.
 4. \`npm exec qm -- status\`, \`npm exec qm -- logs [service]\`, and
    \`npm exec qm -- down\` show
    what is running, tail logs, and stop the deployment.

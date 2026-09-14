@@ -1,37 +1,41 @@
 ---
 name: update-qm
-description: Update a private qm fork by merging upstream qm into it and opening a sync PR. Use when asked to "update qm", "sync from upstream", "pull in the latest qm".
+description: Update a QM source fork by merging upstream, or upgrade a package deployment dependency, and open a PR. Use when asked to "update qm", "sync from upstream", "pull in the latest qm".
 ---
 
 # update-qm
 
-An organization customizes qm from a private fork: a standalone private repository whose
-history begins as a clone of qm, with everything organization-specific confined to
-`deploy/layers/<org>/` and the rest of the tree identical to upstream. That rest is what
-this skill means by core: every file outside the organization's layer directory,
-including the plugins, the CLI, the docs, and CI, not just the runtime under `src/`.
-This skill keeps a private fork current. It merges upstream qm in and opens the
-resulting sync PR.
+Determine whether this is a source fork or a package deployment before choosing the
+update procedure. Source forks may intentionally change core; preserve those changes.
+Contributing them upstream is optional.
 
-See [`deploy/layers/README.md`](../../../deploy/layers/README.md) for the layer boundary,
-and the `upstream-pr` skill for sending changes the other direction.
+## Identify the checkout
 
-## Check that there is anything to sync
+Run `git remote -v` and inspect the files and ancestry. If `origin` is `yc-software/qm`,
+this is upstream itself, not a downstream sync target. A different origin alone does
+not prove a source fork. A source fork has the QM source tree and shared upstream
+history; a package deployment has a deployment config and a pinned `@yc-software/qm`
+dependency. In a source fork with nested deployment directories, update source unless
+the request specifically targets a nested package pin.
 
-```bash
-git remote -v
-```
+For a package deployment, work on a topic branch and install the requested release with
+`npm install --save-exact @yc-software/qm@<version>`. If no version is specified, resolve
+the current published release first. Review the package and lockfile diff, contract
+changes, and image overrides that could keep workloads on older images. Package updates
+do not refresh generated runbooks, skills, or vendored Terraform: compare the release's
+scaffold in a separate temporary directory and reconcile required changes without
+reinitializing or overwriting the existing deployment. Run the installed CLI's `check`,
+`doctor`, and `plan`, then open a PR in the deployment repository. Deploy only within
+the user's requested scope, following its deployment runbook and live checks. Do not
+add an upstream source remote or merge source into a package deployment.
 
-If `origin` is `yc-software/qm`, stop: you are in upstream qm, and a repository
-cannot merge from itself. Never merge an organization's private fork into qm.
-
-Otherwise proceed. Judge by where `origin` points, not by the repository's name.
-
-If the clone has no `upstream` remote, add it:
-
-```bash
-git remote add upstream git@github.com:yc-software/qm
-```
+For a source fork, check the `upstream` remote points to `yc-software/qm`; if absent, add
+`git remote add upstream git@github.com:yc-software/qm`. Confirm shared history before
+merging. Never merge downstream history into upstream. Use `--repo` on every `gh`
+command. Inspect the actual default branch; the examples below assume `main` and must
+be adapted if the fork deliberately uses another name. If a mirror-seeded repository
+has a stale feature branch as its default, identify the intended base before syncing;
+do not silently merge into the stale branch or delete existing refs.
 
 ## Merge, never rebase
 
@@ -42,7 +46,7 @@ upstream rewrites those commits, so always merge.
 git switch main
 git pull --ff-only origin main
 git fetch upstream
-git switch -c sync-upstream-<yyyy-mm-dd>
+git switch -c codex/sync-upstream-<yyyy-mm-dd>
 git log --oneline main..upstream/main
 git merge upstream/main
 ```
@@ -53,35 +57,28 @@ PR.
 
 ## Resolving conflicts
 
-A merge conflict needs both histories to change the same path, and upstream has no files
-under `deploy/layers/<org>/`, so an organization's layer cannot conflict with a sync.
-Upstream changing the layer contract does not conflict either; it surfaces as a `qm check`
-failure, covered below. Every conflict in a sync therefore means the private fork edited a
-file that exists in upstream qm, which the layer boundary exists to prevent. For each such
-file, decide which happened:
+Read both sides and the local commits that explain the customization. Preserve
+intentional local behavior while integrating upstream fixes; a core conflict is expected
+maintenance, not a policy violation. Keep deployment data in the layer or separate
+private deployment repository where practical. Do not discard a core modification just
+because it is organization-specific or insist it be contributed upstream.
 
-- The edit is organization-specific and should never have been in core. Take upstream's
-  side, then move the customization into `deploy/layers/<org>/`.
-- The edit belongs in core qm for everyone. Resolve in whichever direction keeps the tree
-  working, then use the `upstream-pr` skill to send it to qm so the next sync stops
-  conflicting on it.
-
-List these files in the PR description either way. A private fork that accumulates core edits
-gets more expensive to sync each time, and the sync PR is where that cost should be
-visible.
+Document conflicts, resolutions, and remaining divergence in the sync PR. When intent
+cannot be recovered from code, tests, or history, ask the operator before choosing a
+behavior. Review inherited CI and publishing changes for the fork's own accounts and
+registries rather than enabling upstream workflows blindly.
 
 ## Verify before opening the PR
 
-A sync changes the runtime, the CLI, and possibly the deployment contract at once, so run
-everything. The root suite does not cover the CLI, and the CLI is where a contract change
-lands:
+Determine affected tests from the merged range and conflict resolutions. Run those
+locally plus typecheck and lint; include CLI tests for CLI or deployment-contract changes.
+Use the full local suite only when the affected scope cannot be determined; otherwise
+let CI run it. Install the locked dependencies first:
 
 ```bash
-npm install
+npm ci
 npm run typecheck
 npm run lint
-npm test
-npm --prefix cli test
 ```
 
 A sync can raise the deployment contract major, and the CLI rejects a layer config written
@@ -92,14 +89,18 @@ work in a source checkout; the workspace symlink points at `cli/`, which is unbu
 node cli/bin/qm.ts check --config deploy/layers/<org>/qm.config.jsonc
 ```
 
-If that reports an unsupported contract major, updating the layer config to the new shape
-is part of this sync.
+For deployments outside the checkout, substitute their config paths. If a config reports
+an unsupported contract major, adapting it is part of the sync. Verify non-trivial behavior
+changes in a live dev instance before opening the PR, per AGENTS.md. Production service
+builds must use `--build-from` against this checkout (or deliberately published custom
+images); merging source does not update published runtime images. See the README source
+deployment procedure.
 
 ## Open the PR
 
 ```bash
-git push -u origin sync-upstream-<yyyy-mm-dd>
-gh pr create --repo <private-fork> --base main \
+git push -u origin codex/sync-upstream-<yyyy-mm-dd>
+gh pr create --repo <source-fork> --base main \
   --title "Sync upstream qm through <short-sha>" \
   --body-file .generated/sync-body.md
 ```
@@ -113,19 +114,26 @@ The description should state the upstream commit range merged, any file outside
 `deploy/layers/` that conflicted and how it was resolved, and the results of the checks
 above.
 
+When authorized to land a source-sync PR, preserve the upstream ancestry with a merge
+commit (`gh pr merge --repo <source-fork> <pr> --merge`) or an ancestry-preserving
+fast-forward. Never squash or rebase a source-sync PR, even if the repository's usual
+shipping workflow uses squash: that loses the upstream merge and causes later syncs to
+revisit already-integrated history. If repository settings prohibit merge commits,
+resolve that policy before landing; do not fall back to squash. Package dependency PRs
+can follow the deployment repository's ordinary merge policy.
+
 If the private fork deploys from `main`, merging this PR ships upstream's changes to production,
 so merge when someone can watch it.
 
-A private fork runs upstream's CI workflows in the organization's own account. A sync that
+A source fork runs its enabled CI workflows in its own account. A sync that
 adds or changes CI changes what runs on the next PR, and workflows that need secrets the
 fork never received will fail until those are supplied.
 
 ## Never do these
 
-- `git push --mirror` to a private fork. It deletes refs the destination has and the
-  source does not, discarding the organization's own branches, and into an empty
-  repository it copies every upstream branch, leaving GitHub to pick the default among
-  them. Seed a fork by pushing `main` alone, as the README shows.
+- `git push --mirror` to seed or update a source fork. It copies unrelated branches and
+  tags, leaves initial default-branch selection implicit, and can delete destination-only
+  refs. Seed only `main` and explicitly set the default branch as the README shows.
 - Pushing a branch whose history contains organization commits to upstream. The
   `upstream-pr` skill pushes upstream only from branches cut fresh from `upstream/main`
   and scrubbed.
