@@ -14,9 +14,11 @@ async function request(body: unknown, enabled: boolean, actor = "alice") {
     actor: { p: actor, exp: Date.now() + 1000 },
     deps: enabled
       ? {
-          suggestedActivities: async () => {
-            calls++;
-            return [];
+          suggestedActivities: {
+            get: async () => {
+              calls++;
+              return { activities: [], pending: false };
+            },
           },
         }
       : {},
@@ -49,12 +51,17 @@ test("signed actor cannot generate for another principal", async () => {
 });
 
 test("generation validates inputs before invoking the model", async () => {
-  for (const body of [{}, { principalId: "" }, { principalId: "alice", seeds: [{}] }]) {
+  for (const body of [
+    {},
+    { principalId: "" },
+    { principalId: "alice", seeds: [{}] },
+    { principalId: "alice", timezone: "not/a/timezone" },
+  ]) {
     assert.equal((await request(body, true)).status, 400);
   }
   assert.deepEqual(await request({ principalId: "alice" }, true), {
     status: 200,
-    result: { activities: [] },
+    result: { activities: [], pending: false },
     calls: 1,
   });
 });

@@ -496,7 +496,7 @@ export function createChatSurface(
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
     if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
-      void loadGeneratedActivities(me).then(() => {
+      void loadGeneratedActivities(me, () => {
         if (appState.me === me && chatState.agent === agent && !chatState.sessionId) drawActiveChat(agent);
       });
     }

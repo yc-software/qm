@@ -2485,14 +2485,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         return contextTokenBudgetForModel(id);
       },
 
-      async oneShot(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+      async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
         const model = getRequiredModel(resolveModelId());
         const providerKeys = await resolveProviderKeys();
         if (!keyForModel(providerKeys, model)) return undefined;
-        return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, {
-          modelGateway,
-          ...(signal ? { signal } : {}),
-        });
+        return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
       },
 
       async judge(systemPrompt: string, prompt: string): Promise<string | undefined> {

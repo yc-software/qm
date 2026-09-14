@@ -86,21 +86,35 @@ without printing its contents. Restart the web service after changing it.
 The authenticated `/me` response supplies the configured fallback and whether generation is enabled.
 Fixed starters are organization-wide; keep them free of personal activity or credentials.
 
-When enabled, opening a new personal chat requests three activities from the configured
-harness's tool-free model utility. The system prompt in `src/suggestions/activities.ts`
-defines the title, editable request, icon, and JSON format, including app creation and
-recurring work. Set `SUGGESTED_ACTIVITIES_CONTEXT` on core for rollout guidance (up to
-8,000 characters); for a YC rollout, describe WaaS sourcing, investor CRM, deck review,
-office hours, and Bookface advice there and optionally supply fixed fallback starters.
-Public QM has no YC context by default.
+When enabled, opening a new personal chat enrolls the user in an ordinary personal
+cron named **Refresh my suggested activities**. Its first run starts immediately;
+subsequent runs happen around 2am in the browser's timezone, with the minute
+staggered by user. The cron runner uses the normal owner-scoped session, runtime
+selection, memory, history, tools, and authorized data access. It has no delivery
+destination. The standing task in `src/suggestions/activities.ts` asks it to research
+relevant context, avoid mutations or notifications, and return three validated
+activity objects. It does not create a separate reduced-context model call.
 
-Generation uses only the current person's recent private-chat titles and configured
-seeds, not transcripts or shared-chat activity. Titles are treated as untrusted data.
-Validated results are cached per person in the core artifact store for six hours,
-invalidated when the input context changes. A durable five-minute retry cooldown
-limits concurrent/repeated model calls. Calls have a 45-second cancellation deadline;
-missing or invalid output falls back to the configured starters. Loading never blocks
-the composer. This does not execute the proposed activities or create a recurring job.
+The UI reads the latest valid result from the cron's completed personal session,
+including responses larger than the truncated fire-log preview. It displays the
+previous result while a refresh runs and briefly polls for the first/new result;
+opening another chat does not normally invoke a model. Failed initial generations
+can retry after five minutes. Existing cron queueing, run persistence, authorization,
+fire history, and failure handling apply.
+
+Cadence is reevaluated hourly. Ten or more user messages in sampled recent private
+conversations within 24 hours increases refreshes to every four hours; otherwise it
+returns to nightly. Accounts with no observed conversation activity or suggestion
+visits for 30 days are paused until activity returns. The owner can pause, delete,
+or edit the cron; custom task text and schedules are preserved. The global disable
+flag pauses managed jobs. Background work must also be enabled.
+
+Set `SUGGESTED_ACTIVITIES_CONTEXT` on core for rollout guidance (up to 8,000
+characters). For a YC rollout, describe WaaS sourcing, investor CRM, deck review,
+office hours, and Bookface advice there; optionally provide fallback starters on web.
+Guidance updates propagate to unmodified managed tasks. Public QM has no YC context
+by default. Suggestions are private to their owner; generated sessions use the
+same scoped access controls as other personal work.
 
 ## On a phone
 

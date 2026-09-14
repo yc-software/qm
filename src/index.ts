@@ -66,6 +66,7 @@ if (config.deployProvider === "docker") {
 
 if (config.backgroundWorkEnabled) {
   built.scheduler.start(1000);
+  built.suggestedActivityMaintenance.start();
 } else {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
@@ -110,6 +111,7 @@ function shutdown(signal: string): void {
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   built.scheduler.stop();
+  built.suggestedActivityMaintenance.stop();
   built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();

@@ -1,5 +1,5 @@
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
-import { createSuggestedActivityService, type SuggestedActivityCache } from "./suggestions/activities.ts";
+import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
@@ -399,6 +399,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  suggestedActivityMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   screenSecurity?: SecurityScreenProbe;
@@ -1945,6 +1946,19 @@ export function buildApp(
       await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
     },
   });
+  const suggestedActivities = createSuggestedActivityService({
+    store: artifactMap<SuggestedActivityProfile>("suggested_activity_profiles"),
+    sessions,
+    crons,
+    scheduler,
+    enabled: config.suggestedActivitiesEnabled === true,
+    ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
+  });
+  const suggestedActivityMaintenance = createSweeper(
+    () => leaderLease.hold("suggested-activities:maintenance", () => suggestedActivities.maintain()),
+    60 * 60_000,
+    { label: "suggested-activities", immediate: true },
+  );
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
   orchestratorDeps.runtime = createRuntimeService(
@@ -2195,16 +2209,8 @@ export function buildApp(
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
-    ...(config.suggestedActivitiesEnabled && harness.models.oneShot
-      ? {
-          suggestedActivities: createSuggestedActivityService({
-            store: artifactMap<SuggestedActivityCache>("suggested_activities"),
-            sessions,
-            oneShot: (system, prompt, signal) => harness.models.oneShot!(system, prompt, signal),
-            ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
-          }),
-        }
-      : {}),
+    ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
+    suggestedActivityMaintenance,
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:

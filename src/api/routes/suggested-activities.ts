@@ -26,8 +26,14 @@ export const suggestedActivityRoutes: Route[] = [
       } catch {
         return sendJson(res, 400, { error: "bad_request" });
       }
-      const activities = await deps.suggestedActivities(body.principalId, seeds);
-      return sendJson(res, 200, { activities });
+      const timezone = body.timezone ?? "UTC";
+      if (typeof timezone !== "string" || timezone.length > 100) return sendJson(res, 400, { error: "bad_request" });
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+      } catch {
+        return sendJson(res, 400, { error: "bad_request" });
+      }
+      return sendJson(res, 200, await deps.suggestedActivities.get(body.principalId, seeds, timezone));
     },
   },
 ];

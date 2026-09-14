@@ -181,7 +181,7 @@ export function oneShotModelUtilities(
   judgeModelId?: string,
 ): Pick<HarnessModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
   return {
-    oneShot: (system, prompt, signal) => single(system, prompt, signal),
+    oneShot: (system, prompt) => single(system, prompt),
     judge: (system, prompt) => single(system, prompt, undefined, undefined, judgeModelId),
     screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
       parseSecurityScreenVerdict(

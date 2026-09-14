@@ -37,3 +37,30 @@ test("generation coalesces requests, honors empty fallback, and stays disabled b
     await vite.close();
   }
 });
+
+test("a pending refresh displays its cached result and then publishes the completed result", async (t) => {
+  const oldFetch = globalThis.fetch;
+  let calls = 0;
+  const first = [{ id: "first", title: "Review my current work", prompt: "Review my work.", icon: "📚" }];
+  const second = [{ id: "second", title: "Plan my next steps", prompt: "Plan my next steps.", icon: "🧭" }];
+  globalThis.fetch = async () =>
+    Response.json(++calls === 1 ? { activities: first, pending: true } : { activities: second, pending: false });
+  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { loadGeneratedActivities } = await vite.ssrLoadModule("/src/generated-activities.ts");
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const me = { user: "alice", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: [] };
+    const seen: unknown[] = [];
+    const pending = loadGeneratedActivities(me, () => seen.push(structuredClone(me.suggestedActivities)));
+    await new Promise(setImmediate);
+    assert.deepEqual(seen, [first]);
+    t.mock.timers.tick(10_000);
+    await pending;
+    assert.deepEqual(seen, [first, second]);
+    assert.deepEqual(me.suggestedActivities, second);
+  } finally {
+    t.mock.timers.reset();
+    globalThis.fetch = oldFetch;
+    await vite.close();
+  }
+});
