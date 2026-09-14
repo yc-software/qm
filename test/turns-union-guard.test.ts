@@ -273,6 +273,55 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   assert.match(JSON.stringify(await r.json()), /reserved slack: prefix/);
 });
 
+const postPeerOriginTurn = async (threadRef: string, origin: unknown): Promise<Record<string, unknown>> => {
+  const body = JSON.stringify({
+    surface: "cron",
+    actor: { externalId: "internal:owner" },
+    conversation: { kind: "dm", threadRef, audience: [{ externalId: "internal:owner" }] },
+    text: "x",
+    origin,
+    async: true,
+  });
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    body,
+  });
+  assert.equal(r.status, 202);
+  const { runId } = (await r.json()) as { runId: string };
+  const run = await built.runs.get(runId);
+  return run!.request.origin as unknown as Record<string, unknown>;
+};
+
+test("POST /v1/turns keeps a well-formed peer origin so an approval replay stays attributed", async () => {
+  await built.sessions.getOrCreateByThread("t-peer-replay", "dm", "personal:internal:owner");
+  assert.deepEqual(
+    await postPeerOriginTurn("t-peer-replay", {
+      kind: "peer",
+      senderSessionId: "s-a",
+      senderAgentName: "scout",
+      messageId: "m1",
+      entryTs: "1.0",
+      useOwnerKeychain: true,
+    }),
+    { kind: "peer", senderSessionId: "s-a", senderAgentName: "scout", messageId: "m1", entryTs: "1.0" },
+    "the approval-resume replay of a stored peer request must survive the sanitizer",
+  );
+});
+
+test("POST /v1/turns drops a malformed peer origin instead of faulting inside the turn", async () => {
+  await built.sessions.getOrCreateByThread("t-peer-guard", "dm", "personal:internal:owner");
+  assert.deepEqual(
+    await postPeerOriginTurn("t-peer-guard", {
+      kind: "peer",
+      senderSessionId: "s-a",
+      senderAgentName: 7,
+      messageId: "",
+    }),
+    { kind: "direct" },
+  );
+});
+
 test("POST /v1/crons (raw source-auth) rejects runAs:scopeShared", async () => {
   const body = JSON.stringify({
     schedule: { everyMs: 3_600_000 },

@@ -19,7 +19,7 @@ export function resolveTurnOrigin(input: Partial<LegacyTurnOrigin> & { origin?: 
   if (!typed) return normalizeTurnOrigin(input);
   if (!hasLegacy) return typed;
   const legacy = normalizeTurnOrigin(input);
-  const rank: Record<TurnOrigin["kind"], number> = { direct: 0, human: 1, ambient: 2, automation: 3 };
+  const rank: Record<TurnOrigin["kind"], number> = { direct: 0, human: 1, ambient: 2, peer: 3, automation: 4 };
   if (rank[typed.kind] !== rank[legacy.kind]) return rank[typed.kind] > rank[legacy.kind] ? typed : legacy;
   if (typed.kind === "automation" && legacy.kind === "automation") {
     let screenData = typed.screenData;
@@ -77,7 +77,7 @@ export function normalizeTurnOrigin(input: LegacyTurnOrigin): TurnOrigin {
   return { kind: "direct" };
 }
 
-export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnOrigin> {
+export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnOrigin> & { origin?: TurnOrigin } {
   switch (origin.kind) {
     case "human":
       return {
@@ -98,6 +98,8 @@ export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnO
         ...(origin.destination ? { triggerDestination: origin.destination } : {}),
         ...(origin.useOwnerKeychain ? { ownerKeychainUnion: true } : {}),
       };
+    case "peer":
+      return { origin };
     case "direct":
       return {};
   }

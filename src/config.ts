@@ -748,6 +748,10 @@ export function orgId(): string {
   return process.env.ORG_ID ?? DEFAULT_ORG_ID;
 }
 
+export function jqChildEnv(): NodeJS.ProcessEnv {
+  return { PATH: process.env.PATH ?? "/usr/bin:/bin" };
+}
+
 export function orgScope(): string {
   return `org:${orgId()}`;
 }

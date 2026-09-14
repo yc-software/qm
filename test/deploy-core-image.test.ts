@@ -16,6 +16,11 @@ test("core deploy image includes git", () => {
   );
   assert.match(
     dockerfile,
+    /\bapk\s+add\b[\s\S]*\bjq\b/,
+    "the peer audience evaluator shells out to real jq, which CI's runner ships and the image must too",
+  );
+  assert.match(
+    dockerfile,
     /npm audit --omit=dev --audit-level=moderate/,
     "the production dependency threshold is a build gate",
   );

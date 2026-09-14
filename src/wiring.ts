@@ -287,6 +287,14 @@ import { createEcsTaskProtection, type TaskProtection } from "./runs/task-protec
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createPeerDirectory } from "./coordination/peer-directory.ts";
+import { createMemoryMessageBoardStore } from "./coordination/memory-message-board-store.ts";
+import { createPostgresMessageBoardStore } from "./coordination/postgres-message-board-store.ts";
+import { createMemorySwarmStore } from "./coordination/memory-swarm-store.ts";
+import { createPostgresSwarmStore } from "./coordination/postgres-swarm-store.ts";
+import { createCoordinationService, type CoordinationService } from "./coordination/coordination-service.ts";
+import { createPeerDispatcher } from "./coordination/peer-dispatcher.ts";
+import type { PeerIdentity } from "./coordination/types.ts";
 import {
   createMemoryProcessRegistry,
   createPostgresProcessRegistry,
@@ -461,6 +469,7 @@ export interface BuiltApp {
   livenessCache: LivenessCache;
   deviceFlowCutover: DeviceFlowCutoverStore;
   featureFlags: FeatureFlagStore;
+  coordination: CoordinationService;
   replayDedupe?: ReplayDedupe;
   brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
@@ -1792,6 +1801,33 @@ export function buildApp(
       });
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
+  const peerBoard = config.databaseUrl
+    ? createPostgresMessageBoardStore(config.databaseUrl)
+    : createMemoryMessageBoardStore();
+  const peerSwarms = config.databaseUrl ? createPostgresSwarmStore(config.databaseUrl) : createMemorySwarmStore();
+  const peerIdentities = createPeerDirectory(artifactMap<PeerIdentity>("peer_identities"));
+  const coordination = createCoordinationService({
+    directory: peerIdentities,
+    board: peerBoard,
+    swarms: peerSwarms,
+    sessions,
+    runs,
+    signals: runSignals,
+    featureFlags,
+    app: { spawnSession: app.spawnSession, discardSession: app.discardSession },
+  });
+  const PEER_DISPATCH_INTERVAL_MS = 5_000;
+  const peerDispatchSweeper = createPeerDispatcher({
+    board: peerBoard,
+    directory: peerIdentities,
+    coordination,
+    sessions,
+    runs,
+    signals: runSignals,
+    featureFlags,
+    peopleDirectory: directory,
+    turn: (request) => app.turn(request),
+  }).sweeper(PEER_DISPATCH_INTERVAL_MS);
   let lastSignalPrune = 0;
   const orphanedSignalSweeper = createSweeper(
     async () => {
@@ -2037,6 +2073,7 @@ export function buildApp(
       deepIdleSweeper?.start();
       wakeSweep.start();
       orphanedSignalSweeper.start();
+      peerDispatchSweeper.start();
       drain.start();
     },
     async releaseInFlightRuns() {
@@ -2055,6 +2092,7 @@ export function buildApp(
       fileUploads?.stop();
       wakeSweep.stop();
       orphanedSignalSweeper.stop();
+      peerDispatchSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
         swallowAs("wiring: worker drain failed", undefined),
       );
@@ -2065,6 +2103,8 @@ export function buildApp(
       void sessionStateBus.close?.();
       void ledgerEventBus.close?.();
       void runActivity.close?.();
+      void peerBoard.close?.();
+      void peerSwarms.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
     },
@@ -2137,6 +2177,7 @@ export function buildApp(
     livenessCache,
     deviceFlowCutover,
     featureFlags,
+    coordination,
     ...(replayDedupe ? { replayDedupe } : {}),
     ...(brokerSessions ? { brokerSessions } : {}),
     directory,
@@ -2222,6 +2263,7 @@ export function serverDeps(
     credentialUsage: built.credentialUsage,
     deviceFlowCutover: built.deviceFlowCutover,
     featureFlags: built.featureFlags,
+    coordination: built.coordination,
     egressAudit: built.egressAudit,
     sessions: built.sessions,
     auditLog: built.auditLog,
