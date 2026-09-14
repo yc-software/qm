@@ -1134,7 +1134,27 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveAuthor, true, "an author-live detection turn attests authorship");
-  assert.equal(claims!.liveActor, undefined, "a detection turn must never open the admin plane");
+  const threadPrompt = await app.turn({
+    surface: "test",
+    actor: admin,
+    conversation: {
+      kind: "group",
+      threadRef: "grp:G1:det",
+      channelRef: "G1",
+      audience: [admin],
+      publishMembers: [admin, { externalId: "bob" }],
+    },
+    text: "!sysprompt",
+    liveActor: true,
+    unprompted: true,
+  });
+  assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
+
+  assert.equal(
+    claims!.liveActor,
+    undefined,
+    "a thread reply attests authorship without pretending to be an explicit mention",
+  );
   assert.equal(claims!.memory?.orgWrite, undefined);
 
   captured = undefined;
@@ -1232,6 +1252,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "guest-audience turns must not attest liveness");
+  assert.equal(claims!.liveAuthor, undefined);
   assert.equal(claims!.memory?.orgWrite, undefined);
 
   for (const publishMembers of [undefined, [] as { externalId: string; orgId: string }[]]) {

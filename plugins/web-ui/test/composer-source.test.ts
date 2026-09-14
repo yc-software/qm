@@ -56,8 +56,6 @@ test("switching setups preserves prior tweaks and validates effort and Fast for 
     ),
     "a stored Fast preference cannot enable an unsupported model",
   );
-  assert.ok(apply.includes("persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel)"));
-  assert.ok(apply.includes('persistPreference(FAST_MODE_STORAGE_KEY, composerState.fastMode ? "1" : "0")'));
   assert.ok(apply.includes("saveLoadout(loadout)"));
 });
 
@@ -93,22 +91,8 @@ test("a steer whose run already ended is recovered, never silently dropped", () 
 });
 
 test("scope runtime defaults include effort and fast mode", () => {
-  assert.ok(/effortLevel: settings\.effort/.test(composer));
-  assert.ok(/fastMode: settings\.fast/.test(composer));
-  const restore = composer.slice(
-    composer.indexOf("function applySelectedRuntime"),
-    composer.indexOf("async function changeScopeRuntime"),
-  );
-  assert.ok(/saved\?\.effort \?\? \(config\.effective\.effortLevel/.test(restore));
-  assert.ok(/\(saved\?\.fast \?\? config\.effective\.fastMode\) === true/.test(restore));
-});
-
-test("a mouse click opens a submenu without the autofocus that pins it through hover-out", () => {
-  const clickOpens = composer.match(/openLoadoutSection\("(?:add|harness|effort)", e\.detail === 0\)/g) ?? [];
-  assert.equal(clickOpens.length, 3, "every submenu click gates autofocus on e.detail");
-  assert.match(composer, /loadoutSectionHovered = e\.detail !== 0 && !isPhone\(\)/);
-  assert.match(
-    composer,
-    /if \(isPhone\(\) \|\| !loadoutSectionHovered \|\| !loadoutSection \|\| loadoutSubmenuHasFocus\(\)\) return;/,
-  );
+  assert.match(composer, /effortLevel: settings\.effort/);
+  assert.match(composer, /fastMode: settings\.fast/);
+  assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.effortLevel/);
+  assert.match(composer, /getRuntimeConfig\(scopeKey\(\)\)\?\.effective\.fastMode === true/);
 });

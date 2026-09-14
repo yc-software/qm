@@ -34,12 +34,12 @@ import {
   webFetch,
   withBase,
 } from "./core-bridge";
-import { applyRuntimeOptions } from "./model-options";
+import { seedRuntimeConfig } from "./runtime-config-store";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { brandMark, brandName, icon } from "./ui";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
-import { clearSkillsCache, resyncModelSelection, seedRuntimeConfig } from "./composer";
+import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
@@ -685,7 +685,7 @@ export function switchView(v: View): void {
   resetActiveDetail(v);
   switch (v) {
     case "chats":
-      if (splitState.active) drawCanvas();
+      if (mountRestoredCanvas()) drawCanvas();
       else void renderChatsPage();
       renderList();
       break;
@@ -998,13 +998,6 @@ export async function boot(): Promise<void> {
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);
   if (runtimeConfig) {
-    applyRuntimeOptions(
-      personalScope,
-      runtimeConfig.approvedHarnesses,
-      runtimeConfig.modelsByHarness,
-      runtimeConfig.effective,
-      runtimeConfig.modelCatalog,
-    );
     seedRuntimeConfig(personalScope, runtimeConfig);
   }
   resyncModelSelection();
@@ -1021,7 +1014,7 @@ export async function boot(): Promise<void> {
   const viewIntent = isView(wanted) && canView(wanted) && wanted !== "chats";
 
   const bareEntry = !viewIntent && !wantedSession && wanted !== "app-edit" && !connectedProvider;
-  if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();
+  if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   const sessions = refreshSessions({ showLoading: true });
 

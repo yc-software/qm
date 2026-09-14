@@ -12,7 +12,7 @@ interface Harness {
   boot: () => Promise<void>;
   appState: { currentView: string };
   sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
-  mainConversation: () => { state: { sessionId: string | null; threadRef: string | null } };
+  visibleConversation: () => { state: { sessionId: string | null; threadRef: string | null } };
   mainText: () => string;
   close: () => Promise<void>;
 }
@@ -149,7 +149,11 @@ async function harness(opts: HarnessOptions): Promise<Harness> {
     boot: shell.boot as () => Promise<void>,
     appState: shell.appState as Harness["appState"],
     sessionsState: sessions.sessionsState as Harness["sessionsState"],
-    mainConversation: conversations.mainConversation as Harness["mainConversation"],
+    visibleConversation: () =>
+      conversations
+        .allConversations()
+        .find((conv: { state: { host: HTMLElement | null } }) => conv.state.host?.isConnected) ??
+      conversations.mainConversation(),
     mainText: () => dom.window.document.querySelector(".main")?.textContent ?? "",
     close: async () => {
       releaseSessions();
@@ -175,7 +179,7 @@ test("a share link paints its conversation from the transcript, without waiting 
   try {
     await h.boot();
     assert.equal(h.sessionsState.loaded, false, "the sidebar list must still be in flight");
-    assert.equal(h.mainConversation().state.sessionId, SESSION.id, "the linked chat is already mounted");
+    assert.equal(h.visibleConversation().state.sessionId, SESSION.id, "the linked chat is already mounted");
     assert.deepEqual(
       h.sessionsState.list.map((s) => s.id),
       [SESSION.id],
@@ -186,6 +190,11 @@ test("a share link paints its conversation from the transcript, without waiting 
       h.requests.filter((p) => p === "/api/sessions").length,
       1,
       "boot must not stampede the expensive list route",
+    );
+    assert.equal(
+      h.requests.filter((p) => p === `/api/sessions/${SESSION.id}?tailTurns=25`).length,
+      1,
+      "the pane reuses the prefetched transcript",
     );
     const transcript = h.requests.indexOf(`/api/sessions/${SESSION.id}?tailTurns=25`);
     assert.ok(transcript >= 0, "the transcript is fetched with the tail window");
@@ -209,7 +218,7 @@ test("a share link whose transcript 404s falls back to the session list", async 
     h.releaseSessions();
     await booted;
     assert.equal(h.sessionsState.loaded, true, "the fallback waits for the list");
-    assert.equal(h.mainConversation().state.sessionId, null, "no conversation is mounted");
+    assert.equal(h.visibleConversation().state.sessionId, null, "no conversation is mounted");
     assert.match(h.mainText(), /wasn't found, or you don't have access to it/);
   } finally {
     await h.close();
@@ -227,7 +236,7 @@ test("a share link whose transcript fetch flakes still opens from the session li
     const booted = h.boot();
     h.releaseSessions();
     await booted;
-    assert.equal(h.mainConversation().state.sessionId, SESSION.id);
+    assert.equal(h.visibleConversation().state.sessionId, SESSION.id);
   } finally {
     await h.close();
   }
@@ -253,7 +262,7 @@ test("a session list that wins the race keeps its own decorated rows", async () 
       true,
       "…nor strip the decorations only the list route computes",
     );
-    assert.equal(h.mainConversation().state.sessionId, SESSION.id);
+    assert.equal(h.visibleConversation().state.sessionId, SESSION.id);
   } finally {
     await h.close();
   }
@@ -266,7 +275,7 @@ test("a list that omits the open conversation does not drop its row", async () =
     await h.boot();
     h.releaseSessions();
     await h.sessionsReady();
-    assert.equal(h.mainConversation().state.sessionId, SESSION.id);
+    assert.equal(h.visibleConversation().state.sessionId, SESSION.id);
     assert.ok(
       h.sessionsState.list.some((s) => s.id === SESSION.id),
       "the conversation the user is reading must keep its sidebar row",
@@ -303,8 +312,8 @@ test("a bare entry still mints a new chat once the list lands", async () => {
     await booted;
     assert.equal(h.sessionsState.loaded, true);
     assert.equal(h.appState.currentView, "chats");
-    assert.equal(h.mainConversation().state.sessionId, null);
-    assert.ok(h.mainConversation().state.threadRef, "a fresh chat is mounted");
+    assert.equal(h.visibleConversation().state.sessionId, null);
+    assert.ok(h.visibleConversation().state.threadRef, "a fresh chat is mounted");
   } finally {
     await h.close();
   }

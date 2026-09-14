@@ -197,6 +197,37 @@ test("Pi title generation returns no title without an auxiliary-model credential
   assert.equal(await harness.models.generateTitle!("User:\nPrioritize the public qm issues"), undefined);
 });
 
+test("Pi title generation surfaces provider failures to its caller", async (t) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "title model rejected request" } }));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const harness = createPiHarness({
+    defaultModelId: "claude-opus-4-8",
+    titleModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "title-model" },
+    },
+  });
+
+  await assert.rejects(harness.models.generateTitle!("User:\nInvestigate the deploy"));
+});
+
 test("piHarnessConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = piHarnessConfigOptions(testConfig());
   for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {

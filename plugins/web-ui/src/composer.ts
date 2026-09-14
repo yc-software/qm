@@ -1,4 +1,6 @@
+import { getRuntimeConfig, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
+import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
 import { html, nothing, type TemplateResult } from "lit";
@@ -24,7 +26,6 @@ import {
   api,
   ApiError,
   approvalBlocksComposer,
-  fetchRuntimeConfig,
   latestTranscriptSeq,
   MAX_ATTACHMENT_BYTES,
   MAX_FILES_PER_MESSAGE,
@@ -33,7 +34,6 @@ import {
   PENDING_APPROVAL_REASON,
   queueTurn,
   tooManyFilesNote,
-  updateRuntimeConfig,
   uploadAttachments,
   userSendMessage,
   verifySteerDelivered,
@@ -42,13 +42,11 @@ import {
   type CoreAttachment,
   type PendingApproval,
   type QueuedRun,
-  type RuntimeConfig,
 } from "./core-bridge";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { fieldSelect, icon, modelMark } from "./ui";
 import {
   EFFORT_LEVELS,
-  applyRuntimeOptions,
   defaultEffortForModel,
   defaultModelValue,
   effortLabel,
@@ -60,7 +58,7 @@ import {
   type ModelOption,
   type ModelOptionValue,
 } from "./model-options";
-import { modelSupportsFastMode, setFastModeModelIds } from "./pi-models";
+import { modelSupportsFastMode } from "./pi-models";
 import type { ComposerSurface, ConvCtx } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
@@ -88,8 +86,6 @@ export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 const LEGACY_MODEL_STORAGE_KEY = "web-ui:model";
 const THREAD_PICKS_STORAGE_KEY = "web-ui:model-picks";
 const THREAD_PICKS_CAP = 50;
-const FAST_MODE_STORAGE_KEY = "web-ui:fast-mode";
-const EFFORT_STORAGE_KEY = "web-ui:effort";
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
 
 function loadLoadout(): LoadoutEntry[] {
@@ -120,12 +116,6 @@ function loadThreadPicks(): Map<string, ModelOptionValue> {
 }
 
 let threadModelPicks = loadThreadPicks();
-let seededRuntime: { scopeId: string | null; config: RuntimeConfig } | null = null;
-
-export function seedRuntimeConfig(scopeId: string | null, config: RuntimeConfig): void {
-  seededRuntime = { scopeId: runtimeScopeKey(scopeId), config };
-}
-
 function runtimeScopeKey(scopeId: string | null): string | null {
   if (scopeId) return scopeId;
   const user = appState.me?.user;
@@ -161,27 +151,6 @@ export function carryModelPick(fromThreadRef: string | null, toThreadRef: string
 
 function modelOptionFor(value: ModelOptionValue, scopeKey?: string | null): ModelOption | undefined {
   return getModelOptions(scopeKey).find((option) => option.value === value);
-}
-
-function loadStoredFastMode(): boolean | undefined {
-  try {
-    const stored = localStorage.getItem(FAST_MODE_STORAGE_KEY);
-    if (stored === "0") return false;
-    if (stored === "1") return true;
-  } catch {
-    void 0;
-  }
-  return undefined;
-}
-
-function loadStoredEffort(fallback: EffortLevel): EffortLevel {
-  try {
-    const stored = localStorage.getItem(EFFORT_STORAGE_KEY);
-    if (stored && EFFORT_LEVELS.some((option) => option.value === stored)) return stored as EffortLevel;
-  } catch {
-    void 0;
-  }
-  return fallback;
 }
 
 function persistPreference(key: string, value: string): void {
@@ -247,8 +216,16 @@ export function resyncModelSelection(): void {
 
 export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   const loadoutMenuId = `composer-loadout-${crypto.randomUUID()}`;
-  let activeRuntimeConfig: RuntimeConfig | null = null;
   let runtimeRequest = 0;
+  let runtimeIdentity = "";
+  let unsubscribeRuntime: (() => void) | undefined;
+  let effortOverride: EffortLevel | undefined;
+  let fastModeOverride: boolean | undefined;
+  let restoredLoadout: LoadoutEntry | undefined;
+  let loadoutRestored = false;
+  let modelSelectionRevision = 0;
+  let effortSelectionRevision = 0;
+  let fastSelectionRevision = 0;
 
   function isUnsentNewChat(): boolean {
     return (
@@ -277,8 +254,36 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     openMenu: null as ComposerMenu | null,
     menuQuery: "",
     slashDismissed: false,
-    effortLevel: loadStoredEffort(defaultEffortForModel(modelOptionFor(defaultModelValue())?.model)),
-    fastMode: loadStoredFastMode(),
+    get effortLevel(): EffortLevel {
+      const selected = currentModelOption();
+      const effort =
+        effortOverride ??
+        (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
+        (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
+        defaultEffortForModel(selected?.model);
+      const levels = effortLevelsForHarness(selected?.harnessId ?? "");
+      return levels.some((level) => level.value === effort) ? effort : "auto";
+    },
+    set effortLevel(value: EffortLevel) {
+      ++effortSelectionRevision;
+      effortOverride = value;
+    },
+    get fastMode(): boolean | undefined {
+      const selected = currentModelOption();
+      const fast =
+        fastModeOverride ??
+        (restoredLoadout?.value === selected?.value ? restoredLoadout?.fast : undefined) ??
+        getRuntimeConfig(scopeKey())?.effective.fastMode === true;
+      return (
+        fast &&
+        harnessSupportsFastMode(selected?.harnessId ?? "") &&
+        modelSupportsFastMode(scopeKey(), selected?.model.id)
+      );
+    },
+    set fastMode(value: boolean | undefined) {
+      ++fastSelectionRevision;
+      fastModeOverride = value;
+    },
     pasteView: null as { id: string; text: string; initial: string; dirty: boolean } | null,
   };
 
@@ -302,12 +307,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     );
   }
 
-  let dragDepth = 0;
+  const fileDrag = createFileDragState((dragging) => {
+    composerState.dragging = dragging;
+    ctx.chat.drawActiveChat();
+  });
   let skillsLoading = false;
   let slashActiveIndex = 0;
-  let orgFastModeDefault = false;
   function effectiveFastMode(): boolean {
-    return composerState.fastMode ?? orgFastModeDefault;
+    return composerState.fastMode === true;
   }
 
   function resetComposer(): void {
@@ -331,45 +338,53 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return modelOptionFor(picked ?? defaultModelValue(scopeKey()), scopeKey());
   }
 
-  async function refreshRuntimeSelection(scopeId: string | null, agent?: Agent): Promise<void> {
+  async function refreshRuntimeSelection(scopeId: string | null, agent?: Agent, refresh = false): Promise<void> {
     const request = ++runtimeRequest;
-    const scopeKey = runtimeScopeKey(scopeId);
-    const seeded = scopeKey !== null && seededRuntime?.scopeId === scopeKey ? seededRuntime.config : null;
-    if (seeded) {
-      seededRuntime = null;
-      applySelectedRuntime(seeded, agent);
-      return;
+    const key = runtimeScopeKey(scopeId);
+    const identity = `${key}:${ctx.chat.state.threadRef}`;
+    const changedIdentity = identity !== runtimeIdentity;
+    if (changedIdentity) {
+      effortOverride = undefined;
+      fastModeOverride = undefined;
+      restoredLoadout = undefined;
+      loadoutRestored = false;
+      runtimeIdentity = identity;
     }
-    activeRuntimeConfig = null;
+    unsubscribeRuntime?.();
+    let defaults = getRuntimeConfig(key)?.effective;
+    unsubscribeRuntime =
+      key === null
+        ? undefined
+        : subscribeRuntimeConfig(key, () => {
+            if (key !== scopeKey()) return;
+            const next = getRuntimeConfig(key)?.effective;
+            if (
+              (["harnessId", "modelId", "effortLevel", "fastMode"] as const).some(
+                (field) => defaults?.[field] !== next?.[field],
+              )
+            ) {
+              restoredLoadout = undefined;
+            }
+            defaults = next;
+            syncRuntimeSelection(ctx.chat.state.agent ?? undefined);
+          });
     composerState.error = "";
-    ctx.chat.drawActiveChat(agent);
-    const config = await fetchRuntimeConfig(scopeId);
+    syncRuntimeSelection(agent);
+    const config = key === null ? null : await loadRuntimeConfig(key, refresh);
     if (request !== runtimeRequest) return;
-    if (!config) {
-      applyRuntimeOptions(scopeKey, [], {}, { harnessId: "", modelId: "" });
-      composerState.error = "Could not load runtime settings.";
-      ctx.chat.drawActiveChat(agent);
-      return;
+    if (!config) composerState.error = "Could not load runtime settings.";
+    if (config && !loadoutRestored) {
+      restoreLoadoutSelection();
+      loadoutRestored = true;
     }
-    applySelectedRuntime(config, agent);
+    syncRuntimeSelection(agent);
   }
 
-  function applySelectedRuntime(config: RuntimeConfig, agent?: Agent, restoreSaved = true): void {
-    activeRuntimeConfig = config;
-    composerState.error = "";
-    setFastModeModelIds(scopeKey(), config.fastModeModelIds);
-    orgFastModeDefault = config.interactiveFastMode === true;
-    applyRuntimeOptions(
-      scopeKey(),
-      config.approvedHarnesses,
-      config.modelsByHarness,
-      config.effective,
-      config.modelCatalog,
-    );
+  function restoreLoadoutSelection(): void {
     loadout = loadLoadout();
     let selected = currentModelOption();
     const threadRef = ctx.chat.state.threadRef;
-    if (restoreSaved && selected && threadRef && !threadModelPicks.has(threadRef)) {
+    if (selected && threadRef && !threadModelPicks.has(threadRef)) {
       const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout, selected.harnessId).find(
         (option) => option.model.id === selected!.model.id,
       );
@@ -378,21 +393,20 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         selected = preferred;
       }
     }
-    const saved = restoreSaved ? loadout.find((entry) => entry.value === selected?.value) : undefined;
-    const effort = saved?.effort ?? (config.effective.effortLevel as EffortLevel | undefined);
-    composerState.effortLevel =
-      effort && effortLevelsForHarness(selected?.harnessId ?? "").some((level) => level.value === effort)
-        ? effort
-        : defaultEffortForModel(selected?.model);
-    composerState.fastMode =
-      (saved?.fast ?? config.effective.fastMode) === true &&
-      harnessSupportsFastMode(selected?.harnessId ?? "") &&
-      modelSupportsFastMode(scopeKey(), selected?.model.id);
-    if (selected) {
-      const normalized = normalizeLoadoutEntry(activeLoadoutEntry(selected), selected);
-      composerState.effortLevel = normalized.effort;
-      composerState.fastMode = normalized.fast;
+    if (!selected) return;
+    const saved = loadout.find((entry) => entry.value === selected.value);
+    if (!saved) return;
+    const normalized = normalizeLoadoutEntry(saved, selected);
+    if (threadRef && threadModelPicks.has(threadRef)) {
+      effortOverride ??= normalized.effort;
+      fastModeOverride ??= normalized.fast;
+    } else {
+      restoredLoadout = normalized;
     }
+  }
+
+  function syncRuntimeSelection(agent?: Agent): void {
+    const selected = currentModelOption();
     if (agent && selected) agent.state.model = selected.model;
     ctx.chat.drawActiveChat(agent);
     if (pendingComposerFocus) focusComposerEnd();
@@ -411,29 +425,45 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     preserveSelection = false,
   ): Promise<void> {
     const request = ++runtimeRequest;
-    const scopeId = ctx.chat.state.scopeId;
+    const scopeId = scopeKey();
+    if (!scopeId) return;
+    composerState.error = "";
+    const current = preserveSelection ? currentModelOption() : undefined;
+    const settings = current ? activeLoadoutEntry(current) : undefined;
+    const modelRevision = modelSelectionRevision;
+    const effortRevision = effortSelectionRevision;
+    const fastRevision = fastSelectionRevision;
     try {
-      const config = await updateRuntimeConfig(scopeId, change);
-      if (request !== runtimeRequest || scopeId !== ctx.chat.state.scopeId) return;
-      seededRuntime = null;
-      const current = preserveSelection ? currentModelOption() : undefined;
-      if (current) rememberActiveTweaks(current);
-      if (ctx.chat.state.threadRef) {
-        if (current) rememberThreadPick(ctx.chat.state.threadRef, current.value);
-        else if (change.inherit) forgetThreadPick(ctx.chat.state.threadRef);
-        else rememberThreadPick(ctx.chat.state.threadRef, `${config.effective.harnessId}:${config.effective.modelId}`);
+      await saveRuntimeConfig(scopeId, change);
+      if (request !== runtimeRequest || scopeId !== scopeKey()) return;
+      if (modelSelectionRevision === modelRevision) {
+        if (current && settings) {
+          if (effortSelectionRevision === effortRevision) effortOverride = settings.effort;
+          if (fastSelectionRevision === fastRevision) fastModeOverride = settings.fast;
+          if (ctx.chat.state.threadRef) rememberThreadPick(ctx.chat.state.threadRef, current.value);
+          rememberActiveTweaks(current);
+        } else if (
+          !change.keep &&
+          effortSelectionRevision === effortRevision &&
+          fastSelectionRevision === fastRevision
+        ) {
+          if (ctx.chat.state.threadRef) forgetThreadPick(ctx.chat.state.threadRef);
+          effortOverride = undefined;
+          fastModeOverride = undefined;
+          restoredLoadout = undefined;
+        }
       }
-      applySelectedRuntime(config, agent, preserveSelection);
-      const selected = currentModelOption();
-      if (selected) rememberActiveTweaks(selected);
+      syncRuntimeSelection(agent);
+      placeLoadout();
     } catch (e) {
-      if (request !== runtimeRequest || scopeId !== ctx.chat.state.scopeId) return;
+      if (request !== runtimeRequest || scopeId !== scopeKey()) return;
       composerState.error = errMessage(e, "Could not update the scope default.");
+      ctx.chat.drawActiveChat(agent);
     }
-    ctx.chat.drawActiveChat(agent);
   }
 
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
+    const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const selectedModel = currentModelOption();
     if (!selectedModel) {
       const selected =
@@ -457,14 +487,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               if (!option) return;
               await changeScopeRuntime({ harnessId: option.harnessId, modelId: option.model.id }, agent);
               if (
-                activeRuntimeConfig?.effective.harnessId === option.harnessId &&
-                activeRuntimeConfig.effective.modelId === option.model.id
+                getRuntimeConfig(scopeKey())?.effective.harnessId === option.harnessId &&
+                getRuntimeConfig(scopeKey())?.effective.modelId === option.model.id
               )
                 selectModel(value, agent);
             },
           })}
         </label>
-        <button type="button" @click=${() => void refreshRuntimeSelection(ctx.chat.state.scopeId, agent)}>
+        <button type="button" @click=${() => void refreshRuntimeSelection(ctx.chat.state.scopeId, agent, true)}>
           Refresh models
         </button>
       </div>`;
@@ -484,7 +514,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       composerNotice = composerState.error
         ? html`<div class="composer-error">
             ${composerState.error}
-            <button type="button" @click=${() => void refreshRuntimeSelection(ctx.chat.state.scopeId, agent)}>
+            <button type="button" @click=${() => void refreshRuntimeSelection(ctx.chat.state.scopeId, agent, true)}>
               Retry
             </button>
           </div>`
@@ -508,9 +538,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
             ? html`<div class="runtime-upgrade">
                 <span
                   >The org now recommends
-                  ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`)?.harnessLabel ?? activeRuntimeConfig.orgDefault.harnessId}
+                  ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`, scopeKey())?.harnessLabel ?? activeRuntimeConfig.orgDefault.harnessId}
                   ·
-                  ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`)?.buttonLabel ?? activeRuntimeConfig.orgDefault.modelId}.</span
+                  ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`, scopeKey())?.buttonLabel ?? activeRuntimeConfig.orgDefault.modelId}.</span
                 >
                 <button
                   type="button"
@@ -883,8 +913,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const normalized = normalizeLoadoutEntry(entry, option);
     composerState.effortLevel = normalized.effort;
     composerState.fastMode = normalized.fast;
-    persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
-    persistPreference(FAST_MODE_STORAGE_KEY, composerState.fastMode ? "1" : "0");
     loadout = upsertLoadout(loadout, activeLoadoutEntry(option));
     saveLoadout(loadout);
     loadoutSection = null;
@@ -954,6 +982,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const active = entry.value === selected.value;
     const settings = active ? activeLoadoutEntry(selected) : entry;
     const isDefault = entry.value === defaultModelValue(scopeKey());
+    const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const canMakeDefault =
       activeRuntimeConfig !== null &&
       (!isDefault ||
@@ -1458,7 +1487,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
                   </span>
                 </button>
               </div>
-              ${activeRuntimeConfig?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>Use org default</button></div>` : nothing}
+              ${getRuntimeConfig(scopeKey())?.scopeOverride ? html`<div class="loadout-foot"><button class="loadout-foot-btn" type="button" @click=${() => changeScopeRuntime({ inherit: true }, agent)}>Use org default</button></div>` : nothing}
               ${loadoutSubmenu(agent, selected)}
             </div>`
           : nothing
@@ -1678,7 +1707,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return (
       Boolean(composerState.draft.trim() || composerState.attachments.length) &&
       !composerState.processingFiles &&
-      activeRuntimeConfig !== null &&
+      getRuntimeConfig(scopeKey()) !== null &&
       ctx.chat.state.resolvingApprovals.size === 0 &&
       !ctx.chat.hasUnresolvedApproval()
     );
@@ -1942,7 +1971,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   async function sendPrompt(agent: Agent): Promise<void> {
     if (!currentModelOption()) return;
     if (composerState.processingFiles) return;
-    if (!activeRuntimeConfig) return;
+    if (!getRuntimeConfig(scopeKey())) return;
     if (composerState.pasteView) closePasteView(agent);
     if (ctx.chat.state.resolvingApprovals.size > 0) return;
     if (ctx.chat.hasUnresolvedApproval()) return;
@@ -2188,11 +2217,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   function onDragEnter(e: DragEvent): void {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
-    dragDepth += 1;
-    if (!composerState.dragging) {
-      composerState.dragging = true;
-      ctx.chat.drawActiveChat();
-    }
+    fileDrag.enter(e);
   }
 
   function onDragOver(e: DragEvent): void {
@@ -2202,20 +2227,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function onDragLeave(e: DragEvent): void {
-    if (!dragHasFiles(e)) return;
-    e.preventDefault();
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0 && composerState.dragging) {
-      composerState.dragging = false;
-      ctx.chat.drawActiveChat();
-    }
+    fileDrag.leave(e);
   }
 
   async function onDrop(e: DragEvent, agent: Agent): Promise<void> {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
-    dragDepth = 0;
-    composerState.dragging = false;
+    fileDrag.reset();
     const { files, folders } = splitDropItems(Array.from(e.dataTransfer?.items ?? []));
     if (!files.length && !folders.length) files.push(...Array.from(e.dataTransfer?.files ?? []));
     ctx.chat.drawActiveChat(agent);
@@ -2237,12 +2255,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   function selectModel(value: string, agent: Agent): void {
     const option = getModelOptions(scopeKey()).find((candidate) => candidate.value === value);
     if (!option) return;
+    ++modelSelectionRevision;
     const previousDefaultEffort = defaultEffortForModel(currentModelOption()?.model);
     if (ctx.chat.state.threadRef) rememberThreadPick(ctx.chat.state.threadRef, option.value);
     agent.state.model = option.model;
     if (composerState.effortLevel === previousDefaultEffort) {
       composerState.effortLevel = defaultEffortForModel(option.model);
-      persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
     }
     composerState.openMenu = null;
     ctx.chat.drawActiveChat(agent);
@@ -2263,7 +2281,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const selected = currentModelOption();
     if (!selected || !effortLevelsForHarness(selected.harnessId).some((option) => option.value === level)) return;
     composerState.effortLevel = level;
-    persistPreference(EFFORT_STORAGE_KEY, level);
     rememberActiveTweaks(selected);
     ctx.chat.drawActiveChat(agent);
     placeLoadout();
@@ -2279,7 +2296,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     )
       return;
     composerState.fastMode = !effectiveFastMode();
-    persistPreference(FAST_MODE_STORAGE_KEY, composerState.fastMode ? "1" : "0");
     rememberActiveTweaks(selected);
     ctx.chat.drawActiveChat(agent);
     placeLoadout();
@@ -2340,6 +2356,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function dispose(): void {
     cancelLoadoutClose();
+    unsubscribeRuntime?.();
+    ++runtimeRequest;
+    fileDrag.dispose();
     autosizeObserver?.disconnect();
     autosizeObserver = null;
     autosizedTa = null;

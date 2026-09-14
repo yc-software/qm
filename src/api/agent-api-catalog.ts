@@ -1,4 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { livePersonCapability } from "./artifact-share.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -718,7 +719,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (_m, p) => p.startsWith("/v1/admin/"),
-    when: (v) => v.isAdmin && v.claims.liveActor === true,
+    when: (v) => v.isAdmin && livePersonCapability(v.claims),
     guidance:
       "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads work only from a DM with the admin; bulk config imports also require a DM; other mutations work anywhere; admin grant changes are portal-only and refuse agent tokens.",
     routes: [
@@ -805,7 +806,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: () => false,
-    when: (v) => v.claims.liveActor !== true && v.claims.grants?.includes("admin.sessions.read") === true,
+    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.sessions.read") === true,
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
     routes: [
@@ -818,28 +819,28 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: () => false,
-    when: (v) => v.claims.liveActor !== true && v.claims.grants?.includes("admin.audit.read") === true,
+    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.audit.read") === true,
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
     routes: [{ method: "GET", path: "/v1/admin/audit", summary: "read security audit events" }],
   },
   {
     match: () => false,
-    when: (v) => v.claims.liveActor !== true && v.claims.grants?.includes("admin.metrics.read") === true,
+    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.metrics.read") === true,
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
     routes: [{ method: "GET", path: "/v1/admin/metrics", summary: "read usage and performance metrics" }],
   },
   {
     match: () => false,
-    when: (v) => v.claims.liveActor !== true && v.claims.grants?.includes("admin.egress.read") === true,
+    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.egress.read") === true,
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
     routes: [{ method: "GET", path: "/v1/admin/egress", summary: "read scope-labelled egress decisions" }],
   },
   {
     match: () => false,
-    when: (v) => v.claims.liveActor !== true && v.claims.grants?.includes("admin.files.read") === true,
+    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.files.read") === true,
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
     routes: [
@@ -852,7 +853,7 @@ const FAMILIES: AgentApiFamily[] = [
 
 const WHOAMI_FOR_ALL: AgentApiFamily = {
   match: () => false,
-  when: (v) => !(v.isAdmin && v.claims.liveActor === true),
+  when: (v) => !(v.isAdmin && livePersonCapability(v.claims)),
   routes: [
     { method: "GET", path: "/v1/admin/whoami", summary: "this user's org capabilities: {permissions, isAdmin, role?}" },
   ],

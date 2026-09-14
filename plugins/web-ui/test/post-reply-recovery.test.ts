@@ -132,7 +132,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       await vite.ssrLoadModule("/src/conversations.ts");
     const { entriesToMessages } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
-    const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/composer.ts");
+    const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
     appState.me = { user: "owner", org: "test" };
     appState.currentView = "chats";

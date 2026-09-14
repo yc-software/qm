@@ -33,6 +33,7 @@ import { dispatch, findRoute, run, type ApiCtx, type BaseCtx, type Route, type R
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
+import { livePersonCapability } from "./artifact-share.ts";
 
 const safeDecode = (s: string): string => {
   try {
@@ -45,7 +46,7 @@ const safeDecode = (s: string): string => {
 function capabilityAdminDenied(method: string, pathname: string, url: URL, claims: CapabilityClaims): string | null {
   if (method === "GET" && pathname === "/v1/admin/whoami") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
-  if (claims.liveActor !== true && !unattendedAdminReadAllowed(method, pathname, claims)) {
+  if (!livePersonCapability(claims) && !unattendedAdminReadAllowed(method, pathname, claims)) {
     return "admin actions through the agent require a turn the admin started themselves — autonomous turns (crons, webhooks) cannot act as an admin";
   }
   if (pathname.startsWith("/v1/admin/grants")) {

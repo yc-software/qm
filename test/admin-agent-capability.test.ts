@@ -11,7 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -28,6 +28,8 @@ function start() {
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-agent-cap-")),
       signingSecret: SECRET,
+      capabilitySecret: SECRET,
+      apiBaseUrl: "http://core.example.test",
     }),
   );
   void built.directory.replaceChannels(
@@ -49,6 +51,7 @@ function start() {
     runs: built.runs,
     errors: built.errors,
     keychain,
+    capabilitySecret: SECRET,
     signingSecret: SECRET,
   });
   server.listen(0);
@@ -58,7 +61,7 @@ function start() {
 
 const capFor = async (
   actorId: string,
-  opts: { aud?: string | null; live?: boolean; scope?: string; grants?: string[] } = {},
+  opts: { aud?: string | null; live?: boolean; liveAuthor?: boolean; scope?: string; grants?: string[] } = {},
 ) => {
   const aud = opts.aud === undefined ? CONTROL_PLANE_AUD : opts.aud;
   return await mintCapabilityToken(
@@ -67,6 +70,7 @@ const capFor = async (
       scopeId: opts.scope ?? scopeId("personal", actorId),
       ...(aud === null ? {} : { aud }),
       ...(opts.live === false ? {} : { liveActor: true }),
+      ...(opts.liveAuthor ? { liveAuthor: true } : {}),
       ...(opts.grants ? { grants: opts.grants } : {}),
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
@@ -457,3 +461,105 @@ test("revoking the admin grant cuts off an already-minted token immediately", as
     await s.close();
   }
 });
+
+for (const liveAuthor of [false, true]) {
+  test(`thread author admin access (${liveAuthor}) preserves all other authorization gates`, async () => {
+    const s = start();
+    try {
+      const cap = await capFor("admin-alice", { live: false, liveAuthor, scope: "channel:C1" });
+      const headers = { "x-agent-capability": cap, "content-type": "application/json" };
+      const path = `/v1/admin/scopes/${ORG}/security-posture`;
+      const write = await fetch(`${s.base}${path}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ posture: "auto" }),
+      });
+      assert.equal(write.status, liveAuthor ? 200 : 403);
+      if (!liveAuthor) return;
+      const read = await fetch(`${s.base}/v1/admin/scopes/${ORG}`, { headers });
+      assert.equal(read.status, 200);
+      assert.equal(((await read.json()) as { securityPosture: string }).securityPosture, "auto");
+      for (const restricted of ["/v1/admin/sessions", "/v1/admin/keychain"]) {
+        assert.equal((await fetch(`${s.base}${restricted}`, { headers })).status, 403);
+      }
+      assert.equal(
+        (
+          await fetch(`${s.base}/v1/admin/grants`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ principalId: "U9", role: "org_admin", scopeId: ORG }),
+          })
+        ).status,
+        403,
+      );
+      const memberCap = await capFor("U1", { live: false, liveAuthor: true });
+      assert.equal(
+        (
+          await fetch(`${s.base}${path}`, {
+            method: "PUT",
+            headers: { ...headers, "x-agent-capability": memberCap },
+            body: JSON.stringify({ posture: "strict" }),
+          })
+        ).status,
+        403,
+      );
+      await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
+      assert.equal(
+        (
+          await fetch(`${s.base}${path}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({ posture: "strict" }),
+          })
+        ).status,
+        403,
+      );
+    } finally {
+      await s.close();
+    }
+  });
+}
+
+for (const [name, input, expected] of [
+  ["human thread reply", { unprompted: true, liveActor: true }, 200],
+  ["synthetic ambient wake", { unprompted: true }, 403],
+  ["bot thread reply", { unprompted: true, botActor: true }, 403],
+  ["cron", { triggered: true, surface: "cron", liveActor: true }, 403],
+  ["webhook", { triggered: true, surface: "webhook", liveActor: true }, 403],
+] satisfies Array<[string, Partial<TurnRequest>, number]>) {
+  test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
+    const s = start();
+    try {
+      let cap: string | undefined;
+      const provision = s.built.sandbox.provision.bind(s.built.sandbox);
+      s.built.sandbox.provision = (layers, opts) => {
+        cap = opts?.env?.AGENT_API_TOKEN;
+        return provision(layers, opts);
+      };
+      const admin = { externalId: "admin-alice" };
+      const result = await s.built.app.turn({
+        surface: "test",
+        actor: admin,
+        conversation: {
+          kind: "channel",
+          threadRef: "ch:C1:reply",
+          channelRef: "C1",
+          audience: [admin],
+          publishMembers: [admin],
+        },
+        text: "!run echo ok",
+        ...input,
+      });
+      assert.equal(result.status, "ok");
+      assert.ok(cap);
+      const res = await fetch(`${s.base}/v1/admin/scopes/${ORG}/security-posture`, {
+        method: "PUT",
+        headers: { "x-agent-capability": cap, "content-type": "application/json" },
+        body: JSON.stringify({ posture: "auto" }),
+      });
+      assert.equal(res.status, expected);
+    } finally {
+      await s.close();
+    }
+  });
+}

@@ -7,7 +7,7 @@ const contexts = readFileSync(new URL("../src/contexts.ts", import.meta.url), "u
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("the scope's model panel writes through the same endpoint the composer's default does", () => {
-  assert.match(panel, /updateRuntimeConfig\(\s*scope,/);
+  assert.match(panel, /saveRuntimeConfig\(\s*scope,/);
   assert.match(panel, /\{ inherit: true \}/);
   assert.match(panel, /harnessId,\n\s+modelId: value\.slice\(sep \+ 1\)/);
   assert.doesNotMatch(panel, /applyRuntimeOptions/);

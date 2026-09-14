@@ -500,7 +500,6 @@ export function createChatSurface(
     scopeId: string | null,
     messages: ReturnType<typeof entriesToMessages>,
   ): boolean {
-    if (ctx.pane) return false;
     if (proactiveOpenerStarted || sessionId !== null || scopeId !== null || messages.length > 0) return false;
     if (!sessionsState.loaded) return false;
     if (sessionsState.list.some((s) => s.id)) return false;

@@ -2492,22 +2492,18 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
       async generateTitle(transcript: string): Promise<string | undefined> {
         if (!transcript.trim()) return undefined;
-        try {
-          const model = getRequiredModel(titleModelId());
-          const providerKeys = await resolveProviderKeys();
-          if (!keyForModel(providerKeys, model)) return undefined;
-          const out = await oneShot(
-            "pi-title",
-            model,
-            providerKeys,
-            TITLE_GENERATION_PROMPT,
-            titleUserPrompt(transcript),
-            { modelGateway },
-          );
-          return sanitizeTitle(out);
-        } catch {
-          return undefined;
-        }
+        const model = getRequiredModel(titleModelId());
+        const providerKeys = await resolveProviderKeys();
+        if (!keyForModel(providerKeys, model)) return undefined;
+        const out = await oneShot(
+          "pi-title",
+          model,
+          providerKeys,
+          TITLE_GENERATION_PROMPT,
+          titleUserPrompt(transcript),
+          { modelGateway },
+        );
+        return sanitizeTitle(out);
       },
 
       async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {

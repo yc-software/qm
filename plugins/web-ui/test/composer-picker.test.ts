@@ -46,6 +46,11 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     this.dispatchEvent(new dom.window.Event("close"));
   };
   const updates: Record<string, unknown>[] = [];
+  let failNextGet = true;
+  let failNextPut = false;
+  let deferNextPut = false;
+  let releasePut: () => void = () => {};
+  const extraComposers: ComposerSurface[] = [];
   const globals = {
     window: dom.window,
     document: dom.window.document,
@@ -71,10 +76,27 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       disconnect() {}
     },
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/runtime-config") && init?.method !== "PUT") {
+        if (failNextGet) {
+          failNextGet = false;
+          return Response.json({ error: "initial load failed" }, { status: 500 });
+        }
+        return Response.json(config);
+      }
       if (String(input) !== "/api/runtime-config" || init?.method !== "PUT")
         throw new Error(`Unexpected request: ${String(input)}`);
+      if (failNextPut) {
+        failNextPut = false;
+        return Response.json({ error: "default save failed" }, { status: 500 });
+      }
       const change = JSON.parse(String(init.body));
       updates.push(change);
+      if (deferNextPut) {
+        deferNextPut = false;
+        await new Promise<void>((resolve) => {
+          releasePut = resolve;
+        });
+      }
       const effective = {
         harnessId: change.harnessId,
         modelId: change.modelId,
@@ -123,9 +145,10 @@ test("the model picker remembers compatible harnesses without duplicating or cha
   );
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   let composer: ComposerSurface | undefined;
+  let siblingComposer: ComposerSurface | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-    const { createComposerSurface, seedRuntimeConfig } = await vite.ssrLoadModule("/src/composer.ts");
+    const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { render } = await vite.ssrLoadModule("lit");
     appState.me = { user: "tester", org: "test" };
     const host = document.querySelector<HTMLElement>("#composer")!;
@@ -152,7 +175,6 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       composer?.dispose();
       composer = createComposerSurface(ctx);
       ctx.composer = composer!;
-      seedRuntimeConfig(null, config);
       await composer!.refreshRuntimeSelection(null, agent);
     };
     const tick = async (): Promise<void> => {
@@ -175,6 +197,40 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       [...host.querySelectorAll(".loadout-pick .loadout-name")].map((row) => row.textContent);
 
     await mount();
+    assert.match(composer!.state.error, /Could not load runtime settings/);
+    await composer!.refreshRuntimeSelection(null, agent);
+    assert.equal(composer!.state.effortLevel, "high", "retry restores saved preset effort");
+    assert.equal(composer!.state.fastMode, true, "retry restores saved preset Fast");
+    await composer!.refreshRuntimeSelection(null, agent, true);
+    assert.equal(composer!.state.effortLevel, "high", "identical refresh preserves restored effort");
+    assert.equal(composer!.state.fastMode, true, "identical refresh preserves restored Fast");
+    const siblingHost = document.createElement("section");
+    document.body.append(siblingHost);
+    const siblingAgent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
+    const siblingCtx = {
+      ...ctx,
+      chat: {
+        ...ctx.chat,
+        state: { ...ctx.chat.state, host: siblingHost, agent: siblingAgent, threadRef: "web:tester:sibling" },
+        drawActiveChat: () => render(siblingComposer!.composerForm(siblingAgent), siblingHost),
+      },
+    } as unknown as ConvCtx;
+    siblingComposer = createComposerSurface(siblingCtx);
+    await siblingComposer!.refreshRuntimeSelection(null, siblingAgent);
+    siblingHost.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    failNextPut = true;
+    siblingHost.querySelector<HTMLButtonElement>('[aria-label="Make Beta default"]')!.click();
+    await tick();
+    assert.match(siblingComposer!.state.error, /default save failed/);
+    assert.equal(siblingComposer!.currentModelOption()?.value, "claude:alpha");
+    assert.equal(siblingComposer!.state.effortLevel, "high");
+    assert.equal(siblingComposer!.state.fastMode, true);
+    assert.equal(
+      JSON.parse(localStorage.getItem("web-ui:model-picks") ?? "[]").some(
+        ([ref]: [string, string]) => ref === "web:tester:sibling",
+      ),
+      false,
+    );
     assert.equal(host.querySelector('.composer-toolbar [aria-label="Harness"]'), null);
     assert.equal(host.querySelector(".composer-toolbar .harness-control"), null);
     assert.equal(host.querySelectorAll('.composer-toolbar [aria-haspopup="menu"]').length, 1);
@@ -316,7 +372,13 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     betaDefault.click();
     await tick();
     assert.equal(updates.length, 1);
-    assert.deepEqual(updates[0], { harnessId: "codex", modelId: "beta", effortLevel: "xhigh", fastMode: false });
+    assert.deepEqual(updates[0], {
+      harnessId: "codex",
+      modelId: "beta",
+      effortLevel: "xhigh",
+      fastMode: false,
+      scopeId: config.scopeId,
+    });
     assert.deepEqual(
       {
         value: composer!.currentModelOption()?.value,
@@ -325,14 +387,74 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       },
       current,
     );
+    assert.equal(
+      siblingComposer!.currentModelOption()?.value,
+      "codex:beta",
+      "failed save did not pin an untouched sibling",
+    );
+    assert.equal(siblingComposer!.state.effortLevel, "xhigh", "sibling follows the new default effort");
+    assert.equal(siblingComposer!.state.fastMode, false, "sibling follows the new default Fast setting");
+    assert.equal(siblingAgent.state.model.id, "beta");
     assert.equal(pick("Beta").querySelector(".loadout-default")?.textContent, "my default");
+    assert.equal(pick("Beta").querySelector(".loadout-default svg"), null);
+    assert.ok(pick("Beta").closest(".loadout-row")!.querySelector(".loadout-default-star svg"));
     assert.equal(pick("Beta").closest(".loadout-row")!.querySelector(".loadout-make-default"), null);
     assert.equal(pick("Alpha").getAttribute("aria-checked"), "true");
     pick("Gamma").click();
     assert.equal(updates.length, 1);
     await tick();
+    for (const field of ["effortLevel", "fastMode"] as const) {
+      const pendingHost = document.createElement("section");
+      document.body.append(pendingHost);
+      const pendingAgent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
+      const pendingCtx = {
+        ...ctx,
+        chat: {
+          ...ctx.chat,
+          state: {
+            ...ctx.chat.state,
+            host: pendingHost,
+            agent: pendingAgent,
+            threadRef: `web:tester:pending-${field}`,
+          },
+          drawActiveChat: () => render(pendingComposer.composerForm(pendingAgent), pendingHost),
+        },
+      } as unknown as ConvCtx;
+      const pendingComposer = createComposerSurface(pendingCtx) as ComposerSurface;
+      extraComposers.push(pendingComposer);
+      await pendingComposer.refreshRuntimeSelection(null, pendingAgent);
+      const selectedBefore = pendingComposer.currentModelOption()!;
+      const effortBefore = pendingComposer.state.effortLevel;
+      const fastBefore = pendingComposer.state.fastMode;
+      pendingHost.querySelector<HTMLButtonElement>(".loadout-button")!.click();
+      const target = [...pendingHost.querySelectorAll<HTMLButtonElement>(".loadout-make-default")].find(
+        (button) => button.getAttribute("aria-label") !== `Make ${selectedBefore.label} default`,
+      );
+      assert.ok(target);
+      deferNextPut = true;
+      releasePut = () => {
+        throw new Error("default save did not start");
+      };
+      target.click();
+      await tick();
+      assert.equal(deferNextPut, false, "default save is pending");
+      if (field === "effortLevel") pendingComposer.state.effortLevel = "high";
+      else pendingComposer.state.fastMode = !fastBefore;
+      releasePut();
+      await tick();
+      assert.equal(
+        pendingComposer.currentModelOption()?.value,
+        selectedBefore.value,
+        `${field} edit does not change the selected model during a default save`,
+      );
+      assert.equal(pendingComposer.state.effortLevel, field === "effortLevel" ? "high" : effortBefore);
+      assert.equal(pendingComposer.state.fastMode, field === "fastMode" ? !fastBefore : fastBefore);
+      pendingComposer.dispose();
+    }
   } finally {
     composer?.dispose();
+    siblingComposer?.dispose();
+    for (const extra of extraComposers) extra.dispose();
     await vite.close();
     dom.window.close();
     for (const [key, descriptor] of descriptors) {

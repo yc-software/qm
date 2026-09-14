@@ -41,23 +41,9 @@ test("targets and highlights stay honest when the layout changes mid-drag", () =
   );
 });
 
-test("the single-view overlay hides splits the drop cannot honor", () => {
-  const single = split.match(/^function showSingleDropOverlay\([\s\S]*?\n\}/m)?.[0] ?? "";
-  assert.ok(single, "showSingleDropOverlay not found");
-  assert.match(
-    single,
-    /currentChatParams\(\) !== null/,
-    "a dirty unsaved chat cannot seed a pane, so no split targets",
-  );
-  assert.match(single, /drag\.splittableSingle\(\)/, "a drag that cannot split falls back to opening full");
-  assert.match(single, /splittable \? zonesTpl\(act\) : zoneTpl\("center", "Open here", act\("center"\)\)/);
-  const sessionDrag = split.match(/^export function beginSessionDrag\([\s\S]*?\n\}/m)?.[0] ?? "";
-  assert.ok(sessionDrag, "beginSessionDrag not found");
-  assert.match(
-    sessionDrag,
-    /splittableSingle: \(\) => mainConversation\(\)\.state\.sessionId !== sessionId/,
-    "dropping the chat onto itself cannot split",
-  );
+test("single-pane chats share the canvas drag path", () => {
+  assert.doesNotMatch(split, /showSingleDropOverlay|currentChatParams|splittableSingle/);
+  assert.match(split, /beginPaneDrag\(sessionTarget\(sessionId, s\.threadRef\)\);/);
 });
 
 test("every pane kind shares one legitimacy path", () => {
@@ -87,4 +73,13 @@ test("the highlighted strip is a real drop target, not just a glow", () => {
   const end = split.match(/^export function endPaneDrag\([\s\S]*?\n\}/m)?.[0] ?? "";
   assert.match(end, /drawStripDrops\(\)/, "zones vanish when the drag ends");
   assert.match(css, /\.strip-zones \{/, "the overlay is styled");
+});
+
+test("drop regions tile the content without pointer-dead margins", () => {
+  const zone = css.match(/\.split-zone \{[^}]*\}/)?.[0] ?? "";
+  assert.match(zone, /margin: 0;/);
+  for (const edge of ["left", "right"]) {
+    assert.match(css.match(new RegExp(`\\.zone-${edge} \\{[^}]*\\}`))?.[0] ?? "", /width: 25%;/);
+  }
+  assert.match(css, /\.split-zones > \.split-zone:only-child \{/);
 });

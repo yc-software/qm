@@ -24,7 +24,7 @@ test("every new-chat affordance follows the shared placement rule", () => {
   assert.match(placed, /dockApi\.removePanel\(target\)/);
   assert.match(placed, /dockApi\.groups\.length === 2/);
   const start = fn(sessions, "startNewChat");
-  assert.match(start, /if \(splitState\.active\) return startNewChatInCanvas/);
+  assert.match(start, /const pane = startNewChatInCanvas/);
   assert.match(start, /addPendingSession\(conv\.newChat/);
   assert.match(shell, /startNewChatInLastScope\(\);/);
   assert.match(fn(sessions, "startProjectChat"), /startNewChat\(scopeId, name\);/);
@@ -95,14 +95,14 @@ test("a strip drop lands where a dragged pane header would, not merely at the en
 
 test("the pane body no longer offers a tab zone", () => {
   assert.doesNotMatch(layout, /"tab"/, "DropEdge must drop the zone that no longer exists");
-  const zones = fn(split, "zonesTpl") + fn(split, "splitZonesTpl");
+  const zones = fn(split, "paneZonesTpl") + fn(split, "splitZonesTpl");
   assert.doesNotMatch(zones, /"tab"/);
-  assert.match(zones, /zoneTpl\("center", "Open here"/);
+  assert.match(zones, /zoneTpl\("center", "Replace pane"/);
   for (const edge of ["left", "right", "top", "bottom"]) assert.match(zones, new RegExp(`zoneTpl\\("${edge}"`));
   assert.doesNotMatch(css, /\.zone-tab \{/);
   const center = css.match(/\.zone-center \{[^}]*\}/)?.[0] ?? "";
-  assert.match(center, /top: 26%;/);
-  assert.match(center, /bottom: 26%;/);
+  assert.match(center, /top: 25%;/);
+  assert.match(center, /bottom: 25%;/);
   assert.doesNotMatch(css, /\.split-zones-single \.zone-center/, "with one zone layout the exception is dead");
 });
 
@@ -117,7 +117,7 @@ test("the tile cap only judges dockview's own panel drags", () => {
 test("boot mounts a restored canvas before it awaits the session list", () => {
   const boot = shell.match(/export async function boot\(\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(boot, "boot not found");
-  const early = boot.indexOf("if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas();");
+  const early = boot.indexOf("if (bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);");
   const listStart = boot.indexOf("const sessions = refreshSessions({ showLoading: true });");
   const listAwait = boot.lastIndexOf("await sessions;");
   assert.ok(early > 0, "boot must offer the canvas its head start");
@@ -131,7 +131,8 @@ test("boot mounts a restored canvas before it awaits the session list", () => {
     /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/,
   );
   const mount = fn(split, "mountRestoredCanvas");
-  assert.match(mount, /^ {2}if \(splitState\.active && \(dockApi\?\.panels\.length \?\? 0\) > 0\) return true;/m);
+  assert.match(mount, /if \(isPhone\(\) \|\| \(restoreOnly && !splitState\.active\)\) return false;/);
+  assert.match(mount, /if \(dockApi\.panels\.length === 0\) addPane\(\{\}\);/);
 });
 
 test("boot's fallback never replaces a chat the user mounted during the wait", () => {
@@ -147,12 +148,8 @@ test("boot's fallback never replaces a chat the user mounted during the wait", (
   assert.match(fn(chat, "mountContinuable"), /chatState\.threadRef = threadRef;/);
 
   const reconcile = fn(split, "reconcileAfterClose");
-  assert.match(
-    reconcile,
-    /exitSplitIfActive\(\);\s*\n\s*mainConversation\(\)\.newChat\(\);/,
-    "a blank lone survivor mounts a new chat",
-  );
-  assert.match(reconcile, /void maximizePane\(params\);/, "a lone survivor with a session is maximized");
+  assert.match(reconcile, /if \(dockApi\.panels\.length === 0\) addPane\(\{\}\);/);
+  assert.doesNotMatch(reconcile, /exitSplitIfActive|maximizePane|mainConversation/);
   assert.match(fn(split, "exitSplitIfActive"), /splitState\.active = false;/);
 });
 
