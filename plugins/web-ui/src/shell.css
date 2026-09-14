@@ -3378,7 +3378,7 @@ a.chat-row-open {
   color: var(--muted-foreground);
 }
 .loadout-icon[data-provider="openai"] {
-  color: #7c83ee;
+  color: var(--foreground);
 }
 .loadout-icon[data-provider="anthropic"] {
   color: #d77d59;
