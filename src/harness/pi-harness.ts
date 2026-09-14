@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1277,7 +1278,7 @@ export async function oneShot(
   opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
-  const { resourceLoader, cwd, agentDir } = await createIsolatedResources(prefix, systemPrompt);
+  const { resourceLoader, cwd, agentDir } = await createIsolatedResources(prefix, randomUUID(), systemPrompt);
   try {
     const { session } = await createAgentSession({
       model,
