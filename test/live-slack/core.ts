@@ -66,7 +66,7 @@ export class CoreClient {
     try {
       while (true) {
         signal.throwIfAborted();
-        const { matches } = await core.request("GET", `/v1/directory/resolve?q=${encodeURIComponent(slackId)}`);
+        const { matches } = await core.admin("GET", `/v1/directory/resolve?q=${encodeURIComponent(slackId)}`);
         if (!Array.isArray(matches)) throw new Error("invalid directory resolution response");
         if (matches.length) {
           if (
@@ -75,7 +75,7 @@ export class CoreClient {
             (matches[0].slackId !== slackId && matches[0].principalId !== slackId)
           )
             throw new Error(`directory did not resolve the exact QA Slack identity ${slackId}`);
-          const { member } = await core.request(
+          const { member } = await core.admin(
             "GET",
             `/v1/directory/channels/${encodeURIComponent(channelId)}/members/${encodeURIComponent(matches[0].principalId)}`,
           );
