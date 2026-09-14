@@ -59,6 +59,19 @@ function isConversationColor(value: unknown): value is string | null {
   return value === null || (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value));
 }
 
+function conversationWebUrl(publicWebUrl: string | undefined, sessionId: string): string | undefined {
+  const raw = publicWebUrl?.trim();
+  if (!raw || !/^https?:\/\//i.test(raw) || /[?#]/.test(raw)) return undefined;
+  try {
+    const base = new URL(raw);
+    if ((base.protocol !== "http:" && base.protocol !== "https:") || base.username || base.password) return undefined;
+    base.pathname = `${base.pathname.replace(/\/+$/, "")}/s/${encodeURIComponent(sessionId)}`;
+    return base.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -87,7 +100,7 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
 }
 
 async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
+  const { res, app, body, capability, deps } = ctx;
   if (!capability) {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
@@ -133,7 +146,12 @@ async function spawnAgentConversation(ctx: ApiCtx): Promise<void> {
     });
   }
   const runId = (turn as { runId?: string }).runId;
-  return sendJson(res, 202, { session, turn: { status: turn.status, ...(runId ? { runId } : {}) } });
+  const webUrl = conversationWebUrl(deps.portalUrl, session.id);
+  return sendJson(res, 202, {
+    session,
+    turn: { status: turn.status, ...(runId ? { runId } : {}) },
+    ...(webUrl ? { webUrl } : {}),
+  });
 }
 
 async function forkAgentConversation(ctx: ApiCtx): Promise<void> {

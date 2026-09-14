@@ -354,7 +354,7 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+$/.test(p))) ||
       (m === "POST" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+(?:\/fork)?$/.test(p))),
     guidance:
-      "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving.",
+      "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving. When handing off a newly started conversation, share the exact webUrl returned by POST /v1/conversations; never guess or reconstruct its route.",
     routes: [
       {
         method: "GET",
@@ -378,7 +378,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/conversations",
         summary:
-          "start a FRESH conversation in this scope (no inherited transcript) — body {text, title?}; text becomes its first message and a run begins there asynchronously. Unlike /fork, the new session starts with only what you put in text. Human-attended turns only — refused (403) from crons and other automations",
+          "start a FRESH conversation in this scope (no inherited transcript) — body {text, title?}; text becomes its first message and a run begins there asynchronously. Returns {session, turn, webUrl?}; share webUrl verbatim when present (it is omitted without a valid configured public web URL). Unlike /fork, the new session starts with only what you put in text. Human-attended turns only — refused (403) from crons and other automations",
       },
       {
         method: "POST",

@@ -37,9 +37,26 @@ describe("agent conversations self-API", async () => {
       body: JSON.stringify(body),
     });
 
+  const spawnWithPortal = async (portalUrl: string | undefined, app: typeof built.app = built.app) => {
+    const configuredServer = createServer(app, { signingSecret: SECRET, ...(portalUrl ? { portalUrl } : {}) });
+    await new Promise<void>((resolve) => configuredServer.listen(0, resolve));
+    const configuredBase = `http://localhost:${(configuredServer.address() as AddressInfo).port}`;
+    try {
+      const response = await fetch(`${configuredBase}/v1/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-agent-capability": await capFor("U1") },
+        body: JSON.stringify({ text: "start from configured portal" }),
+      });
+      const text = await response.text();
+      return { status: response.status, text, body: JSON.parse(text) as { session: { id: string }; webUrl?: string } };
+    } finally {
+      await new Promise<void>((resolve) => configuredServer.close(() => resolve()));
+    }
+  };
+
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, { signingSecret: SECRET, portalUrl: "https://portal.example/" });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
@@ -61,10 +78,12 @@ describe("agent conversations self-API", async () => {
     const body = (await res.json()) as {
       session: { id: string; scopeId: string; threadRef: string; title?: string | null };
       turn: { status: string; runId?: string };
+      webUrl?: string;
     };
     assert.notEqual(body.session.id, mineId);
     assert.equal(body.session.scopeId, scopeId("personal", "U1"));
     assert.equal(body.session.title, "Flaky test hunt");
+    assert.equal(body.webUrl, `https://portal.example/s/${body.session.id}`);
     const list = await get("/v1/conversations", token);
     const { conversations } = (await list.json()) as { conversations: Array<{ id: string }> };
     assert.ok(
@@ -83,6 +102,38 @@ describe("agent conversations self-API", async () => {
       !readBody.entries.some((e) => (e.payload.text ?? "").includes("plan the launch")),
       "nothing from the spawning conversation leaks in",
     );
+  });
+
+  it("preserves the public base prefix and encodes the returned session id", async () => {
+    const sessionId = "session /?#";
+    const app: typeof built.app = {
+      ...built.app,
+      spawnSession: async (...args) => {
+        const out = await built.app.spawnSession(...args);
+        return out ? { session: { ...out.session, id: sessionId } } : null;
+      },
+    };
+    const result = await spawnWithPortal("https://portal.example/qm///", app);
+    assert.equal(result.status, 202);
+    assert.equal(result.body.session.id, sessionId);
+    assert.equal(result.body.webUrl, "https://portal.example/qm/s/session%20%2F%3F%23");
+  });
+
+  it("omits webUrl without a safe configured public web URL", async () => {
+    const unsafe = [
+      undefined,
+      "portal.example",
+      "ftp://portal.example/qm",
+      "https://user:secret@portal.example/qm",
+      "https://portal.example/qm?tenant=one",
+      "https://portal.example/qm#conversation",
+    ];
+    for (const portalUrl of unsafe) {
+      const result = await spawnWithPortal(portalUrl);
+      assert.equal(result.status, 202);
+      assert.equal(result.body.webUrl, undefined);
+      assert.ok(!result.text.includes("secret"));
+    }
   });
 
   it("spawns a fresh channel conversation for a current member", async () => {
