@@ -104,9 +104,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          git fetch --no-tags --quiet https://github.com/yc-software/qm.git main
           base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           offenders=""
-          for sha in $(git rev-list "$base..$HEAD_SHA"); do
+          for sha in $(git rev-list "$base..$HEAD_SHA" --not FETCH_HEAD); do
             if git log -1 --format='%(trailers:key=Co-authored-by,valueonly)' "$sha" \
               | grep -Ei '(@users\.noreply\.github\.com|noreply@(openai|anthropic|cursor)\.com|^(Codex|Claude Code|Claude (Opus|Sonnet|Haiku)|Copilot|Cursor)([[:space:]<]|$))' > /dev/null; then
               offenders="$offenders $sha"
