@@ -95,7 +95,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     scopeId: "personal:tester",
     approvedHarnesses: ["pi", "claude", "opencode", "codex"],
     modelsByHarness: {
-      pi: ["alpha", "gamma", "delta"],
+      pi: ["alpha", "gamma", "delta", "epsilon"],
       claude: ["alpha", "delta"],
       opencode: ["alpha"],
       codex: ["beta"],
@@ -105,6 +105,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       beta: model("beta", "Beta", "openai"),
       gamma: model("gamma", "Gamma"),
       delta: model("delta", "Delta"),
+      epsilon: model("epsilon", "Epsilon"),
     },
     orgDefault: { harnessId: "claude", modelId: "alpha", revision: 1 },
     effective: { harnessId: "claude", modelId: "alpha" },
@@ -216,7 +217,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     button('[data-loadout-section="add"]').click();
     await tick();
     const catalog = [...host.querySelectorAll(".loadout-submenu .menu-option")];
-    assert.equal(catalog.length, 1);
+    assert.equal(catalog.length, 2);
     assert.match(catalog[0]!.textContent ?? "", /Delta/);
     button(".loadout-back").click();
 
@@ -328,6 +329,21 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     assert.equal(pick("Beta").querySelector(".loadout-default")?.textContent, "my default");
     assert.equal(pick("Beta").closest(".loadout-row")!.querySelector(".loadout-make-default"), null);
     assert.equal(pick("Alpha").getAttribute("aria-checked"), "true");
+    button('[data-loadout-section="add"]').click();
+    await tick();
+    button(".loadout-back").hidden = true;
+    const search = host.querySelector<HTMLInputElement>(".loadout-search input")!;
+    const results = [...host.querySelectorAll<HTMLButtonElement>(".loadout-submenu .menu-option")];
+    assert.equal(results.length, 2);
+    search.focus();
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    assert.equal(document.activeElement, results.at(-1));
+    search.focus();
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    assert.equal(document.activeElement, results[0]);
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await tick();
+    assert.equal(document.activeElement, button('[data-loadout-section="add"]'));
     pick("Gamma").click();
     assert.equal(updates.length, 1);
     await tick();
