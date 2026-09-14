@@ -49,9 +49,17 @@ test("a pane focusin never re-activates the pane it is already in", () => {
 });
 
 function clickFixture(secondContent = '<textarea class="composer-input">draft</textarea>') {
-  const dom = new JSDOM(
-    `<main><section id="first"><textarea class="composer-input"></textarea></section><section id="second"><p>message</p>${secondContent}</section></main>`,
-  );
+  const dom = new JSDOM(`
+    <main>
+      <section id="first">
+        <textarea class="composer-input"></textarea>
+      </section>
+      <section id="second">
+        <p>message</p>
+        ${secondContent}
+      </section>
+    </main>
+  `);
   const doc = dom.window.document;
   const host = doc.querySelector("main")!;
   const first = doc.querySelector<HTMLElement>("#first")!;
