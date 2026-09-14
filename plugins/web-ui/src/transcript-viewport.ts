@@ -7,6 +7,10 @@ export function createTranscriptViewport() {
   let promptKey: string | undefined;
   let expanded = false;
   let lastTop = 0;
+  let lastBottom = 0;
+  let previousBottom = 0;
+  let bottomChangedAt = 0;
+  let inputBottom: number | null = null;
   let observer: ResizeObserver | null = null;
   let following = false;
   let frame: number | null = null;
@@ -16,7 +20,12 @@ export function createTranscriptViewport() {
     if (scroller) scroller.style.overflowAnchor = value ? "none" : "";
   }
 
+  function clearInput(): void {
+    inputBottom = null;
+  }
+
   function cancelFollow(): void {
+    clearInput();
     setFollowing(false);
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
@@ -93,17 +102,51 @@ export function createTranscriptViewport() {
   function onScroll(): void {
     if (!scroller) return;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
-    if (atBottom) setFollowing(true);
+    const reachedPreviousBottom =
+      scroller.scrollTop > lastTop &&
+      (Math.abs(scroller.scrollTop - lastBottom) <= 1 ||
+        (inputBottom !== null && Math.abs(scroller.scrollTop - inputBottom) <= 1));
+    if (atBottom || reachedPreviousBottom) setFollowing(true);
     else if (scroller.scrollTop < lastTop) cancelFollow();
+    if (scroller.scrollTop !== lastTop) clearInput();
     lastTop = scroller.scrollTop;
+    measureBottom();
     syncSticky();
   }
 
+  function measureBottom(): void {
+    if (!scroller) return;
+    const bottom = scroller.scrollHeight - scroller.clientHeight;
+    if (bottom === lastBottom) return;
+    previousBottom = lastBottom;
+    lastBottom = bottom;
+    bottomChangedAt = performance.now();
+  }
+
+  function beforeRender(): void {
+    if (!scroller) return;
+    if (scroller.scrollTop !== lastTop) onScroll();
+    measureBottom();
+  }
+
   function onWheel(event: WheelEvent): void {
-    if (event.deltaY < 0) cancelFollow();
+    if (!scroller) return;
+    if (event.deltaY < 0 && scroller.scrollTop > 0) cancelFollow();
+    if (event.deltaY > 0) {
+      clearInput();
+      inputBottom = scroller.scrollHeight - scroller.clientHeight;
+    }
+    if (
+      event.deltaY > 0 &&
+      event.timeStamp < bottomChangedAt &&
+      scroller.scrollTop > lastTop &&
+      Math.abs(scroller.scrollTop - previousBottom) <= 1
+    )
+      setFollowing(true);
   }
 
   function dispose(): void {
+    clearInput();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     observer?.disconnect();
@@ -111,11 +154,13 @@ export function createTranscriptViewport() {
     scroller?.removeEventListener("scroll", onScroll);
     scroller?.removeEventListener("wheel", onWheel);
     scroller?.removeEventListener("click", onClick);
+    scroller?.removeEventListener("pointerdown", clearInput);
+    scroller?.removeEventListener("keydown", clearInput);
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
-    lastTop = 0;
+    lastTop = lastBottom = previousBottom = bottomChangedAt = 0;
     following = false;
   }
 
@@ -126,12 +171,16 @@ export function createTranscriptViewport() {
       dispose();
       scroller = element;
       lastTop = scroller?.scrollTop ?? 0;
+      lastBottom = previousBottom = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
       setFollowing(false);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
       scroller?.addEventListener("wheel", onWheel, { passive: true });
       scroller?.addEventListener("click", onClick);
+      scroller?.addEventListener("pointerdown", clearInput);
+      scroller?.addEventListener("keydown", clearInput);
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver(() => {
+          beforeRender();
           syncSticky();
           follow();
         });
@@ -192,5 +241,5 @@ export function createTranscriptViewport() {
     });
   }
 
-  return { sync, follow, dispose };
+  return { sync, follow, beforeRender, dispose };
 }

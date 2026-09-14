@@ -1724,6 +1724,10 @@ a.chat-row-open {
 .streaming-text {
   position: relative;
 }
+.streaming-text.live-stream {
+  overflow-anchor: none;
+}
+
 .streaming-text .tok-in {
   animation: tok-in 0.42s ease-out both;
 }
