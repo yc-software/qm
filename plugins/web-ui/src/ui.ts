@@ -92,8 +92,10 @@ const OPENCODE_FRAME = "M180 60H60V240H180V60ZM240 300H0V0H240V300Z";
 
 const OPENCODE_SCREEN = "M180 240H60V120H180V240Z";
 
-const MARK_KEYS: Record<string, "claude" | "codex" | "pi" | "opencode"> = {
+const MARK_KEYS: Record<string, "claude" | "codex" | "pi" | "opencode" | "gemini"> = {
   anthropic: "claude",
+  google: "gemini",
+  gemini: "gemini",
   opencode: "opencode",
   pi: "pi",
   claude: "claude",
@@ -104,6 +106,21 @@ const MARK_KEYS: Record<string, "claude" | "codex" | "pi" | "opencode"> = {
 export function modelMark(key: string, size = 16): TemplateResult | null {
   const mark = MARK_KEYS[key.toLocaleLowerCase()];
   if (!mark) return null;
+  if (mark === "gemini")
+    return html`<svg
+      class="model-mark"
+      width=${size}
+      height=${size}
+      viewBox="0 0 24 24"
+      role="img"
+      aria-label="Gemini"
+      focusable="false"
+    >
+      <path
+        fill="#4285f4"
+        d="M12 1C10.5 8.5 8.5 10.5 1 12c7.5 1.5 9.5 3.5 11 11 1.5-7.5 3.5-9.5 11-11C15.5 10.5 13.5 8.5 12 1Z"
+      />
+    </svg>`;
   if (mark === "opencode")
     return html`<svg
       class="model-mark"

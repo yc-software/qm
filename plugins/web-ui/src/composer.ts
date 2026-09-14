@@ -971,7 +971,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function modelGlyph(option: ModelOption): TemplateResult {
-    const provider = String(option.model.provider);
+    const provider = option.displayProvider ?? String(option.model.provider);
     const mark = modelMark(provider, 16) ?? modelMark(option.harnessId, 16);
     return html`<span class="loadout-icon" data-provider=${provider} aria-hidden="true"
       >${mark ?? icon(Sparkles, 16)}</span

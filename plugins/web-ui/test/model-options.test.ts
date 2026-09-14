@@ -111,3 +111,44 @@ test("deleted selection retains identity and transcript rendering does not borro
   assert.equal(defaultModelValue("scope:deleted"), "pi:custom");
   assert.equal(transcriptModel("scope:deleted")?.id, "custom");
 });
+
+test("gateway choices display model names and brands without changing serving identity", () => {
+  const cases = [
+    ["anthropic/claude-sonnet-5", "Sonnet 5", "anthropic", "Anthropic"],
+    ["anthropic/claude-fable-5-1", "Fable 5.1", "anthropic", "Anthropic"],
+    ["openai/gpt-6-astra", "GPT-6 Astra", "openai", "OpenAI"],
+    ["openai/gpt-5.6-terra", "GPT-5.6 Terra", "openai", "OpenAI"],
+    ["openai/gpt-5.6-1", "GPT-5.6 1", "openai", "OpenAI"],
+    ["gemini/gemini-3.8-flash", "Gemini 3.8 Flash", "google", "Google"],
+  ];
+  for (const [route, label, provider, group] of cases) {
+    const id = `gateway/${route}`;
+    const data = metadata(id!, route!, "qm:gateway");
+    const [option] = runtimeModelOptions(["pi"], { pi: [id] }, { [id]: data });
+    assert.equal(option?.label, label);
+    assert.equal(option?.buttonLabel, label);
+    assert.equal(option?.displayProvider, provider);
+    assert.equal(option?.groupLabel, group);
+    assert.equal(option?.value, `pi:${id}`);
+    assert.equal(option?.model.provider, "qm:gateway");
+    assert.equal(option?.model.id, id);
+    assert.deepEqual(option?.model.cost, data.cost);
+  }
+});
+
+test("gateway display preserves explicit labels and leaves unknown families alone", () => {
+  const id = "gateway/anthropic/claude-sonnet-5";
+  const custom = { ...metadata(id, "Writing model", "qm:gateway"), buttonLabel: "Writer" };
+  const unknownId = "gateway/vendor/special-model";
+  const unknown = metadata(unknownId, "Special", "qm:gateway");
+  const [knownOption, unknownOption] = runtimeModelOptions(
+    ["pi"],
+    { pi: [id, unknownId] },
+    { [id]: custom, [unknownId]: unknown },
+  );
+  assert.equal(knownOption?.label, "Writing model");
+  assert.equal(knownOption?.buttonLabel, "Writer");
+  assert.equal(knownOption?.displayProvider, "anthropic");
+  assert.equal(unknownOption?.label, "Special");
+  assert.equal(unknownOption?.displayProvider, undefined);
+});
