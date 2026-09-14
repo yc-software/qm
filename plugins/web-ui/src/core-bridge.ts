@@ -27,6 +27,8 @@ const POLL_RETRY_MAX_MS = 5_000;
 export const RUN_IDLE_MS = 6 * 60_000;
 const STALE_GRACE_MS = 10 * 60_000;
 const SSE_OPEN_TIMEOUT_MS = 4_000;
+const SSE_SILENCE_MS = 30_000;
+const RUN_REQUEST_TIMEOUT_MS = 15_000;
 
 let now: () => number = () => Date.now();
 export function setClock(fn: () => number): void {
@@ -693,16 +695,15 @@ export interface RunSlot {
   runId: string | null;
   generation: number;
   stopGeneration: number | null;
-  unreachedAbort: boolean;
+  onStopError?: (message: string) => void;
 }
 
-export function createRunSlot(): RunSlot {
-  return { runId: null, generation: 0, stopGeneration: null, unreachedAbort: false };
+export function createRunSlot(onStopError?: (message: string) => void): RunSlot {
+  return { runId: null, generation: 0, stopGeneration: null, onStopError };
 }
 
 function beginSubmit(slot: RunSlot | undefined): number {
   if (!slot) return 0;
-  slot.unreachedAbort = false;
   return ++slot.generation;
 }
 
@@ -745,6 +746,7 @@ export async function signalLiveRun(
   try {
     await api(runPath(run.runId, "/signal"), {
       method: "POST",
+      signal: kind === "abort" ? AbortSignal.timeout(RUN_REQUEST_TIMEOUT_MS) : undefined,
       body: JSON.stringify({ kind, ...(text !== undefined ? { text } : {}), ...steerContext }),
     });
     return { ok: true };
@@ -1172,16 +1174,13 @@ async function followRun(
 ): Promise<void> {
   try {
     if (slot && slot.stopGeneration === gen) {
-      slot.stopGeneration = null;
       slot.runId = runId;
-      try {
-        const outcome = await signalLiveRun(slot, "abort", undefined, { threadRef: null });
-        if (!outcome.ok) slot.unreachedAbort = true;
-      } catch (e) {
-        slot.unreachedAbort = true;
-        swallow("web-ui: stop requested before the run id arrived", e);
-      }
-      return abortStream(stream, partial);
+      void signalLiveRun(slot, "abort", undefined, { threadRef: null }).catch(() => {
+        if (slot.generation !== gen || slot.stopGeneration !== gen) return;
+        slot.stopGeneration = null;
+        slot.onStopError?.("Could not request stop. Try again.");
+        notify?.();
+      });
     }
     if (signal?.aborted) return abortStream(stream, partial);
     if (slot) slot.runId = runId;
@@ -1326,9 +1325,13 @@ export async function pollRun(
     if (signal?.aborted) return abortStream(stream, partial);
     let run: RunPoll;
     try {
-      run = await api<RunPoll>(runPath(runId, ""));
+      const timeout = AbortSignal.timeout(RUN_REQUEST_TIMEOUT_MS);
+      run = await api<RunPoll>(runPath(runId, ""), {
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      });
       consecutiveFailures = 0;
     } catch (e) {
+      if (signal?.aborted) return abortStream(stream, partial);
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) return fail(stream, partial, e.message);
       consecutiveFailures++;
       if (now() - st.lastProgressAt > RUN_IDLE_MS)
@@ -1418,30 +1421,37 @@ function streamRunViaSse(
     if (typeof EventSource === "undefined") return resolve("fallback");
     let settled = false;
     let established = false;
+    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
     const es = new EventSource(withBase(runPath(runId, "/events")));
     const settle = (outcome: "done" | "fallback"): void => {
       if (settled) return;
       settled = true;
       clearTimeout(openTimer);
+      clearTimeout(silenceTimer);
       signal?.removeEventListener("abort", onAbort);
       es.close();
       resolve(outcome);
+    };
+    const received = (): void => {
+      established = true;
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => settle("fallback"), SSE_SILENCE_MS);
     };
     const onAbort = (): void => {
       abortStream(stream, partial);
       settle("done");
     };
-    signal?.addEventListener("abort", onAbort);
-    if (signal?.aborted) return onAbort();
     const openTimer = setTimeout(() => {
       if (!established) settle("fallback");
     }, SSE_OPEN_TIMEOUT_MS);
+    signal?.addEventListener("abort", onAbort);
+    if (signal?.aborted) return onAbort();
 
     es.onopen = (): void => {
-      established = true;
+      received();
     };
     es.addEventListener("partial", (e: MessageEvent) => {
-      established = true;
+      received();
       try {
         const d = JSON.parse(e.data) as { partial?: string };
         if (typeof d.partial === "string" && d.partial.length > st.acc.length) {
@@ -1453,7 +1463,7 @@ function streamRunViaSse(
       }
     });
     es.addEventListener("activity", (e: MessageEvent) => {
-      established = true;
+      received();
       try {
         const d = JSON.parse(e.data) as { activity?: unknown[]; startedAt?: number | null };
         const work = (partial as AssistantWork).work;
@@ -1467,11 +1477,11 @@ function streamRunViaSse(
       }
     });
     es.addEventListener("alive", () => {
-      established = true;
+      received();
       st.lastProgressAt = now();
     });
     es.addEventListener("stale", (e: MessageEvent) => {
-      established = true;
+      received();
       try {
         const d = JSON.parse(e.data) as { stale?: boolean };
         const stale = d.stale === true;
@@ -1484,7 +1494,7 @@ function streamRunViaSse(
       }
     });
     es.addEventListener("done", (e: MessageEvent) => {
-      established = true;
+      received();
       try {
         applyRun(stream, partial, st, JSON.parse(e.data) as RunPoll, notify);
         settle("done");

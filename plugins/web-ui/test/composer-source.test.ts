@@ -81,15 +81,6 @@ test("a mid-turn submit queues — attachments cannot ride a queued message and 
   assert.doesNotMatch(composer, /attachments stay for your next message/);
 });
 
-test("a steer whose run already ended is recovered, never silently dropped", () => {
-  assert.match(composer, /const outcome = await ctx\.chat\.signalLiveRun\("steer", queued\.text\);/);
-  assert.match(composer, /if \(!outcome\.ok\) recoverEndedRunSteer\(agent, queued\.text, outcome\);/);
-  assert.match(composer, /function recoverEndedRunSteer\(/);
-  assert.match(composer, /attachWhenIdle\(agent, 0\);/);
-  assert.match(composer, /resendWhenIdle\(agent, text, 0\);/);
-  assert.match(composer, /if \(composerState\.draft === text\) void sendPrompt\(agent\);/);
-});
-
 test("scope runtime defaults include effort and fast mode", () => {
   assert.match(composer, /effortLevel: settings\.effort/);
   assert.match(composer, /fastMode: settings\.fast/);

@@ -221,16 +221,13 @@ test("Stop pressed before the run id arrives still stops core's run", () => {
   assert.match(composer, /void ctx\.chat\.stopLiveRun\(\)\.catch/);
   const followRun = bridge.slice(bridge.indexOf("async function followRun"), bridge.indexOf("function runPath"));
   assert.match(followRun, /if \(slot && slot\.stopGeneration === gen\) \{/);
-  assert.match(followRun, /await signalLiveRun\(slot, "abort", undefined, \{ threadRef: null \}\);/);
-  assert.match(followRun, /slot\.unreachedAbort = true;/);
+  assert.match(followRun, /void signalLiveRun\(slot, "abort", undefined, \{ threadRef: null \}\)/);
+  assert.match(followRun, /notify\?\.\(\);/);
 });
 
-test("the aborted-refresh guard yields when the abort never reached core", () => {
+test("confirmed aborted output is preserved during transcript refresh", () => {
   assert.match(chat, /if \(last\?\.stopReason === "error"\) return drawActiveChat\(agent\);/);
-  assert.match(
-    chat,
-    /if \(last\?\.stopReason === "aborted" && !runSlot\.unreachedAbort\) return drawActiveChat\(agent\);/,
-  );
+  assert.match(chat, /if \(last\?\.stopReason === "aborted"\) return drawActiveChat\(agent\);/);
 });
 
 test("verifySteerDelivered only trusts a steered entry newer than the baseline it was given", async () => {

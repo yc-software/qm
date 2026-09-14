@@ -40,6 +40,7 @@ export interface ConvCtx extends ConvHost {
 interface ChatState {
   pins: import("./core-bridge").SessionPin[];
   agent: Agent | null;
+  normalStreamFn: Agent["streamFn"] | null;
   host: HTMLElement | null;
   threadRef: string | null;
   sessionId: string | null;
@@ -65,6 +66,7 @@ export interface ChatSurface {
   hasLiveRun(): boolean;
   signalLiveRun(kind: "abort" | "steer", text?: string): Promise<import("./core-bridge").SignalOutcome>;
   stopLiveRun(): Promise<void>;
+  isStopping(): boolean;
   currentTurnOptions(): TurnOptions;
   newChat(context?: { scopeId: string; name: string | null }): string;
   teardown(): void;

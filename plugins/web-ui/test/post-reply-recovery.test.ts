@@ -385,6 +385,61 @@ test("post replies remain visible in new and continuing conversations", async (t
       assert.equal(count("Second confirmed reply"), 1);
       assert.equal(count("Replies sent."), 0);
     });
+    for (const edited of [false, true]) {
+      await t.test(
+        `delayed ended-run steer ${edited ? "preserves a newer draft" : "resends after completion"}`,
+        async (sub) => {
+          sub.after(() => {
+            intercept = undefined;
+          });
+          await mount();
+          const agent = conv!.state.agent!;
+          let oldRunLive = true;
+          let signalled = false;
+          let resends = 0;
+          intercept = (path) => {
+            if (path.includes("/api/runs/active"))
+              return Promise.resolve(
+                Response.json({
+                  runId: oldRunLive ? "r1" : null,
+                  run: oldRunLive ? { status: "running" } : null,
+                  queued: [],
+                }),
+              );
+            if (path === "/api/runs/queued/withdraw") return Promise.resolve(Response.json({ withdrawn: true }));
+            if (path === "/api/runs/r1/signal") {
+              signalled = true;
+              return Promise.resolve(Response.json({ reason: "terminal", replayed: false }, { status: 409 }));
+            }
+            if (path === "/api/turn") {
+              resends++;
+              return Promise.resolve(Response.json({ reply: "Follow-up received" }));
+            }
+          };
+          const before = FakeEventSource.instances.length;
+          conv!.resumeIfIdle();
+          await until(() => FakeEventSource.instances.length > before);
+          const turn = agent.waitForIdle();
+          const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
+          run.onopen?.();
+          conv!.composer.setQueuedRuns(row.threadRef, [{ runId: "queued", text: "Follow-up question" }]);
+          conv!.drawActiveChat(agent);
+          host.querySelector<HTMLButtonElement>(".queued-steer")!.click();
+          await until(() => signalled && conv!.composer.state.draft === "Follow-up question");
+          if (edited) conv!.composer.state.draft = "New draft";
+          await new Promise((resolve) => setTimeout(resolve, 5_200));
+          assert.equal(resends, 0);
+          oldRunLive = false;
+          run.emit("done", { status: "done", result: { status: "ok", reply: "Original answer" } });
+          await turn;
+          if (!edited) await until(() => resends === 1);
+          await settle();
+          assert.equal(resends, edited ? 0 : 1);
+          if (edited) assert.equal(conv!.composer.state.draft, "New draft");
+          intercept = undefined;
+        },
+      );
+    }
     if (conv) {
       disposeConversation(conv);
       conv = undefined;

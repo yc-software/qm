@@ -1,3 +1,4 @@
+import { withAbort } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
@@ -211,7 +212,7 @@ export interface ToolContext extends SurfaceToolDeps {
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string): Promise<void>;
   migrateComputer(to: string): Promise<{ from: string; to: string }>;
-  read(path: string): Promise<ReadResult>;
+  read(path: string, signal?: AbortSignal): Promise<ReadResult>;
   write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult>;
   publish(input: PublishInput): Promise<PublishResult>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
@@ -808,17 +809,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
-    async read(path: string): Promise<ReadResult> {
+    async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
+      signal?.throwIfAborted();
       if (path === MEMORY_FILE && deps.memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
           throw new Error("memory recall is not enabled for this conversation; use the `memory` tool when enabled");
         }
-        const content = await deps.memory.read(deps.memoryScopeId);
+        const content = await withAbort(() => deps.memory!.read(deps.memoryScopeId!), signal);
         if (content) return { content, sourceScopeId: deps.memoryScopeId };
       }
       const sharedFile = deps.context
-        ? await deps.context.readFile(path)
-        : await readContextFile(path, deps.grantedHandles, deps.workspace, deps.files);
+        ? await withAbort(() => deps.context!.readFile(path), signal)
+        : await withAbort(() => readContextFile(path, deps.grantedHandles, deps.workspace, deps.files), signal);
       if (sharedFile && "error" in sharedFile) return { content: sharedFile.error, sourceScopeId: null };
       if (sharedFile) {
         const { grant: granted, bytes } = sharedFile;
@@ -837,7 +839,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const materializedPath = deps.sharedMaterializeDir
           ? `${deps.sharedMaterializeDir}/${name}`
           : granted.handlePath;
+        signal?.throwIfAborted();
         await deps.sandbox.writeFileBytes(handle, materializedPath, bytes);
+        signal?.throwIfAborted();
         return {
           content:
             `[binary file materialized into the sandbox at ${materializedPath} (${bytes.length} bytes) — ` +
@@ -849,12 +853,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
       const skillDir = skillTreeDirFor(path);
       if (skillDir && deps.ensureSkillTree) await deps.ensureSkillTree(skillDir);
+      signal?.throwIfAborted();
       const handle = await deps.provision();
       return timed("file_op", async () => {
-        const direct = await deps.sandbox.readFile(handle, path);
+        const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
         if (direct !== null) return { content: direct, sourceScopeId: writableScopeId };
         for (const mount of fallbackMounts) {
-          const v = await deps.sandbox.readFile(handle, join(mount.mountPath, path));
+          const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, path)), signal);
           if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
         }
         return { content: null, sourceScopeId: null };

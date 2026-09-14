@@ -44,3 +44,15 @@ test("queued cards tuck beneath the next card just as the queue tucks beneath th
   assert.match(strip, /margin: 0 auto -10px;/);
   assert.match(stacked, /margin-top: -10px;/);
 });
+
+test("only collapsed overflowing prompt content gets the soft cutoff", () => {
+  const selector =
+    ".message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits) .user-bubble > .pin-content";
+  const rule = css.slice(css.indexOf(`${selector} {`)).split("}")[0] ?? "";
+  const overlay = css.slice(css.indexOf(`${selector}::after {`)).split("}")[0] ?? "";
+  assert.match(rule, /position: relative;/);
+  assert.match(rule, /mask-image: linear-gradient\(to bottom, #000 calc\(100% - 18px\), transparent\);/);
+  assert.match(overlay, /height: 18px;/);
+  assert.match(overlay, /backdrop-filter: blur\(2px\);/);
+  assert.match(overlay, /pointer-events: none;/);
+});

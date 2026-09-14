@@ -738,7 +738,14 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
     const canQueue = Boolean(composerState.draft.trim() || composerState.attachments.length);
     return html`
-      <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
+      <button
+        class="stop-btn"
+        type="button"
+        aria-label="Stop"
+        ${tip("Stop")}
+        ?disabled=${ctx.chat.isStopping()}
+        @click=${() => stopStreaming(agent)}
+      >
         ${icon(Square, 16)}
       </button>
       <button
@@ -1770,8 +1777,12 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function stopStreaming(agent: Agent): void {
-    void ctx.chat.stopLiveRun().catch((e) => swallow("web-ui: abort signal", e));
-    agent.abort();
+    composerState.error = "";
+    void ctx.chat.stopLiveRun().catch(() => {
+      if (agent !== ctx.chat.state.agent) return;
+      composerState.error = "Could not request stop. Try again.";
+      ctx.chat.drawActiveChat(agent);
+    });
   }
 
   let failedQueueSend: { threadRef: string; text: string; filesKey: string; idempotencyKey: string } | null = null;
@@ -1904,7 +1915,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       : undefined;
     try {
       const outcome = await ctx.chat.signalLiveRun("steer", queued.text);
-      if (!outcome.ok) recoverEndedRunSteer(agent, queued.text, outcome);
+      if (!outcome.ok) await recoverEndedRunSteer(agent, queued.text, outcome);
     } catch (err) {
       if (steerSessionId && (await verifySteerDelivered(steerSessionId, queued.text, sentAt, undefined, sinceSeq))) {
         composerState.error = "";
@@ -1919,50 +1930,19 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
   }
 
-  // The run ended before the steer landed (the client believed it was still live).
-  // Core either replayed the text as a fresh turn (`replayed`) or never stored it.
-  // Either way the message must not silently vanish: detach from the stale stream,
-  // then attach to the replay run — or resend the text as an ordinary prompt.
-  function recoverEndedRunSteer(agent: Agent, text: string, outcome: { replayed?: boolean }): void {
-    agent.abort();
-    if (outcome.replayed) {
-      const last = agent.state.messages[agent.state.messages.length - 1] as
-        { role?: string; content?: unknown; steered?: boolean } | undefined;
-      // It is now an ordinary user turn in the transcript, not a mid-run steer.
-      if (last?.role === "user" && last.content === text && last.steered) delete last.steered;
-      ctx.chat.drawActiveChat(agent);
-      attachWhenIdle(agent, 0);
-      return;
-    }
+  async function recoverEndedRunSteer(agent: Agent, text: string, outcome: { replayed?: boolean }): Promise<void> {
     const last = agent.state.messages[agent.state.messages.length - 1] as
-      { role?: string; content?: unknown } | undefined;
-    if (last?.role === "user" && last.content === text) agent.state.messages.pop();
-    composerState.draft = text;
+      { role?: string; content?: unknown; steered?: boolean } | undefined;
+    if (last?.role === "user" && last.content === text) {
+      if (outcome.replayed) delete last.steered;
+      else agent.state.messages.pop();
+    }
+    if (!outcome.replayed) composerState.draft = text;
     ctx.chat.drawActiveChat(agent);
-    resendWhenIdle(agent, text, 0);
-  }
-
-  function attachWhenIdle(agent: Agent, attempt: number): void {
+    await agent.waitForIdle();
     if (agent !== ctx.chat.state.agent) return;
-    if (agent.state.isStreaming) {
-      if (attempt < 20) window.setTimeout(() => attachWhenIdle(agent, attempt + 1), 250);
-      return;
-    }
-    ctx.chat.resumeIfIdle();
-  }
-
-  function resendWhenIdle(agent: Agent, text: string, attempt: number): void {
-    if (agent !== ctx.chat.state.agent) return;
-    if (agent.state.isStreaming) {
-      if (attempt < 20) window.setTimeout(() => resendWhenIdle(agent, text, attempt + 1), 250);
-      else {
-        composerState.error =
-          "Could not deliver the message. The running task ended mid-send. It is back in the composer.";
-        ctx.chat.drawActiveChat(agent);
-      }
-      return;
-    }
-    if (composerState.draft === text) void sendPrompt(agent);
+    if (outcome.replayed) ctx.chat.resumeIfIdle();
+    else if (composerState.draft === text) await sendPrompt(agent);
   }
 
   async function sendPrompt(agent: Agent): Promise<void> {
@@ -1988,6 +1968,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
     try {
+      if (ctx.chat.state.normalStreamFn) agent.streamFn = ctx.chat.state.normalStreamFn;
       await agent.prompt(userSendMessage(text, attachments.length ? attachments : undefined));
       restoreBlockedSend(agent, sentFromThread, text, attachments);
       restoreFailedAttachments(agent, text, attachments);
