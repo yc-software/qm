@@ -27,20 +27,40 @@ test("confetti celebrates only the highest supported effort and respects reduced
   const label = button.querySelector("span")!;
   label.getBoundingClientRect = () => ({ left: 100, top: 100, width: 60, height: 20 }) as DOMRect;
   try {
-    const { isHighestEffort, burstEffortConfetti } = await vite.ssrLoadModule("/src/effort-confetti.ts");
+    const { burstEffortConfetti } = await vite.ssrLoadModule("/src/effort-confetti.ts");
+    let selectedLevel = "xhigh";
+    let selectedHarness = "codex";
+    button.addEventListener("click", (event) => burstEffortConfetti(event, selectedLevel, selectedHarness));
+    const finishBurst = async (): Promise<void> => {
+      completions.splice(0).forEach((complete) => complete());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
+    };
     for (const [harness, top] of [
       ["pi", "ultracode"],
       ["claude", "max"],
       ["codex", "xhigh"],
     ]) {
-      assert.equal(isHighestEffort(top, harness), true);
-      assert.equal(isHighestEffort("high", harness), false);
-      assert.equal(isHighestEffort("auto", harness), false);
+      selectedHarness = harness;
+      for (const level of ["high", "auto", top]) {
+        selectedLevel = level;
+        button.click();
+        assert.equal(dom.window.document.querySelectorAll(".effort-confetti > span").length, level === top ? 14 : 0);
+        await finishBurst();
+      }
     }
-    assert.equal(isHighestEffort("auto", "opencode"), false);
-    assert.equal(isHighestEffort("ultracode", "codex"), false);
-    assert.equal(isHighestEffort("max", "pi"), false);
-    button.addEventListener("click", (event) => burstEffortConfetti(event, "xhigh", "codex"));
+    for (const [harness, level] of [
+      ["opencode", "auto"],
+      ["codex", "ultracode"],
+      ["pi", "max"],
+    ]) {
+      selectedHarness = harness;
+      selectedLevel = level;
+      button.click();
+      assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
+    }
+    selectedHarness = "codex";
+    selectedLevel = "xhigh";
     reducedMotion = true;
     button.click();
     assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
@@ -50,9 +70,7 @@ test("confetti celebrates only the highest supported effort and respects reduced
     assert.equal(dom.window.document.querySelector(".effort-confetti")?.getAttribute("aria-hidden"), "true");
     button.click();
     assert.equal(completions.length, 14);
-    completions.forEach((complete) => complete());
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
+    await finishBurst();
   } finally {
     await vite.close();
     dom.window.close();

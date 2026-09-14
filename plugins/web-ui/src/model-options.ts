@@ -122,10 +122,6 @@ export function getHarnessOptions(scopeKey?: string | null): Array<{ value: stri
   );
 }
 
-export function getModelOptionsForHarness(harnessId: string, scopeKey?: string | null): ModelOption[] {
-  return runtimeFor(scopeKey).options.filter((option) => option.harnessId === harnessId);
-}
-
 export function runtimeModelOptions(
   approvedHarnesses: readonly string[],
   modelsByHarness: Readonly<Record<string, readonly string[]>>,

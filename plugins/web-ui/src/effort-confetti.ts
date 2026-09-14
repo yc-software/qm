@@ -4,7 +4,7 @@ const COLORS = ["#e8843a", "#e45d79", "#a78bfa", "#60a5fa", "#5cc074", "#f6cc46"
 let activeBurst: HTMLElement | null = null;
 let activeAnchor: Element | null = null;
 
-export function isHighestEffort(level: string, harnessId: string): boolean {
+function isHighestEffort(level: string, harnessId: string): boolean {
   const levels = effortLevelsForHarness(harnessId);
   return levels.length > 1 && levels.at(-1)?.value === level;
 }

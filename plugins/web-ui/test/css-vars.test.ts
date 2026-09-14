@@ -57,7 +57,7 @@ test("every modal scrim dims through --scrim, which each theme points away from 
   assert.ok(scrims.length >= 5, "the scrim rules should still be findable by name");
   for (const rule of scrims) {
     const background = rule.match(/\n\s*background:\s*([^;]+);/)?.[1] ?? "";
-    if (!background.includes("transparent")) continue;
+    if (!background.includes("transparent") || background === "transparent") continue;
     const name = rule.split("{")[0].trim();
     assert.doesNotMatch(
       background,

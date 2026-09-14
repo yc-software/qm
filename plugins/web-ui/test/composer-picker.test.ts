@@ -28,6 +28,7 @@ function model(id: string, label: string, provider = "anthropic"): ModelMetadata
 test("the model picker remembers compatible harnesses without duplicating or changing models", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/web-ui/",
+    pretendToBeVisual: true,
   });
   Object.defineProperty(dom.window, "matchMedia", {
     value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
@@ -68,8 +69,8 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     KeyboardEvent: dom.window.KeyboardEvent,
     customElements: dom.window.customElements,
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     ResizeObserver: class {
       observe() {}
       unobserve() {}
@@ -177,7 +178,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       await composer!.refreshRuntimeSelection(null, agent);
     };
     const tick = async (): Promise<void> => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve()));
     };
     const button = (selector: string): HTMLButtonElement => {
       const target = host.querySelector<HTMLButtonElement>(selector);
