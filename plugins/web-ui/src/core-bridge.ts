@@ -1,3 +1,4 @@
+import { beginSendTiming, type SendTiming } from "./send-timing.ts";
 import { postCallText, postResultOk } from "./surface-post.ts";
 import type { ModelMetadata } from "./pi-models.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -453,6 +454,7 @@ export interface ActiveRun {
 }
 
 export interface QueuedRun {
+  onRendered?: (element: Element | undefined) => void;
   runId: string;
   text: string;
   hasAttachments?: boolean;
@@ -850,16 +852,30 @@ export async function queueTurn(
   getTurnOptions?: () => TurnOptions,
   idempotencyKey?: string,
   attachments: CoreAttachment[] = [],
+  timing: SendTiming = beginSendTiming(withBase("/api/send-timing")),
 ): Promise<QueuedRun> {
-  const submit = await api<{ status?: string; runId?: string; reason?: string }>("/api/turn", {
-    method: "POST",
-    body: JSON.stringify(
-      turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
-    ),
-  });
-  if (submit.status === "pending_approval") throw new Error(submit.reason ?? PENDING_APPROVAL_REASON);
-  if (!submit.runId) throw new Error("Could not queue the message.");
-  return { runId: submit.runId, text, ...(attachments.length ? { hasAttachments: true } : {}) };
+  timing.mark("request_start");
+  try {
+    const submit = await api<{ status?: string; runId?: string; reason?: string }>("/api/turn", {
+      method: "POST",
+      body: JSON.stringify({
+        ...turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        traceId: timing.traceId,
+      }),
+    });
+    timing.mark("response_received");
+    if (submit.status === "pending_approval") throw new Error(submit.reason ?? PENDING_APPROVAL_REASON);
+    if (!submit.runId) throw new Error("Could not queue the message.");
+    return {
+      runId: submit.runId,
+      text,
+      onRendered: timing.onRendered,
+      ...(attachments.length ? { hasAttachments: true } : {}),
+    };
+  } catch (error) {
+    timing.mark("error");
+    throw error;
+  }
 }
 
 export async function withdrawRun(runId: string): Promise<boolean> {
@@ -1049,6 +1065,8 @@ async function drive(
   slot?: RunSlot,
   onSendIssues?: SendIssueObserver,
 ): Promise<void> {
+  const timing = beginSendTiming(withBase("/api/send-timing"));
+  let acknowledged = false;
   const gen = beginSubmit(slot);
   const partial = baseAssistant(model);
   const work: WorkBlock = { status: "thinking", activity: [] };
@@ -1069,7 +1087,9 @@ async function drive(
           retryable: [] as Attachment[],
         }
       : await latestUserTurn(agent);
+    timing.mark("uploads_complete");
     if (!opener && !text.trim() && attachments.length === 0) {
+      timing.mark("error");
       work.status = "failed";
       work.finishedAt = Date.now();
       notify();
@@ -1082,14 +1102,18 @@ async function drive(
     }
     if (issues.length) onSendIssues?.(issues, retryable);
 
+    timing.mark("request_start");
     const submit = await api<{ status?: string; runId?: string; reply?: string; reason?: string }>("/api/turn", {
       method: "POST",
       body: JSON.stringify({
         ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        traceId: timing.traceId,
         ...(opener ? { proactiveOpener: true } : {}),
       }),
     });
 
+    acknowledged = true;
+    timing.mark("response_received");
     if (submit.runId) {
       await followRun(stream, partial, submit.runId, signal, notify, undefined, slot, gen);
       return;
@@ -1109,6 +1133,7 @@ async function drive(
     notify();
     finish(stream, partial, { acc: "", lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
+    if (!acknowledged) timing.mark("error");
     work.status = "failed";
     work.finishedAt = Date.now();
     notify();

@@ -1,3 +1,5 @@
+import { ref } from "lit/directives/ref.js";
+import { beginSendTiming, type SendTiming } from "./send-timing.ts";
 import { getRuntimeConfig, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
@@ -28,6 +30,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_FILES_PER_MESSAGE,
   mintSendKey,
+  withBase,
   oversizeAttachmentNote,
   PENDING_APPROVAL_REASON,
   queueTurn,
@@ -768,7 +771,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       <div class="queued-strip" role="list" aria-label="Queued messages">
         ${queued.map(
           (q) => html`
-            <div class="queued-chip" role="listitem">
+            <div class="queued-chip" role="listitem" ${ref(q.onRendered)}>
               <span class="queued-tag">Queued</span>
               <span class="queued-text" dir="auto" ${tip(q.text || "Files, no text")}
                 >${q.text || (q.hasAttachments ? "(files)" : "")}</span
@@ -1320,6 +1323,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     const text = composerState.draft.trim();
     const staged = composerState.attachments;
     if ((!text && !staged.length) || !threadRef) return;
+    const timing = beginSendTiming(withBase("/api/send-timing"));
     clearActiveDraft();
     composerState.draft = "";
     composerState.attachments = [];
@@ -1327,16 +1331,18 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
     const { uploaded, skipped } = await uploadAttachments(staged);
+    timing.mark("uploads_complete");
     const stillHere = (): boolean => ctx.chat.state.threadRef === threadRef;
     if (skipped.length && stillHere()) composerState.error = skipped.map((s) => s.note).join(" ");
     const droppedIds = new Set(skipped.filter((s) => s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
     const transientIds = new Set(skipped.filter((s) => !s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
     const sendable = staged.filter((a) => !droppedIds.has(a.id));
     if (!text && !uploaded.length) {
+      timing.mark("error");
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
-    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable)))) {
+    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), timing))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     } else if (transientIds.size && stillHere()) {
       restageAttachments(
@@ -1361,10 +1367,19 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     text: string,
     attachments: CoreAttachment[] = [],
     filesKey = "",
+    timing?: SendTiming,
   ): Promise<boolean> {
     const idempotencyKey = queueSendKey(threadRef, text, filesKey);
     try {
-      const queued = await queueTurn(threadRef, text, agent, ctx.chat.currentTurnOptions, idempotencyKey, attachments);
+      const queued = await queueTurn(
+        threadRef,
+        text,
+        agent,
+        ctx.chat.currentTurnOptions,
+        idempotencyKey,
+        attachments,
+        timing,
+      );
       failedQueueSend = null;
       setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
       bumpSessionActivity(threadRef);

@@ -35,7 +35,7 @@ test("the queue lives in core, not in the browser", () => {
   );
   assert.match(
     composer,
-    /const queued = await queueTurn\(threadRef, text, agent, ctx\.chat\.currentTurnOptions, idempotencyKey, attachments\);/,
+    /const queued = await queueTurn\(\s*threadRef,\s*text,\s*agent,\s*ctx\.chat\.currentTurnOptions,\s*idempotencyKey,\s*attachments,\s*timing,?\s*\);/,
   );
   assert.match(
     bridge,

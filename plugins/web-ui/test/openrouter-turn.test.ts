@@ -29,7 +29,9 @@ test("a web turn submits the fetched OpenRouter model selected by runtime config
   );
   const model = getModelOptions()[0]!.model;
   const submitted: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (_input, init) => {
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/send-timing")) return new Response(null, { status: 204 });
+    assert.ok(String(input).endsWith("/api/turn"));
     submitted.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return Response.json({ status: "ok", reply: "ready" });
   }) as typeof fetch;

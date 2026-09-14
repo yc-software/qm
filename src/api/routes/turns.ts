@@ -1,3 +1,4 @@
+import { createSendTiming, sendTraceId } from "../../../plugins/chassis/src/send-timing.ts";
 import type { TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { samePerson } from "../../directory/person.ts";
@@ -60,7 +61,16 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
   const sanitized = sanitizedTurnRequest(body);
   if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
-  const result = await app.turn({ ...sanitized.request, async: wantAsync });
+  const traceId = sendTraceId(sanitized.request.traceId);
+  const timing = createSendTiming(traceId, "core");
+  let result;
+  try {
+    result = await app.turn({ ...sanitized.request, traceId, async: wantAsync });
+    timing("complete");
+  } catch (error) {
+    timing("error");
+    throw error;
+  }
   if (result.status === "queued") return sendJson(res, 202, result);
   const status = result.status === "refused" ? 403 : 200;
   return sendJson(res, status, result);

@@ -568,6 +568,7 @@ export type TurnOrigin =
   | { kind: "direct" };
 
 export interface TurnRequest {
+  traceId?: string;
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;

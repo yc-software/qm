@@ -1,3 +1,10 @@
+import {
+  createSendTiming,
+  logSendTiming,
+  parseSendTiming,
+  sendTraceId,
+  type SendTimingStage,
+} from "../../chassis/src/send-timing.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -5,7 +12,7 @@ import { Readable } from "node:stream";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, normalize } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
   signedHeaders,
@@ -649,6 +656,8 @@ async function readJson<T extends object>(
   }
 }
 
+const timingReports = new LRUCache<string, { start: number; count: number }>({ max: 1000, ttl: 60_000 });
+
 const SEND_KEY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 function namespacedSendKey(user: string, raw: unknown): string | undefined {
@@ -657,8 +666,22 @@ function namespacedSendKey(user: string, raw: unknown): string | undefined {
   return SEND_KEY_PATTERN.test(key) ? `web:${encodeURIComponent(user)}:${key}` : undefined;
 }
 
-async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string, threadRef: string): Promise<void> {
-  const r = await coreFetch("POST", `/v1/turns?async=1`, JSON.stringify(turn));
+async function postTurnAndMint(
+  res: ServerResponse,
+  turn: unknown,
+  user: string,
+  threadRef: string,
+  timing?: (stage: SendTimingStage) => void,
+): Promise<void> {
+  timing?.("forward_start");
+  let r;
+  try {
+    r = await coreFetch("POST", `/v1/turns?async=1`, JSON.stringify(turn));
+    timing?.("response_received");
+  } catch (error) {
+    timing?.("error");
+    throw error;
+  }
   if (r.status >= 200 && r.status < 300) {
     try {
       const parsed = JSON.parse(r.text) as Record<string, unknown> & { runId?: string };
@@ -2075,10 +2098,37 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/send-timing",
+    handle: async ({ req, res, user }) => {
+      const now = Date.now();
+      const window = timingReports.get(user) ?? { start: now, count: 0 };
+      if (now - window.start >= 60_000) {
+        window.start = now;
+        window.count = 0;
+      }
+      window.count += 1;
+      timingReports.set(user, window);
+      if (window.count > 120) return json(res, 429, { error: "rate_limited" });
+      let event;
+      try {
+        event = parseSendTiming(JSON.parse(await readBodyCapped(req, 512)));
+      } catch (error) {
+        if (error instanceof PayloadTooLargeError) throw error;
+        return json(res, 400, { error: "bad_request" });
+      }
+      if (!event || event.layer !== "browser") return json(res, 400, { error: "bad_request" });
+      logSendTiming(event);
+      res.writeHead(204);
+      res.end();
+    },
+  },
+  {
+    method: "POST",
     path: "/api/turn",
     handle: async (c) => {
       const { req, res, user } = c;
       const ownPrefix = `web:${user}:`;
+      let traceId: string = randomUUID();
       let text = "";
       let threadRef = `${ownPrefix}default`;
       let model: string | undefined;
@@ -2094,6 +2144,7 @@ const apiRoutes: readonly WebRoute[] = [
       let idempotencyKey: string | undefined;
       try {
         const p = JSON.parse(await readBody(req));
+        traceId = sendTraceId(p.traceId) ?? traceId;
         text = String(p.text ?? "");
         idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
         if (
@@ -2136,6 +2187,12 @@ const apiRoutes: readonly WebRoute[] = [
       } catch (e) {
         if (e instanceof PayloadTooLargeError) throw e;
       }
+      const timing = createSendTiming(traceId, "web");
+      timing("received");
+      res.once("finish", () => timing("response_sent"));
+      res.once("close", () => {
+        if (!res.writableFinished) timing("closed");
+      });
       if (!text.trim() && attachments.length === 0 && !approval && !proactiveOpener)
         return json(res, 400, { error: "empty message" });
 
@@ -2143,6 +2200,7 @@ const apiRoutes: readonly WebRoute[] = [
       if ("error" in resolved) return json(res, 403, resolved);
 
       const turn = {
+        traceId,
         ...webTurnBase(req, user, resolved.conversation, threadRef, text),
         ...(harness ? { harness } : {}),
         ...(model ? { model } : {}),
@@ -2154,7 +2212,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
       };
-      return postTurnAndMint(res, turn, user, threadRef);
+      return postTurnAndMint(res, turn, user, threadRef, timing);
     },
   },
   {
