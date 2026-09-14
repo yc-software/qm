@@ -49,7 +49,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
   let failNextGet = true;
   let failNextPut = false;
   let deferNextPut = false;
-  let releasePut: () => void = () => {};
+  let pendingPut: Promise<void> | undefined;
   const extraComposers: ComposerSurface[] = [];
   const globals = {
     window: dom.window,
@@ -93,9 +93,7 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       updates.push(change);
       if (deferNextPut) {
         deferNextPut = false;
-        await new Promise<void>((resolve) => {
-          releasePut = resolve;
-        });
+        await pendingPut;
       }
       const effective = {
         harnessId: change.harnessId,
@@ -448,15 +446,14 @@ test("the model picker remembers compatible harnesses without duplicating or cha
       );
       assert.ok(target);
       deferNextPut = true;
-      releasePut = () => {
-        throw new Error("default save did not start");
-      };
+      const gate = Promise.withResolvers<void>();
+      pendingPut = gate.promise;
       target.click();
       await tick();
       assert.equal(deferNextPut, false, "default save is pending");
       if (field === "effortLevel") pendingComposer.state.effortLevel = "high";
       else pendingComposer.state.fastMode = !fastBefore;
-      releasePut();
+      gate.resolve();
       await tick();
       assert.equal(
         pendingComposer.currentModelOption()?.value,
