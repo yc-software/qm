@@ -1,36 +1,27 @@
-# Composio integrations
+# Composio through an ordinary credential
 
-Composio is an opt-in universal integration provider. Existing direct OAuth remains available when it is not configured.
+QM uses Composio from its computer, through a skill and the official SDK. There is no Composio-specific harness tool, SDK adapter, callback route, connection record type or approval engine.
 
-## Operator setup
+## Setup
 
-Store the project key as an existing org service credential with `provider: "composio"`, `delivery: "broker"`, and `host: "backend.composio.dev"`. Grant its use through the existing service-credential ACL. Never put the project key in sandbox environment variables. The generic HTTP/Git brokers and model credential resolver refuse this provider type.
+Register an ordinary personal keychain credential named `composio` with env key `COMPOSIO_API_KEY`, or use an existing org service credential with `delivery: "env"` and that env key. Set the normal credential grants. No provider flag is needed. Never paste the key into a conversation, a script or a repository.
 
-Configure the Composio project's callback verifier to the authenticated portal path `/connect/composio/complete/<credential-slug>` (for example `/connect/composio/complete/apps`). This is one verifier URL per Composio project, not per app. The SDK link-level `callbackUrl` is deliberately omitted: Composio ignores it when project callback verification is enabled. See [the vendor verifier contract](https://docs.composio.dev/reference/api-reference/connected-accounts#callback-identity-verification). Composio sends its opaque `session_uri` there. The portal requires sign-in and forwards the real browser session identity to core; core redeems it with the namespaced company/user ID. Only a successful redemption of an active private account registers a connection reference in the existing keychain. Browser query flags or an ACTIVE account alone cannot register one.
+The existing credential machinery delivers the key only where authorized. The `composio` skill discovers apps and tools, starts consent, chooses connections and makes SDK calls. Onboarding and app skills prefer it when an authorized credential is available; otherwise direct OAuth remains unchanged. The SDK is installed on demand in the computer, not in the harness package.
 
-A shared hosting project needs a centrally authenticated tenant gateway for both dispatch and callback verification. Do not distribute that shared project key into tenant-managed stacks. Hosting-specific routing is deliberately outside the public harness.
+## Access model
 
-## Shared helper
+A Composio project API key grants its holder the project's permitted capabilities. Resource-area restrictions are not per-user account isolation. Keychain grants control who receives that key; they do not narrow its authority within Composio. A caller-supplied `userId` is not a security boundary.
 
-The `integrations` tool is the single helper used by onboarding and app skills:
+Use a key whose authority is appropriate for every recipient. Do not distribute one cross-company project key to mutually isolated companies and claim their connections remain isolated. This skill does not solve shared hosting credential isolation or provisioning.
 
-- `status`: configured and entitled providers, without key material. Availability does not prove provider health or an app connection.
-- `catalog` / `search`: native provider apps and tool schemas, with no local app registry.
-- `connections`: local references owned by this personal context or explicitly granted here.
-- `connect`: a native consent link for the current user in their personal conversation.
-- `execute`: one versioned native app tool, using a selected authorized connection.
-- `disconnect`: revoke local access and grants before requesting remote deletion.
+Existing command policies remain unchanged. Rules written for direct provider URLs or particular CLI commands do not automatically cover SDK calls; operators must review their policy coverage. Skill instructions retain the user's sending, drafting and approval requirements.
 
-The helper runs inside the existing tool executor, not through a second execution API. Existing strict-posture screening and approval pause/resume apply. Native execution and disconnect require exact-operation approval by default; explicit command-policy allow rules can permit selected operations. Shell-only rules are not assumed to authorize a native call. The approval command includes credential, local connection, tool version and canonical arguments.
+## Consent and limitations
 
-Connection references carry no token and cannot be materialized. Existing owner grants work for shared conversations, including atomic once-grant consumption after operation approval. Provider key access and connection access are separate checks.
+Composio handles provider authentication and refresh. Some apps still require provider admin/customer setup. If project callback identity verification is enabled, an existing authenticated verifier must complete consent; this skill neither implements nor bypasses it. See [the vendor verifier contract](https://docs.composio.dev/reference/api-reference/connected-accounts#callback-identity-verification).
 
-## What stays out of core
+No live key, grant or project setting is changed by adding these skills. Test app-originated consent and requested operations before rollout. Automatic SDK file transfer is disabled. The separate chat bot installation and deterministic background source adapters remain unchanged.
 
-Composio owns app discovery, OAuth, token refresh, provider schemas and native execution. Skills choose apps and compose calls. There is no provider URL registry, custom HTTP proxy, connection state machine or app-specific workflow in core.
+## Rollback
 
-The SDK's automatic local file transfers, telemetry, redirects and request retries are disabled. Meta-tools, custom tools and remote workbench execution are not exposed. Do not automatically repeat an uncertain write or OAuth completion. File operations need explicit authorized data; a path to core's filesystem is never a file handoff.
-
-## Rollout
-
-No provider key or project callback is changed by installing this code. Validate real consent, reads, approved writes, sharing, revocation and files in a development instance before rollout. Native app calls do not install the separate chat bot. Deterministic inbox/loop adapters still use their direct connectors; this change routes the agent's skills, not those background adapters.
+Seed removal does not delete an already-published skill. When replacing the earlier prototype, archive its obsolete `integrations` skill if installed. To roll this version back, restore the previous app/onboarding skills, archive the published `composio` skill and stop workflows using it. Revoke any separately enabled credential grants; rotate or revoke the provider key if previously delivered copies must stop working. Do not delete provider connections without authorization.

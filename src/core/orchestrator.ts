@@ -1,4 +1,3 @@
-import { createIntegrationHelper } from "../connectors/integrations.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
@@ -1464,7 +1463,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (deps.serviceCreds) {
           const records = serviceCredRecords;
           const enabled = new Set(
-            records.filter((r) => r.enabled && r.hasSecret && r.delivery !== "env" && !r.provider).map((r) => r.slug),
+            records.filter((r) => r.enabled && r.hasSecret && r.delivery !== "env").map((r) => r.slug),
           );
           if (enabled.size > 0) {
             const slugs = [...grantedCredSlugs].filter((s) => enabled.has(s));
@@ -2184,46 +2183,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           commandPolicy: () => commandPolicy,
           layerCommandRules: () => layerCommandRules,
           authorizeCommand,
-          ...(!strictReadOnly && actor.type === "internal" && deps.keychain && deps.auditLog
-            ? {
-                integrations: createIntegrationHelper({
-                  keychain: deps.keychain,
-                  orgScopeId: resolution.orgScopeId,
-                  scopeId,
-                  actorId: actor.id,
-                  grantedCredentials: async () =>
-                    (
-                      await deps.acl.grantsOfKind(
-                        "service-cred",
-                        conversation.audience,
-                        scopeId,
-                        resolution.orgScopeId,
-                        principalEntitledToScope,
-                      )
-                    ).map((g) => parseRef(g.ref).id),
-                  approve: (command) => {
-                    const gate = evaluateCommandWithLayer(command, commandPolicy, layerCommandRules);
-                    if (gate.decision === "deny") throw new CommandDenied(command, gate.reason ?? "Denied by policy");
-                    if ((gate.decision !== "allow" || !gate.matched) && !authorizeCommand(command, gate.approvalKey))
-                      throw new NeedsApproval(
-                        command,
-                        gate.reason ?? "Approve this integration operation",
-                        "approval",
-                        gate.matched,
-                        gate.approvalKey,
-                      );
-                  },
-                  audit: (action, resource) =>
-                    deps.auditLog!.record({
-                      at: Date.now(),
-                      principalId: actor.id,
-                      scopeLabel: scopeId,
-                      action,
-                      resource,
-                    }),
-                }),
-              }
-            : {}),
           grantedHandles: resolution.grantedHandles,
           context,
           sharedMaterializeDir: turnSharedDir,

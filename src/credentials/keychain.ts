@@ -12,14 +12,7 @@ import { homeRelativePath } from "./paths.ts";
 import type { CredentialPathSpec } from "./resident-paths.ts";
 import { envKey } from "./connector-token.ts";
 
-type CredentialKind = "env" | "file" | "broker" | "connection";
-
-interface IntegrationConnection {
-  provider: "composio";
-  credential: string;
-  accountId: string;
-  toolkit: string;
-}
+type CredentialKind = "env" | "file" | "broker";
 
 export interface CredentialInjection {
   header?: string;
@@ -44,7 +37,6 @@ export function credentialInjectionError(value: unknown): string | undefined {
 }
 
 interface BrokerDelivery {
-  provider?: "composio";
   name: string;
   delivery?: "broker" | "env";
   envKey?: string;
@@ -90,7 +82,6 @@ export interface CredentialFieldInput {
 }
 
 export interface KeychainCredential {
-  connection?: IntegrationConnection;
   id: string;
   ownerId: string;
   orgId?: string;
@@ -161,7 +152,6 @@ export const ASK_TTL_MS = 24 * 60 * 60_000;
 export const ASK_PRUNE_AFTER_MS = 14 * 24 * 60 * 60_000;
 
 export interface ServiceCredentialInput {
-  provider?: "composio";
   slug: string;
   name: string;
   secret?: string;
@@ -177,7 +167,6 @@ export interface ServiceCredentialInput {
 }
 
 export interface PublicServiceCredential {
-  provider?: "composio";
   slug: string;
   name: string;
   delivery: "broker" | "env";
@@ -194,7 +183,6 @@ export interface PublicServiceCredential {
 }
 
 export interface DecryptedServiceCredential {
-  provider?: "composio";
   slug: string;
   name: string;
   secret: string;
@@ -384,8 +372,6 @@ interface GrantListFilter {
 }
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
-  saveConnection(ownerId: string, connection: IntegrationConnection): Promise<KeychainCredentialMeta>;
-  useConnection(credentialId: string, scopeId: ScopeId, actorId: string): Promise<KeychainCredentialMeta>;
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
@@ -594,7 +580,6 @@ export function createKeychain(deps: {
       slug: rec.service,
       name: b.name,
       delivery: b.delivery ?? "broker",
-      ...(b.provider ? { provider: b.provider } : {}),
       ...(b.envKey ? { envKey: b.envKey } : {}),
       host: rec.host ?? "",
       ...(b.injection ? { injection: b.injection } : {}),
@@ -622,9 +607,6 @@ export function createKeychain(deps: {
     const trimmedSecret = input.secret?.trim();
     const t = Math.max(now(), (prior?.updatedAt ?? 0) + 1);
     const delivery = input.delivery ?? "broker";
-    if (input.provider !== undefined && input.provider !== "composio") throw new Error("Unknown integration provider");
-    if (input.provider && (delivery !== "broker" || input.host !== "backend.composio.dev" || input.envKey))
-      throw new Error("Composio requires server-only delivery to backend.composio.dev");
     if (delivery === "env") {
       if (!input.envKey || !isValidServiceCredentialEnvKey(input.envKey)) {
         throw new Error(
@@ -643,7 +625,6 @@ export function createKeychain(deps: {
       host: input.host,
       broker: {
         name: input.name,
-        ...(input.provider ? { provider: input.provider } : {}),
         ...(delivery === "env" ? { delivery, envKey: input.envKey! } : {}),
         ...(input.injection ? { injection: input.injection } : {}),
         ...(input.allowedMethods ? { allowedMethods: input.allowedMethods.map((m) => m.toUpperCase()) } : {}),
@@ -1038,38 +1019,6 @@ export function createKeychain(deps: {
       return updated !== null;
     },
 
-    async saveConnection(ownerId, connection) {
-      const id = credId(ownerId, connection.credential, connection.accountId);
-      const t = now();
-      const rec: KeychainCredential = {
-        id,
-        ownerId,
-        orgId: configOrgId(),
-        service: connection.toolkit,
-        kind: "connection",
-        connection,
-        secretEnc: "",
-        fingerprint: fingerprintOf(connection.accountId),
-        accountLabel: connection.toolkit,
-        createdAt: t,
-        updatedAt: t,
-      };
-      await deps.creds.put(id, rec);
-      return toMeta(rec);
-    },
-
-    async useConnection(id, scopeId, actorId) {
-      const rec = await deps.creds.get(id);
-      if (!rec || rec.kind !== "connection" || !rec.connection || rec.orgId !== configOrgId())
-        throw new KeychainError(404, "Unknown integration connection");
-      if (scopeId !== toScopeId("personal", rec.ownerId) || !samePerson(rec.ownerId, actorId)) {
-        const grant = (await activeGrantsFor(scopeId)).find((g) => g.credentialId === id);
-        if (!grant) throw new KeychainError(403, "Connection requires an owner grant to this conversation");
-        await claimOnceGrant(grant, scopeId, actorId);
-      }
-      return toMeta(rec);
-    },
-
     async getCredential(id) {
       const rec = await deps.creds.get(id);
       return rec ? toMeta(rec) : null;
@@ -1311,7 +1260,6 @@ export function createKeychain(deps: {
         name: b.name,
         secret: decryptSecret(rec.secretEnc, deps.key),
         delivery: b.delivery ?? "broker",
-        ...(b.provider ? { provider: b.provider } : {}),
         ...(b.envKey ? { envKey: b.envKey } : {}),
         host: rec.host ?? "",
         ...(b.injection ? { injection: b.injection } : {}),
@@ -1391,11 +1339,8 @@ export function createKeychain(deps: {
       if (expired(grant, now())) throw new KeychainError(410, "grant is expired");
       const cred = await deps.creds.get(grant.credentialId);
       if (!cred) throw new KeychainError(404, "credential no longer exists");
-      if (cred.kind === "broker" || cred.kind === "connection") {
-        throw new KeychainError(
-          403,
-          "broker and connection credentials are not grantable — they are used via the credential broker",
-        );
+      if (cred.kind === "broker") {
+        throw new KeychainError(403, "broker credentials are not grantable — they are used via the credential broker");
       }
       const extra = { grantId: grant.id, purpose: grant.purpose };
       if (cred.managed === "connector") {
@@ -1418,11 +1363,8 @@ export function createKeychain(deps: {
       }
       const cred = await deps.creds.get(credentialId);
       if (!cred || !samePerson(cred.ownerId, ownerId)) throw new KeychainError(404, "unknown credential");
-      if (cred.kind === "broker" || cred.kind === "connection") {
-        throw new KeychainError(
-          403,
-          "broker and connection credentials are used via the credential broker, never materialized",
-        );
+      if (cred.kind === "broker") {
+        throw new KeychainError(403, "broker credentials are used via the credential broker, never materialized");
       }
       if (cred.managed === "connector") return materializeConnectorEnv(cred);
       if (credExpired(cred, now())) throw new KeychainError(410, "credential is expired");
@@ -1614,7 +1556,6 @@ function credLine(
   if (c.kind === "env") {
     slot = c.fields ? c.fields.map((f) => `\`${f.envKey}\``).join(" + ") : `\`${c.envKey}\``;
   }
-  if (c.kind === "connection") slot = "Composio; use the integrations helper, never keychain materialization";
   const label = c.accountLabel ? `, account ${c.accountLabel}` : "";
   return `- ${who}: ${c.service} (${slot}${label}${expiryNote(c, now, own)}) — credential id \`${c.id}\` — ${grantNote}`;
 }

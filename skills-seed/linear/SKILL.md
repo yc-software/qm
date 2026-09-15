@@ -5,9 +5,9 @@ requiredCapabilities:
   - egress:api.linear.app
 ---
 
-## Universal integration provider first
+## Composio when available
 
-Call `integrations` with `action: "status"`. When available, read `skills/integrations/SKILL.md` and use that shared helper for discovery, consent and execution. Follow this skill's task/content rules, but skip its direct-token and script instructions. The direct OAuth procedures below are fallback only when no universal provider is available, never after a permission denial.
+If an authorized Composio credential is available, read `skills/composio/SKILL.md` and use its SDK workflow. Keep this skill's task/content rules, but skip its direct-token and script instructions. Otherwise use the direct connector below. Never switch credentials to evade a permission denial.
 
 # Linear
 

@@ -39,6 +39,7 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
   assert.deepEqual(result.skipped, []);
   assert.ok(result.installed.includes("cloud-cli"));
+  assert.ok(result.installed.includes("composio"));
   assert.ok(result.installed.includes("google-workspace"));
   assert.ok(result.installed.includes("google-drive-sheets"));
   assert.ok(result.installed.includes("github-gitlab"));

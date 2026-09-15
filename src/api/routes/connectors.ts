@@ -1,4 +1,3 @@
-import { integrationCompletionRoutes } from "./integration-completion.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
@@ -503,7 +502,6 @@ export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  ...integrationCompletionRoutes,
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
   { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start", auth: "source", handle: oauthStart },

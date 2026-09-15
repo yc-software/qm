@@ -5,7 +5,6 @@ import type { AddressInfo } from "node:net";
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
-let lastComposioHeaders: IncomingMessage["headers"] | null = null;
 let lastImpersonateIdentity: string | null = null;
 let agentApiRequests = 0;
 const VALID_AGENT_CAPABILITY = "valid.agent.capability";
@@ -38,11 +37,6 @@ const upstream = createServer((req: IncomingMessage, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
     });
-  }
-  if (req.url?.startsWith("/v1/connectors/composio/complete")) {
-    lastComposioHeaders = req.headers;
-    res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ status: "connected" }));
   }
   if (typeof req.url === "string" && req.url.startsWith("/v1/connectors/oauth/consent/redeem/")) {
     lastConsentClicker = (req.headers["x-consent-clicker"] as string | undefined) ?? null;
@@ -634,20 +628,4 @@ test("impersonate: an admin starts it; the web-ui hop carries target + impersona
   });
   assert.equal(stop.status, 200);
   assert.match(stop.headers.get("set-cookie") ?? "", /portal_impersonate=;[^,]*Max-Age=0/);
-});
-
-test("Composio completion requires a real session and forwards only its identity", async () => {
-  const path = "/connect/composio/complete/apps?session_uri=opaque&principalId=attacker";
-  const noSession = await fetch(base + path, { redirect: "manual" });
-  assert.equal(noSession.status, 302);
-  assert.match(noSession.headers.get("location") ?? "", /^\/auth\/login/);
-  const result = await fetch(base + path, {
-    headers: { cookie: sessionCookie("eve@acme"), "x-consent-clicker": "attacker" },
-    redirect: "manual",
-  });
-  assert.equal(result.status, 200);
-  assert.match(await result.text(), /Your app is connected/);
-  assert.equal(lastComposioHeaders?.["x-consent-clicker"], "eve@acme");
-  assert.ok(lastComposioHeaders?.["x-consent-clicker-org"]);
-  assert.ok(lastComposioHeaders?.["x-signature"]);
 });

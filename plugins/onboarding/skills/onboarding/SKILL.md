@@ -36,7 +36,7 @@ Memory is not a file; never edit it with shell commands.
 
 ## 1. Connect accounts
 
-First call `integrations` with `action: "status"`. If a universal provider is available, use `skills/integrations/SKILL.md`: discover apps from its catalog, ask which ones the user wants, and offer its consent links. Do not ask regular users to create OAuth apps or supply the shared key. This replaces the direct-provider allowlist procedure below, not the remaining onboarding steps. If unavailable, follow the existing configured-connection flow below.
+Check for an authorized Composio credential in the existing credential inventory. If available, follow `skills/composio/SKILL.md` to discover apps and offer consent links for the apps the user wants. This replaces the dedicated OAuth-provider setup below, not the remaining onboarding steps. Do not request a new project key from regular users or change credential grants as part of onboarding. Otherwise use the existing configured-connection flow below.
 
 The surface already authenticated the user. Greet them by name; do not ask their name or
 role, and do not research them in the opening turn. Explain that connecting lets you act as

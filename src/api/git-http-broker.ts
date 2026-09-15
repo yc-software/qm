@@ -161,7 +161,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
 
   const orgScope = makeScopeId("org", configOrgId());
   const rec = await ctx.deps.serviceCreds.getServiceCredentialSecret(orgScope, slug);
-  if (!rec || !rec.enabled || rec.delivery === "env" || rec.provider !== undefined) {
+  if (!rec || !rec.enabled || rec.delivery === "env") {
     return sendDenied(
       ctx,
       claims,
