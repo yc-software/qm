@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import { connect, createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,7 +12,7 @@ import { sleep } from "../src/util/async.ts";
 const databaseUrl = process.env.DATABASE_URL;
 
 test(
-  "HTTP project mutation survives loss of its advisory-lock socket and recovers",
+  "HTTP project mutation survives loss of its advisory-lock connection and recovers",
   {
     skip: databaseUrl ? false : "requires DATABASE_URL",
     timeout: 60_000,
@@ -31,36 +30,11 @@ test(
     });
     const target = new URL(databaseUrl!);
     target.pathname = `/${database}`;
-    const sockets = new Set<Socket>();
-    const connections = new Map<number, Socket>();
-    const proxy = createServer((front) => {
-      const back = connect(Number(target.port || 5432), target.hostname);
-      for (const socket of [front, back]) {
-        sockets.add(socket);
-        socket.on("error", () => {});
-        socket.on("close", () => sockets.delete(socket));
-      }
-      back.once("connect", () => connections.set(back.localPort!, front));
-      back.once("close", () => {
-        for (const [port, socket] of connections) if (socket === front) connections.delete(port);
-      });
-      front.once("close", () => back.destroy());
-      front.pipe(back).pipe(front);
-    });
-    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
-    cleanup.defer(async () => {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => proxy.close(() => resolve()));
-    });
-
-    const proxied = new URL(target);
-    proxied.hostname = "127.0.0.1";
-    proxied.port = String((proxy.address() as AddressInfo).port);
     const dataDir = await mkdtemp(join(tmpdir(), "advisory-http-"));
     cleanup.defer(() => rm(dataDir, { recursive: true, force: true }));
 
     const child = fork(new URL("./support/advisory-lock-server.ts", import.meta.url), [], {
-      env: { PATH: process.env.PATH, HOME: dataDir, DATABASE_URL: proxied.toString() },
+      env: { PATH: process.env.PATH, HOME: dataDir, DATABASE_URL: target.toString() },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     let logs = "";
@@ -104,21 +78,24 @@ test(
       (response) => ({ response }),
       (error: unknown) => ({ error }),
     );
-    let lockSocket: Socket | undefined;
-    for (let attempt = 0; attempt < 200 && !lockSocket; attempt++) {
+    let lockPid: number | undefined;
+    for (let attempt = 0; attempt < 200 && !lockPid; attempt++) {
       await observer.query("SELECT pg_stat_clear_snapshot()");
-      const { rows } = await observer.query<{ client_port: number }>(
+      const { rows } = await observer.query<{ pid: number }>(
         `WITH k AS (SELECT hashtextextended($1, 0) AS v)
-         SELECT a.client_port FROM pg_stat_activity a JOIN pg_locks l ON l.pid = a.pid, k
+         SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON l.pid = a.pid, k
          WHERE l.locktype = 'advisory' AND l.granted AND a.datname = current_database()
            AND l.classid::bigint = ((k.v >> 32) & 4294967295) AND l.objid::bigint = (k.v & 4294967295)`,
         [`project:${project.id}`],
       );
-      for (const row of rows) lockSocket = connections.get(row.client_port) ?? lockSocket;
-      if (!lockSocket) await sleep(10);
+      lockPid = rows[0]?.pid;
+      if (!lockPid) await sleep(10);
     }
-    assert.ok(lockSocket, `project mutation did not acquire its lock: ${logs}`);
-    lockSocket.destroy();
+    assert.ok(lockPid, `project mutation did not acquire its lock: ${logs}`);
+    const terminated = await observer.query<{ terminated: boolean }>("SELECT pg_terminate_backend($1) AS terminated", [
+      lockPid,
+    ]);
+    assert.equal(terminated.rows[0]?.terminated, true);
     await sleep(100);
     assert.equal(child.exitCode, null, `database disconnect crashed server: ${logs}`);
     await observer.query("ROLLBACK");
