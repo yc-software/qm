@@ -8,8 +8,11 @@ test("scope-default buttons render when any runtime setting differs from the sco
   assert.match(composer, /const runtimeToggled =\s*!runtimePending/);
   assert.match(composer, /composerState\.effortLevel !== effectiveEffort/);
   assert.match(composer, /fastOn !== effectiveFast/);
-  assert.match(composer, /\$\{\s*runtimeToggled\s*\? html`[\s\S]{0,800}?>\s*Make default\s*<\/button>/);
-  assert.match(composer, /\$\{\s*runtimeToggled && activeRuntimeConfig\?\.scopeOverride/);
+  assert.match(
+    composer,
+    /\$\{\s*!options.submit && runtimeToggled\s*\? html`[\s\S]{0,800}?>\s*Make default\s*<\/button>/,
+  );
+  assert.match(composer, /\$\{\s*!options.submit && runtimeToggled && activeRuntimeConfig\?\.scopeOverride/);
 });
 
 test("composer-right keeps its control order: make default, use org default, model, harness, send", () => {

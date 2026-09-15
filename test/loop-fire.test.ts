@@ -598,3 +598,35 @@ test("a proposal changed while appending the chat cannot replace the version the
   assert.ok(prompt.includes(`"expectedProposalAt":${item!.proposal!.at}`));
   assert.ok(!prompt.includes('"body":"Unreviewed replacement"'));
 });
+
+test("inbox followup runtime and attachments affect only that item turn", async () => {
+  const s = service(HAPPY);
+  const loop = await makeLoop(s.loops);
+  await s.items.ingest([{ loopId: loop.id, dedupeKey: "runtime-item", sourcePayload: {} }]);
+  const [item] = await s.items.byLoop(loop.id);
+  const attachments = [{ name: "notes.txt", mimetype: "text/plain", blobId: "staged-file", sizeBytes: 12 }];
+  await s.fire.followUp(loop, item!, "Use these notes", "josh", {
+    model: "gpt-5.6-terra",
+    harness: "pi",
+    thinkingLevel: "high",
+    fastMode: true,
+    attachments,
+  });
+  const turn = s.turns[0]!;
+  assert.equal(turn.model, "gpt-5.6-terra");
+  assert.equal(turn.harness, "pi");
+  assert.equal(turn.thinkingLevel, "high");
+  assert.equal(turn.fastMode, true);
+  assert.deepEqual(turn.attachments, attachments);
+  assert.equal(turn.surface, "loop");
+  assert.ok(turn.conversation.threadRef.startsWith(`loop:${loop.id}:item:`));
+  assert.equal(turn.actor.externalId, "josh");
+  await s.fire.fire(loop.id, "scheduled-after-followup");
+  for (const scheduled of s.turns.slice(1)) {
+    assert.equal(scheduled.model, undefined);
+    assert.equal(scheduled.harness, undefined);
+    assert.equal(scheduled.fastMode, false);
+    assert.equal(scheduled.thinkingLevel, "xhigh");
+    assert.equal(scheduled.attachments, undefined);
+  }
+});

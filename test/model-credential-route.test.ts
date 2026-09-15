@@ -634,3 +634,28 @@ test("a stored scope runtime remains usable outside the legacy configured picker
     await srv.close();
   }
 });
+
+test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
+  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+  try {
+    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
+    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.flushScope("org:default-org");
+    const rejected = await srv.built.app.turn({
+      surface: "loop",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
+      text: "Make it shorter",
+      model: "claude-haiku-4-5",
+      harness: "mock",
+      triggered: true,
+      async: true,
+    });
+    assert.equal(rejected.status, "refused");
+    assert.match(rejected.reason ?? "", /not enabled for the web UI/);
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.modelId, "claude-opus-4-8");
+    assert.equal(await srv.built.config.getRuntimeSelectionDurable("personal:alice"), null);
+  } finally {
+    await srv.close();
+  }
+});

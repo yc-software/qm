@@ -19,6 +19,8 @@ import {
   INBOX_SYNC_TASK_VERSION,
   renderInboxSyncTask,
 } from "../../loops/inbox-loop.ts";
+import type { LoopFollowUpOptions } from "../../loops/loop-fire.ts";
+import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
 import { principalDestination } from "../../reach/reach.ts";
 
 const MAX_ITEMS_PER_INGEST = 50;
@@ -368,13 +370,59 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
 }
 
+function followUpOptions(body: Record<string, unknown>): LoopFollowUpOptions | { error: string } {
+  const options: LoopFollowUpOptions = {};
+  for (const key of ["model", "harness", "thinkingLevel"] as const) {
+    if (body[key] === undefined) continue;
+    if (typeof body[key] !== "string" || !body[key].trim()) return { error: `${key} must be a non-empty string` };
+    options[key] = body[key].trim();
+  }
+  if (options.harness && !isHarnessId(options.harness)) return { error: "unsupported harness" };
+  if (options.thinkingLevel && !(THINKING_LEVELS as readonly string[]).includes(options.thinkingLevel))
+    return { error: "unsupported thinking level" };
+  if (body.fastMode !== undefined) {
+    if (typeof body.fastMode !== "boolean") return { error: "fastMode must be a boolean" };
+    options.fastMode = body.fastMode;
+  }
+  if (body.attachments !== undefined) {
+    if (!Array.isArray(body.attachments) || body.attachments.length > 10)
+      return { error: "at most 10 attachments allowed" };
+    options.attachments = [];
+    for (const raw of body.attachments) {
+      if (
+        !isObj(raw) ||
+        typeof raw.name !== "string" ||
+        !raw.name ||
+        typeof raw.blobId !== "string" ||
+        !raw.blobId ||
+        typeof raw.mimetype !== "string" ||
+        typeof raw.sizeBytes !== "number" ||
+        !Number.isSafeInteger(raw.sizeBytes) ||
+        raw.sizeBytes < 1 ||
+        raw.sizeBytes > 1_000_000_000
+      )
+        return { error: "invalid attachment" };
+      options.attachments.push({
+        name: raw.name,
+        blobId: raw.blobId,
+        mimetype: raw.mimetype,
+        sizeBytes: raw.sizeBytes,
+      });
+    }
+  }
+  return options;
+}
+
 async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
   const { deps, loop, item } = loaded;
   const body = isObj(ctx.body) ? ctx.body : {};
+  const options = followUpOptions(body);
+  if ("error" in options) return sendJson(ctx.res, 400, { error: "bad_request", message: options.error });
   const message = typeof body.message === "string" ? body.message.trim() : "";
-  if (!message) return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });
+  if (!message && !options.attachments?.length)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });
   if (message.length > MAX_FOLLOWUP_CHARS) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
@@ -386,7 +434,13 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
-    const next = await deps.fire.followUp(loop, item, message, loaded.actorId);
+    const next = await deps.fire.followUp(
+      loop,
+      item,
+      message || "Please review the attached files.",
+      loaded.actorId,
+      options,
+    );
     sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });

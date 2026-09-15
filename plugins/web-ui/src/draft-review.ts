@@ -250,7 +250,7 @@ function detailTpl(surface: ReviewSurface, item: InboxItem | null): TemplateResu
       <span class="rv-detail-title">${gmail ? item.title : (item.slack?.channelLabel ?? item.title)}</span>
       <span class="rv-detail-from">${item.from}${item.fromDetail ? ` · ${item.fromDetail}` : ""}</span>
     </div>
-    ${contextTpl(item)} ${item.status === "open" ? chatTpl(item) : handledNoteTpl(item)}
+    ${contextTpl(item)} ${item.status === "open" ? chatTpl(item, true) : handledNoteTpl(item)}
     ${item.status === "open" ? steerTpl(surface, item) : nothing}
   `;
 }

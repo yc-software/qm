@@ -148,9 +148,9 @@ function modelOptionFor(value: ModelOptionValue, scopeKey?: string | null): Mode
   return getModelOptions(scopeKey).find((option) => option.value === value);
 }
 
-function loadStoredFastMode(): boolean | undefined {
+function loadStoredFastMode(key = FAST_MODE_STORAGE_KEY): boolean | undefined {
   try {
-    const stored = localStorage.getItem(FAST_MODE_STORAGE_KEY);
+    const stored = localStorage.getItem(key);
     if (stored === "0") return false;
     if (stored === "1") return true;
   } catch {
@@ -159,9 +159,9 @@ function loadStoredFastMode(): boolean | undefined {
   return undefined;
 }
 
-function loadStoredEffort(fallback: EffortLevel): EffortLevel {
+function loadStoredEffort(fallback: EffortLevel, key = EFFORT_STORAGE_KEY): EffortLevel {
   try {
-    const stored = localStorage.getItem(EFFORT_STORAGE_KEY);
+    const stored = localStorage.getItem(key);
     if (stored && EFFORT_LEVELS.some((option) => option.value === stored)) return stored as EffortLevel;
   } catch {
     void 0;
@@ -222,12 +222,30 @@ export function resyncModelSelection(): void {
   }
 }
 
-export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
+export interface ComposerSubmission {
+  model: string;
+  harness: string;
+  thinkingLevel?: string;
+  fastMode?: boolean;
+  attachments?: CoreAttachment[];
+}
+
+export interface ComposerOptions {
+  submit?: (text: string, options: ComposerSubmission) => Promise<void>;
+  placeholder?: string;
+  preferenceKey?: string;
+}
+
+export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {}): ComposerSurface {
+  let submitting = false;
+  const effortKey = options.preferenceKey ? `${EFFORT_STORAGE_KEY}:${options.preferenceKey}` : EFFORT_STORAGE_KEY;
+  const fastKey = options.preferenceKey ? `${FAST_MODE_STORAGE_KEY}:${options.preferenceKey}` : FAST_MODE_STORAGE_KEY;
   let activeRuntimeConfig: RuntimeConfig | null = null;
   let runtimeRequest = 0;
 
   function isUnsentNewChat(): boolean {
     return (
+      !options.submit &&
       ctx.chat.state.sessionId === null &&
       !(ctx.chat.state.agent?.state.messages ?? []).some((m) => !(m as { opener?: boolean }).opener)
     );
@@ -241,7 +259,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function clearActiveDraft(): void {
     if (ctx.chat.state.threadRef) clearDraft(ctx.chat.state.threadRef);
-    if (ctx.chat.state.sessionId === null) clearDraft(newChatDraftKey(appState.me?.user));
+    if (!options.submit && ctx.chat.state.sessionId === null) clearDraft(newChatDraftKey(appState.me?.user));
   }
 
   const composerState = {
@@ -253,8 +271,8 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     openMenu: null as ComposerMenu | null,
     menuQuery: "",
     slashDismissed: false,
-    effortLevel: loadStoredEffort(defaultEffortForModel(modelOptionFor(defaultModelValue())?.model)),
-    fastMode: loadStoredFastMode(),
+    effortLevel: loadStoredEffort(defaultEffortForModel(modelOptionFor(defaultModelValue())?.model), effortKey),
+    fastMode: loadStoredFastMode(fastKey),
     pasteView: null as { id: string; text: string; initial: string; dirty: boolean } | null,
   };
 
@@ -348,6 +366,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       (config.effective.effortLevel as EffortLevel | undefined) ?? defaultEffortForModel(currentModelOption()?.model);
     composerState.fastMode =
       config.effective.fastMode === true && modelSupportsFastMode(scopeKey(), config.effective.modelId);
+    if (options.preferenceKey) {
+      composerState.effortLevel = loadStoredEffort(composerState.effortLevel, effortKey);
+      composerState.fastMode = loadStoredFastMode(fastKey) ?? composerState.fastMode;
+    }
     if (agent && (!ctx.chat.state.threadRef || !threadModelPicks.has(ctx.chat.state.threadRef)))
       if (currentModelOption()) agent.state.model = currentModelOption()!.model;
     ctx.chat.drawActiveChat(agent);
@@ -365,6 +387,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     },
     agent: Agent,
   ): Promise<void> {
+    if (options.submit) {
+      if (change.harnessId && change.modelId) selectModel(`${change.harnessId}:${change.modelId}`, agent);
+      return;
+    }
     const request = ++runtimeRequest;
     const scopeId = ctx.chat.state.scopeId;
     try {
@@ -436,7 +462,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         fastOn !== effectiveFast);
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || blockingPauses.length > 0;
     const attachingDisabled = inputBlocked;
-    let placeholder = "Ask anything";
+    let placeholder = options.placeholder ?? "Ask anything";
     if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
     else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
     let composerNotice: TemplateResult | typeof nothing = nothing;
@@ -461,7 +487,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       ? settingsControl(agent, selectedModel, inputBlocked)
       : html`
           ${
-            runtimeToggled
+            !options.submit && runtimeToggled
               ? html`<button
                   class="runtime-default-btn"
                   type="button"
@@ -476,7 +502,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               : nothing
           }
           ${
-            runtimeToggled && activeRuntimeConfig?.scopeOverride
+            !options.submit && runtimeToggled && activeRuntimeConfig?.scopeOverride
               ? html`<button
                   class="runtime-default-btn"
                   type="button"
@@ -518,7 +544,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       <form class="composer-wrap ${compact ? "compact" : ""}" @submit=${(e: Event) => submitComposer(e, agent)}>
         ${header} ${slashMenu(agent)}
         ${
-          activeRuntimeConfig?.upgradeAvailable
+          !options.submit && activeRuntimeConfig?.upgradeAvailable
             ? html`<div class="runtime-upgrade">
                 <span
                   >The org now recommends
@@ -1245,6 +1271,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return (
       Boolean(composerState.draft.trim() || composerState.attachments.length) &&
       !composerState.processingFiles &&
+      !submitting &&
       activeRuntimeConfig !== null &&
       ctx.chat.state.resolvingApprovals.size === 0 &&
       !ctx.chat.hasUnresolvedApproval()
@@ -1507,7 +1534,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   async function sendPrompt(agent: Agent): Promise<void> {
-    if (!currentModelOption()) return;
+    if (!currentModelOption() || submitting) return;
     if (composerState.processingFiles) return;
     if (!activeRuntimeConfig) return;
     if (composerState.pasteView) closePasteView(agent);
@@ -1516,6 +1543,35 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (agent.state.isStreaming) return queueDraft(agent);
     const text = composerState.draft.trim();
     if (!text && composerState.attachments.length === 0) return;
+    const submit = options.submit;
+    if (submit) {
+      const selected = currentModelOption()!;
+      const attachments = [...composerState.attachments];
+      const selection: ComposerSubmission = {
+        model: selected.model.id,
+        harness: selected.harnessId,
+        ...(harnessSupportsEffort(selected.harnessId) ? { thinkingLevel: composerState.effortLevel } : {}),
+        ...(harnessSupportsFastMode(selected.harnessId)
+          ? { fastMode: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode() }
+          : {}),
+      };
+      submitting = true;
+      clearActiveDraft();
+      resetComposer();
+      ctx.chat.drawActiveChat(agent);
+      try {
+        const { uploaded, skipped } = await uploadAttachments(attachments);
+        if (skipped.length) throw new Error(skipped.map((file) => file.note).join(" "));
+        await submit(text, { ...selection, ...(uploaded.length ? { attachments: uploaded } : {}) });
+      } catch (error) {
+        restoreStagedOnFailure(text, attachments, errMessage(error, "Could not send message."));
+        persistDraft();
+      } finally {
+        submitting = false;
+        ctx.chat.drawActiveChat(agent);
+      }
+      return;
+    }
     if (ctx.chat.state.threadRef) {
       bumpSessionActivity(ctx.chat.state.threadRef);
       ctx.chat.state.pendingSend = ctx.chat.state.threadRef;
@@ -1809,7 +1865,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     agent.state.model = option.model;
     if (composerState.effortLevel === previousDefaultEffort) {
       composerState.effortLevel = defaultEffortForModel(option.model);
-      persistPreference(EFFORT_STORAGE_KEY, composerState.effortLevel);
+      persistPreference(effortKey, composerState.effortLevel);
     }
     if (composerState.openMenu !== "settings") composerState.openMenu = null;
     ctx.chat.drawActiveChat(agent);
@@ -1824,7 +1880,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   function selectEffort(level: EffortLevel, agent: Agent): void {
     composerState.effortLevel = level;
-    persistPreference(EFFORT_STORAGE_KEY, level);
+    persistPreference(effortKey, level);
     if (composerState.openMenu !== "settings") composerState.openMenu = null;
     ctx.chat.drawActiveChat(agent);
   }
@@ -1833,7 +1889,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
     if (!modelSupportsFastMode(scopeKey(), currentModelOption()?.model.id)) return;
     composerState.fastMode = !effectiveFastMode();
-    persistPreference(FAST_MODE_STORAGE_KEY, composerState.fastMode ? "1" : "0");
+    persistPreference(fastKey, composerState.fastMode ? "1" : "0");
     if (fastModeChargeTimer) {
       clearTimeout(fastModeChargeTimer);
       fastModeChargeTimer = null;
@@ -1908,6 +1964,13 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
 
   return {
     state: composerState,
+    submit: async (instruction = "") => {
+      if (submitting || !activeRuntimeConfig) return;
+      const agent = ctx.chat.state.agent;
+      if (!agent) return;
+      if (instruction) composerState.draft = [composerState.draft.trim(), instruction].filter(Boolean).join("\n\n");
+      await sendPrompt(agent);
+    },
     restageAttachments,
     composerForm,
     queuedStrip,

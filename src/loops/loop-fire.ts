@@ -1,4 +1,4 @@
-import type { Loop, LoopItem, LoopOutput, TurnResult } from "../types.ts";
+import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../types.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -47,9 +47,17 @@ interface ItemTurnResult {
   sessionId?: string;
 }
 
+export type LoopFollowUpOptions = Pick<TurnRequest, "model" | "harness" | "thinkingLevel" | "fastMode" | "attachments">;
+
 export interface LoopFireService {
   fire(loopId: string, fireKey: string): Promise<LoopFireResult>;
-  followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null>;
+  followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    options?: LoopFollowUpOptions,
+  ): Promise<LoopItem | null>;
   itemAction(loop: Loop, item: LoopItem, kind: string, args: Record<string, unknown>): Promise<ItemTurnResult>;
   shipOutput(loopId: string, outputId: string, actorId: string, note?: string): Promise<LoopOutput | null>;
   returnOutput(loopId: string, outputId: string, actorId: string, note: string): Promise<LoopOutput | null>;
@@ -362,7 +370,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     fireKey: string,
     threadRef: string,
     input: string,
-    options?: { readOnly?: boolean },
+    options?: { readOnly?: boolean } & LoopFollowUpOptions,
   ): Promise<TriggerOutcome> {
     return runTrigger(deps.trigger, {
       owner: loop.owner,
@@ -373,6 +381,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       surface: "loop",
       ...(loop.runAs ? { runAs: loop.runAs } : {}),
       ...(options?.readOnly ? { readOnly: true } : {}),
+      ...(options?.model ? { model: options.model } : {}),
+      ...(options?.harness ? { harness: options.harness } : {}),
+      ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+      ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
+      ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
     });
   }
 
@@ -639,8 +652,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
   }
 
-  async function itemTurn(loop: Loop, item: LoopItem, input: string, fireKey: string): Promise<ItemTurnResult> {
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input);
+  async function itemTurn(
+    loop: Loop,
+    item: LoopItem,
+    input: string,
+    fireKey: string,
+    options?: LoopFollowUpOptions,
+  ): Promise<ItemTurnResult> {
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, options);
     const failure = stageFailure("item turn", outcome);
     if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
     return {
@@ -650,11 +669,17 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     };
   }
 
-  async function followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null> {
+  async function followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    options?: LoopFollowUpOptions,
+  ): Promise<LoopItem | null> {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
-    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey);
+    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, options);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },

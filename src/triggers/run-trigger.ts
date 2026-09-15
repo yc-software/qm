@@ -37,7 +37,7 @@ export interface TriggerDeps {
   sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
 }
 
-export interface TriggerSpec {
+export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
   title?: string;
   owner: string;
   ownerScopeId: ScopeId;
@@ -303,7 +303,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(!isScopeFloor && !isScopeShared && spec.unattendedGrants
           ? { unattendedGrants: spec.unattendedGrants }
           : {}),
-        ...turnModelOptions({ triggered: true, ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}) }),
+        ...turnModelOptions({ triggered: true, thinkingLevel: spec.thinkingLevel, fastMode: spec.fastMode }),
+        ...(spec.model ? { model: spec.model } : {}),
+        ...(spec.harness ? { harness: spec.harness } : {}),
+        ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
         ...(spec.readOnly ? { readOnly: true } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),

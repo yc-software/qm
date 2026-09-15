@@ -145,7 +145,7 @@ export function createTurnMethods(
       }
 
       const individualAuth = !!deps.userModelCredentials && (await deps.config.getIndividualModelAuthDurable());
-      if (req.surface === "web") {
+      if (req.surface === "web" || (req.surface === "loop" && (req.model !== undefined || req.harness !== undefined))) {
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
         if (existing) {

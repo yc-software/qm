@@ -23,11 +23,9 @@ test("reply history grows in the page rather than a nested scroll panel", () => 
   );
 });
 
-test("composer autosizing still responds to pane width changes", () => {
-  const observer = inbox.match(/function observeChatInputSize\(host: HTMLElement\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
-  assert.match(observer, /chatInputObserver\?\.disconnect\(\);/);
-  assert.match(observer, /new ResizeObserver\(/);
-  assert.match(observer, /sizeChatInputs\(host\)/);
-  assert.match(observer, /\.observe\(host\)/);
-  assert.match(inbox, /appState\.mainEl\.replaceChildren\(host\);\s*observeChatInputSize\(host\);/);
+test("inbox reuses the shared composer's autosizing", () => {
+  const embedded = readFileSync(new URL("../src/embedded-composer.ts", import.meta.url), "utf8");
+  assert.match(inbox, /embeddedComposer\(/);
+  assert.match(embedded, /ctx.composer.resizeComposer\(\)/);
+  assert.doesNotMatch(inbox, /autosizeChatInput/);
 });

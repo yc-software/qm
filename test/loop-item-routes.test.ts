@@ -940,3 +940,38 @@ test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", asyn
   assert.equal((await w.loops.items.byLoop(loop.id)).length, 2);
   assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
 });
+
+test("followup accepts only typed runtime and staged attachment fields", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const path = `/v1/loops/${loop.id}/items/${item.id}/followup`;
+  let received: unknown;
+  w.loops.fire!.followUp = async (_loop, held, _message, _actor, options) => {
+    received = options;
+    return held;
+  };
+  const options = {
+    model: "gpt-5.6-terra",
+    harness: "pi",
+    thinkingLevel: "high",
+    fastMode: true,
+    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 20, blobId: "opaque-upload" }],
+  };
+  const out = await call(w, { method: "POST", path, body: { message: "", ...options, scopeId: "personal:other" } });
+  assert.equal(out.status, 200);
+  assert.deepEqual(received, options);
+  for (const invalid of [
+    { model: 5 },
+    { harness: "unknown" },
+    { thinkingLevel: "unsupported" },
+    { fastMode: "true" },
+    { attachments: [{ path: "/etc/passwd" }] },
+    { attachments: [{ ...options.attachments[0], sizeBytes: -1 }] },
+    { attachments: Array(11).fill(options.attachments[0]) },
+  ]) {
+    received = undefined;
+    const bad = await call(w, { method: "POST", path, body: { message: "hello", ...invalid } });
+    assert.equal(bad.status, 400, JSON.stringify(invalid));
+    assert.equal(received, undefined);
+  }
+});
