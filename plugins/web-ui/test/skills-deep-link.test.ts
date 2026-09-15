@@ -40,6 +40,7 @@ test("skill details have a back link and resource fields", () => {
 });
 
 test("skill detail routes survive reload and browser history", () => {
-  assert.match(shell, /if \(wanted === "skills" && wantedItem\) openSkillById\(wantedItem\)/);
-  assert.match(shell, /else if \(view === "skills"\) routeSkillsHistory\(item\)/);
+  assert.match(shell, /open: module\.openSkillById/);
+  assert.match(shell, /route: module\.routeSkillsHistory/);
+  assert.match(shell, /activateView\(wanted as View, wantedItem, true\)/);
 });

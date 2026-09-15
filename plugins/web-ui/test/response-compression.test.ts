@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { gunzipSync, gzipSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const SECRET = "web-ui-compression-test";
@@ -31,12 +31,16 @@ process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "alice";
 
 const assetsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web", "assets");
-const assetName = "compression-fixture-Aa1Bb2Cc.js";
+const assetName = `compression-fixture-${process.pid}-Aa1Bb2Cc.js`;
+const legacyName = `compression-legacy-${process.pid}-Aa1Bb2Cc.js`;
 const assetPath = join(assetsDir, assetName);
 const assetBody = `export const filler = ${JSON.stringify("x".repeat(50)).repeat(200)};\n`;
 mkdirSync(assetsDir, { recursive: true });
 writeFileSync(assetPath, assetBody);
 writeFileSync(`${assetPath}.gz`, gzipSync(Buffer.from(assetBody), { level: 9 }));
+writeFileSync(`${assetPath}.br`, brotliCompressSync(Buffer.from(assetBody)));
+writeFileSync(join(assetsDir, legacyName), assetBody);
+writeFileSync(join(assetsDir, `${legacyName}.gz`), gzipSync(Buffer.from(assetBody)));
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -48,6 +52,9 @@ test.after(() => {
   core.close();
   rmSync(assetPath, { force: true });
   rmSync(`${assetPath}.gz`, { force: true });
+  rmSync(`${assetPath}.br`, { force: true });
+  rmSync(join(assetsDir, legacyName), { force: true });
+  rmSync(join(assetsDir, `${legacyName}.gz`), { force: true });
 });
 
 function identityHeaders(): Record<string, string> {
@@ -88,7 +95,7 @@ test("the session list is byte-identical and uncompressed without accept-encodin
 });
 
 test("a static asset is served from its precompressed sibling, byte-identical once decoded", async () => {
-  const packed = await get(`/assets/${assetName}`, { "accept-encoding": "gzip, deflate, br" });
+  const packed = await get(`/assets/${assetName}`, { "accept-encoding": "gzip" });
   assert.equal(packed.status, 200);
   assert.equal(packed.headers["content-encoding"], "gzip");
   assert.equal(packed.headers["vary"], "accept-encoding");
@@ -127,4 +134,50 @@ test("the delivery event stream still streams incrementally instead of buffering
   assert.equal(first.headers["content-type"], "text/event-stream; charset=utf-8");
   assert.equal(first.headers["cache-control"], "no-cache, no-transform");
   assert.equal(first.chunk, ": open\n\n");
+});
+
+test("static brotli negotiation respects quality, exclusions, and identity preference", async () => {
+  const cases: Array<[string, "br" | "gzip" | undefined]> = [
+    ["gzip, deflate, br", "br"],
+    ["br;q=0, gzip", "gzip"],
+    ["br;q=0.2, gzip;q=0.9", "gzip"],
+    ["br;q=0.9, gzip;q=0.2", "br"],
+    ["br;q=0, *;q=1", "gzip"],
+    ["BR;Q=0.8, GZip;Q=0.4", "br"],
+    ["br;q=invalid, gzip;q=0", undefined],
+    ["br;q=0, gzip;q=0", undefined],
+    ["identity;q=1, br;q=0.1", undefined],
+  ];
+  for (const [header, encoding] of cases) {
+    const result = await get(`/assets/${assetName}`, { "accept-encoding": header });
+    assert.equal(result.status, 200, header);
+    assert.equal(result.headers["content-encoding"], encoding, header);
+    assert.equal(result.headers["vary"], "accept-encoding");
+    assert.equal(result.headers["cache-control"], "public, max-age=31536000, immutable");
+    assert.equal(result.headers["content-type"], "text/javascript; charset=utf-8");
+    let decoded = result.body;
+    if (encoding === "br") decoded = brotliDecompressSync(result.body);
+    else if (encoding === "gzip") decoded = gunzipSync(result.body);
+    assert.equal(decoded.toString("utf8"), assetBody, header);
+  }
+});
+
+test("brotli-capable clients retain gzip fallback for assets from older builds", async () => {
+  const result = await get(`/assets/${legacyName}`, { "accept-encoding": "br, gzip" });
+  assert.equal(result.headers["content-encoding"], "gzip");
+  assert.equal(gunzipSync(result.body).toString("utf8"), assetBody);
+});
+
+test("static assets do not send identity when every available encoding is rejected", async () => {
+  for (const header of ["identity;q=0, br;q=0, gzip;q=0", "*;q=0"]) {
+    const response = await get(`/assets/${assetName}`, { "accept-encoding": header });
+    assert.equal(response.status, 406);
+    assert.equal(response.body.length, 0);
+    assert.equal(response.headers["content-encoding"], undefined);
+    assert.equal(response.headers["cache-control"], "no-store");
+    assert.equal(response.headers["vary"], "accept-encoding");
+  }
+  const unavailable = await get(`/assets/${legacyName}`, { "accept-encoding": "br, gzip;q=0, identity;q=0" });
+  assert.equal(unavailable.status, 406);
+  assert.equal(unavailable.body.length, 0);
 });

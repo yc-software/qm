@@ -70,6 +70,7 @@ async function withCanvas(
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell.ts");
     const split = await vite.ssrLoadModule("/src/split.ts");
+    await split.prepareCanvas();
     const sessions = await vite.ssrLoadModule("/src/sessions.ts");
     appState.me = { user: "tester", org: "test" };
     appState.currentView = "chats";

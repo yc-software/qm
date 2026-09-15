@@ -131,7 +131,10 @@ test("boot mounts a restored canvas before it awaits the session list", () => {
     /\} else if \(!mountRestoredCanvas\(\) && !mainConversation\(\)\.state\.threadRef\) \{/,
   );
   const mount = fn(split, "mountRestoredCanvas");
-  assert.match(mount, /if \(isPhone\(\) \|\| \(restoreOnly && !splitState\.active\)\) return false;/);
+  assert.match(mount, /if \(isPhone\(\) \|\| !dockviewFactory\.loaded\(\)/);
+  assert.ok(boot.indexOf("const canvasPreparation = prepareCanvas();") < boot.indexOf('webFetch(withBase("/me"))'));
+  assert.ok(boot.indexOf("await canvasPreparation;") < boot.indexOf("mountShell();"));
+  assert.ok(boot.indexOf("await prepareCanvas();") < boot.indexOf("mountShell();"));
   assert.match(mount, /if \(dockApi\.panels\.length === 0\) addPane\(\{\}\);/);
 });
 

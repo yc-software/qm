@@ -54,6 +54,7 @@ import {
   focusedPaneSession,
   loadPersistedSplit,
   mountRestoredCanvas,
+  prepareCanvas,
   restoredCanvasNeedsSessionList,
   splitState,
 } from "./split";
@@ -73,17 +74,10 @@ import {
   startNewChatInLastScope,
   startNewChat,
 } from "./sessions";
-import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
-import { renderLoopsPage, resetActiveLoop } from "./loops";
-import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
-import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { closeBrowse, openBrowse } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
-import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { renderDeploys } from "./deploys";
-import { renderMemory, resetMemoryState } from "./memory";
 import {
   inboxOpenCount,
   openInboxItemById,
@@ -93,12 +87,12 @@ import {
   resetInboxState,
   routeInboxHistory,
 } from "./inbox";
-import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
 import { applyTheme, renderSettings, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
+import { lazyModule, type LazyModule } from "./lazy-module";
 export { appState, can, type Me, type View } from "./shell-state";
 
 let userMenuOpen = false;
@@ -127,8 +121,138 @@ function signOutFromMenu(): void {
 
 let authMode: AuthMode = "portal";
 let shellMounted = false;
+let authGeneration = 0;
+let bootGeneration = 0;
+let navigationRevision = 0;
+let identityUser: string | null = null;
+
+interface DeferredViewModule {
+  clearNotice?(): void;
+  invalidateIdentity?(): void;
+  noteConnectorResult?(provider: string, status: string): void;
+  open?(item: string): void;
+  render(): void | Promise<void>;
+  resetIdentity?(): void;
+  resetView?(): void;
+  route?(item: string | null): void;
+}
+
+interface NavigationIntent {
+  auth: number;
+  revision: number;
+  url: string;
+  view: View;
+}
+
+export const deferredViewLoaders: Partial<Record<View, LazyModule<DeferredViewModule>>> = {
+  crons: lazyModule(async () => {
+    const module = await import("./crons");
+    return {
+      open: module.openCronById,
+      render: module.renderCronsPage,
+      resetView: module.resetActiveCron,
+      route: module.routeCronsHistory,
+    };
+  }),
+  deploys: lazyModule(async () => {
+    const module = await import("./deploys");
+    return { render: module.renderDeploys };
+  }),
+  files: lazyModule(async () => {
+    const module = await import("./files");
+    return { render: module.renderFiles };
+  }),
+  keychain: lazyModule(
+    async () => {
+      const module = await import("./connectors");
+      return {
+        clearNotice: module.clearConnectorNotice,
+        noteConnectorResult: module.noteConnectorResult,
+        render: module.renderConnectors,
+        resetIdentity: module.resetKeychainState,
+      };
+    },
+    (module) => module.resetIdentity?.(),
+  ),
+  loops: lazyModule(async () => {
+    const module = await import("./loops");
+    return { render: module.renderLoopsPage, resetView: module.resetActiveLoop };
+  }),
+  memory: lazyModule(
+    async () => {
+      const module = await import("./memory");
+      return {
+        invalidateIdentity: module.invalidateMemoryRequests,
+        render: module.renderMemory,
+        resetIdentity: module.resetMemoryState,
+      };
+    },
+    (module) => module.resetIdentity?.(),
+  ),
+  skills: lazyModule(async () => {
+    const module = await import("./skills");
+    return {
+      open: module.openSkillById,
+      render: module.renderSkills,
+      resetView: module.resetActiveSkill,
+      route: module.routeSkillsHistory,
+    };
+  }),
+  webhooks: lazyModule(async () => {
+    const module = await import("./webhooks");
+    return {
+      open: module.openWebhookById,
+      render: module.renderWebhooksPage,
+      resetView: module.resetActiveWebhook,
+      route: module.routeWebhooksHistory,
+    };
+  }),
+};
+
+function invalidateIdentityState(): void {
+  deferredViewLoaders.keychain?.reset();
+  deferredViewLoaders.memory?.loaded()?.invalidateIdentity?.();
+}
+
+function resetIdentityState(): void {
+  deferredViewLoaders.keychain?.reset();
+  deferredViewLoaders.memory?.reset();
+}
+
+function loseIdentity(): void {
+  authGeneration++;
+  appState.viewRenderSeq++;
+  invalidateIdentityState();
+  appState.me = null;
+}
+
+function clearIdentity(): void {
+  authGeneration++;
+  appState.viewRenderSeq++;
+  resetIdentityState();
+  identityUser = null;
+  appState.me = null;
+}
+
+function currentUrl(): string {
+  return `${location.pathname}${location.search}`;
+}
+
+function captureNavigation(view: View): NavigationIntent {
+  return { auth: authGeneration, revision: navigationRevision, url: currentUrl(), view };
+}
+
+function navigationIsCurrent(intent: NavigationIntent): boolean {
+  return (
+    intent.auth === authGeneration &&
+    intent.revision === navigationRevision &&
+    intent.url === currentUrl() &&
+    intent.view === appState.currentView
+  );
+}
 
 setSigninRequiredHandler((detail) => {
+  loseIdentity();
   authMode = detail.mode ?? authMode;
   renderAuthGate(gateFor(authMode, detail.reason));
 });
@@ -225,7 +349,7 @@ export async function signOut(): Promise<void> {
       void 0;
     }
   }
-  appState.me = null;
+  clearIdentity();
   closeBrowse();
   resetInboxState();
   clearAllDrafts();
@@ -234,9 +358,7 @@ export async function signOut(): Promise<void> {
   resetSessionsState();
   appState.currentView = "chats";
   clearSkillsCache();
-  resetMemoryState();
   resetContextsState();
-  resetKeychainState();
   mainConversation().composer.resetComposer();
   updateDocumentTitle();
   if (!portal) {
@@ -666,14 +788,24 @@ function onNavClick(e: Event): void {
 }
 
 export function switchView(v: View): void {
+  void activateView(v);
+}
+
+function activateView(
+  v: View,
+  item: string | null = null,
+  preserveUrl = false,
+  connectorResult: [string, string] | null = null,
+): void | Promise<void> {
   if (!canView(v)) v = "chats";
   closeSidebarOnNarrowView();
-  if (appState.currentView === v) {
+  if (appState.currentView === v && item === null && !preserveUrl && !connectorResult) {
     refreshActiveView(v);
     return;
   }
   appState.currentView = v;
   appState.viewRenderSeq++;
+  navigationRevision++;
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   if (v !== "chats") {
@@ -681,8 +813,16 @@ export function switchView(v: View): void {
     mainConversation().composer.resetComposer();
   }
   renderSidebarTop();
-  syncUrlFromState();
-  resetActiveDetail(v);
+  if (!preserveUrl) syncUrlFromState();
+  return renderActiveView(v, item, false, connectorResult);
+}
+
+function renderActiveView(
+  v: View,
+  item: string | null = null,
+  refresh = false,
+  connectorResult: [string, string] | null = null,
+): void | Promise<void> {
   switch (v) {
     case "chats":
       if (mountRestoredCanvas()) drawCanvas();
@@ -690,104 +830,78 @@ export function switchView(v: View): void {
       renderList();
       break;
     case "inbox":
+      resetActiveInboxItem();
       void renderInbox();
-      break;
-    case "webhooks":
-      void renderWebhooksPage();
-      break;
-    case "crons":
-      void renderCronsPage();
-      break;
-    case "loops":
-      void renderLoopsPage();
       break;
     case "contexts":
       void renderContexts();
       break;
-    case "files":
-      void renderFiles();
-      break;
-    case "keychain":
-      void renderConnectors();
-      break;
-    case "deploys":
-      void renderDeploys();
-      break;
-    case "memory":
-      void renderMemory();
-      break;
-    case "skills":
-      void renderSkills();
-      break;
     case "settings":
       renderSettings();
       break;
+    default:
+      return renderDeferredView(v, item, refresh, connectorResult);
   }
 }
 
-function resetActiveDetail(v: View): void {
-  switch (v) {
-    case "inbox":
-      resetActiveInboxItem();
-      break;
-    case "webhooks":
-      resetActiveWebhook();
-      break;
-    case "crons":
-      resetActiveCron();
-      break;
-    case "loops":
-      resetActiveLoop();
-      break;
-    case "skills":
-      resetActiveSkill();
-      break;
+function renderDeferredLoading(v: View): void {
+  if (!appState.mainEl) return;
+  const host = document.createElement("div");
+  host.className = "pane";
+  const loading = document.createElement("div");
+  loading.className = "empty";
+  loading.textContent = `Loading ${v}…`;
+  host.appendChild(loading);
+  replacePanePreservingFocus(host);
+}
+
+function renderDeferredFailure(v: View, intent: NavigationIntent, retry: () => void): void {
+  if (!navigationIsCurrent(intent) || !appState.mainEl) return;
+  const host = document.createElement("div");
+  host.className = "pane";
+  render(
+    html`<div class="empty" role="alert">
+      <p>We couldn't load ${v}.</p>
+      <button class="btn primary" type="button" @click=${retry}>Try again</button>
+    </div>`,
+    host,
+  );
+  replacePanePreservingFocus(host);
+}
+
+async function renderDeferredView(
+  v: View,
+  item: string | null = null,
+  refresh = false,
+  connectorResult: [string, string] | null = null,
+): Promise<void> {
+  const loader = deferredViewLoaders[v];
+  if (!loader) return;
+  const intent = captureNavigation(v);
+  renderDeferredLoading(v);
+  try {
+    const module = await loader.load();
+    if (!navigationIsCurrent(intent)) return;
+    module.resetView?.();
+    if (refresh) module.clearNotice?.();
+    if (connectorResult) module.noteConnectorResult?.(...connectorResult);
+    if (item) module.open?.(item);
+    await module.render();
+  } catch (error) {
+    if (!navigationIsCurrent(intent)) return;
+    swallow(`web-ui: load ${v}`, error);
+    renderDeferredFailure(v, intent, () => void renderDeferredView(v, item, refresh, connectorResult));
   }
 }
 
 function refreshActiveView(v: View): void {
-  resetActiveDetail(v);
+  navigationRevision++;
   syncUrlFromState();
-  switch (v) {
-    case "chats":
-      if (splitState.active) void refreshSessions({ silent: true, refreshContexts: true });
-      else void renderChatsPage();
-      break;
-    case "inbox":
-      void renderInbox();
-      break;
-    case "contexts":
-      void renderContexts();
-      break;
-    case "webhooks":
-      void renderWebhooksPage();
-      break;
-    case "crons":
-      void renderCronsPage();
-      break;
-    case "loops":
-      void renderLoopsPage();
-      break;
-    case "files":
-      void renderFiles();
-      break;
-    case "keychain":
-      clearConnectorNotice();
-      void renderConnectors();
-      break;
-    case "deploys":
-      void renderDeploys();
-      break;
-    case "memory":
-      void renderMemory();
-      break;
-    case "skills":
-      void renderSkills();
-      break;
-    case "settings":
-      renderSettings();
-      break;
+  if (v === "chats" && splitState.active) {
+    void refreshSessions({ silent: true, refreshContexts: true });
+    return;
   }
+  void renderActiveView(v, null, true);
 }
 
 export function showMainEmpty(text: string): void {
@@ -907,15 +1021,28 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
   replaceChildrenPreservingFocus(appState.mainEl, host);
 }
 
+async function routeDeferredHistory(view: View, item: string | null): Promise<void> {
+  const loader = deferredViewLoaders[view];
+  if (!loader) return;
+  const intent = captureNavigation(view);
+  try {
+    const module = await loader.load();
+    if (navigationIsCurrent(intent)) module.route?.(item);
+  } catch (error) {
+    if (!navigationIsCurrent(intent)) return;
+    swallow(`web-ui: route ${view}`, error);
+    renderDeferredFailure(view, intent, () => void routeDeferredHistory(view, item));
+  }
+}
+
 window.addEventListener("popstate", () => {
   const routed = ["crons", "webhooks", "inbox", "skills"];
   if (!routed.includes(appState.currentView)) return;
   const { view, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
   if (view !== appState.currentView) return;
-  if (view === "crons") routeCronsHistory(item);
-  else if (view === "webhooks") routeWebhooksHistory(item);
-  else if (view === "skills") routeSkillsHistory(item);
-  else routeInboxHistory(item);
+  navigationRevision++;
+  if (view === "inbox") routeInboxHistory(item);
+  else void routeDeferredHistory(view, item);
 });
 
 window.addEventListener("focus", () => {
@@ -923,13 +1050,6 @@ window.addEventListener("focus", () => {
   if (appState.currentView === "contexts") void renderContexts();
   else if (appState.currentView === "chats") void refreshSessions({ silent: true, refreshContexts: true });
 });
-
-function warmDeferredChunks(): void {
-  const warm = (): void => void import("@earendil-works/pi-web-ui").catch(() => {});
-  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
-  if (ric) ric(warm);
-  else setTimeout(warm, 1500);
-}
 
 function openAppEditChat(slug: string): void {
   const user = appState.me?.user ?? "anon";
@@ -954,6 +1074,19 @@ export async function bootSafely(): Promise<void> {
 }
 
 export async function boot(): Promise<void> {
+  const attempt = ++bootGeneration;
+  const generation = ++authGeneration;
+  appState.viewRenderSeq++;
+  invalidateIdentityState();
+  const startupRevision = navigationRevision;
+  const startupUrl = currentUrl();
+  const bootIsCurrent = (): boolean => attempt === bootGeneration && generation === authGeneration;
+  const startupNavigationIsCurrent = (): boolean =>
+    bootIsCurrent() && startupRevision === navigationRevision && startupUrl === currentUrl();
+  const canvasPreparation = prepareCanvas().then(
+    () => ({ error: null }),
+    (error: unknown) => ({ error }),
+  );
   const params = new URLSearchParams(location.search);
   const {
     view: wanted,
@@ -971,11 +1104,15 @@ export async function boot(): Promise<void> {
   try {
     r = await webFetch(withBase("/me"));
   } catch {
-    renderAuthGate({ kind: "unreachable" });
+    if (bootIsCurrent()) renderAuthGate({ kind: "unreachable" });
     return;
   }
+  if (!bootIsCurrent()) return;
   if (r.status === 401) {
     const body = (await r.json().catch(() => ({}))) as SigninRequired;
+    if (!bootIsCurrent()) return;
+    invalidateIdentityState();
+    appState.me = null;
     authMode = body.mode ?? "portal";
     renderAuthGate(gateFor(authMode, body.reason));
     return;
@@ -984,8 +1121,11 @@ export async function boot(): Promise<void> {
     renderAuthGate({ kind: "unreachable" });
     return;
   }
-  resetKeychainState();
-  appState.me = (await r.json()) as Me;
+  const me = (await r.json()) as Me;
+  if (!bootIsCurrent()) return;
+  if (identityUser !== null && identityUser !== me.user) resetIdentityState();
+  identityUser = me.user;
+  appState.me = me;
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();
   if (appState.me.individualModelAuth && !appState.me.modelAuthConnected) {
@@ -995,19 +1135,24 @@ export async function boot(): Promise<void> {
   }
   const personalScope = `personal:${appState.me.user}`;
   const prefetchedConfig = await runtimeConfigFetch;
+  if (!bootIsCurrent()) return;
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);
-  if (runtimeConfig) {
-    seedRuntimeConfig(personalScope, runtimeConfig);
-  }
+  if (!bootIsCurrent()) return;
+  if (runtimeConfig) seedRuntimeConfig(personalScope, runtimeConfig);
+  const canvasResult = await canvasPreparation;
+  if (!bootIsCurrent()) return;
+  if (canvasResult.error) throw canvasResult.error;
+  await prepareCanvas();
+  if (!bootIsCurrent()) return;
   resyncModelSelection();
   mountShell();
   shellMounted = true;
   ensureDeliveryStream();
-  warmDeferredChunks();
   void refreshInbox({ silent: true });
   loadPersistedSplit();
   await adoptRemoteSplit(remoteSplitFetch);
+  if (!bootIsCurrent()) return;
 
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
   if (connectedProvider) markConnectorConnected(connectedProvider);
@@ -1021,6 +1166,7 @@ export async function boot(): Promise<void> {
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
     const transcript = entriesPrefetch ?? fetchTranscript(wantedSession, { tailTurns: TAIL_TURNS }).catch(() => null);
     const linked = (await transcript)?.session;
+    if (!startupNavigationIsCurrent()) return;
     if (linked) {
       exitSplitIfActive();
       if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
@@ -1029,6 +1175,7 @@ export async function boot(): Promise<void> {
       return;
     }
     await sessions;
+    if (!startupNavigationIsCurrent()) return;
     const match = sessionsState.list.find((s) => s.id === wantedSession);
     if (match) {
       exitSplitIfActive();
@@ -1045,6 +1192,7 @@ export async function boot(): Promise<void> {
   }
 
   await sessions;
+  if (!startupNavigationIsCurrent()) return;
 
   if (wanted === "app-edit") {
     const slug = (params.get("slug") ?? "").toLowerCase();
@@ -1059,19 +1207,16 @@ export async function boot(): Promise<void> {
   if (wanted === "keychain") {
     const provider = params.get("connector");
     const status = params.get("status");
-    if (provider && status) noteConnectorResult(provider, status);
-    switchView("keychain");
+    await activateView("keychain", null, true, provider && status ? [provider, status] : null);
   } else if (viewIntent) {
     if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
       const scope =
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
+      if (!startupNavigationIsCurrent()) return;
       if (scope) contextsState.selected = scope;
     }
-    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
-    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
     if (wanted === "inbox" && wantedItem) openInboxItemById(wantedItem);
-    if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
-    switchView(wanted as View);
+    await activateView(wanted as View, wantedItem, true);
   } else if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();

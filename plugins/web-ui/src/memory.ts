@@ -26,8 +26,15 @@ let search = "";
 let historyOpen = false;
 let history: RevisionRow[] = [];
 let memoryConfirmation: { title: string; body: string; action: string; run: () => Promise<void> } | null = null;
+let memoryRequestGeneration = 0;
+
+export function invalidateMemoryRequests(): void {
+  memoryRequestGeneration++;
+  memorySaving = false;
+}
 
 export function resetMemoryState(): void {
+  invalidateMemoryRequests();
   memoryDraft = "";
   memorySaved = "";
   memoryRevision = "";
@@ -230,17 +237,20 @@ export async function renderMemory(force = false): Promise<void> {
     return void drawMemory();
   }
   const seq = appState.viewRenderSeq;
+  const generation = memoryRequestGeneration;
   memoryNotice = "";
   drawMemory(true);
   try {
     const r = await api<{ content?: string; revision?: string }>("/api/memory");
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "memory") return;
+    if (generation !== memoryRequestGeneration || seq !== appState.viewRenderSeq || appState.currentView !== "memory")
+      return;
     memorySaved = r.content ?? "";
     memoryDraft = memorySaved;
     memoryRevision = r.revision ?? "";
     memoryLoaded = true;
   } catch (e) {
-    if (seq !== appState.viewRenderSeq || appState.currentView !== "memory") return;
+    if (generation !== memoryRequestGeneration || seq !== appState.viewRenderSeq || appState.currentView !== "memory")
+      return;
     memoryNotice = errMessage(e, "Failed to load memory.");
   }
   drawMemory();
@@ -248,6 +258,7 @@ export async function renderMemory(force = false): Promise<void> {
 
 async function saveMemory(): Promise<void> {
   if (memorySaving) return;
+  const generation = memoryRequestGeneration;
   memorySaving = true;
   memoryNotice = "";
   drawMemory();
@@ -256,43 +267,49 @@ async function saveMemory(): Promise<void> {
       method: "PUT",
       body: JSON.stringify({ content: memoryDraft, revision: memoryRevision }),
     });
+    if (generation !== memoryRequestGeneration) return;
     memorySaved = r.content ?? memoryDraft;
     memoryDraft = memorySaved;
     memoryRevision = r.revision ?? memoryRevision;
     memoryNotice = "Saved ✓";
     if (historyOpen) {
       try {
-        await loadHistory();
+        await loadHistory(generation);
       } catch {
-        memoryNotice = "Saved ✓ History could not refresh.";
+        if (generation === memoryRequestGeneration) memoryNotice = "Saved ✓ History could not refresh.";
       }
     }
   } catch (e) {
+    if (generation !== memoryRequestGeneration) return;
     memoryNotice =
       e instanceof ApiError && e.status === 409
         ? "Memory changed in another conversation. Your draft is still here; copy it if needed, then refresh to merge with the latest version."
         : errMessage(e, "Failed to save memory.");
   } finally {
-    memorySaving = false;
-    drawMemory();
+    if (generation === memoryRequestGeneration) {
+      memorySaving = false;
+      drawMemory();
+    }
   }
 }
 
-async function loadHistory(): Promise<void> {
+async function loadHistory(generation = memoryRequestGeneration): Promise<void> {
   const r = await api<{ revisions?: RevisionRow[] }>("/api/memory/history");
+  if (generation !== memoryRequestGeneration) return;
   history = r.revisions ?? [];
 }
 
 async function toggleHistory(): Promise<void> {
+  const generation = memoryRequestGeneration;
   historyOpen = !historyOpen;
   if (historyOpen) {
     try {
-      await loadHistory();
+      await loadHistory(generation);
     } catch (e) {
-      memoryNotice = errMessage(e, "Failed to load memory history.");
+      if (generation === memoryRequestGeneration) memoryNotice = errMessage(e, "Failed to load memory history.");
     }
   }
-  drawMemory();
+  if (generation === memoryRequestGeneration) drawMemory();
 }
 
 function requestRestoreRevision(row: RevisionRow): void {
@@ -309,22 +326,25 @@ function requestRestoreRevision(row: RevisionRow): void {
 }
 
 async function restoreRevision(row: RevisionRow): Promise<void> {
+  const generation = memoryRequestGeneration;
   try {
     const r = await api<{ content?: string; revision?: string }>("/api/memory/restore", {
       method: "POST",
       body: JSON.stringify({ revision: row.revision, expectedRevision: memoryRevision }),
     });
+    if (generation !== memoryRequestGeneration) return;
     memorySaved = r.content ?? "";
     memoryDraft = memorySaved;
     memoryRevision = r.revision ?? memoryRevision;
     memoryNotice = "Revision restored ✓";
     try {
-      await loadHistory();
+      await loadHistory(generation);
     } catch {
-      memoryNotice = "Revision restored ✓ History could not refresh.";
+      if (generation === memoryRequestGeneration) memoryNotice = "Revision restored ✓ History could not refresh.";
     }
   } catch (e) {
+    if (generation !== memoryRequestGeneration) return;
     memoryNotice = errMessage(e, "Could not restore that revision.");
   }
-  drawMemory();
+  if (generation === memoryRequestGeneration) drawMemory();
 }

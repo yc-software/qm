@@ -81,7 +81,8 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     const { appState, signOut, syncDocumentTitle } = await vite.ssrLoadModule("/src/shell.ts");
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
     const { openSession, refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-    const { mountRestoredCanvas, beginSessionDrag } = await vite.ssrLoadModule("/src/split.ts");
+    const { mountRestoredCanvas, beginSessionDrag, prepareCanvas } = await vite.ssrLoadModule("/src/split.ts");
+    await prepareCanvas();
     const oldSession = { id: "old", threadRef: "web:old", scopeId: "personal:tester", title: "Old title" };
     const newSession = { id: "new", threadRef: "web:new", scopeId: "personal:tester", title: "New title" };
     sessionsState.list = [oldSession, newSession];

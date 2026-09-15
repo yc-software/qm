@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import type { Plugin, ResolvedConfig } from "vite";
 import { precompressStaticAssets } from "../vite.config.ts";
 import viteConfig from "../vite.config.ts";
@@ -19,7 +19,7 @@ function runBuild(outDir: string, root: string): void {
   (plugin.closeBundle as Hook<"closeBundle">).call({ info: () => undefined } as never);
 }
 
-test("the build writes a gzip sibling for every compressible asset worth compressing", () => {
+test("the build writes gzip and brotli siblings for compressible assets", () => {
   const root = mkdtempSync(join(tmpdir(), "precompress-"));
   try {
     const out = join(root, "dist-web");
@@ -34,8 +34,18 @@ test("the build writes a gzip sibling for every compressible asset worth compres
 
     assert.equal(gunzipSync(readFileSync(join(out, "assets", "bundle.js.gz"))).toString("utf8"), bundle);
     assert.ok(readFileSync(join(out, "assets", "styles.css.gz")).length > 0);
+    assert.equal(brotliDecompressSync(readFileSync(join(out, "assets", "bundle.js.br"))).toString("utf8"), bundle);
+    assert.equal(
+      brotliDecompressSync(readFileSync(join(out, "assets", "styles.css.br"))).toString("utf8"),
+      `.a{color:red}\n`.repeat(200),
+    );
     assert.throws(() => readFileSync(join(out, "assets", "tiny.js.gz")), /ENOENT/, "sub-1KiB files are not worth it");
     assert.throws(() => readFileSync(join(out, "assets", "photo.png.gz")), /ENOENT/, "png is already compressed");
+    assert.throws(() => readFileSync(join(out, "assets", "tiny.js.br")), /ENOENT/);
+    assert.throws(() => readFileSync(join(out, "assets", "photo.png.br")), /ENOENT/);
+    runBuild("dist-web", root);
+    assert.throws(() => readFileSync(join(out, "assets", "bundle.js.gz.br")), /ENOENT/);
+    assert.throws(() => readFileSync(join(out, "assets", "bundle.js.br.br")), /ENOENT/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -49,6 +59,7 @@ test("the build follows the configured outDir rather than a hardcoded one", () =
     writeFileSync(join(out, "app.js"), `console.log(${JSON.stringify("b".repeat(60))});\n`.repeat(50));
     runBuild("elsewhere", root);
     assert.ok(readFileSync(join(out, "app.js.gz")).length > 0);
+    assert.ok(readFileSync(join(out, "app.js.br")).length > 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

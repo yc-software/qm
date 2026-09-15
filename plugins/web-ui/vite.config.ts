@@ -2,7 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
 const SERVER = process.env.WEB_UI_SERVER_URL ?? "http://localhost:8096";
 
@@ -11,8 +11,8 @@ const here = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url
 const PRECOMPRESS_EXTENSIONS = new Set([".js", ".mjs", ".css", ".svg", ".json", ".map", ".wasm", ".txt"]);
 const PRECOMPRESS_MIN_BYTES = 1024;
 
-function precompressDirectory(dir: string): { files: number; raw: number; packed: number } {
-  const totals = { files: 0, raw: 0, packed: 0 };
+function precompressDirectory(dir: string): { files: number; raw: number; packed: number; brotli: number } {
+  const totals = { files: 0, raw: 0, packed: 0, brotli: 0 };
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -20,16 +20,21 @@ function precompressDirectory(dir: string): { files: number; raw: number; packed
       totals.files += nested.files;
       totals.raw += nested.raw;
       totals.packed += nested.packed;
+      totals.brotli += nested.brotli;
       continue;
     }
     if (!entry.isFile() || !PRECOMPRESS_EXTENSIONS.has(extname(entry.name))) continue;
     const size = statSync(path).size;
     if (size < PRECOMPRESS_MIN_BYTES) continue;
-    const packed = gzipSync(readFileSync(path), { level: 9 });
+    const source = readFileSync(path);
+    const packed = gzipSync(source, { level: 9 });
+    const brotli = brotliCompressSync(source, { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } });
     writeFileSync(`${path}.gz`, packed);
+    writeFileSync(`${path}.br`, brotli);
     totals.files += 1;
     totals.raw += size;
     totals.packed += packed.length;
+    totals.brotli += brotli.length;
   }
   return totals;
 }
@@ -43,9 +48,9 @@ export function precompressStaticAssets(): Plugin {
       outDir = resolve(config.root, config.build.outDir);
     },
     closeBundle() {
-      const { files, raw, packed } = precompressDirectory(outDir);
+      const { files, raw, packed, brotli } = precompressDirectory(outDir);
       const mib = (n: number): string => `${(n / 1048576).toFixed(2)} MiB`;
-      this.info(`precompressed ${files} assets: ${mib(raw)} -> ${mib(packed)} gzip`);
+      this.info(`precompressed ${files} assets: ${mib(raw)} -> ${mib(packed)} gzip / ${mib(brotli)} brotli`);
     },
   };
 }

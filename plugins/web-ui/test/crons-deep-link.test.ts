@@ -40,7 +40,8 @@ test("modified clicks fall through to the browser so open-in-tab and save-link s
 test("opening a cron from the list pushes history, so Back returns to the list", () => {
   assert.match(source, /openCron\(c, \{ push: true \}\)/);
   assert.match(source, /if \(push\) history\.pushState\(null, "", next\);\s+else history\.replaceState/);
-  assert.match(shell, /addEventListener\("popstate"[\s\S]*?routeCronsHistory\(item\)/);
+  assert.match(shell, /route: module\.routeCronsHistory/);
+  assert.match(shell, /addEventListener\("popstate"[\s\S]*?routeDeferredHistory\(view, item\)/);
 });
 
 test("a failed load is never reported as a missing cron", () => {

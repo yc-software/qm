@@ -5,6 +5,7 @@ import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
+import { convertMessagesToLlm } from "./message-conversion";
 import { markdown } from "./message-markdown";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -428,7 +429,7 @@ export function createChatSurface(
         messages,
         tools: [],
       },
-      convertToLlm: (messages) => import("@earendil-works/pi-web-ui").then((m) => m.defaultConvertToLlm(messages)),
+      convertToLlm: convertMessagesToLlm,
     });
     chatState.agent = agent;
     clearLiveWork();

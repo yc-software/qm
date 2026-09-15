@@ -19,19 +19,18 @@ import {
   Shrink,
   X,
 } from "lucide";
-import {
-  createDockview,
-  type DockviewApi,
-  type DockviewWillDropEvent,
-  type GroupPanelPartInitParameters,
-  type IContentRenderer,
-  type IDockviewGroupPanel,
-  type IDockviewPanel,
-  type IGroupHeaderProps,
-  type IHeaderActionsRenderer,
-  type ITabRenderer,
-  type SerializedDockview,
-  type TabPartInitParameters,
+import type {
+  DockviewApi,
+  DockviewWillDropEvent,
+  GroupPanelPartInitParameters,
+  IContentRenderer,
+  IDockviewGroupPanel,
+  IDockviewPanel,
+  IGroupHeaderProps,
+  IHeaderActionsRenderer,
+  ITabRenderer,
+  SerializedDockview,
+  TabPartInitParameters,
 } from "dockview-core";
 import {
   dropAddsTile,
@@ -51,7 +50,7 @@ import { attachTooltip, tip } from "./tooltip";
 import { icon, workingWave } from "./ui";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
-import { appState } from "./shell-state";
+import { appState, type Me } from "./shell-state";
 import { renderSidebarTop, switchView, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { sleep } from "./chat";
 import {
@@ -84,6 +83,7 @@ import {
   type UiStateRecord,
 } from "./core-bridge";
 import { isPhone, onPhoneChange } from "./viewport";
+import { lazyModule } from "./lazy-module";
 
 export const splitState = {
   active: false,
@@ -124,6 +124,13 @@ let persistTimer: number | null = null;
 let remoteTimer: number | null = null;
 let remotePayload: { updatedAt: number } | null = null;
 let persistedUpdatedAt = 0;
+export const dockviewFactory = lazyModule(() => import("dockview-core").then(({ createDockview }) => createDockview));
+
+export async function prepareCanvas(): Promise<boolean> {
+  if (isPhone()) return false;
+  await dockviewFactory.load();
+  return !isPhone();
+}
 
 function uid(): string {
   return crypto.randomUUID().slice(0, 8);
@@ -180,6 +187,8 @@ function persistSoon(): void {
 }
 
 function buildDock(): DockviewApi {
+  const createDockview = dockviewFactory.loaded();
+  if (!createDockview) throw new Error("Canvas is not ready");
   const host = canvasHost!;
   const dockEl = document.createElement("div");
   dockEl.className = "split-dock";
@@ -355,7 +364,48 @@ function edgeToDirection(edge: SplitEdge): "left" | "right" | "above" | "below" 
   return edge;
 }
 
+let phoneChangeGeneration = 0;
+const desktopPreparationAttempts = 2;
+
+function desktopTransitionIsCurrent(generation: number, identity: Me, viewGeneration: number): boolean {
+  return (
+    generation === phoneChangeGeneration &&
+    !isPhone() &&
+    appState.me === identity &&
+    appState.currentView === "chats" &&
+    appState.viewRenderSeq === viewGeneration
+  );
+}
+
+function restoreDesktopCanvas(generation: number, identity: Me, viewGeneration: number, attempt = 1): void {
+  if (!desktopTransitionIsCurrent(generation, identity, viewGeneration)) return;
+  void prepareCanvas()
+    .then((ready) => {
+      if (!ready || !desktopTransitionIsCurrent(generation, identity, viewGeneration)) return;
+      if (!suspended && splitState.active) return;
+      suspended = false;
+      loadPersistedSplit();
+      if (!splitState.active) return;
+
+      sessionsState.openingKey = null;
+      mainConversation().teardown();
+      mainConversation().composer.resetComposer();
+      if (!mountRestoredCanvas()) {
+        mainConversation().newChat();
+        return;
+      }
+      syncUrlFromState();
+      renderList();
+    })
+    .catch(() => {
+      if (attempt >= desktopPreparationAttempts || !desktopTransitionIsCurrent(generation, identity, viewGeneration))
+        return;
+      window.setTimeout(() => restoreDesktopCanvas(generation, identity, viewGeneration, attempt + 1), 0);
+    });
+}
+
 onPhoneChange((phone) => {
+  const generation = ++phoneChangeGeneration;
   if (phone) {
     if (!splitState.active) return;
     const focused = focusedPaneSession();
@@ -378,21 +428,9 @@ onPhoneChange((phone) => {
     else mainConversation().newChat();
     return;
   }
-  if (!suspended && splitState.active) return;
-  suspended = false;
-  loadPersistedSplit();
-
-  if (!splitState.active || appState.currentView !== "chats") return;
-
-  sessionsState.openingKey = null;
-  mainConversation().teardown();
-  mainConversation().composer.resetComposer();
-  if (!mountRestoredCanvas()) {
-    mainConversation().newChat();
-    return;
-  }
-  syncUrlFromState();
-  renderList();
+  const identity = appState.me;
+  if (!identity || appState.currentView !== "chats") return;
+  restoreDesktopCanvas(generation, identity, appState.viewRenderSeq);
 });
 
 export function exitSplitIfActive(): void {
@@ -475,7 +513,7 @@ export function restoredCanvasNeedsSessionList(): boolean {
 }
 
 export function mountRestoredCanvas(restoreOnly = false): boolean {
-  if (isPhone() || (restoreOnly && !splitState.active)) return false;
+  if (isPhone() || !dockviewFactory.loaded() || (restoreOnly && !splitState.active)) return false;
   splitState.active = true;
   if (!ensureCanvas() || !dockApi) return false;
   if (dockApi.panels.length === 0) addPane({});

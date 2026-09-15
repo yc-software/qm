@@ -5,37 +5,26 @@ import test from "node:test";
 const shell = readFileSync(new URL("../src/shell.ts", import.meta.url), "utf8");
 const inbox = readFileSync(new URL("../src/inbox.ts", import.meta.url), "utf8");
 
-const resetDetail = shell.match(/function resetActiveDetail\(v: View\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+const renderActive = shell.match(/function renderActiveView\([\s\S]*?\n\}/)?.[0] ?? "";
 const refresh = shell.match(/function refreshActiveView\(v: View\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
 
 test("pressing the nav entry for the view you are already on drops back to its index", () => {
-  assert.match(refresh, /^\s*resetActiveDetail\(v\);/m);
   assert.match(refresh, /syncUrlFromState\(\);/);
+  assert.match(refresh, /renderActiveView\(v, null, true\)/);
 });
 
 test("every view with a detail page clears it, so no nav entry is a no-op", () => {
-  for (const [view, reset] of [
-    ["inbox", "resetActiveInboxItem"],
-    ["webhooks", "resetActiveWebhook"],
-    ["crons", "resetActiveCron"],
-    ["loops", "resetActiveLoop"],
-    ["skills", "resetActiveSkill"],
-  ]) {
-    assert.match(resetDetail, new RegExp(String.raw`case "${view}":\s*${reset}\(\);`), `${view} keeps its detail open`);
+  assert.match(renderActive, /case "inbox":\s*resetActiveInboxItem\(\);/);
+  for (const reset of ["resetActiveWebhook", "resetActiveCron", "resetActiveLoop", "resetActiveSkill"]) {
+    assert.match(shell, new RegExp(String.raw`resetView: module\.${reset}`), `${reset} remains wired`);
   }
 });
 
 test("arriving from another view and re-pressing the nav entry share one reset", () => {
-  assert.equal(shell.match(/resetActiveDetail\(v\);/g)?.length, 2);
-  const switcher = shell.match(/export function switchView\(v: View\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
-  assert.match(switcher, /resetActiveDetail\(v\);/);
-  for (const reset of ["resetActiveWebhook", "resetActiveCron", "resetActiveLoop", "resetActiveSkill"]) {
-    assert.doesNotMatch(
-      switcher,
-      new RegExp(String.raw`${reset}\(\);`),
-      `${reset} should only run via resetActiveDetail`,
-    );
-  }
+  const activate = shell.match(/function activateView\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(activate, /refreshActiveView\(v\);/);
+  assert.match(activate, /renderActiveView\(v, item/);
+  assert.match(shell, /module\.resetView\?\.\(\);/);
 });
 
 test("a deep link still wins: the reset clears the selection but never the pending item", () => {
@@ -44,7 +33,7 @@ test("a deep link still wins: the reset clears the selection but never the pendi
   assert.doesNotMatch(reset, /pendingItemId/);
   assert.match(
     shell,
-    /if \(wanted === "inbox" && wantedItem\) openInboxItemById\(wantedItem\);\s*\n\s*.*\n?\s*switchView\(wanted as View\);/,
+    /if \(wanted === "inbox" && wantedItem\) openInboxItemById\(wantedItem\);\s*\n\s*await activateView\(wanted as View, wantedItem, true\);/,
   );
 });
 
