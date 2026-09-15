@@ -173,7 +173,9 @@ export function registerSlackEvents(
       ) {
         const info = await directory.getChannelInfo(client, m.channel);
         if (!info) throw new Error("Slack message channel lookup unavailable");
-        m.channel_type = info.is_im ? "im" : info.is_mpim ? "mpim" : info.is_private ? "group" : "channel";
+        if (info.is_im) m.channel_type = "im";
+        else if (info.is_mpim) m.channel_type = "mpim";
+        else m.channel_type = info.is_private ? "group" : "channel";
       }
       const eventId = parseEventId(body);
       const privacyChange = channelPrivacyChange(m);
