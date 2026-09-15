@@ -171,3 +171,19 @@ test("installation launch restricts redirect origin and hides service credential
   });
   await assert.rejects(bad.start(), /invalid URL/);
 });
+
+test("own-app switch blocks stale managed callbacks until explicit restart", async (t) => {
+  const { request, store } = await fixture(t);
+  await request("installation", installation);
+  await store.set({ botToken: "xoxb-own", appToken: "xapp-own", teamId: "T123", updatedBy: "admin" });
+  const replacement = { ...installation, installId: "late", installedAt: Date.now() + 1000 };
+  assert.equal((await request("installation", replacement)).status, 409);
+  assert.equal(await store.enableManaged(), false);
+  await request("installation", { installId: installation.installId }, "DELETE");
+  assert.equal((await store.get())?.botToken, "xoxb-own");
+  assert.equal((await request("events", { installId: installation.installId, body: event })).status, 409);
+  await store.delete("admin");
+  assert.equal((await request("installation", replacement)).status, 409);
+  assert.equal(await store.enableManaged(), true);
+  assert.equal((await request("installation", replacement)).status, 202);
+});

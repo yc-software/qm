@@ -31,6 +31,8 @@ export function createManagedSlack(opts: {
   };
   return {
     async start(): Promise<{ url: string }> {
+      if (!(await opts.store.enableManaged()))
+        throw new Error("Disconnect your own Slack app before installing the managed app");
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/start", serviceUrl), {
         method: "POST",
         headers: { authorization: `Bearer ${opts.token}`, "content-type": "application/json" },

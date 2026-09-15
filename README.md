@@ -272,3 +272,10 @@ and app before passing it to the existing Slack runtime and acknowledgment
 machinery. There is no shared queue: unavailable core instances return failures,
 and the hosting service must relay those failures to Slack. The service must
 process lifecycle events and ignore revocations older than the installation.
+
+Managed deployments also support an administrator-provided Slack app through the same
+Slack settings card. Saving its validated bot and Socket Mode tokens replaces the
+managed runtime and rejects subsequent managed installation callbacks. To return to
+the managed app, disconnect the administrator-provided app in QM, then explicitly
+choose **Add to Slack**. Disconnecting alone does not permit old managed callbacks to
+restore an installation.

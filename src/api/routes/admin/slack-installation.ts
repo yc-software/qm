@@ -38,7 +38,13 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
   if (ctx.deps.managedSlack) {
     const status = await ctx.deps.slackInstallation.status();
-    return sendJson(ctx.res, 200, { ...status, source: "service", installAvailable: true });
+    const installation = await ctx.deps.slackInstallation.get();
+    return sendJson(ctx.res, 200, {
+      ...status,
+      source: installation?.appToken ? "admin" : "service",
+      installAvailable: true,
+      createUrl,
+    });
   }
   const stored = await ctx.deps.slackInstallation.status();
   if (stored.managed) return sendJson(ctx.res, 200, { ...stored, source: "admin", createUrl });
@@ -58,7 +64,6 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
-  if (ctx.deps.managedSlack) return sendJson(ctx.res, 409, { error: "use_managed_installation" });
   const body = ctx.body as { botToken?: unknown; appToken?: unknown };
   const botToken = typeof body.botToken === "string" ? body.botToken.trim() : "";
   const appToken = typeof body.appToken === "string" ? body.appToken.trim() : "";
