@@ -1,4 +1,3 @@
-import { sandboxBackendSelected } from "../../src/deployment/secret-schema.ts";
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
 import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
@@ -488,17 +487,17 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
 ];
 
 function conditionMatches(config: QmConfig, condition: SecretCondition): boolean {
-  if (condition.kind === "sandbox-backend")
-    return sandboxBackendSelected(
-      {
-        ...config.env.core,
-        SANDBOX_BACKEND:
-          config.env.core?.SANDBOX_BACKEND ??
-          config.sandbox?.backend ??
-          targetEnvDefault(config, "core", "SANDBOX_BACKEND"),
-      },
-      condition.backend,
-    );
+  if (condition.kind === "sandbox-backend") {
+    const backend =
+      config.env.core?.SANDBOX_BACKEND ??
+      config.sandbox?.backend ??
+      targetEnvDefault(config, "core", "SANDBOX_BACKEND");
+    if (backend?.trim() === condition.backend) return true;
+    const scopes: unknown = JSON.parse(config.env.core?.SANDBOX_SCOPE_BACKENDS || "{}");
+    if (!scopes || typeof scopes !== "object" || Array.isArray(scopes))
+      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object");
+    return Object.values(scopes).some((value) => typeof value === "string" && value.trim() === condition.backend);
+  }
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
   if (condition.kind === "all") return condition.conditions.every((nested) => conditionMatches(config, nested));
