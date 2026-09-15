@@ -31,6 +31,16 @@ interface FlyApp {
 
 interface FlyIpAssignment {
   ip: string;
+  network?: { name?: string; org_slug?: string };
+}
+
+interface FlyNetworkPolicy {
+  netpolSelector?: { all?: boolean };
+  rules?: Array<{
+    action?: string;
+    direction?: string;
+    ports?: Array<{ protocol?: string; port?: number }>;
+  }>;
 }
 
 interface FlyMachineExitEvent {
@@ -71,7 +81,7 @@ interface FlyMachinesApi {
   ensureVolume(appName: string, region: string, sizeGb: number, name: string): Promise<string>;
   updateMachine(appName: string, machineId: string, config: FlyMachineConfig): Promise<void>;
   ensureApp(appName: string, orgSlug: string): Promise<void>;
-  ensurePrivateIngress(appName: string, provisioned: boolean): Promise<void>;
+  ensurePrivateIngress(appName: string, provisioned: boolean, orgSlug: string): Promise<void>;
   assertOwnedApp(appName: string, orgSlug: string): Promise<boolean>;
   deleteApp(appName: string): Promise<void>;
   listMachines(appName: string): Promise<FlyMachine[]>;
@@ -189,12 +199,45 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       if (!found) throw failure(`create app ${appName}`, r);
       assertOwned(appName, orgSlug, found);
     },
-    async ensurePrivateIngress(appName, provisioned): Promise<void> {
+    async ensurePrivateIngress(appName, provisioned, orgSlug): Promise<void> {
       const listed = await request("GET", `${app(appName)}/ip_assignments`);
       if (!listed.ok) throw failure(`list IP assignments for ${appName}`, listed);
       const ips = parse<{ ips: FlyIpAssignment[] }>(`list IP assignments for ${appName}`, listed).ips;
       if (ips.some((entry) => !entry.ip.toLowerCase().startsWith("fdaa:"))) {
         throw new Error(`fly app ${appName} has a public IP assignment; refusing to expose the published app`);
+      }
+      if (provisioned && ips.length) {
+        if (
+          ips.some(
+            ({ network }) =>
+              !network?.name || network.name === "default" || network.name === appName || network.org_slug !== orgSlug,
+          )
+        ) {
+          throw new Error(`Fly shared app ${appName} requires ingress on a separate private network in ${orgSlug}`);
+        }
+        const response = await request("GET", `${app(appName)}/network_policies`);
+        if (!response.ok) throw failure(`read network policies for ${appName}`, response);
+        const policies = parse<FlyNetworkPolicy[]>(`read network policies for ${appName}`, response);
+        const ingress = (policy: FlyNetworkPolicy) =>
+          policy.rules?.filter((rule) => rule.direction === "ingress") ?? [];
+        if (
+          !policies.some(
+            (policy) =>
+              policy.netpolSelector?.all === true &&
+              Object.keys(policy.netpolSelector).length === 1 &&
+              ingress(policy).length > 0,
+          ) ||
+          policies.some((policy) =>
+            ingress(policy).some(
+              (rule) =>
+                rule.action !== "allow" ||
+                !rule.ports?.length ||
+                rule.ports.some((port) => port.protocol !== "tcp" || port.port !== 22),
+            ),
+          )
+        ) {
+          throw new Error(`Fly shared app ${appName} requires all-machine ingress restricted to TCP port 22`);
+        }
       }
       if (ips.length) return;
       if (provisioned) throw new Error(`Fly shared app ${appName} needs private ingress provisioned before publishing`);
@@ -418,7 +461,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
   }
 
   return {
-    profile: { managedScaleToZero: true, ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}) },
+    profile: { managedScaleToZero: !!opts.sharedAppName, ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}) },
 
     async resolveEndpoint(d) {
       if (!opts.privateTransport) return d.endpoint;
@@ -434,7 +477,9 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       if (machines.length !== 1) throw new Error(`fly app ${appName} requires one machine to change always-on`);
       const machine = await api.getMachine(appName, machines[0]!.id);
       if (!machine?.config) throw new Error(`fly app ${appName} has no machine configuration`);
-      const accepted = (await opts.configStore?.get(d.id)) ?? machine.config;
+      const accepted = machine.config.mounts?.length
+        ? ((await opts.configStore?.get(d.id)) ?? machine.config)
+        : machine.config;
       const config = {
         ...accepted,
         services: accepted.services.map((service) => ({ ...service, min_machines_running: alwaysOn ? 1 : 0 })),
@@ -464,7 +509,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       } else {
         await api.ensureApp(appName, opts.org);
       }
-      await api.ensurePrivateIngress(appName, Boolean(opts.sharedAppName));
+      await api.ensurePrivateIngress(appName, Boolean(opts.sharedAppName), opts.org);
       const stale = await deploymentMachines(d);
       const port = await portFor(d);
       if (!opts.dataVolumeSizeGb && (await api.hasVolumes(appName))) {

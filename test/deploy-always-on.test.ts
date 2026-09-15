@@ -15,6 +15,7 @@ function svc(
     managedScaleToZero?: boolean;
     resolve?: () => Promise<DeployEndpoint | null>;
     setAlwaysOn?: DeployProvider["setAlwaysOn"];
+    apply?: DeployProvider["apply"];
   } = {},
 ) {
   const deployStore = createDeployStore();
@@ -22,8 +23,9 @@ function svc(
   let resolves = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: opts.managedScaleToZero ?? true },
-    apply: async () => {
+    apply: async (d, version) => {
       applies++;
+      if (opts.apply) return opts.apply(d, version);
       return { host: "127.0.0.1", port: 5000 };
     },
     destroy: async () => {},
@@ -57,6 +59,44 @@ function svc(
 }
 
 const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1" };
+
+for (const operation of ["redeploy", "rollback"] as const) {
+  for (const initial of [false, true]) {
+    test(`failed ${operation} preserves always-on=${initial} and permits a subsequent settings retry`, async () => {
+      let reject = false;
+      const seen: Array<boolean | undefined> = [];
+      const toggled: boolean[] = [];
+      const { deploy, deployStore } = svc({
+        apply: async (d) => {
+          seen.push(d.alwaysOn);
+          if (reject) throw new Error("publication failed");
+          return { host: "127.0.0.1", port: 5000 };
+        },
+        setAlwaysOn: async (_d, enabled) => {
+          toggled.push(enabled);
+        },
+      });
+      const d = await deploy.deploy({ ...owner, entrypoint: "first", files: [], alwaysOn: initial });
+      await deploy.redeploy(d.id, { entrypoint: "second", files: [] });
+      const accepted = (await deployStore.get(d.id))!;
+      reject = true;
+      await assert.rejects(
+        operation === "redeploy"
+          ? deploy.redeploy(d.id, { entrypoint: "third", files: [], alwaysOn: !initial })
+          : deploy.rollbackDeployment(d.id, 1, { alwaysOn: !initial }),
+        /publication failed/,
+      );
+      assert.equal(seen.at(-1), !initial);
+      const after = (await deployStore.get(d.id))!;
+      assert.equal(!!after.alwaysOn, initial);
+      assert.equal(after.appliedVersion, accepted.appliedVersion);
+      assert.deepEqual(after.endpoint, accepted.endpoint);
+      await deploy.setDeploymentAlwaysOn(d.id, !initial);
+      assert.deepEqual(toggled, [!initial]);
+      assert.equal((await deployStore.get(d.id))!.alwaysOn, !initial);
+    });
+  }
+}
 
 test("setDeploymentAlwaysOn flips the flag on and off, and persists", async () => {
   const { deploy, deployStore } = svc();

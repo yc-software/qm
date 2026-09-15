@@ -39,6 +39,8 @@ interface FakeFlyOptions {
   createAppBody?: string;
   existingApp?: { name: string; network: string; organization: { slug: string } };
   ips?: string[];
+  ingressNetwork?: string;
+  networkPolicies?: unknown[];
   deleteAppStatus?: number;
   existingMachines?: string[];
   states?: string[];
@@ -89,7 +91,20 @@ function fakeFly(opts: FakeFlyOptions = {}) {
       app = undefined;
       return new Response("{}", { status: opts.deleteAppStatus ?? 202 });
     }
-    if (segments[3] === "ip_assignments" && method === "GET") return json(200, { ips: ips.map((ip) => ({ ip })) });
+    if (segments[3] === "ip_assignments" && method === "GET")
+      return json(200, {
+        ips: ips.map((ip) => ({ ip, network: { name: opts.ingressNetwork ?? "trusted-ingress", org_slug: ORG } })),
+      });
+    if (segments[3] === "network_policies" && method === "GET")
+      return json(
+        200,
+        opts.networkPolicies ?? [
+          {
+            netpolSelector: { all: true },
+            rules: [{ action: "allow", direction: "ingress", ports: [{ protocol: "tcp", port: 22 }] }],
+          },
+        ],
+      );
     if (segments[3] === "ip_assignments" && method === "POST") {
       ips.push("fdaa:1:2:3::1");
       return json(201, { ip: ips[0] });
@@ -432,9 +447,10 @@ test("destroy: refuses a mismatched app and surfaces a failed deletion", async (
   await assert.rejects(provider(fetchImpl).destroy(deployment(ID)), /delete app .*http 500/);
 });
 
-test("profile: Flycast manages idle suspension without deleting published applications", () => {
+test("profile: shared Flycast manages suspension while existing standalone apps retain idle cleanup", () => {
   const { fetchImpl } = fakeFly();
-  assert.deepEqual(provider(fetchImpl).profile, { managedScaleToZero: true });
+  assert.deepEqual(provider(fetchImpl).profile, { managedScaleToZero: false });
+  assert.deepEqual(provider(fetchImpl, { sharedAppName: "company-app" }).profile, { managedScaleToZero: true });
 });
 
 test("missing fly configuration fails at the point of use with the env var that is missing", async () => {
@@ -566,6 +582,21 @@ test("always-on toggles update an existing machine without replacing its data", 
     assert.deepEqual(fake.configs.get("machine-1")!.mounts, [{ volume: "volume-1", path: "/data" }]);
     assert.equal(fake.machines.size, 1);
   }
+});
+
+test("always-on toggles preserve the latest ephemeral publication after a prior toggle", async () => {
+  const fake = fakeFly();
+  const deploy = provider(fake.fetchImpl);
+  const d = deployment(ID);
+  await deploy.apply(d, version(snapshot({ "server.js": "first" })));
+  await deploy.setAlwaysOn!(d, true);
+  await deploy.apply({ ...d, alwaysOn: true }, version(snapshot({ "server.js": "second" }), { version: 2 }));
+  const current = structuredClone(fake.configs.get("machine-2")!);
+  await deploy.setAlwaysOn!(d, false);
+  assert.deepEqual(fake.configs.get("machine-2"), {
+    ...current,
+    services: current.services.map((service) => ({ ...service, min_machines_running: 0 })),
+  });
 });
 
 test("an update that leaves the machine stopped explicitly starts it", async () => {
@@ -709,4 +740,53 @@ test("private transport is restored when resolving a persisted endpoint", async 
   assert.equal(endpoint.socksProxyPort, 18096);
   assert.deepEqual(await deploy.resolveEndpoint!({ ...d, endpoint }, version(snapshot({}))), endpoint);
   assert.equal(connections, 2);
+});
+
+test("shared publishing rejects missing or permissive ingress isolation before creating resources", async () => {
+  for (const overrides of [
+    { ingressNetwork: "" },
+    { ingressNetwork: "default" },
+    { ingressNetwork: "company-app" },
+    { networkPolicies: [] },
+    {
+      networkPolicies: [
+        {
+          netpolSelector: { all: true, metadata: { role: "not-qm" } },
+          rules: [{ action: "allow", direction: "ingress", ports: [{ protocol: "tcp", port: 22 }] }],
+        },
+      ],
+    },
+    {
+      networkPolicies: [
+        {
+          netpolSelector: { all: false },
+          rules: [{ action: "allow", direction: "ingress", ports: [{ protocol: "tcp", port: 22 }] }],
+        },
+      ],
+    },
+    {
+      networkPolicies: [
+        {
+          netpolSelector: { all: true },
+          rules: [{ action: "allow", direction: "ingress", ports: [{ protocol: "tcp", port: 8080 }] }],
+        },
+      ],
+    },
+  ]) {
+    const fake = fakeFly({
+      existingApp: { name: "company-app", network: "company-app", organization: { slug: ORG } },
+      ips: ["fdaa:1:2:3::1"],
+      ...overrides,
+    });
+    const deploy = provider(fake.fetchImpl, {
+      sharedAppName: "company-app",
+      portStore: createMemoryMap<string>(),
+      dataVolumeSizeGb: 1,
+    });
+    await assert.rejects(
+      deploy.apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      /requires.*(private network|ingress restricted)/,
+    );
+    assert.ok(fake.calls.every((call) => call.method === "GET"));
+  }
 });

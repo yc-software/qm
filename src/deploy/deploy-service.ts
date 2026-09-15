@@ -166,8 +166,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     id: string,
     version: DeploymentVersion,
     fromVersion?: number,
+    alwaysOn?: boolean,
   ): Promise<DeployEndpoint> => {
-    const d = (await deps.deployStore.get(id))!;
+    const stored = (await deps.deployStore.get(id))!;
+    const d = alwaysOn === undefined ? stored : { ...stored, alwaysOn };
     const deploymentEnv = await deps.deploymentEnv?.(d);
     if (deploymentEnv && Object.keys(deploymentEnv).length)
       version = { ...version, env: { ...version.env, ...deploymentEnv } };
@@ -191,6 +193,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       endpoint = await deps.provider.apply(d, materialized);
     }
+    if (alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, alwaysOn);
     if (endpoint.image && endpoint.image !== version.image) {
       await deps.deployStore.setVersionImage(id, version.version, endpoint.image);
     }
@@ -384,7 +387,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async redeploy(id, input) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
-        if (input.alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, input.alwaysOn);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
         const v = await deps.deployStore.addVersion(id, {
@@ -396,7 +398,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown deployment: ${id}`);
-        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion);
+        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
         deps.auditLog.record({
           at: Date.now(),
@@ -420,12 +422,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async rollbackDeployment(id, version, options) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
-        if (options?.alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, options.alwaysOn);
         await deps.deployStore.setCurrentVersion(id, version);
         const v = await deps.deployStore.versionOf(id, version);
         const d = await deps.deployStore.get(id);
         if (!d || !v) return;
-        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion);
+        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion, options?.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
         deps.auditLog.record({
           at: Date.now(),
