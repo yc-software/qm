@@ -138,3 +138,9 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("uncaughtException", (error) =>
+  console.error("[qm] uncaught exception (process kept alive):", errMessage(error)),
+);
+process.on("unhandledRejection", (reason) =>
+  console.error("[qm] unhandled rejection (process kept alive):", errMessage(reason)),
+);

@@ -57,6 +57,9 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
   }
   const pool = new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 });
   pool.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
+  pool.on("connect", (client) =>
+    client.on("error", (error) => console.error("[pg] checked-out client error:", errMessage(error))),
+  );
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
