@@ -1,5 +1,6 @@
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot, resolveMentionsInText } from "./lib.ts";
+import { SLACK_MENTION } from "./mrkdwn.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
@@ -66,17 +67,21 @@ export function createMirror(deps: {
     text: string,
   ): Promise<{ text: string; mentions: Record<string, string> }> {
     const mentionIds = new Set<string>();
-    for (const match of text.matchAll(/<@(U\w+)(?:\|[^>]*)?>/g)) mentionIds.add(match[1] as string);
+    for (const match of text.matchAll(SLACK_MENTION)) mentionIds.add(match[1] as string);
     const names = new Map<string, string>();
+    if (mentionIds.has(ids.ownBotId) && ids.botHandle) names.set(ids.ownBotId, ids.botHandle);
     await Promise.all(
-      [...mentionIds].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
-        try {
-          const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
-          if (dn) names.set(id, dn);
-        } catch (e) {
-          swallow("slack: mention users.info", e);
-        }
-      }),
+      [...mentionIds]
+        .filter((id) => id.startsWith("U") || id.startsWith("W"))
+        .slice(0, MAX_NAME_LOOKUPS)
+        .map(async (id) => {
+          try {
+            const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
+            if (dn) names.set(id, dn);
+          } catch (e) {
+            swallow("slack: mention users.info", e);
+          }
+        }),
     );
     return { text: resolveMentionsInText(text, (id) => names.get(id)), mentions: Object.fromEntries(names) };
   }
@@ -118,7 +123,7 @@ export function createMirror(deps: {
         text,
         ...(Object.keys(mentions).length ? { mentions } : {}),
         ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
-        ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
+        ...(mentionsBot(raw, ids.botUserId, ids.ownBotId) ? { mentionsSelf: true } : {}),
         ...(opts.editedAt ? { editedAt: opts.editedAt } : {}),
         ...(opts.handled ? { handled: true } : {}),
         ...(opts.containerName ? { containerName: opts.containerName } : {}),

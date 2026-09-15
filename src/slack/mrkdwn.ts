@@ -3,15 +3,19 @@ export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
 
+export const SLACK_MENTION = /<@([UWB]\w+)(?:\|([^>]*))?>/g;
+
 export function resolveMentionsInText(text: string, lookup: (id: string) => string | undefined): string {
-  return text.replace(/<@(U\w+)(?:\|([^>]*))?>/g, (_m, id: string, label?: string) => {
+  return text.replace(SLACK_MENTION, (_m, id: string, label?: string) => {
     const name = (label && label.trim()) || lookup(id);
     return name ? `@${name}` : `@${id}`;
   });
 }
 
-export function stripMention(text: string, botUserId: string): string {
-  const withoutMention = botUserId ? text.replace(new RegExp(`<@${botUserId}>`, "g"), "") : text;
+export function stripMention(text: string, botUserId: string, ownBotId = ""): string {
+  const withoutMention = text.replace(SLACK_MENTION, (mention, id: string) =>
+    id === botUserId || id === ownBotId ? "" : mention,
+  );
   return decodeSlackEntities(withoutMention).trim();
 }
 
@@ -33,7 +37,7 @@ export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
   mentionNameById = byId;
 }
-const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^>]*))?>/gi;
+const WIRE_MENTION = /<(@[UWB]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^>]*))?>/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {
   const name = label?.trim().replace(/^@/, "") || "";
