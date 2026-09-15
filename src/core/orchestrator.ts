@@ -1061,6 +1061,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               for (const chunk of securityScreenChunks("tool_result:shared_skill", payload)) {
                 const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
                   hook: "tool_response",
+                  request: input.text,
                   surface: "shared_skill",
                   origin: input.origin.kind,
                 });
@@ -2423,6 +2424,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ? ({ content }) =>
                       classifySecurityData(content, actor.id, scopeId, undefined, {
                         hook: "tool_response",
+                        request: input.text,
                         surface: "inbound_file",
                         origin: input.origin.kind,
                       })
@@ -2913,6 +2915,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           chunks.slice(i, i + 4).map((chunk) =>
                             classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
                               hook: "tool_response",
+                              request: input.text,
                               surface: toolLabel,
                               origin: input.origin.kind,
                             }),
