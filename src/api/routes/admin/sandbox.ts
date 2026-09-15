@@ -21,6 +21,7 @@ export async function listSandboxRoutes(ctx: ApiCtx): Promise<void> {
   const routes = await runner.listRoutes();
   return sendJson(res, 200, {
     defaultBackend: runner.defaultBackend,
+    scopeDefaults: runner.scopeDefaults ?? {},
     availableBackends: runner.availableBackends(),
     routes: routes.map(([scopeId, r]) => ({ scopeId, ...r })),
   });

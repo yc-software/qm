@@ -2,7 +2,12 @@ import { randomUUID, createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
-import type { SandboxBackendName, SandboxRoute } from "./sandbox-routing.ts";
+import {
+  sandboxDefaultForScope,
+  type SandboxScopeDefaults,
+  type SandboxBackendName,
+  type SandboxRoute,
+} from "./sandbox-routing.ts";
 import type { Sandbox, SandboxHandle, AgentComputerSpec, ProvisionOptions, ComputerStatus } from "./sandbox.ts";
 
 export interface SandboxResource {
@@ -62,7 +67,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null | undefined>;
   get(id: string): Promise<SandboxResource>;
-  defaultBackend(): SandboxBackendName;
+  defaultBackend(scopeId?: string): SandboxBackendName;
   withLegacyMutation<T>(scopeId: string, action: () => Promise<T>): Promise<T>;
   recordLegacy(scopeId: string, backend: SandboxBackendName, handle: SandboxHandle): Promise<string>;
 }
@@ -77,6 +82,7 @@ export function createSandboxResources(opts: {
   routes: DurableMap<SandboxRoute>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
+  scopeDefaults?: SandboxScopeDefaults;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
@@ -117,7 +123,8 @@ export function createSandboxResources(opts: {
         if (valid(binding.scopeId)) candidates.set(legacyId(binding.scopeId, binding.backend), binding);
       }
       for (const scope of scopes) {
-        const backend = routeBackends.get(scope) ?? opts.defaultBackend;
+        const backend =
+          routeBackends.get(scope) ?? sandboxDefaultForScope(scope, opts.defaultBackend, opts.scopeDefaults);
         const id = legacyId(scope, backend);
         if (!candidates.has(id)) candidates.set(id, { scopeId: scope, backend });
       }
@@ -139,7 +146,10 @@ export function createSandboxResources(opts: {
         });
       }
       for (const scope of scopes) {
-        const id = legacyId(scope, routeBackends.get(scope) ?? opts.defaultBackend);
+        const id = legacyId(
+          scope,
+          routeBackends.get(scope) ?? sandboxDefaultForScope(scope, opts.defaultBackend, opts.scopeDefaults),
+        );
         const record = await opts.records.get(id);
         await opts.defaults.putIfAbsent(scope, { sandboxId: record?.state === "retired" ? null : id });
       }
@@ -195,7 +205,7 @@ export function createSandboxResources(opts: {
     return id;
   };
   return {
-    defaultBackend: () => opts.defaultBackend,
+    defaultBackend: (scopeId) => sandboxDefaultForScope(scopeId, opts.defaultBackend, opts.scopeDefaults),
     initialize,
     get,
     recordLegacy: (scopeId, backend, handle) =>
@@ -220,7 +230,9 @@ export function createSandboxResources(opts: {
           const current = await get(id);
           if (current.state === "retired" && !current.cleanupPending && !current.error) return;
           const selected = await opts.defaults.get(current.ownerScopeId);
-          const legacyBackend = (await opts.routes.get(current.ownerScopeId))?.backend ?? opts.defaultBackend;
+          const legacyBackend =
+            (await opts.routes.get(current.ownerScopeId))?.backend ??
+            sandboxDefaultForScope(current.ownerScopeId, opts.defaultBackend, opts.scopeDefaults);
           if (selected?.sandboxId === id || (!selected && current.legacy && current.backend === legacyBackend))
             throw new Error("unset or change this scope's default before retiring its computer");
           await opts.beforeRetire?.(current);

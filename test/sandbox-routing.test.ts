@@ -287,3 +287,36 @@ test("computer status/restart on a scope routed to a backend without them is a t
     (e: unknown) => e instanceof CapabilityUnsupportedError,
   );
 });
+
+test("scope defaults select providers while explicit routes and handles retain ownership", async () => {
+  const routes = createMemoryMap<SandboxRoute>();
+  const modal = fakeBackend("modal");
+  const sprites = fakeBackend("sprites");
+  const aws = fakeBackend("aws");
+  const router = createSandboxRouter({
+    backends: { modal, sprites, aws },
+    routes,
+    defaultBackend: "sprites",
+    scopeDefaults: { personal: "modal", channel: "sprites" },
+  });
+  await routes.put("personal:existing", { backend: "aws" });
+  const personal = await router.provision(layersFor("personal:new"));
+  const channel = await router.provision(layersFor("channel:shared"));
+  const existing = await router.provision(layersFor("personal:existing"));
+  assert.equal(personal.backend, "modal");
+  assert.equal(channel.backend, "sprites");
+  assert.equal(existing.backend, "aws");
+  assert.equal((await router.run(personal, "pwd")).stdout, "modal");
+  assert.equal((await router.profileFor!("personal:new")).backend, "modal");
+  assert.equal((await router.profileFor!("personal:existing")).backend, "aws");
+});
+
+test("missing scope provider refuses substitution", async () => {
+  const router = createSandboxRouter({
+    backends: { sprites: fakeBackend("sprites") },
+    routes: createMemoryMap<SandboxRoute>(),
+    defaultBackend: "sprites",
+    scopeDefaults: { personal: "modal" },
+  });
+  await assert.rejects(router.provision(layersFor("personal:new")), /unavailable: modal/);
+});

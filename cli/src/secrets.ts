@@ -1,9 +1,11 @@
+import { sandboxBackendSelected } from "../../src/deployment/secret-schema.ts";
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
 import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue } from "./util.ts";
 
 type SecretCondition =
+  | { kind: "sandbox-backend"; backend: string }
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
   | { kind: "env-in"; service: DeclaredServiceName; name: string; values: string[] }
   | { kind: "env-absent"; service: DeclaredServiceName; name: string }
@@ -125,7 +127,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       when: {
         kind: "any",
         conditions: [
-          { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "porter" },
+          { kind: "sandbox-backend", backend: "porter" },
           { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "porter" },
         ],
       },
@@ -138,33 +140,33 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "SPRITES_TOKEN",
     service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "sprites" } },
+    required: { when: { kind: "sandbox-backend", backend: "sprites" } },
     description: "Fly Sprites API token for the agent-computer substrate.",
     generate: "sprite login   # then copy the token from ~/.sprite/credentials",
   },
   {
     name: "E2B_API_KEY",
     service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "e2b" } },
+    required: { when: { kind: "sandbox-backend", backend: "e2b" } },
     description: "E2B API key used by the e2b sandbox backend (from e2b.dev dashboard).",
   },
   {
     name: "MODAL_TOKEN_ID",
     service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "modal" } },
+    required: { when: { kind: "sandbox-backend", backend: "modal" } },
     description: "Modal token id used by the modal sandbox backend.",
     generate: "modal token new   # or create a token in the Modal dashboard",
   },
   {
     name: "MODAL_TOKEN_SECRET",
     service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "modal" } },
+    required: { when: { kind: "sandbox-backend", backend: "modal" } },
     description: "Modal token secret paired with MODAL_TOKEN_ID.",
   },
   {
     name: "SMOLMACHINES_TOKEN",
     service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "smolmachines" } },
+    required: { when: { kind: "sandbox-backend", backend: "smolmachines" } },
     description: "smolmachines API key for the agent-computer substrate.",
     generate: "create an API key in the smolmachines console (https://smolmachines.com/console)",
   },
@@ -175,7 +177,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       when: {
         kind: "any",
         conditions: [
-          { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "agent37" },
+          { kind: "sandbox-backend", backend: "agent37" },
           { kind: "env-equals", service: "core", name: "SANDBOX_SECONDARY_BACKEND", value: "agent37" },
         ],
       },
@@ -486,6 +488,17 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
 ];
 
 function conditionMatches(config: QmConfig, condition: SecretCondition): boolean {
+  if (condition.kind === "sandbox-backend")
+    return sandboxBackendSelected(
+      {
+        ...config.env.core,
+        SANDBOX_BACKEND:
+          config.env.core?.SANDBOX_BACKEND ??
+          config.sandbox?.backend ??
+          targetEnvDefault(config, "core", "SANDBOX_BACKEND"),
+      },
+      condition.backend,
+    );
   if (condition.kind === "service-enabled") return config.services.includes(condition.service);
   if (condition.kind === "service-absent") return !config.services.includes(condition.service);
   if (condition.kind === "all") return condition.conditions.every((nested) => conditionMatches(config, nested));
@@ -710,6 +723,8 @@ function requiresOtherEmailTransport(config: QmConfig, condition: SecretConditio
 }
 
 function conditionClause(condition: SecretCondition): string {
+  if (condition.kind === "sandbox-backend")
+    return `SANDBOX_BACKEND or SANDBOX_SCOPE_BACKENDS selects ${condition.backend}`;
   if (condition.kind === "service-enabled") return `the ${condition.service} service is enabled`;
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;
   if (condition.kind === "all") return condition.conditions.map(conditionClause).join(" and ");

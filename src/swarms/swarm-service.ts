@@ -264,7 +264,7 @@ export function createSwarmService(deps: {
     const source = run.request;
     const inventory = await deps.sandboxes.list(auth.actorId, session.scopeId);
     const selected = inventory.sandboxes.find((box) => box.id === inventory.defaultSandboxId);
-    const requested = backend ?? selected?.backend ?? deps.sandboxes.defaultBackend();
+    const requested = backend ?? selected?.backend ?? deps.sandboxes.defaultBackend(session.scopeId);
     const provider = inventory.providers.find((item) => item.name === requested);
     if (!provider || !provider.actions.includes("create") || !provider.actions.includes("retire"))
       throw new Error("sandbox backend must support creating and retiring workers");

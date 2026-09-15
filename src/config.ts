@@ -1,3 +1,5 @@
+import { parseScopeId } from "./types.ts";
+import type { SandboxScopeDefaults } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
   parseProviderBaseUrl,
@@ -54,6 +56,7 @@ export interface Config {
   securityPosture: SecurityPosture;
   sandboxResourcesEnabled: boolean;
   sharingPosture: SharingPosture;
+  sandboxScopeDefaults?: SandboxScopeDefaults;
   sandboxBackend: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
   sandboxSecondaryBackend?: "aws" | "local" | "sprites" | "smolmachines" | "e2b" | "modal" | "porter" | "agent37";
   deployProvider: "docker" | "aws" | "fly" | "porter";
@@ -1076,6 +1079,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
+  const sandboxScopeDefaults: SandboxScopeDefaults = {};
+  if (env.SANDBOX_SCOPE_BACKENDS) {
+    const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
+    if (!values || typeof values !== "object" || Array.isArray(values))
+      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object of scope kinds and backend names");
+    for (const [kind, value] of Object.entries(values)) {
+      const parsed = parseScopeId(kind + ":scope").kind;
+      if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
+        throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
+      sandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
+    }
+  }
+
   if (env.SANDBOX_SECONDARY_BACKEND?.trim()) {
     console.warn(
       `[config] SANDBOX_SECONDARY_BACKEND=${JSON.stringify(env.SANDBOX_SECONDARY_BACKEND.trim())} is retired and ignored — every backend whose credential is present is constructed; per-scope routes pick between them. Remove the variable.`,
@@ -1243,6 +1259,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     sandboxBackend,
+    sandboxScopeDefaults,
     sandboxResourcesEnabled: boolEnvStrict("SANDBOX_RESOURCES_ENABLED", env.SANDBOX_RESOURCES_ENABLED) ?? false,
     deployProvider,
     ...(env.EGRESS_SERVICE_HOSTS

@@ -389,3 +389,14 @@ test("combined auth rejects two source secrets for the same environment name", (
     /would receive env RESEND_API_KEY from both/,
   );
 });
+
+test("scope-selected providers require both Modal and Sprites credentials", () => {
+  const config = makeConfig({
+    env: { core: { SANDBOX_BACKEND: "sprites", SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' } },
+  });
+  const required = computedSecrets(config)
+    .filter((secret) => secret.required)
+    .map((secret) => secret.name);
+  for (const name of ["SPRITES_TOKEN", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"])
+    assert.ok(required.includes(name), name);
+});

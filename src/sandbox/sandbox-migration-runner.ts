@@ -4,7 +4,12 @@ import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { copyHome, packHome, translateScript, type CopyHomeResult } from "./sandbox-migrate.ts";
-import type { SandboxBackendName, SandboxRoute } from "./sandbox-routing.ts";
+import {
+  sandboxDefaultForScope,
+  type SandboxScopeDefaults,
+  type SandboxBackendName,
+  type SandboxRoute,
+} from "./sandbox-routing.ts";
 import {
   capabilitiesLostMovingTo,
   supportsBlobStaging,
@@ -18,6 +23,7 @@ export interface SandboxMigrationOptions {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   routes: DurableMap<SandboxRoute>;
   defaultBackend: SandboxBackendName;
+  scopeDefaults?: SandboxScopeDefaults;
   advisoryLock?: AdvisoryLock;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   settleMs?: number;
@@ -50,6 +56,7 @@ export interface SandboxMigrationRunner {
   listRoutes(): Promise<Array<[string, SandboxRoute]>>;
   availableBackends(): SandboxBackendName[];
   defaultBackend: SandboxBackendName;
+  scopeDefaults?: SandboxScopeDefaults;
 }
 
 const scopeLayers = (scopeId: string): WorkspaceLayer[] => [
@@ -68,7 +75,7 @@ export function createSandboxMigrationRunner(opts: SandboxMigrationOptions): San
     const toSandbox = backends[to];
     if (!toSandbox) throw new Error(`cannot migrate to ${to}: that backend is not constructed on this deployment`);
     const route = await routes.get(scopeId);
-    const from = route?.backend ?? defaultBackend;
+    const from = route?.backend ?? sandboxDefaultForScope(scopeId, defaultBackend, opts.scopeDefaults);
     if (from === to) throw new Error(`scope is already on ${to}`);
     const fromSandbox = backends[from];
     if (!fromSandbox) throw new Error(`scope lives on ${from}, which is not constructed on this deployment`);
@@ -227,5 +234,6 @@ export function createSandboxMigrationRunner(opts: SandboxMigrationOptions): San
         .filter(([, s]) => !!s)
         .map(([n]) => n as SandboxBackendName),
     defaultBackend,
+    scopeDefaults: opts.scopeDefaults,
   };
 }
