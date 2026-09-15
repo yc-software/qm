@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { pooledClientsWaiting } from "../persistence/pg-pool.ts";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 
 export interface LoadShedGate {
@@ -7,46 +8,51 @@ export interface LoadShedGate {
   canClaim(): boolean;
 }
 
+export interface LoadSample {
+  utilization: number;
+  waitingForDb: number;
+}
+
 export interface LoadSampler {
   start(): void;
-  stop(): void;
-  utilization(): number;
+  sample(): LoadSample;
 }
 
 const SAMPLE_MS = 2_000;
 export const SHED_AT_UTILIZATION = 0.85;
 export const RESUME_BELOW_UTILIZATION = 0.6;
+export const SHED_AT_DB_WAITERS = 8;
 
-export function nextShedState(shedding: boolean, utilization: number): boolean {
-  return shedding ? utilization >= RESUME_BELOW_UTILIZATION : utilization >= SHED_AT_UTILIZATION;
+export function nextShedState(shedding: boolean, s: LoadSample): boolean {
+  if (shedding) return s.utilization >= RESUME_BELOW_UTILIZATION || s.waitingForDb > 0;
+  return s.utilization >= SHED_AT_UTILIZATION || s.waitingForDb >= SHED_AT_DB_WAITERS;
 }
 
-function eventLoopUtilizationSampler(): LoadSampler {
+function processLoadSampler(): LoadSampler {
   let last = performance.eventLoopUtilization();
   return {
     start: () => {
       last = performance.eventLoopUtilization();
     },
-    stop: () => {},
-    utilization: () => {
+    sample: () => {
       const now = performance.eventLoopUtilization();
-      const delta = performance.eventLoopUtilization(now, last);
+      const utilization = performance.eventLoopUtilization(now, last).utilization;
       last = now;
-      return delta.utilization;
+      return { utilization, waitingForDb: pooledClientsWaiting() };
     },
   };
 }
 
 export function createLoadShedGate(opts: { sampler?: LoadSampler; sampleMs?: number } = {}): LoadShedGate {
   let shedding = false;
-  const sampler = opts.sampler ?? eventLoopUtilizationSampler();
+  const sampler = opts.sampler ?? processLoadSampler();
   const sweeper: Sweeper = createSweeper(
     () => {
-      const utilization = sampler.utilization();
-      const next = nextShedState(shedding, utilization);
+      const s = sampler.sample();
+      const next = nextShedState(shedding, s);
       if (next !== shedding) {
         console.error(
-          `[load-shed] event loop utilization ${Math.round(utilization * 100)}%; ${next ? "pausing new run claims" : "resuming run claims"}`,
+          `[load-shed] event loop ${Math.round(s.utilization * 100)}% busy, ${s.waitingForDb} queries waiting for a connection; ${next ? "pausing new run claims" : "resuming run claims"}`,
         );
         shedding = next;
       }
@@ -59,10 +65,7 @@ export function createLoadShedGate(opts: { sampler?: LoadSampler; sampleMs?: num
       sampler.start();
       sweeper.start();
     },
-    stop: () => {
-      sweeper.stop();
-      sampler.stop();
-    },
+    stop: () => sweeper.stop(),
     canClaim: () => !shedding,
   };
 }

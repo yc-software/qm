@@ -246,10 +246,11 @@ function main(): void {
   const tokenless = process.env.EGRESS_TOKENLESS === "open" ? ("open" as const) : ("deny" as const);
   const server = buildEgressAuthzServer({ ...(capabilitySecret ? { capabilitySecret } : {}), audit, tokenless });
   server.listen(port, "127.0.0.1", () => console.log(`[egress-authz] listening on 127.0.0.1:${port}`));
+  let shuttingDown = false;
   const shutdown = (): void => {
-    server.close(
-      () => void (relay ? relay.flush() : Promise.resolve()).finally(() => process.exit(process.exitCode ?? 0)),
-    );
+    if (shuttingDown) return;
+    shuttingDown = true;
+    server.close(() => void (relay ? relay.flush() : Promise.resolve()).finally(() => process.exit()));
   };
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, shutdown);
   shutdownOnUncaught("egress-authz", shutdown);
