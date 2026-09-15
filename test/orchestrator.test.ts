@@ -3438,7 +3438,7 @@ test("collect-mode metrics: a turn the caller sees as 'ok' records metric status
 });
 
 test("a conversational turn never provisions a sandbox (lazy); execute/write/read do", async () => {
-  const built = freshApp();
+  const built = freshApp({ eagerProvisionEnabled: false });
   const { app } = built;
   const boxes = spyProvisioning(built.sandbox);
 
