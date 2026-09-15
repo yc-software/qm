@@ -51,7 +51,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "LINEAR_OAUTH_CLIENT_SECRET", requiredWhen: "linear-oauth" },
 ];
 
-export function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolean {
+function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolean {
   if (env.SANDBOX_BACKEND?.trim() === backend) return true;
   const scopes: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS || "{}");
   if (!scopes || typeof scopes !== "object" || Array.isArray(scopes))
