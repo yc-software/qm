@@ -245,7 +245,8 @@ test("surface context keeps a successful channel page when an empty thread is th
     } as SlackCoreClient,
     directory,
     serializer: {
-      shapeRecentMessages: async (_client, raw) => raw.map((m) => ({ ts: m.ts!, text: m.text!, name: "Alice" })),
+      shapeRecentMessages: async (_client: unknown, raw: import("../src/slack/payloads.ts").SlackHistoryMessage[]) =>
+        raw.map((m) => ({ ts: m.ts!, text: m.text!, name: "Alice" })),
     } as unknown as import("../src/slack/conversation-view.ts").ConversationSerializer,
     botToken: "test",
     clientOptions: {},
