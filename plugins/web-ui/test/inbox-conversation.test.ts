@@ -76,6 +76,9 @@ test("draft is the first editable chat message and Send it submits the combined 
         input.value = instruction;
         input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
         const send = host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!;
+        assert.equal(send.parentElement, host.querySelector(".inbox-chat-suggestions"));
+        assert.equal(send.parentElement!.firstElementChild, send);
+        assert.equal(host.querySelector(".inbox-chat-composer")!.textContent!.includes("Dismiss"), false);
         send.click();
         send.click();
         await requested;
@@ -93,6 +96,14 @@ test("draft is the first editable chat message and Send it submits the combined 
         assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.disabled, true);
         release();
         await new Promise((resolve) => setTimeout(resolve, 20));
+        item.thread = [{ role: "human", text: "Make it shorter", at: 102 }];
+        render(chatTpl(item), host);
+        assert.equal(host.querySelectorAll(".inbox-chat-suggestions .inbox-suggest-chip.primary").length, 1);
+        assert.equal(host.querySelectorAll(".inbox-chat-suggestion").length, 0);
+        for (const status of ["sent", "dismissed", "replied"]) {
+          render(chatTpl({ ...item, status }), host);
+          assert.equal(host.querySelector(".inbox-chat-suggestions"), null);
+        }
       }
     }
     for (const failure of ["save", "followup"]) {

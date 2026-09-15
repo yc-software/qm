@@ -61,8 +61,8 @@ test("an inbox drag paints drop zones on every existing pane", () => {
 test("email items edit like an email; slack items like slack", () => {
   assert.match(inbox, /<span>To<\/span>/);
   assert.match(inbox, /<span>Subject<\/span>/);
-  assert.match(inbox, /Send it/, "send lives in the composer as a suggested action");
-  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render inside the ask composer");
+  assert.match(inbox, /Send it/, "send is a suggested action");
+  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render beside edit prompts");
   assert.match(inbox, /submit\(box, "Send it"\)/);
   assert.match(inbox, /rows=\$\{gmail \? 7 : 3\}/, "email drafts get a taller editor than slack replies");
 });

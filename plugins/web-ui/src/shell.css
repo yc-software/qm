@@ -8105,6 +8105,14 @@ h3.ambient-field-label {
   border-bottom: 1px solid var(--border);
 }
 @media (max-width: 900px) {
+  .inbox-item-head .pane-title {
+    flex-wrap: wrap;
+  }
+  .inbox-item-head .pane-title .inbox-item-head-meta {
+    flex-basis: 100%;
+    margin-left: 0;
+    padding-left: 0;
+  }
   .inbox-item-aside {
     width: min(960px, 100%);
     margin: 14px auto 0;
@@ -8350,6 +8358,44 @@ h3.ambient-field-label {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.inbox-dismiss {
+  flex: none;
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.inbox-dismiss:hover:not(:disabled) {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.inbox-dismiss:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.inbox-item-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.inbox-dismiss:focus-visible,
+.inbox-chat-suggestion:focus-visible,
+.inbox-suggest-chip:focus-visible {
+  outline: 2px solid var(--cta);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .inbox-dismiss,
+  .inbox-chat-suggestion,
+  .inbox-suggest-chip {
+    min-height: 44px;
+  }
+}
+
 .inbox-chat-log {
   display: flex;
   flex-direction: column;
@@ -8470,15 +8516,8 @@ h3.ambient-field-label {
 .inbox-chat-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
-}
-.inbox-chat-suggest {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
 }
 .inbox-suggest-chip {
   display: inline-flex;
@@ -8502,13 +8541,15 @@ h3.ambient-field-label {
   color: var(--foreground);
 }
 .inbox-suggest-chip.primary {
-  border-color: color-mix(in srgb, var(--cta) 45%, var(--border));
-  color: var(--cta);
-  background: color-mix(in srgb, var(--cta) 7%, transparent);
+  border-color: var(--cta);
+  color: var(--cta-foreground);
+  background: var(--cta);
+  font-weight: 600;
 }
 .inbox-suggest-chip.primary:hover:not(:disabled) {
-  border-color: var(--cta);
-  background: color-mix(in srgb, var(--cta) 14%, transparent);
+  border-color: var(--cta-hover);
+  background: var(--cta-hover);
+  color: var(--cta-foreground);
 }
 .inbox-suggest-chip:disabled {
   opacity: 0.5;

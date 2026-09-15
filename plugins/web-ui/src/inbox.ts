@@ -792,9 +792,23 @@ export function chatTpl(item: InboxItem): TemplateResult {
           (m) => html`<div class="inbox-chat-msg ${m.role}"><span class="inbox-chat-text">${m.text}</span></div>`,
         )}
         ${
-          empty && item.status === "open"
+          item.status === "open"
             ? html`<div class="inbox-chat-suggestions">
-                ${DRAFT_SUGGESTIONS.map(
+                <button
+                  class="inbox-suggest-chip primary"
+                  type="button"
+                  ?disabled=${busy || acting.has(item.id)}
+                  ${tip("Send the draft with your instructions")}
+                  @click=${(e: MouseEvent) => {
+                    const box = (e.currentTarget as HTMLElement)
+                      .closest(".inbox-chat")
+                      ?.querySelector<HTMLTextAreaElement>(".inbox-chat-input");
+                    if (box) submit(box, "Send it");
+                  }}
+                >
+                  ${icon(Send, 12)}<span>Send it</span>
+                </button>
+                ${(empty ? DRAFT_SUGGESTIONS : []).map(
                   (prompt) =>
                     html`<button
                       class="inbox-chat-suggestion"
@@ -831,36 +845,6 @@ export function chatTpl(item: InboxItem): TemplateResult {
           }}
         ></textarea>
         <div class="inbox-chat-actions">
-          <div class="inbox-chat-suggest">
-            ${
-              item.status === "open"
-                ? html`
-                    <button
-                      class="inbox-suggest-chip primary"
-                      type="button"
-                      ?disabled=${busy}
-                      ${tip('Add "Send it" to your instructions and ask the agent')}
-                      @click=${(e: MouseEvent) => {
-                        const box = (e.currentTarget as HTMLElement)
-                          .closest(".inbox-chat-composer")
-                          ?.querySelector<HTMLTextAreaElement>(".inbox-chat-input");
-                        if (box) submit(box, "Send it");
-                      }}
-                    >
-                      ${icon(Send, 12)}<span>Send it</span>
-                    </button>
-                    <button
-                      class="inbox-suggest-chip"
-                      type="button"
-                      ?disabled=${busy || acting.has(item.id)}
-                      @click=${() => void setItemStatus(item, "dismissed")}
-                    >
-                      ${icon(X, 12)}<span>Dismiss</span>
-                    </button>
-                  `
-                : nothing
-            }
-          </div>
           <button
             class="btn inbox-chat-send"
             type="button"
@@ -1025,6 +1009,18 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
   </div>`;
 }
 
+function dismissItemTpl(item: InboxItem): TemplateResult | typeof nothing {
+  if (item.status !== "open") return nothing;
+  return html`<button
+    class="inbox-dismiss"
+    type="button"
+    ?disabled=${chatting.has(item.id) || acting.has(item.id)}
+    @click=${() => void setItemStatus(item, "dismissed")}
+  >
+    Dismiss
+  </button>`;
+}
+
 function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
   const inlineDetail = surface.pane;
   const open = surface.selectedId === item.id;
@@ -1068,6 +1064,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
+              ${handled ? nothing : html`<div class="inbox-item-detail-actions">${dismissItemTpl(item)}</div>`}
               ${contextTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item)}
             </div>`
           : nothing
@@ -1229,6 +1226,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         </h1>
         ${sub ? html`<div class="pane-subtitle">${sub}</div>` : nothing}
       </div>
+      ${dismissItemTpl(item)}
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
