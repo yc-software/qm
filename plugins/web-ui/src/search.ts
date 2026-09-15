@@ -291,9 +291,9 @@ function askRow(): TemplateResult {
 
 function paletteTpl(): TemplateResult {
   const q = searchState.query.trim();
-  let body: TemplateResult;
+  let body: TemplateResult | typeof nothing;
   if (q.length < MIN_QUERY_LEN) {
-    body = html`<div class="chat-search-empty">Search every chat you can see: messages, not just titles.</div>`;
+    body = nothing;
   } else if (searchState.loading && !searchState.hits.length) {
     body = html`<div class="chat-search-empty">Searching…</div>`;
   } else if (searchState.failed) {
