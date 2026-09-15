@@ -360,6 +360,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         await turn.emit({ type: "thinking", payload: { thinking: value }, scopeLabel: turn.scopeLabel });
     };
     const taskStates = new Map<string, { callId: string; status: TaskStatus; resultEmitted: boolean }>();
+    let backgroundTaskLevelSeen = false;
+    let activeBackgroundTasks = new Set<string>();
     const callUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>();
     let stepCallIds = new Set<string>();
     let recordedSteps = 0;
@@ -485,6 +487,18 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     let timer: NodeJS.Timeout | undefined;
     let signalsStopped = false;
+    const backgroundTasksSettled = () =>
+      backgroundTaskLevelSeen
+        ? activeBackgroundTasks.size === 0
+        : ![...taskStates.values()].some((task) => task.status === "pending" || task.status === "in_progress");
+    const closeQueueIfSettled = async () => {
+      if (pendingPrompts > 0 || !backgroundTasksSettled()) return;
+      if (!signalsStopped) {
+        await stopSignals?.();
+        signalsStopped = true;
+      }
+      queue.close();
+    };
     const recordedEnvelope = {
       system: turn.systemPrompt,
       tools: allowSubagents ? ["Agent"] : [],
@@ -574,6 +588,11 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (message.type === "user" && !initialUserEchoSkipped) initialUserEchoSkipped = true;
           else if (message.type === "assistant" || message.type === "user")
             await appendTape(stripClaudeImageBytes(message));
+          if (message.type === "system" && message.subtype === "background_tasks_changed") {
+            backgroundTaskLevelSeen = true;
+            activeBackgroundTasks = new Set(message.tasks.map((task) => task.task_id));
+            await closeQueueIfSettled();
+          }
           if (message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;
             if (!taskStates.has(message.task_id)) {
@@ -633,6 +652,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                 });
               }
             }
+            await closeQueueIfSettled();
           }
           thinking.push(...thinkingFromMessage(message));
           const delta = streamDelta(message);
@@ -657,12 +677,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           }
           streamedText = "";
           pendingPrompts = Math.max(0, pendingPrompts - 1);
-          if (pendingPrompts > 0) continue;
-          if (!signalsStopped) {
-            await stopSignals?.();
-            signalsStopped = true;
-          }
-          if (pendingPrompts === 0) queue.close();
+          await closeQueueIfSettled();
         }
       })();
       try {
