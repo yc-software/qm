@@ -15,7 +15,7 @@ test("the pinned prompt and composer have elevated solid surfaces", () => {
   const composer = css.match(/^\.composer-wrap \{[^}]*\}/m)?.[0] ?? "";
   assert.match(pinned, /box-shadow: var\(--chat-surface-shadow\);/);
   assert.match(composer, /background: var\(--background\);/);
-  assert.match(composer, /box-shadow: var\(--chat-surface-shadow\);/);
+  assert.match(composer, /box-shadow:\s*0 2px 5px rgb\(0 0 0 \/ 0\.05\),\s*0 8px 24px rgb\(0 0 0 \/ 0\.06\);/);
 });
 
 test("prompt elevation uses the shared surface shadow only while stuck", () => {

@@ -51,12 +51,9 @@ test("hidden panes retain their last meaningful density, and every measure write
   );
 });
 
-test("pane composer sizing hangs off the density attribute, so writing it is load-bearing", () => {
+test("pane density still controls compact transcript spacing", () => {
   const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const block = css.match(/\[data-density\] \.composer-input \{[^}]*\}/)?.[0] ?? "";
-  assert.match(
-    block,
-    /min-height: 0;/,
-    "without the attribute the pane composer falls back to the main-window min-height",
-  );
+  const block = css.match(/\[data-density="compact"\] \.chat-scroll \{[^}]*\}/)?.[0] ?? "";
+  assert.match(block, /--chat-scroll-pad-top: 8px;/);
+  assert.match(block, /padding: var\(--chat-scroll-pad-top\) var\(--chat-pad\) var\(--chat-scroll-pad-bottom\);/);
 });
