@@ -524,3 +524,42 @@ test("stake fallback bounds Slack replies while omitted cutoff and negative trac
   assert.equal(await handler.botHasStakeInThread(client, "C1", "5"), false);
   assert.deepEqual(calls[1], { channel: "C1", ts: "5", limit: 200 });
 });
+
+test("reaction turns preserve the reacted message in the mirror", async () => {
+  const cache = createMemorySurfaceCache();
+  const f = fixture({ ingest: (events) => cache.ingest(events) });
+  const client = { reactions: { get: async () => ({ message: { text: "Original bot answer", user: "UBOT" } }) } };
+  await f.mirror.mirrorMessageEvent(
+    { channel: "D1", channel_type: "im", ts: "100.001", text: "Original bot answer", user: "UBOT" },
+    client,
+    { kind: "dm" },
+  );
+  const before = await cache.readMessages("D1", { limit: 10 });
+  const turns: any[] = [];
+  const handler = createTurnHandler({
+    core: {},
+    flow: {
+      callCore: async (turn: any) => {
+        turns.push(turn);
+        return { status: "silent" };
+      },
+    },
+    directory: { classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Teammate" } }) },
+    mirror: f.mirror,
+    ids,
+    threads: createThreadTracker(),
+    deduper: createDeduper(),
+  } as any);
+  for (const added of [true, false]) {
+    await handler.handleReactionEvent(
+      { user: "U1", reaction: "thumbsup", item_user: "UBOT", item: { type: "message", channel: "D1", ts: "100.001" } },
+      `reaction-${added}`,
+      client,
+      added,
+    );
+  }
+  assert.equal(turns.length, 2);
+  assert.match(turns[0].text, /\[Slack reaction\].*reacted/);
+  assert.match(turns[1].text, /\[Slack reaction\].*removed/);
+  assert.deepEqual(await cache.readMessages("D1", { limit: 10 }), before);
+});

@@ -401,7 +401,7 @@ export function createTurnHandler(deps: {
       await ack?.settle().catch(swallowAs("slack: ack settle", undefined));
     };
 
-    {
+    if (!inc.synthetic) {
       const containerName = inc.kind === "dm" ? actor.displayName?.trim() || undefined : channelName;
       await mirrorMessageEvent(
         {
