@@ -65,3 +65,58 @@ test("a managed-auth login link is left untouched — it must render as an ordin
   const text = `Here's your secure sign-in link:\n\n${AUTH_URL}\n\nTell me once you're through.`;
   assert.equal(stripConnectorLinks(text), text);
 });
+
+const COMPOSIO_URL = "https://connect.composio.dev/link/lk_example123";
+
+test("Composio hosted consent links reuse the connector widget", () => {
+  assert.deepEqual(connectorLinksIn(COMPOSIO_URL, "https://agent.example.com"), [
+    { provider: "composio", url: COMPOSIO_URL },
+  ]);
+});
+
+test("Composio supports bare, markdown, autolink and emphasized links", () => {
+  for (const text of [
+    COMPOSIO_URL,
+    `**${COMPOSIO_URL}**`,
+    `<${COMPOSIO_URL}>`,
+    `[Connect Gmail](${COMPOSIO_URL})`,
+    `**[Connect Gmail](<${COMPOSIO_URL}>)**`,
+  ]) {
+    const links = connectorLinksIn(text, "https://agent.example.com");
+    assert.deepEqual(links, [{ provider: "composio", url: COMPOSIO_URL }]);
+    assert.equal(stripConnectorLinks(text, links), "");
+  }
+});
+
+test("Composio URLs retain query parameters and deduplicate", () => {
+  const url = `${COMPOSIO_URL}?callback_url=https%3A%2F%2Fexample.com%2Fdone`;
+  assert.deepEqual(connectorLinksIn(`${url}\n${url}`), [{ provider: "composio", url }]);
+});
+
+test("only HTTPS Composio hosted link URLs become cards", () => {
+  for (const url of [
+    "http://connect.composio.dev/link/lk_example123",
+    "https://connect.composio.dev.evil.example/link/lk_example123",
+    "https://evil.example/link/lk_example123",
+    "https://user@connect.composio.dev/link/lk_example123",
+    "https://connect.composio.dev:444/link/lk_example123",
+    "https://connect.composio.dev/other/lk_example123",
+    "https://connect.composio.dev/link/",
+    "https://connect.composio.dev/link/lk_example123/extra",
+  ]) {
+    assert.deepEqual(connectorLinksIn(url, "https://agent.example.com"), [], url);
+    assert.equal(stripConnectorLinks(url), url);
+  }
+});
+
+test("stripping removes only links actually rendered as cards", () => {
+  const foreign = "https://evil.example/connect/redeem/x?p=google";
+  const text = `${COMPOSIO_URL}\n${foreign}`;
+  assert.equal(stripConnectorLinks(text, connectorLinksIn(text, "https://agent.example.com")), foreign);
+});
+
+test("stripping a card does not remove the prefix of an unrecognized URL", () => {
+  const other = `${URL}unknown`;
+  const text = `${URL}\n${other}`;
+  assert.equal(stripConnectorLinks(text, connectorLinksIn(text, "https://agent.example.com")), other);
+});
