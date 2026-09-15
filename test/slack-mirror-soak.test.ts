@@ -59,11 +59,15 @@ test("shadow compares counts and text but returns live context without waiting f
     release = resolve;
   });
   const logs: string[] = [];
+  let mirrorReads = 0;
   t.mock.method(console, "info", (line: string) => {
     logs.push(line);
   });
   const core = {
-    readSurfaceMessages: async () => pending,
+    readSurfaceMessages: async () => {
+      mirrorReads++;
+      return pending;
+    },
     rememberSurfaceHistory: async () => {
       throw new Error("must not backfill");
     },
@@ -78,7 +82,10 @@ test("shadow compares counts and text but returns live context without waiting f
       }),
     },
   };
-  const result = await createSlackHistoryReader({ core, ids, source: "shadow" })(client, "C-secret");
+  const read = createSlackHistoryReader({ core, ids, source: "shadow" });
+  const result = await read(client, "C-secret");
+  await read(client, "C-secret");
+  assert.equal(mirrorReads, 1);
   assert.equal(result.raw[0]?.text, "second secret");
   assert.equal(logs.length, 0);
   release([{ ts: "1", text: "stale secret text" }]);
