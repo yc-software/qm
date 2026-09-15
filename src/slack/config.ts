@@ -141,6 +141,7 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
       SLACK_API_URL: str(a.apiUrl),
       SLACK_IDENTITY_EMAIL: str(a.identityEmail) ?? "1",
       SLACK_LOG_LEVEL: env.SLACK_LOG_LEVEL,
+      SLACK_CONTEXT_SOURCE: env.SLACK_CONTEXT_SOURCE,
       WEB_UI_PUBLIC_URL: env.WEB_UI_PUBLIC_URL,
     };
     const config = slackPluginConfigFromEnv(accountEnv);

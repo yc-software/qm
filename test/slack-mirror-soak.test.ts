@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { parseSlackContextSource } from "../src/slack/config.ts";
+import { parseSlackContextSource, slackAccountConfigsFromEnv } from "../src/slack/config.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
@@ -143,4 +143,12 @@ test("live and shadow default search cannot source mirror data", async () => {
     assert.equal((await tools.search("match", { source: "mirror" })).ok, false);
     assert.equal(cacheReads, 0);
   }
+});
+
+test("secondary Slack accounts inherit the explicitly selected shadow mode", () => {
+  const [account] = slackAccountConfigsFromEnv({
+    SLACK_CONTEXT_SOURCE: "shadow",
+    SLACK_ACCOUNTS: JSON.stringify([{ id: "secondary", botToken: "xoxb-test", appToken: "xapp-test" }]),
+  });
+  assert.equal(account?.contextSource, "shadow");
 });
