@@ -28,6 +28,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
     base,
     new Set(["history", "files", "memory", "live", "audit", "errors", "skills", "crons", "deployments"]),
     [
+      "connectors",
       "history",
       "files",
       "memory",
@@ -50,6 +51,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
     stateToUrl: (st: Record<string, unknown>) => string;
     urlToState: () => {
       view: string;
+      setup: string | null;
       scope: string;
       session: string | null;
       historyKind: string;
@@ -180,4 +182,17 @@ test("Errors pagination round-trips arbitrary pages without losing scope", () =>
     router.stateToUrl({ view: "errors", scope: SCOPE, page: 37 }),
     `/admin/errors?scope=${SCOPE_ENC}&page=37`,
   );
+});
+
+test("Slack setup links select connectors and preserve the guide through canonical routing", () => {
+  for (const pathname of ["/admin", "/admin/", "/admin/connectors"]) {
+    const { stateToUrl, urlToState } = routerAt(pathname, "?setup=slack");
+    const state = urlToState();
+    assert.equal(state.view, "connectors");
+    assert.equal(state.setup, "slack");
+    assert.equal(stateToUrl(state), "/admin/connectors?setup=slack");
+  }
+  const { stateToUrl } = routerAt("/admin/connectors", "?setup=slack");
+  assert.equal(stateToUrl({ view: "connectors" }), "/admin/connectors");
+  assert.equal(stateToUrl({ view: "files", setup: "slack" }), "/admin/files");
 });
