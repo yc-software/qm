@@ -53,7 +53,7 @@
     "*": "prettier --write --ignore-unknown"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.211",
+    "@anthropic-ai/claude-agent-sdk": "0.3.266",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-s3": "^3.1061.0",
