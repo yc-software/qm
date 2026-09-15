@@ -967,7 +967,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         }
       }
     };
-    const prompt = [turn.input, turn.environment, turn.volatileContext].filter((item) => item?.trim()).join("\n\n");
+    const prompt = [turn.input, turn.environment].filter((item) => item?.trim()).join("\n\n");
     const promptParts: Array<Record<string, unknown>> = [
       { type: "text", text: prompt },
       ...(turn.images ?? []).map((image, index) => ({

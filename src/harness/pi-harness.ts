@@ -711,21 +711,6 @@ export function stoppedPartialTapeMessage(
   };
 }
 
-export function withoutVolatileContext(message: unknown, sent: string, durable: string): unknown {
-  if (sent === durable || !durable.trim()) return message;
-  const m = message as { content?: unknown };
-  if (typeof m?.content === "string") return m.content === sent ? { ...m, content: durable } : message;
-  if (!Array.isArray(m?.content)) return message;
-  return {
-    ...(message as Record<string, unknown>),
-    content: m.content.map((block) =>
-      (block as { type?: unknown; text?: unknown })?.type === "text" && (block as { text?: unknown }).text === sent
-        ? { ...(block as object), text: durable }
-        : block,
-    ),
-  };
-}
-
 export function stripImageBytes(message: unknown, images?: readonly { artifactId?: string }[]): unknown {
   const m = message as { content?: unknown };
   if (!m || !Array.isArray(m.content)) return message;
@@ -1831,8 +1816,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
             return "";
           })();
-          const durablePrompt = [goalNote, turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
-          const modelPrompt = [durablePrompt, turn.volatileContext].filter((s) => s && s.trim()).join("\n\n");
+          const modelPrompt = [goalNote, turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
@@ -1865,13 +1849,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               entryCreatedAt: steer!.entryCreatedAt,
             };
           };
-          const tapedTrigger = (message: unknown): unknown => {
-            const taped = withoutVolatileContext(message, modelPrompt, durablePrompt);
-            if (taped === message && durablePrompt.trim() && modelPrompt !== durablePrompt) {
-              console.error(`[pi] taped trigger kept its volatile context session=${turn.session.id}`);
-            }
-            return taped;
-          };
           const tapeMessage = async (message: unknown): Promise<void> => {
             if (!turn.tape || tapeError) return;
             const role = (message as { role?: string }).role;
@@ -1885,10 +1862,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
-              payload: stripImageBytes(
-                isTrigger ? tapedTrigger(message) : message,
-                isTrigger ? turn.images : undefined,
-              ),
+              payload: stripImageBytes(message, isTrigger ? turn.images : undefined),
               scopeLabel: resultScope ?? turn.scopeLabel,
               ...(isTrigger
                 ? {

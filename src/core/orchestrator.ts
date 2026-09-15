@@ -2598,11 +2598,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote = inputUnscreened || inbound.unscreened.length ? unscreenedNotice("inbound content") : "";
         const turnEnvironment = environmentNote(
-          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim()]
+          [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim(), volatileContext]
             .filter((s) => s && s.trim())
             .join("\n\n"),
         );
-        const turnVolatile = environmentNote(volatileContext);
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
         const pausedTurnUserEntry = input.approval
           ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
@@ -2855,7 +2854,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
             ...(turnEnvironment ? { environment: turnEnvironment } : {}),
-            ...(turnVolatile ? { volatileContext: turnVolatile } : {}),
             ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
             ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
