@@ -261,3 +261,10 @@ test("unknown aliases do not hide the usable discovered model", async () => {
   await f.catalog.refresh();
   assert.ok(builtInModelCatalog().some((m) => m.id === "gateway/vendor/new-model"));
 });
+
+test("resolvable aliases outside the picker do not hide discovered models", async () => {
+  assert.ok(resolveModel("gpt-4o"));
+  const f = fixture([group("openai/gpt-4o")], { "gpt-4o": "openai/gpt-4o" });
+  await f.catalog.refresh();
+  assert.ok(builtInModelCatalog().some((m) => m.id === "gateway/openai/gpt-4o"));
+});

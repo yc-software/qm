@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels } from "./gateway-models.ts";
-import { resolveModel } from "./pi-models.ts";
+import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 1_000;
@@ -160,10 +160,17 @@ export function createGatewayCatalog(
         discovered = true;
         expiresAt = now() + TTL_MS;
         retryAt = expiresAt;
+        const offeredAliases = new Set(
+          selectableBaseModels()
+            .filter(({ id }) => modelOfferedInWebui(id))
+            .map(({ id }) => id),
+        );
         setGatewayModels(
           models,
           Object.entries(config.models).flatMap(([id, target]) =>
-            !id.startsWith(GATEWAY_MODEL_PREFIX) && resolveModel(id) && next[id] ? [GATEWAY_MODEL_PREFIX + target] : [],
+            !id.startsWith(GATEWAY_MODEL_PREFIX) && offeredAliases.has(id) && next[id]
+              ? [GATEWAY_MODEL_PREFIX + target]
+              : [],
           ),
         );
       } catch {
