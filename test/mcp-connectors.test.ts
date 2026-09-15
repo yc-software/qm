@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText, type McpFetch } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
+import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 function jsonResponse(body: unknown, status = 200, contentType = "application/json") {
@@ -123,4 +128,137 @@ test("unknown tool call rejects", async () => {
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await assert.rejects(() => service.call("nope_tool", {}), /unknown MCP tool/);
   service.close();
+});
+
+function tokenStore() {
+  return createKeychain({
+    creds: createMemoryMap<KeychainCredential>(),
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: deriveConnectorKey("mcp-test-encryption-key"),
+  });
+}
+
+test("per-user calls resolve only the caller's fresh token while discovery uses catalog auth", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const users = tokenStore();
+  const host = "accounts.example.com";
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "alice-token" });
+  await users.setConnectorToken(host, "internal:bob", { accessToken: "bob-token" });
+  const catalogAuth: string[] = [];
+  const callAuth: string[] = [];
+  const service = createMcpToolService({
+    servers: store,
+    userTokens: users,
+    fetchImpl: async (_url, init) => {
+      const rpc = JSON.parse(init.body);
+      if (rpc.method === "tools/list") {
+        catalogAuth.push(init.headers.authorization!);
+        return jsonResponse({ result: { tools: TOOLS } });
+      }
+      callAuth.push(init.headers.authorization!);
+      return jsonResponse({ result: { content: [{ type: "text", text: rpc.params.arguments.q }] } });
+    },
+  });
+  t.after(() => service.close());
+  await store.put(
+    server({ auth: "bearer", bearerToken: "catalog-only", credentialScope: "per-user", credentialHost: host }),
+  );
+  await service.refresh();
+  assert.deepEqual(await service.probe((await store.get("crm"))!), ["query", "update"]);
+  assert.ok(catalogAuth.length > 0);
+  assert.ok(catalogAuth.every((auth) => auth === "Bearer catalog-only"));
+  assert.deepEqual(
+    await Promise.all([
+      service.call("crm_query", { q: "alice" }, "internal:alice"),
+      service.call("crm_query", { q: "bob" }, "internal:bob"),
+    ]),
+    ["alice", "bob"],
+  );
+  assert.deepEqual(callAuth.sort(), ["Bearer alice-token", "Bearer bob-token"]);
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "rotated-alice" });
+  await service.call("crm_query", { q: "rotated" }, "internal:alice");
+  assert.equal(callAuth.at(-1), "Bearer rotated-alice");
+  await users.deleteConnectorToken(host, "internal:alice");
+  await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
+  await assert.rejects(service.call("crm_query", {}), /requires a connected user/);
+  await assert.rejects(
+    service.call("crm_query", { principalId: "internal:bob" }, "internal:mallory"),
+    /Connect your account/,
+  );
+  await users.setConnectorToken(host, "internal:bob", { accessToken: "expired", expiresAt: 1 });
+  await assert.rejects(service.call("crm_query", {}, "internal:bob"), /Connect your account/);
+  assert.equal(callAuth.length, 3);
+});
+
+test("per-user mode fails closed without a keychain and shared mode preserves existing behavior", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const { fetch, calls } = fakeServerFetch({ requireBearer: "shared-token" });
+  const service = createMcpToolService({ servers: store, fetchImpl: fetch });
+  t.after(() => service.close());
+  await store.put(
+    server({
+      auth: "bearer",
+      bearerToken: "shared-token",
+      credentialScope: "per-user",
+      credentialHost: "accounts.example.com",
+    }),
+  );
+  await service.refresh();
+  const count = calls.length;
+  await assert.rejects(service.call("crm_query", {}, "internal:alice"), /requires a connected user/);
+  assert.equal(calls.length, count);
+  await store.put(server({ auth: "bearer", bearerToken: "shared-token", credentialScope: "shared" }));
+  await service.refresh();
+  assert.equal(await service.call("crm_query", {}), "ran query");
+});
+
+test("MCP HTTP transport refuses redirects before sending a user token to another endpoint", async (t) => {
+  let targetRequests = 0;
+  const target = createServer((_req, res) => {
+    targetRequests++;
+    res.end("{}");
+  });
+  target.listen(0, "127.0.0.1");
+  await once(target, "listening");
+  const redirected = createServer((_req, res) => {
+    res.writeHead(307, { location: `http://127.0.0.1:${(target.address() as AddressInfo).port}/mcp` });
+    res.end();
+  });
+  redirected.listen(0, "127.0.0.1");
+  await once(redirected, "listening");
+  t.after(() => {
+    target.close();
+    redirected.close();
+  });
+  const client = createMcpClient({
+    url: `http://127.0.0.1:${(redirected.address() as AddressInfo).port}`,
+    auth: { mode: "bearer", token: "private-user-token" },
+  });
+  await assert.rejects(client.callTool("query", {}));
+  assert.equal(targetRequests, 0);
+});
+
+test("per-user connectors select an explicit account slot without falling back to another slot", async (t) => {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const users = tokenStore();
+  const host = "accounts.example.com";
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "default-token" });
+  await users.setConnectorToken(host, "internal:alice", { accessToken: "company-token" }, "company");
+  const { fetch } = fakeServerFetch({ requireBearer: "company-token" });
+  const service = createMcpToolService({ servers: store, userTokens: users, fetchImpl: fetch });
+  t.after(() => service.close());
+  await store.put(
+    server({
+      auth: "bearer",
+      bearerToken: "company-token",
+      credentialScope: "per-user",
+      credentialHost: host,
+      credentialAccountType: "company",
+    }),
+  );
+  await service.refresh();
+  assert.equal(await service.call("crm_query", {}, "internal:alice"), "ran query");
+  await users.deleteConnectorToken(host, "internal:alice", "company");
+  await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });

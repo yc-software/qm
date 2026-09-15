@@ -6,6 +6,7 @@
 // namespaced `<serverId>_<toolName>` so two servers can't collide with each
 // other or with built-in tools.
 
+import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage } from "../util/errors.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpFetch } from "./mcp-client.ts";
@@ -47,6 +48,7 @@ function authOf(server: McpServer): McpAuth {
 export function createMcpToolService(opts: {
   servers: McpServerStore;
   audit?: AuditLog;
+  userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken">;
   fetchImpl?: McpFetch;
   now?: () => number;
   refreshIntervalMs?: number;
@@ -78,6 +80,26 @@ export function createMcpToolService(opts: {
     });
     clients.set(server.id, { client, server });
     return client;
+  }
+
+  async function callerClient(server: McpServer, principalId?: string): Promise<McpClient> {
+    if ((server.credentialScope ?? "shared") === "shared") return clientFor(server);
+    if (server.credentialScope !== "per-user") throw new Error("invalid MCP credential scope");
+    if (!principalId || !server.credentialHost || !opts.userTokens) {
+      throw new Error(`MCP server ${server.id} requires a connected user account`);
+    }
+    const token = await opts.userTokens.connectorAccessToken(
+      server.credentialHost,
+      principalId,
+      server.credentialAccountType,
+    );
+    if (!token) throw new Error(`Connect your account for MCP server ${server.id} before using this tool`);
+    return createMcpClient({
+      url: server.url,
+      auth: { mode: "bearer", token },
+      ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+      now,
+    });
   }
 
   async function refresh(): Promise<void> {
@@ -123,7 +145,7 @@ export function createMcpToolService(opts: {
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
-        const result = await clientFor(server).callTool(def.remoteName, args);
+        const result = await (await callerClient(server, principalId)).callTool(def.remoteName, args);
         record("call", `${def.serverId}/${def.remoteName}`, "ok", principalId);
         const text = mcpResultText(result) || JSON.stringify(result.structuredContent ?? "") || "";
         return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated]` : text;

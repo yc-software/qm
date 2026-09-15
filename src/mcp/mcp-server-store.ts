@@ -9,11 +9,16 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 
 export type McpServerAuthMode = "none" | "bearer" | "client-credentials";
 
+export type McpCredentialScope = "shared" | "per-user";
+
 export interface McpServer {
   id: string;
   name: string;
   url: string;
   auth: McpServerAuthMode;
+  credentialScope?: McpCredentialScope;
+  credentialHost?: string;
+  credentialAccountType?: "default" | "personal" | "company";
   bearerToken?: string;
   clientId?: string;
   clientSecret?: string;

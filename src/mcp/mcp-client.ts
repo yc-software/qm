@@ -24,7 +24,7 @@ export type McpFetch = (
   init: { method: string; headers: Record<string, string>; body: string },
 ) => Promise<McpHttpResponse>;
 
-const realFetch: McpFetch = (url, init) => fetch(url, init);
+const realFetch: McpFetch = (url, init) => fetch(url, { ...init, redirect: "error" });
 
 function baseUrl(mcpUrl: string): string {
   return mcpUrl.replace(/\/+$/g, "").replace(/\/mcp$/g, "");

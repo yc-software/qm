@@ -79,11 +79,45 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
   const existing = await ctx.deps.mcpServers.get(id);
+  const credentialScope = b.credentialScope ?? existing?.credentialScope ?? "shared";
+  if (credentialScope !== "shared" && credentialScope !== "per-user") {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
+  }
+  const credentialHost = b.credentialHost ?? existing?.credentialHost;
+  const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
+  if (!["default", "personal", "company"].includes(credentialAccountType)) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "credentialAccountType must be default, personal, or company",
+    });
+  }
+  if (
+    credentialScope === "per-user" &&
+    (typeof credentialHost !== "string" ||
+      !credentialHost ||
+      credentialHost !== credentialHost.trim() ||
+      credentialHost.length > 253 ||
+      /[\s/\\?#@]/.test(credentialHost))
+  ) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "per-user credentials require a credentialHost" });
+  }
+  if (
+    credentialScope === "per-user" &&
+    parsed.protocol !== "https:" &&
+    !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "per-user credentials require HTTPS (except loopback)",
+    });
+  }
   const server: McpServer = {
     id,
     name: typeof b.name === "string" && b.name.trim() ? b.name.trim().slice(0, 80) : id,
     url,
     auth,
+    credentialScope,
+    ...(credentialScope === "per-user" ? { credentialHost, credentialAccountType } : {}),
     ...(auth === "bearer"
       ? { bearerToken: typeof b.bearerToken === "string" && b.bearerToken ? b.bearerToken : existing?.bearerToken }
       : {}),
