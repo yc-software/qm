@@ -45,6 +45,15 @@ export class StableMarkdown extends ReactiveElement {
           }
           return false;
         }
+        for (let i = 0; i < current.childNodes.length; i++) {
+          const from = current.childNodes[i];
+          const to = next.childNodes[i];
+          if (from?.nodeType !== Node.TEXT_NODE || to?.nodeType !== Node.TEXT_NODE) continue;
+          const before = from.nodeValue ?? "";
+          const after = to.nodeValue ?? "";
+          if (after.length > before.length && after.startsWith(before))
+            (from as Text).appendData(after.slice(before.length));
+        }
         return !current.isEqualNode(next);
       },
     });

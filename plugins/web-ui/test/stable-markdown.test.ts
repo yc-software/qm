@@ -84,3 +84,18 @@ test("replacement text and unsafe links are handled by the existing markdown san
   assert.ok(!block.textContent!.includes("Long original"));
   block.remove();
 });
+
+test("selection inside a growing text node survives append-only updates", async () => {
+  const el = await mount("a growing paragraph");
+  const text = el.querySelector("p")!.firstChild!;
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 9);
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  el.content = "a growing paragraph with more words";
+  await el.updateComplete;
+  assert.equal(selection.toString(), "growing");
+  assert.equal(el.querySelector("p")!.firstChild, text);
+});
