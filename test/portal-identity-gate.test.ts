@@ -6,12 +6,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
+import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
@@ -59,6 +60,54 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   it("rejects (401) a portal identity forged with the source-auth secret (what a surface holds)", async () => {
     assert.equal((await get({ "x-portal-identity": await token("U1", SOURCE) })).status, 401);
+  });
+
+  it("run event streams require a verified actor and preserve run visibility", async () => {
+    const actor = { id: "internal:U1", type: "internal" as const };
+    const { run } = await built.runs.enqueue({
+      sessionId: "identity-gate-run",
+      request: {
+        actor,
+        conversation: { kind: "dm", threadRef: "identity-gate-run", audience: [actor] },
+        origin: { kind: "direct" },
+        text: "test request",
+      },
+    });
+    const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
+    assert.ok(claimed?.leaseToken);
+    await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
+    const strictServer = createServer(built.app, {
+      signingSecret: SOURCE,
+      capabilitySecret: CAP,
+      portalIdentitySecret: PID,
+      production: true,
+    });
+    await new Promise<void>((resolve) => strictServer.listen(0, "127.0.0.1", resolve));
+    const strictBase = `http://127.0.0.1:${(strictServer.address() as AddressInfo).port}`;
+    const read = (identity?: string) => {
+      const path = `/v1/runs/${run.id}/events?nonce=${crypto.randomUUID()}`;
+      return fetch(`${strictBase}${path}`, {
+        headers: {
+          ...signedHeaders(SOURCE, "GET", path, ""),
+          ...(identity ? { "x-portal-identity": identity } : {}),
+        },
+        signal: AbortSignal.timeout(5_000),
+      });
+    };
+    try {
+      assert.equal((await read()).status, 401);
+      assert.equal((await read(await token(actor.id, SOURCE))).status, 401);
+      assert.equal((await read(await token("internal:U2"))).status, 404);
+      const response = await read(await token(actor.id));
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+      const body = await response.text();
+      assert.match(body, /owner-only result/);
+      assert.match(body, /RUN_FINISHED/);
+    } finally {
+      strictServer.closeAllConnections();
+      await new Promise<void>((resolve) => strictServer.close(() => resolve()));
+    }
   });
 
   it("production implies signed identity on the raw deployment proxy", async () => {

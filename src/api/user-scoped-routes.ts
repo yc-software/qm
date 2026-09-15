@@ -108,6 +108,7 @@ const USER_SCOPED: Rule[] = [
   pat("POST", "/v1/environments/attach"),
   pat("POST", "/v1/emoji"),
   pat("GET", "/v1/runs/:id"),
+  pat("GET", "/v1/runs/:id/events"),
   pat("GET", "/v1/runs"),
   pat("POST", "/v1/runs/:id/signal"),
 ];
