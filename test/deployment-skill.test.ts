@@ -152,3 +152,23 @@ test("each provider has an independent agent-computer proof", () => {
   assert.match(aws, /deployment-owned S3 home\s+snapshot/);
   assert.match(aws, /workspace\/qm-computer-proof\.txt/);
 });
+
+test("onboarding composes existing access skills without a provider-setup prerequisite", () => {
+  const onboarding = read("plugins/onboarding/skills/onboarding/SKILL.md");
+  const admin = read("skills-seed/admin/SKILL.md");
+  assert.ok(onboarding.indexOf("### Slack bot first") < onboarding.indexOf("### Personal connections"));
+  assert.match(onboarding, /Reuse their connected accounts after checking identity and permissions/);
+  assert.match(onboarding, /project key is not proof that a personal account is connected/);
+  assert.match(onboarding, /skip account connection/);
+  assert.match(onboarding, /help configure a new source only if they ask/);
+  assert.match(onboarding, /never ask regular users to provision it/);
+  assert.match(admin, /GET \/v1\/admin\/slack-installation/);
+  assert.match(admin, /installAvailable: true/);
+  assert.match(admin, /App Configuration Tokens/);
+  assert.match(admin, /not the refresh token/);
+  assert.match(admin, /manage other apps they own/);
+  assert.match(admin, /then discards it/);
+  assert.match(admin, /never in chat, memory, files, or the keychain/);
+  assert.match(admin, /require a real reply/);
+  assert.doesNotMatch(admin, /## Guide org OAuth app setup/);
+});

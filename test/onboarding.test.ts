@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { detectOnboardingStatus, setOnboardingStatus } from "../src/onboarding/onboarding.ts";
+import { detectOnboardingStatus, setOnboardingStatus, PROACTIVE_OPENER_PROMPT } from "../src/onboarding/onboarding.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const actor = { externalId: "U1" };
@@ -112,4 +112,12 @@ test("onboarding prompt does not appear in channel sessions", async () => {
   } as TurnRequest);
 
   assert.doesNotMatch(sys.reply ?? "", /## Pending Onboarding/);
+});
+
+test("the opener offers admin Slack setup first without requiring provider configuration", () => {
+  assert.match(PROACTIVE_OPENER_PROMPT, /system-identified org admin, offer Slack bot setup first/);
+  assert.match(PROACTIVE_OPENER_PROMPT, /wait for their reply before reading admin-only status/);
+  assert.match(PROACTIVE_OPENER_PROMPT, /empty direct OAuth list does not rule out Composio/);
+  assert.match(PROACTIVE_OPENER_PROMPT, /skip connections and continue onboarding/);
+  assert.match(PROACTIVE_OPENER_PROMPT, /do not ask them to create OAuth apps or supply project keys/);
 });

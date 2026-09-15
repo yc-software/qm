@@ -40,6 +40,43 @@ Anyone can check admin status (this is also how you answer "am I an admin?"):
 GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin","scopeId":"org:…"} or {"isAdmin":false}
 ```
 
+## Guide Slack installation
+
+Offer this early in admin onboarding. It is separate from personal account connections;
+missing Composio or direct OAuth setup is not a reason to require provider configuration.
+Verify admin status first. On a human-started admin turn, read
+`GET /v1/admin/slack-installation`; it returns setup metadata, not tokens. A failed
+read means unknown, not absent. Never inspect deployment secrets to infer status.
+
+- `configured: true`: reuse the existing bot, including environment-backed installs.
+  This is not a live connectivity check; help them send a mention or DM to verify a reply.
+- `managed: true`, `configured: false`: leave the deliberately disabled bot alone
+  unless the admin asks to re-enable it.
+- `source: "invalid_environment"`: help finish the existing setup using the page's
+  instructions or deployment operator; do not create a duplicate app.
+- Otherwise offer the setup below. It is optional; continue onboarding if deferred.
+
+When `installAvailable: true`, use the authenticated admin dashboard's **Add to Slack**
+action. Use the known dashboard URL, not an invented hostname or a launch ticket minted
+in the agent's shell. Walk the admin through the offered flow, one step at a time:
+
+1. If a configuration-token form appears, open [Slack app settings](https://api.slack.com/apps).
+   Under **App Configuration Tokens**, choose **Generate Token**, select the intended
+   workspace, and copy the **access token**, not the refresh token.
+2. Explain that this token can manage other apps they own in that workspace. QM uses
+   it briefly to create/configure its app, then discards it. Paste it only into the
+   secure setup form, never in chat, memory, files, or the keychain. Choose **Create
+   app and continue to Slack**; QM receives the app credentials automatically.
+3. Check the workspace and permissions, then choose **Install / Allow**. An existing
+   app may go straight to consent without another token. Do not recreate it.
+4. After the redirect to QM, re-read status. Say **Connected** only if configured;
+   require a real reply to a DM or mention before claiming the bot works. Follow the
+   page's recovery instructions after failure rather than blindly repeating creation.
+
+Without managed installation, use the returned `createUrl` and the dashboard's workspace
+app guide. Have them enter credentials only in that secure form. Do not guess scopes,
+callback URLs, or credential requirements; reuse existing setup and recheck status.
+
 ## Finding the scope
 
 Most endpoints take `?scope=<scopeId>` (`org:<org>`, `personal:<user>`, `channel:<id>`).
