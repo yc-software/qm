@@ -13,6 +13,14 @@ surfaces, which all stay **private** (no public `[http_service]` of their own):
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 
+Set `PORTAL_APPS_DOMAIN` to a child domain of the company portal, with matching
+core `DEPLOY_APPS_DOMAIN`, gateway/session secrets, wildcard DNS and TLS. App
+hostnames can point at the same portal ingress: portal forwards them to core's
+deployment gateway before its own routes. Core authorizes each app request and
+removes gateway cookies before forwarding to the app. Each app has a separate
+browser origin; cross-origin browser writes are rejected. Keep the session cookie
+domain within the company, never a parent shared with other companies.
+
 It is a thin `node:http` server (native TS type-stripping), like the other
 surfaces, and it does **not** import the core.
 

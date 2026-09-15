@@ -35,6 +35,7 @@ import {
   proxyToSurface,
   proxyToDeployment,
   proxyToUpstream,
+  proxyToAppHost,
   FORWARD_AGENT_API_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
@@ -907,6 +908,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
+
+  const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
+  const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
+  if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === APPS_DOMAIN?.toLowerCase())) {
+    const label = requestHost.slice(0, -appSuffix.length);
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
+    return proxyToAppHost(req, res, CORE);
+  }
 
   void refreshSurfaceConfig();
 

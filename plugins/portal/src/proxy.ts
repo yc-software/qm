@@ -53,7 +53,7 @@ function relay(
     hostname: string;
     port?: string;
     path: string;
-    headers: Record<string, string>;
+    headers: Record<string, string | string[]>;
     honorFramePolicy?: boolean;
     forwardCookies?: boolean;
   },
@@ -237,3 +237,35 @@ export function proxyToUpstream(
 }
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type", "content-length"];
+
+export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string): void {
+  const upstream = new URL(coreBase);
+  const blocked = new Set([
+    ...DROP_RESPONSE_HEADERS,
+    "x-signature",
+    "x-timestamp",
+    "x-as-principal",
+    "x-admin-actor",
+    "x-agent-capability",
+    PORTAL_IDENTITY_HEADER,
+    "x-qm-app-host",
+    "forwarded",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-for",
+    ...(req.headers.connection ?? "").split(",").map((name) => name.trim().toLowerCase()),
+  ]);
+  const headers: Record<string, string | string[]> = { "x-qm-app-host": "1" };
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value !== undefined && !blocked.has(name)) headers[name] = value;
+  }
+  res.removeHeader("x-frame-options");
+  relay(req, res, {
+    protocol: upstream.protocol,
+    hostname: upstream.hostname,
+    port: requestPort(upstream),
+    path: req.url ?? "/",
+    headers,
+    forwardCookies: true,
+  });
+}

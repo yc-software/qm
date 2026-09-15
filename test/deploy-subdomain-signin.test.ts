@@ -57,6 +57,26 @@ test("portalSessionSub: verifies, and rejects tampering, expiry, wrong kind, wro
   assert.equal(portalSessionSub(`portal_session=${body}.${sig}`, SESSION_SECRET), null, "non-session claims");
 });
 
+test("forwarded app hosts fail closed before core routes when gateway configuration is absent", async () => {
+  for (const config of [
+    {},
+    { deployAppsDomain: "apps.example.com" },
+    { deployAppsDomain: "apps.example.com", deployGateSecret: "gate" },
+  ]) {
+    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], config);
+    server.listen(0);
+    try {
+      const result = await httpGet((server.address() as AddressInfo).port, "/healthz", {
+        Host: "app.other.example.com",
+        "x-qm-app-host": "1",
+      });
+      assert.equal(result.status, "deployGateSecret" in config ? 404 : 503);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+});
+
 function httpGet(
   port: number,
   path: string,
@@ -181,6 +201,29 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(owner.body, "UPSTREAM OK");
     assert.equal(upstreamCookie, undefined, "the portal session cookie never reaches the app");
     assert.equal(upstreamUrl, "/consultants?x=1", "the app sees the clean URL");
+    for (const origin of ["https://sibling.apps.example.com", "https://portal.example.com", "null"]) {
+      const denied = await httpPost(port, "/api/update", {
+        Host: host,
+        Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+        Origin: origin,
+      });
+      assert.equal(denied.status, 403);
+    }
+    const sameApp = await httpPost(port, "/api/update", {
+      Host: host,
+      Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+      Origin: `https://${host}`,
+      "Sec-Fetch-Site": "same-origin",
+    });
+    assert.equal(sameApp.status, 200);
+    for (const site of ["same-site", "cross-site"]) {
+      const denied = await httpPost(port, "/api/update", {
+        Host: host,
+        Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
+        "Sec-Fetch-Site": site,
+      });
+      assert.equal(denied.status, 403);
+    }
     const ownerSetCookies = ([] as string[]).concat(owner.headers["set-cookie"] ?? []);
     assert.deepEqual(
       ownerSetCookies,
