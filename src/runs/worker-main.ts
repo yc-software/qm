@@ -1,5 +1,6 @@
 import { loadConfig } from "../config.ts";
-import { buildApp, shutdownOnUncaught, stopWithBackstop } from "../wiring.ts";
+import { buildApp, stopWithBackstop } from "../wiring.ts";
+import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();

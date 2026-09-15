@@ -379,18 +379,6 @@ export interface Runtime {
   releaseInFlightRuns(): Promise<void>;
 }
 
-export function shutdownOnUncaught(label: string, shutdown: (reason: string) => void): void {
-  const describe = (e: unknown): string => (e instanceof Error && e.stack ? e.stack : errMessage(e));
-  process.on("uncaughtException", (error) => {
-    console.error(`[${label}] uncaught exception; draining and exiting:`, describe(error));
-    shutdown("uncaughtException");
-  });
-  process.on("unhandledRejection", (reason) => {
-    console.error(`[${label}] unhandled rejection; draining and exiting:`, describe(reason));
-    shutdown("unhandledRejection");
-  });
-}
-
 export function stopWithBackstop(
   runtime: Runtime,
   shutdownDrainMs: number,
@@ -399,14 +387,16 @@ export function stopWithBackstop(
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(() => process.exit(0));
+    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(() =>
+      process.exit(process.exitCode ?? 0),
+    );
   }, shutdownDrainMs + 5_000);
   hardExit.unref();
   void runtime.stop().then(
     () => {
       clearTimeout(hardExit);
       beforeExit?.();
-      process.exit(0);
+      process.exit(process.exitCode ?? 0);
     },
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
