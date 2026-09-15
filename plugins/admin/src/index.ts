@@ -42,7 +42,7 @@ const ADMIN_CSP = [
   "connect-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
-  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin}` : ""}`,
+  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin} https://slack.com` : ""}`,
   "object-src 'none'",
 ].join("; ");
 
