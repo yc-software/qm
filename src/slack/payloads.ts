@@ -142,6 +142,7 @@ export function parseBlockAction<T extends string>(
 }
 
 export interface SlackHistoryMessage {
+  edited?: { ts?: string };
   mentionsSelf?: boolean;
   ts?: string;
   user?: string;

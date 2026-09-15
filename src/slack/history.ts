@@ -88,6 +88,7 @@ export function createSlackHistoryReader(deps: {
                 ...(mentionsBot(String(m.text ?? ""), deps.ids.botUserId) ? { mentionsSelf: true } : {}),
                 ...(m.user === deps.ids.botUserId ? { self: true } : {}),
                 ...(m.bot_id ? { bot: true } : {}),
+                ...(Number(m.edited?.ts) > 0 ? { editedAt: Math.round(Number(m.edited!.ts) * 1000) } : {}),
                 handled: true,
                 ...(m.files?.length
                   ? {

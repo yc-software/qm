@@ -189,3 +189,83 @@ test("read_thread, whats_new and mirror search retain coverage notes and contain
     ["match here"],
   );
 });
+
+test("backfilled edit timestamps reject older delayed edit events", async () => {
+  const { cache, readHistory, client } = fixture();
+  client.conversations.replies = async () =>
+    ({ messages: [{ ts: "1.000000", text: "latest edit", edited: { ts: "20.000000" } }] }) as never;
+  await readHistory(client, "C1", "1.000000");
+  await cache.ingest([{ container: "C1", ts: "1.000000", text: "delayed old edit", editedAt: 10_000 }]);
+  const [message] = await cache.readMessages("C1");
+  assert.equal(message?.text, "latest edit");
+  assert.equal(message?.editedAt, 20_000);
+  assert.equal((await readHistory(client, "C1", "1.000000")).raw[0]?.text, "latest edit");
+});
+
+test("surface context combines channel coverage and thread rate-limit notes", async () => {
+  const { createSurfaceContextFulfiller } = await import("../src/slack/surface-context.ts");
+  let outcome: any;
+  const fulfiller = createSurfaceContextFulfiller({
+    core: {
+      fulfillContextRequest: async (_id, result) => {
+        outcome = result;
+      },
+    } as SlackCoreClient,
+    directory,
+    serializer: {
+      shapeRecentMessages: async () => [],
+    } as unknown as import("../src/slack/conversation-view.ts").ConversationSerializer,
+    botToken: "test",
+    clientOptions: {},
+    readHistory: async (_client, _channel, thread) => ({
+      raw: [],
+      hasMore: false,
+      note: thread
+        ? "Retry in 60 seconds; setup: https://qm.test/admin/?setup=slack"
+        : "Stored events may be incomplete.",
+    }),
+  });
+  await fulfiller.fulfillSurfaceContext({}, {
+    id: "request",
+    query: { conversationTarget: "C1:1.0" },
+  } as import("../src/api/slack-core-client.ts").SurfaceContextRequest);
+  assert.match(outcome.result.note, /Stored events/);
+  assert.match(outcome.result.note, /60 seconds/);
+  assert.match(outcome.result.note, /setup=slack/);
+});
+
+test("surface context keeps a successful channel page when an empty thread is throttled", async () => {
+  const { createSurfaceContextFulfiller } = await import("../src/slack/surface-context.ts");
+  let outcome: any;
+  const fulfiller = createSurfaceContextFulfiller({
+    core: {
+      fulfillContextRequest: async (_id, result) => {
+        outcome = result;
+      },
+    } as SlackCoreClient,
+    directory,
+    serializer: {
+      shapeRecentMessages: async (_client, raw) => raw.map((m) => ({ ts: m.ts!, text: m.text!, name: "Alice" })),
+    } as unknown as import("../src/slack/conversation-view.ts").ConversationSerializer,
+    botToken: "test",
+    clientOptions: {},
+    historyRateLimitOptions: { managed: true, setupUrl: "https://qm.test/admin/?setup=slack" },
+    readHistory: async (_client, _channel, thread) => {
+      if (thread) throw { code: "slack_webapi_rate_limited_error", retryAfter: 60 };
+      return {
+        raw: [{ ts: "1.0", text: "stored channel message" }],
+        hasMore: false,
+        note: "Stored events may be incomplete.",
+      };
+    },
+  });
+  await fulfiller.fulfillSurfaceContext({}, {
+    id: "request",
+    query: { conversationTarget: "C1:2.0" },
+  } as import("../src/api/slack-core-client.ts").SurfaceContextRequest);
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.result.messages[0].text, "stored channel message");
+  assert.match(outcome.result.note, /Stored events/);
+  assert.match(outcome.result.note, /60/);
+  assert.match(outcome.result.note, /setup=slack/);
+});

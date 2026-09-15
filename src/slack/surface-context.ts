@@ -231,16 +231,32 @@ export function createSurfaceContextFulfiller(deps: {
       }
       const count = Math.max(1, Math.min(RECENT_THREAD_LIMIT, Number(q.count) || 100));
       const before = typeof q.before === "string" && q.before ? q.before : undefined;
-      const [chanPage, threadPage] = await Promise.all([
+      const outcomes = await Promise.allSettled([
         fetchContextHistory(client, channel, undefined, before),
         threadTs
           ? fetchContextHistory(client, channel, threadTs, before)
           : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
       ]);
       const byTs = new Map<string, SlackHistoryMessage>();
-      for (const m of [...chanPage.raw, ...threadPage.raw]) if (m?.ts) byTs.set(m.ts, m);
+      const notes = new Set<string>();
+      let hasMore = false;
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          hasMore = true;
+          notes.add(
+            slackHistoryRateLimitMessage(outcome.reason, deps.historyRateLimitOptions) ??
+              "Some Slack context could not be read; earlier messages may be missing.",
+          );
+          continue;
+        }
+        for (const message of outcome.value.raw) if (message.ts) byTs.set(message.ts, message);
+        hasMore ||= outcome.value.hasMore;
+        if ("note" in outcome.value && outcome.value.note) notes.add(outcome.value.note);
+      }
       const raw = [...byTs.values()];
-      const hasMore = chanPage.hasMore || threadPage.hasMore;
+      const failure = outcomes.find((outcome) => outcome.status === "rejected");
+      if (!raw.length && failure?.status === "rejected") throw failure.reason;
+      const note = [...notes].join(" ");
       const nameById = new Map<string, string>();
       const shaped = await serializer.shapeRecentMessages(client, raw, "", nameById);
       await post({
@@ -250,9 +266,7 @@ export function createSurfaceContextFulfiller(deps: {
           scanHasMore: hasMore,
           nameById,
         }),
-        ...(chanPage.note || ("note" in threadPage && threadPage.note)
-          ? { note: chanPage.note || ("note" in threadPage ? threadPage.note : undefined) }
-          : {}),
+        ...(note ? { note } : {}),
       });
     } catch (err) {
       const code = slackErrorCode(err);
