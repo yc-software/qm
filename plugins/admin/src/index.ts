@@ -338,7 +338,7 @@ const server = createServer((req, res) => {
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
-  res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("referrer-policy", process.env.QM_SLACK_SERVICE_URL ? "strict-origin" : "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
   res.setHeader("content-security-policy", ADMIN_CSP);

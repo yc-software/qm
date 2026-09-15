@@ -57,6 +57,19 @@ test("admin HTML ships a hash-only script policy and transport/browser isolation
   assert.equal(r.headers.get("x-frame-options"), "DENY");
 });
 
+test("managed Slack form navigation retains origin without disclosing the admin path", async () => {
+  const previous = process.env.QM_SLACK_SERVICE_URL;
+  process.env.QM_SLACK_SERVICE_URL = "https://slack.example.test";
+  try {
+    const r = await api("/connectors?private=hidden");
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("referrer-policy"), "strict-origin");
+  } finally {
+    if (previous === undefined) delete process.env.QM_SLACK_SERVICE_URL;
+    else process.env.QM_SLACK_SERVICE_URL = previous;
+  }
+});
+
 test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status", async () => {
   const r = await api("/api/whoami", "admin=U-admin");
   assert.equal(r.status, 200);
