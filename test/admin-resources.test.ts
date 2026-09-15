@@ -30,7 +30,11 @@ function credentialLayer(): string {
   return dir;
 }
 
-function start(harnessId = "pi", withLayer = true): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(
+  harnessId = "pi",
+  withLayer = true,
+  overrides: (built: BuiltApp) => Partial<NonNullable<Parameters<typeof createInsecureTestServer>[1]>> = () => ({}),
+): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-res-")),
@@ -48,7 +52,9 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
     featureFlags: built.featureFlags,
     credentialServices: () => built.credentialTools.map((tool) => tool.service),
     channelPolicy: built.channelPolicy,
+    loops: built.loops,
     harnessId,
+    ...overrides(built),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -114,7 +120,14 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     const r = await fetch(`${srv.base}/v1/admin/resources`, { headers: ADMIN });
     assert.equal(r.status, 200);
     const body = (await r.json()) as {
-      resources: { id: string; kind: string; target?: string; secret?: boolean; enumValues?: unknown[] }[];
+      resources: {
+        id: string;
+        kind: string;
+        target?: string;
+        secret?: boolean;
+        clearable?: boolean;
+        enumValues?: unknown[];
+      }[];
     };
     const ids = body.resources.map((x) => x.id).sort();
     assert.deepEqual(ids, ADMIN_RESOURCES.map((x) => x.id).sort());
@@ -127,6 +140,9 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.deepEqual(byId.get("sharing-posture")?.enumValues, ["isolated", "open"]);
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
+    assert.equal(byId.get("factory-config")?.kind, "custom");
+    assert.equal(byId.get("factory-config")?.target, "org");
+    assert.equal(byId.get("factory-config")?.clearable, true);
     assert.equal(byId.has("import"), false);
   } finally {
     await srv.close();
@@ -933,6 +949,384 @@ test("historical cutover policies remain visible and clearable without layer too
     });
     assert.equal(clear.status, 200);
     assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "retired"), "ephemeral_only");
+  } finally {
+    await srv.close();
+  }
+});
+
+const FACTORY_BODY = {
+  forge: "github",
+  publishProject: "yc-software/qm",
+  targetBranch: "main",
+  repoCloneUrl: "https://github.com/yc-software/qm.git",
+  linearTeamId: "QM",
+  sourceAppDirs: "src,plugins",
+  sourceTestRe: "^test/.*\\.test\\.ts$",
+  verifyTestsCmd: "npm test",
+  verifyTestFileCmd: "node --test",
+  verifyLintCmd: "npm run lint",
+  bugbotRequired: true,
+  followupsEnabled: false,
+};
+
+const putFactory = (base: string, scope: string, body: unknown, headers: Record<string, string> = ADMIN) =>
+  fetch(`${base}/v1/admin/scopes/${scope}/factory-config`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+const scopeConfig = async (base: string, scope: string): Promise<Record<string, unknown>> =>
+  (await (await fetch(`${base}/v1/admin/scopes/${scope}`, { headers: ADMIN })).json()) as Record<string, unknown>;
+
+const withoutKey = (key: string): Record<string, unknown> => {
+  const body: Record<string, unknown> = { ...FACTORY_BODY };
+  delete body[key];
+  return body;
+};
+
+test("factory-config round-trips through the org scope, replaces wholesale, and is admin-gated", async () => {
+  const srv = start();
+  try {
+    const before = await scopeConfig(srv.base, "org:default-org");
+    assert.equal(before.factoryConfig, null);
+
+    const put = await putFactory(srv.base, "org:default-org", FACTORY_BODY);
+    assert.equal(put.status, 200);
+    assert.deepEqual(await put.json(), { ok: true, scopeId: "org:default-org", resource: "factory-config" });
+
+    const after = await scopeConfig(srv.base, "org:default-org");
+    assert.deepEqual(after.factoryConfig, FACTORY_BODY);
+    const stored = after.factoryConfig as Record<string, unknown>;
+    for (const optional of ["repoSetupCmd", "proofStartCmd", "proofBaseUrlCmd", "slackChannel"]) {
+      assert.equal(Object.hasOwn(stored, optional), false, `${optional} must not be materialized`);
+    }
+    assert.deepEqual({ ...after, factoryConfig: null }, { ...before, factoryConfig: null });
+
+    const audit = (await (
+      await fetch(`${srv.base}/v1/admin/audit?scope=org:default-org`, { headers: ADMIN })
+    ).json()) as { events: { action: string; resource: string; principalId: string }[] };
+    const updates = audit.events.filter((e) => e.action === "factory-config.update");
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0]!.resource, "factory-config");
+    assert.equal(updates[0]!.principalId, "admin-alice");
+
+    const withOptionals = { ...FACTORY_BODY, repoSetupCmd: "npm ci", proofStartCmd: "npm run dev" };
+    assert.equal((await putFactory(srv.base, "org:default-org", withOptionals)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, withOptionals);
+
+    assert.equal(
+      (await putFactory(srv.base, "org:default-org", { ...FACTORY_BODY, targetBranch: "  release  " })).status,
+      200,
+    );
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, {
+      ...FACTORY_BODY,
+      targetBranch: "release",
+    });
+
+    const denied = await putFactory(srv.base, "org:default-org", FACTORY_BODY, {
+      "content-type": "application/json",
+      "x-admin-actor": "nobody@default-org",
+    });
+    assert.equal(denied.status, 403);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, {
+      ...FACTORY_BODY,
+      targetBranch: "release",
+    });
+  } finally {
+    await srv.close();
+  }
+});
+
+test("factory-config stores a blank optional string as unset and trims the rest", async () => {
+  const srv = start();
+  try {
+    const blanks = { ...FACTORY_BODY, slackChannel: "   ", repoSetupCmd: "", proofStartCmd: "\t\n" };
+    assert.equal((await putFactory(srv.base, "org:default-org", blanks)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+
+    const trimmable = { ...FACTORY_BODY, slackChannel: "  C0123ABC  ", proofBaseUrlCmd: " echo url " };
+    assert.equal((await putFactory(srv.base, "org:default-org", trimmable)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, {
+      ...FACTORY_BODY,
+      slackChannel: "C0123ABC",
+      proofBaseUrlCmd: "echo url",
+    });
+  } finally {
+    await srv.close();
+  }
+});
+
+test("factory-config rejects every malformed body by name and leaves the stored record intact", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+
+    const cases: [unknown, string][] = [
+      [{ ...FACTORY_BODY, forge: "bitbucket" }, "forge"],
+      [{}, "forge"],
+      [withoutKey("verifyTestsCmd"), "verifyTestsCmd"],
+      [{ ...FACTORY_BODY, targetBranch: "   " }, "targetBranch"],
+      [{ ...FACTORY_BODY, bugbotRequired: "true" }, "bugbotRequired"],
+      [{ ...FACTORY_BODY, slackChannel: 42 }, "slackChannel"],
+      [{ ...FACTORY_BODY, repoSetupCmd: null }, "repoSetupCmd"],
+      [{ ...FACTORY_BODY, linearTeamID: "QM" }, "linearTeamID"],
+      [[], "body must be an object"],
+      [null, "body must be an object"],
+    ];
+    for (const [body, named] of cases) {
+      const r = await putFactory(srv.base, "org:default-org", body);
+      const label = JSON.stringify(body);
+      assert.equal(r.status, 400, label);
+      const payload = (await r.json()) as { error: string; message: string };
+      assert.equal(payload.error, "bad_request", label);
+      assert.ok(payload.message.startsWith("factory-config: "), `${label} → ${payload.message}`);
+      assert.ok(payload.message.includes(named), `${label} → ${payload.message}`);
+    }
+
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+    const audit = (await (
+      await fetch(`${srv.base}/v1/admin/audit?scope=org:default-org`, { headers: ADMIN })
+    ).json()) as { events: { action: string }[] };
+    assert.equal(audit.events.filter((e) => e.action === "factory-config.update").length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("factory-config is org-only at every scope while non-org reads echo the org record", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+
+    for (const scope of ["channel:C1", "personal:U1"]) {
+      for (const body of [FACTORY_BODY, { reset: true }]) {
+        const r = await putFactory(srv.base, scope, body);
+        assert.equal(r.status, 400, `${scope} ${JSON.stringify(body)}`);
+        const payload = (await r.json()) as { error: string; message: string };
+        assert.equal(payload.error, "bad_request");
+        assert.equal(payload.message, "the factory config is org-wide; target an org scope");
+      }
+    }
+
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+    const channel = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN });
+    assert.equal(channel.status, 200);
+    assert.deepEqual(((await channel.json()) as Record<string, unknown>).factoryConfig, FACTORY_BODY);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("factory-config clears with { reset: true } only, idempotently, and leaves other org settings alone", async () => {
+  const srv = start();
+  try {
+    assert.equal(
+      (
+        await fetch(`${srv.base}/v1/admin/scopes/org:default-org/approved-harnesses`, {
+          method: "PUT",
+          headers: ADMIN,
+          body: JSON.stringify({ ids: ["pi"] }),
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const seeded = await scopeConfig(srv.base, "org:default-org");
+
+    const reset = await putFactory(srv.base, "org:default-org", { reset: true });
+    assert.equal(reset.status, 200);
+    assert.deepEqual(await reset.json(), { ok: true, scopeId: "org:default-org", resource: "factory-config" });
+
+    const cleared = await scopeConfig(srv.base, "org:default-org");
+    assert.equal(Object.hasOwn(cleared, "factoryConfig"), true);
+    assert.equal(cleared.factoryConfig, null);
+    assert.deepEqual(cleared.approvedHarnesses, seeded.approvedHarnesses);
+    assert.deepEqual({ ...cleared, factoryConfig: null }, { ...seeded, factoryConfig: null });
+
+    assert.equal((await putFactory(srv.base, "org:default-org", { reset: true })).status, 200);
+    assert.equal((await scopeConfig(srv.base, "org:default-org")).factoryConfig, null);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+
+    for (const body of [{ reset: true, forge: "github" }, { reset: false }, { reset: "true" }, { reset: 1 }]) {
+      const r = await putFactory(srv.base, "org:default-org", body);
+      assert.equal(r.status, 400, JSON.stringify(body));
+      assert.equal(((await r.json()) as { message: string }).message, "factory-config: unknown key reset");
+    }
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+  } finally {
+    await srv.close();
+  }
+});
+
+const factoryLoops = async (built: BuiltApp) =>
+  (await built.loops.store.list()).filter((loop) => loop.surface === "factory");
+
+test("applying a factory config mints one factory loop owned by the acting admin at the deployment org scope", async () => {
+  const srv = start();
+  try {
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+
+    const loops = await factoryLoops(srv.built);
+    assert.equal(loops.length, 1);
+    const loop = loops[0]!;
+    assert.equal(loop.owner, "admin-alice");
+    assert.equal(loop.ownerScopeId, "org:default-org");
+    assert.equal((await srv.built.loops.store.list()).length, 1);
+    assert.equal((await fetch(`${srv.base}/v1/loops/${loop.id}?principalId=admin-alice`)).status, 200);
+
+    const fired = await srv.built.loops.fire!.fire(loop.id, "apply-fire-1");
+    assert.equal(fired.status, "failed");
+    assert.match(fired.note ?? "", /factory_credentials_missing: factory-linear, factory-github, factory-anthropic/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("re-applying a factory config never mints a second loop and never re-owns the first", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const first = (await factoryLoops(srv.built))[0]!;
+
+    const bob = { "content-type": "application/json", "x-admin-actor": "admin-bob@default-org" };
+    const repeats: [string, string, unknown, Record<string, string>][] = [
+      ["same admin, same body", "org:default-org", FACTORY_BODY, ADMIN],
+      ["another admin", "org:default-org", FACTORY_BODY, bob],
+      ["edited config", "org:default-org", { ...FACTORY_BODY, targetBranch: "release" }, ADMIN],
+      ["another org scope in the path", "org:other-org", FACTORY_BODY, ADMIN],
+    ];
+    for (const [label, scope, body, headers] of repeats) {
+      assert.equal((await putFactory(srv.base, scope, body, headers)).status, 200, label);
+      const loops = await factoryLoops(srv.built);
+      assert.equal(loops.length, 1, label);
+      assert.deepEqual(loops[0], first, label);
+    }
+    assert.equal((await srv.built.loops.store.list()).length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("resetting the factory config clears the config only and leaves the loop standing", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", { reset: true })).status, 200);
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const loop = (await factoryLoops(srv.built))[0]!;
+
+    assert.equal((await putFactory(srv.base, "org:default-org", { reset: true })).status, 200);
+    assert.equal((await scopeConfig(srv.base, "org:default-org")).factoryConfig, null);
+    assert.deepEqual(await srv.built.loops.store.list(), [loop]);
+
+    const fired = await srv.built.loops.fire!.fire(loop.id, "reset-fire-1");
+    assert.equal(fired.status, "failed");
+    assert.match(fired.note ?? "", /factory_config_missing/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("deleting the factory loop and applying again brings exactly one back", async () => {
+  const srv = start();
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    const first = (await factoryLoops(srv.built))[0]!;
+
+    const deleted = await fetch(`${srv.base}/v1/loops/${first.id}?principalId=admin-alice`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.equal((await factoryLoops(srv.built)).length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a rejected factory-config apply leaves no loop behind", async () => {
+  const srv = start();
+  try {
+    const rejected: [string, string, unknown, Record<string, string>][] = [
+      ["missing verifyLintCmd", "org:default-org", withoutKey("verifyLintCmd"), ADMIN],
+      ["unknown key", "org:default-org", { ...FACTORY_BODY, linearTeamID: "QM" }, ADMIN],
+      ["unknown forge", "org:default-org", { ...FACTORY_BODY, forge: "svn" }, ADMIN],
+      ["non-org scope", "channel:C1", FACTORY_BODY, ADMIN],
+      ["non-admin actor", "org:default-org", FACTORY_BODY, { ...ADMIN, "x-admin-actor": "nobody@default-org" }],
+    ];
+    for (const [label, scope, body, headers] of rejected) {
+      const r = await putFactory(srv.base, scope, body, headers);
+      assert.equal(r.status, headers["x-admin-actor"] === "nobody@default-org" ? 403 : 400, label);
+      assert.deepEqual(await srv.built.loops.store.list(), [], label);
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a deployment without loops wired still accepts its factory config", async () => {
+  const srv = start("pi", true, () => ({ loops: undefined }));
+  try {
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.deepEqual((await scopeConfig(srv.base, "org:default-org")).factoryConfig, FACTORY_BODY);
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a factory loop that fails to be created surfaces as an error and a retry converges to one loop", async () => {
+  let failNext = true;
+  const srv = start("pi", true, (built) => ({
+    loops: {
+      ...built.loops,
+      store: {
+        ...built.loops.store,
+        create: async (input) => {
+          if (failNext) {
+            failNext = false;
+            throw new Error("loop store is down");
+          }
+          return built.loops.store.create(input);
+        },
+      },
+    },
+  }));
+  try {
+    const failed = await putFactory(srv.base, "org:default-org", FACTORY_BODY);
+    assert.equal(failed.status, 500);
+    assert.equal(((await failed.json()) as { error: string }).error, "internal_error");
+    assert.deepEqual(await srv.built.loops.store.list(), []);
+
+    assert.equal((await putFactory(srv.base, "org:default-org", FACTORY_BODY)).status, 200);
+    assert.equal((await factoryLoops(srv.built)).length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the public loop create route still refuses to carry a surface", async () => {
+  const srv = start();
+  try {
+    const created = await fetch(`${srv.base}/v1/loops?principalId=admin-alice`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "not the factory",
+        playbook: "do the thing",
+        successCondition: "the thing is done",
+        surface: "factory",
+      }),
+    });
+    assert.equal(created.status, 200);
+    const loop = ((await created.json()) as { loop: { id: string; surface?: string } }).loop;
+    assert.equal(loop.surface, undefined);
+    assert.deepEqual(await factoryLoops(srv.built), []);
   } finally {
     await srv.close();
   }

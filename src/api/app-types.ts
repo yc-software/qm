@@ -372,6 +372,7 @@ export interface App {
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
   openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
+  deleteFileForViewer(id: string, principalId: string): Promise<"deleted" | "forbidden" | "not_found">;
   grant(g: Grant): Promise<void>;
   revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
@@ -649,6 +650,7 @@ interface FileListItem {
   createdAt: number;
   createdInScope?: ScopeId;
   openable: boolean;
+  deletable?: boolean;
 }
 
 export interface FileListPage {

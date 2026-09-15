@@ -9,7 +9,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils findutils grep sed gawk \
-      git curl wget jq unzip \
+      git curl wget jq unzip lsof procps \
       nftables \
       python3 python3-venv python3-pip \
       ca-certificates gnupg \

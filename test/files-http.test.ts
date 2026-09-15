@@ -79,6 +79,7 @@ test("owner sees their own file in owned[] and can open its bytes", async () => 
   assert.equal(page.owned.length, 1);
   assert.equal(page.owned[0]!.name, "flag.png");
   assert.equal(page.owned[0]!.openable, true);
+  assert.equal(page.owned[0]!.deletable, true, "the owner manages their own artifact home");
   assert.equal(page.shared.length, 0);
 
   const opened = await app.openFileForViewer(id, "U1");
@@ -115,6 +116,7 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
   assert.equal(u2.shared.length, 1, "U2 sees it as shared");
   assert.equal(u2.shared[0]!.id, id);
   assert.equal(u2.shared[0]!.ownerScopeId, owner, "shared rows retain their provenance for an accurate UI label");
+  assert.equal(u2.shared[0]!.deletable, false, "a read grant never carries the right to delete");
 
   const opened = await app.openFileForViewer(id, "U2");
   assert.ok(opened, "the grant authorizes the bytes");

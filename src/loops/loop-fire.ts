@@ -24,6 +24,22 @@ import { decideShip, outputCandidate } from "./ship-gate.ts";
 import { evaluateSuccess, type SuccessCheckResult, type SuccessVerdict } from "./success-evaluation.ts";
 import { ledgerState } from "./ledger-view.ts";
 import { adapterForItem } from "./sources/index.ts";
+import {
+  createFactoryLoopEffects,
+  factoryForgeRef,
+  isFactoryLoop,
+  loadFactoryContext,
+  type FactoryContext,
+  type FactoryEffectsDeps,
+  type FactoryWorkEffects,
+} from "./factory/effects.ts";
+import {
+  returnFactoryPullRequest,
+  shipFactoryAlreadyFixed,
+  shipFactoryPullRequest,
+  type ShipDeps,
+  type ShipStepResult,
+} from "./factory/ship.ts";
 
 export interface LoopFireDeps {
   loops: LoopStore;
@@ -31,6 +47,7 @@ export interface LoopFireDeps {
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
   trigger: TriggerDeps;
+  factory?: FactoryEffectsDeps;
 }
 
 interface LoopFireResult {
@@ -369,6 +386,19 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     });
   }
 
+  async function factoryShipDeps(): Promise<{ context: FactoryContext; ship: ShipDeps }> {
+    if (!deps.factory) throw new Error("factory loop has no factory deps");
+    const context = await loadFactoryContext(deps.factory);
+    return {
+      context,
+      ship: {
+        forgeToken: context.githubToken,
+        linearApiKey: context.linearApiKey,
+        ...(deps.factory.fetch ? { fetch: deps.factory.fetch } : {}),
+      },
+    };
+  }
+
   function stageFailure(stage: string, outcome: TriggerOutcome): { error: Error; userMessage: string } | null {
     if (outcome.authzFailed)
       return {
@@ -435,6 +465,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   async function fire(loopId: string, fireKey: string): Promise<LoopFireResult> {
     const loop = await deps.loops.get(loopId);
     if (!loop) return { status: "failed", note: "loop not found" };
+    if (isFactoryLoop(loop) && !deps.factory) return { status: "failed", note: "factory loop has no factory deps" };
     if (loop.state === "enabled" && (await deps.trigger.idempotency.committed(`${fireKey}:intake`))) {
       return { status: "silent", note: "duplicate fire key" };
     }
@@ -443,52 +474,63 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     const grants = await deps.grants.byLoop(loopId);
     const workReplies = new Map<string, string>();
 
+    const turnEffects: FactoryWorkEffects = {
+      enumerate: async () => {
+        const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, intakePrompt(loop), {
+          readOnly: true,
+        });
+        if (!outcome.ran && !outcome.authzFailed) throw new DuplicateLoopFireError("duplicate fire key");
+        const failure = stageFailure("intake", outcome);
+        if (failure) throw failure.error;
+        return parseIntake(outcome.reply ?? "");
+      },
+      work: async ({ item, guidance }) => {
+        const outcome = await stageTurn(
+          loop,
+          `${fireKey}:work:${item.id}:${item.attempts}`,
+          threadRef,
+          workPrompt(loop, item, guidance),
+        );
+        const failure = stageFailure("work", outcome);
+        if (failure) throw failure.error;
+        workReplies.set(item.id, outcome.reply ?? "");
+        return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
+      },
+      captureOutputs: async ({ item }) => parseOutputs(workReplies.get(item.id) ?? ""),
+      evaluate: async ({ item, attempt }) => {
+        const outcome = await stageTurn(
+          loop,
+          `${fireKey}:judge:${item.id}:${attempt}`,
+          threadRef,
+          judgePrompt(loop, item),
+          { readOnly: true },
+        );
+        const failure = stageFailure("judge", outcome);
+        if (failure) throw failure.error;
+        return parseVerdict(outcome.reply ?? "", loop.successChecks ?? [], loop.successCondition, attempt, maxAttempts);
+      },
+    };
+
+    const factoryWork = isFactoryLoop(loop) && deps.factory ? createFactoryLoopEffects(deps.factory) : null;
+    const factoryEffects: FactoryWorkEffects | null = factoryWork && {
+      ...factoryWork,
+      enumerate: async (fired) => {
+        let candidates: IntakeCandidate[] = [];
+        const ran = await deps.trigger.idempotency.once(`${fireKey}:intake`, async () => {
+          candidates = await factoryWork.enumerate(fired);
+        });
+        if (!ran) throw new DuplicateLoopFireError("duplicate fire key");
+        return candidates;
+      },
+    };
+
     let summary: FireSummary;
     try {
       summary = await runLoopFire(
         loop,
         { loops: deps.loops, items: deps.items, outputs: deps.outputs },
         {
-          enumerate: async () => {
-            const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, intakePrompt(loop), {
-              readOnly: true,
-            });
-            if (!outcome.ran && !outcome.authzFailed) throw new DuplicateLoopFireError("duplicate fire key");
-            const failure = stageFailure("intake", outcome);
-            if (failure) throw failure.error;
-            return parseIntake(outcome.reply ?? "");
-          },
-          work: async ({ item, guidance }) => {
-            const outcome = await stageTurn(
-              loop,
-              `${fireKey}:work:${item.id}:${item.attempts}`,
-              threadRef,
-              workPrompt(loop, item, guidance),
-            );
-            const failure = stageFailure("work", outcome);
-            if (failure) throw failure.error;
-            workReplies.set(item.id, outcome.reply ?? "");
-            return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
-          },
-          captureOutputs: async ({ item }) => parseOutputs(workReplies.get(item.id) ?? ""),
-          evaluate: async ({ item, attempt }) => {
-            const outcome = await stageTurn(
-              loop,
-              `${fireKey}:judge:${item.id}:${attempt}`,
-              threadRef,
-              judgePrompt(loop, item),
-              { readOnly: true },
-            );
-            const failure = stageFailure("judge", outcome);
-            if (failure) throw failure.error;
-            return parseVerdict(
-              outcome.reply ?? "",
-              loop.successChecks ?? [],
-              loop.successCondition,
-              attempt,
-              maxAttempts,
-            );
-          },
+          ...(factoryEffects ?? turnEffects),
           authorizeAutoShip: async (output) => {
             const currentLoop = await deps.loops.get(loop.id);
             if (!currentLoop || !isRunnable(currentLoop)) return null;
@@ -520,6 +562,17 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     ].join("; ");
     if (failed) return { status: "failed", note, summary };
     return { status: fireNeedsAttention(summary) ? "ok" : "silent", note, summary };
+  }
+
+  async function runFactoryShip(output: LoopOutput, item: LoopItem): Promise<ShipStepResult[]> {
+    if (output.shipAction !== "open_pr" && output.shipAction !== "close_already_fixed")
+      throw new Error(`factory_ship_action_unknown: ${output.shipAction}`);
+    const { context, ship } = await factoryShipDeps();
+    if (output.shipAction === "close_already_fixed")
+      return shipFactoryAlreadyFixed(item.sourceKey, output.summary, ship);
+    const ref = factoryForgeRef(context.config, output.externalRef);
+    if (!ref) throw new Error(`factory_ship_ref_missing: ${output.id}`);
+    return shipFactoryPullRequest(ref, item.sourceKey, ship);
   }
 
   async function shipOutput(
@@ -557,6 +610,20 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const claimToken = claimed.claimToken!;
       const fireKey = `loop:${loopId}:ship:${outputId}`;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
+      if (isFactoryLoop(loop)) {
+        const steps = await runFactoryShip(claimed, item).catch(async (e: unknown) => {
+          await deps.outputs.failShipping(outputId, claimToken);
+          throw e;
+        });
+        const shipped = await deps.outputs.completeShipping(
+          outputId,
+          claimToken,
+          { actorId, ...(note ? { note } : {}) },
+          { status: "ok", note: steps.map((step) => `${step.step}=${step.changed}`).join(", ") },
+        );
+        if (shipped) await settleItem(loopId, shipped.itemId);
+        return shipped;
+      }
       const outcome = await stageTurn(
         loop,
         fireKey,
@@ -612,7 +679,17 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const returned = await deps.outputs.returnToLoop(outputId, { actorId, note });
       if (returned) {
         await deps.outputs.supersedeActiveSiblings(returned.itemId, returned.id);
-        await deps.items.returnToWork(returned.itemId, note);
+        const item = await deps.items.returnToWork(returned.itemId, note);
+        const loop = await deps.loops.get(loopId);
+        if (item && loop && isFactoryLoop(loop)) {
+          const { context, ship } = await factoryShipDeps();
+          await returnFactoryPullRequest(
+            returned.shipAction === "open_pr" ? factoryForgeRef(context.config, returned.externalRef) : null,
+            item.sourceKey,
+            note,
+            ship,
+          );
+        }
       }
       return returned;
     } finally {
@@ -645,6 +722,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
 
   async function followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null> {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
+    if (isFactoryLoop(loop)) return deps.items.get(item.id);
     const asked = (await deps.items.get(item.id)) ?? item;
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
     const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey);

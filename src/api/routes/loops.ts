@@ -1,5 +1,5 @@
 import type { Loop, LoopState } from "../../types.ts";
-import { scopeId, type ScopeId } from "../../types.ts";
+import { parseScopeId, scopeId, type ScopeId } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { LoopStore, CreateLoopInput, LoopPatch } from "../../loops/loop-store.ts";
 import { DECISION_LEASE_MS, type LoopItemLedger } from "../../loops/item-ledger.ts";
@@ -14,7 +14,7 @@ import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { consentRequiredRecipient } from "../../triggers/trigger-store.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj, resolveCapabilityDestination } from "./shared.ts";
+import { isObj, isOrgAdmin, resolveCapabilityDestination } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
@@ -62,6 +62,8 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
 
 async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
   const { app } = ctx;
+  if (parseScopeId(loop.ownerScopeId).kind === "org" && (await isOrgAdmin(ctx.deps, acting.actorId, loop.ownerScopeId)))
+    return true;
   if (await app.membershipControlsScope(loop.ownerScopeId)) {
     return app.managesScope(acting.actorId, loop.ownerScopeId);
   }
@@ -460,9 +462,13 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
   if (b.decision === "return" || b.decision === "returned") {
     if (!note)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "a return needs a note for the next attempt" });
-    const returned = await deps.fire.returnOutput(loop.id, outputId, acting.actorId, note);
-    if (!returned) return decisionMissing();
-    return sendJson(ctx.res, 200, { output: returned });
+    try {
+      const returned = await deps.fire.returnOutput(loop.id, outputId, acting.actorId, note);
+      if (!returned) return decisionMissing();
+      return sendJson(ctx.res, 200, { output: returned });
+    } catch (e) {
+      return sendJson(ctx.res, 502, { error: "return_failed", message: errMessage(e) });
+    }
   }
   return sendJson(ctx.res, 400, { error: "bad_request", message: 'decision must be "shipped" or "returned"' });
 }

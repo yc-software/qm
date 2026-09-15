@@ -11,6 +11,7 @@ import {
   FileVideo,
   Presentation,
   Search,
+  Trash2,
   Upload,
   type IconNode,
 } from "lucide";
@@ -34,6 +35,7 @@ interface FileItem {
   createdInScope?: string;
   ownerScopeId?: string;
   openable: boolean;
+  deletable?: boolean;
 }
 interface FileRow extends FileItem {
   kind: "Created" | "Uploaded" | "Shared";
@@ -239,9 +241,47 @@ function fileRow(f: FileRow) {
       }</span
     >
   `;
-  return f.openable
-    ? html`<a class="list-row file-row" href=${contentUrl} target="_blank" rel="noreferrer">${content}</a>`
-    : html`<article class="list-row file-row">${content}</article>`;
+  return html`<div class="list-row file-row">
+    ${
+      f.openable
+        ? html`<a class="file-row-main" href=${contentUrl} target="_blank" rel="noreferrer">${content}</a>`
+        : html`<span class="file-row-main">${content}</span>`
+    }
+    ${
+      f.deletable
+        ? html`<div class="file-row-actions">
+            <button
+              class="btn danger compact"
+              type="button"
+              aria-label=${`Delete ${f.name}`}
+              ?disabled=${filesBusy.has(f.id)}
+              @click=${() => void deleteFile(f)}
+            >
+              ${icon(Trash2, 14)}<span>Delete</span>
+            </button>
+          </div>`
+        : nothing
+    }
+  </div>`;
+}
+
+const filesBusy = new Set<string>();
+
+async function deleteFile(f: FileRow): Promise<void> {
+  if (filesBusy.has(f.id)) return;
+  if (!confirm(`Delete ${f.name}? This can't be undone.`)) return;
+  filesBusy.add(f.id);
+  drawFiles();
+  try {
+    await api(`/api/files/${encodeURIComponent(f.id)}`, { method: "DELETE" });
+    filesNotice = `Deleted ${f.name}.`;
+    await loadFiles(appState.viewRenderSeq);
+  } catch (e) {
+    filesNotice = errMessage(e, "Couldn't delete that file.");
+  } finally {
+    filesBusy.delete(f.id);
+    drawFiles();
+  }
 }
 
 async function fileSha256(file: globalThis.File): Promise<string> {

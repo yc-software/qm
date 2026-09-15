@@ -9,7 +9,7 @@ import type {
 } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
-import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
+import { type FileArtifact, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, type Run } from "../runs/run-store.ts";
 import { sleep } from "../util/async.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
@@ -356,9 +356,22 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         ...(inScope ? { createdInScope: inScope } : {}),
       },
     );
+    const manages = new Map<string, Promise<boolean>>();
+    const withDeletable = (rows: FileArtifact[]) =>
+      Promise.all(
+        rows.map(async (f) => {
+          const key = `${f.ownerScopeId}\0${f.createdBy}`;
+          let decision = manages.get(key);
+          if (!decision) {
+            decision = principalManagesArtifactHome(f.ownerScopeId, f.createdBy, principalId);
+            manages.set(key, decision);
+          }
+          return { ...toFileItem(f), deletable: await decision };
+        }),
+      );
     return {
-      owned: page.files.filter((f) => myScopes.includes(f.ownerScopeId)).map(toFileItem),
-      shared: page.files.filter((f) => !myScopes.includes(f.ownerScopeId)).map(toFileItem),
+      owned: await withDeletable(page.files.filter((f) => myScopes.includes(f.ownerScopeId))),
+      shared: await withDeletable(page.files.filter((f) => !myScopes.includes(f.ownerScopeId))),
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     };
   }
