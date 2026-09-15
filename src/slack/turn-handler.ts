@@ -84,6 +84,7 @@ interface Incoming {
   actor?: ActorAssertion;
   authorName?: string;
   rawText: string;
+  subtype?: string;
   files: SlackFile[];
   threadTs?: string;
   ts: string;
@@ -408,13 +409,14 @@ export function createTurnHandler(deps: {
           channel: inc.channel,
           ts: inc.ts,
           text: inc.rawText,
+          subtype: inc.subtype,
           files: inc.files,
           user: inc.userId,
           thread_ts: inc.threadTs,
           channel_type: channelType(inc.kind, conversationKind),
         },
         client,
-        { kind: conversationKind, handled: true, ...(containerName ? { containerName } : {}) },
+        { partial: true, kind: conversationKind, handled: true, ...(containerName ? { containerName } : {}) },
       );
     }
 

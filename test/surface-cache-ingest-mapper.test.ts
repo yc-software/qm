@@ -51,3 +51,17 @@ test("toEvent rejects a payload with no container/ts", () => {
   assert.equal(toEvent({ container: "C1" }), null);
   assert.equal(toEvent("nope"), null);
 });
+
+test("toEvent preserves authoritative root, subtype and broadcast corrections", () => {
+  assert.deepEqual(toEvent({ container: "C", ts: "1", sub: null, subtype: "", broadcast: false }), {
+    container: "C",
+    ts: "1",
+    sub: null,
+    subtype: "",
+    broadcast: false,
+  });
+  assert.deepEqual(toEvent({ container: "C", ts: "1", subtype: 5, broadcast: "true" }), {
+    container: "C",
+    ts: "1",
+  });
+});

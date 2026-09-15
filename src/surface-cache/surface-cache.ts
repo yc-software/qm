@@ -119,6 +119,10 @@ export function createPostgresSurfaceCache(
       id: "surface-cache/store/0004",
       statements: [`ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS broadcast BOOLEAN NOT NULL DEFAULT FALSE`],
     },
+    {
+      id: "surface-cache/store/0005",
+      statements: [`ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS subtype TEXT`],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -128,6 +132,7 @@ export function createPostgresSurfaceCache(
       container: r.container as string,
       ts: r.ts as string,
       ...(r.sub != null ? { sub: r.sub as string } : {}),
+      ...(r.subtype != null ? { subtype: r.subtype as string } : {}),
       ...(r.broadcast ? { broadcast: true } : {}),
       ...(r.author_id != null ? { authorId: r.author_id as string } : {}),
       ...(r.author_name != null ? { authorName: r.author_name as string } : {}),
@@ -158,10 +163,11 @@ export function createPostgresSurfaceCache(
           const e = normalizeEvent(event);
           if (!e.container || !e.ts) continue;
           const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE))
+            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19)
              ON CONFLICT (org_id, container, ts) DO UPDATE SET
                sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
+               subtype = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.subtype ELSE COALESCE(EXCLUDED.subtype, channel_messages.subtype) END,
                broadcast = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR $18::boolean IS NULL THEN channel_messages.broadcast ELSE EXCLUDED.broadcast END,
                author_id = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.author_id ELSE COALESCE(EXCLUDED.author_id, channel_messages.author_id) END,
                author_name = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.author_name ELSE COALESCE(EXCLUDED.author_name, channel_messages.author_name) END,
@@ -197,6 +203,7 @@ export function createPostgresSurfaceCache(
               e.deleted ? now : null,
               e.sub !== undefined,
               e.broadcast ?? null,
+              e.subtype ?? null,
             ],
           );
           upserted += res.rowCount ?? 0;
@@ -457,6 +464,7 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
             ...((e.sub === undefined ? existing?.sub : e.sub)
               ? { sub: (e.sub === undefined ? existing?.sub : e.sub) as string }
               : {}),
+            ...((e.subtype ?? existing?.subtype) !== undefined ? { subtype: e.subtype ?? existing?.subtype } : {}),
             ...((e.broadcast ?? existing?.broadcast) ? { broadcast: true } : {}),
             ...((e.authorId ?? existing?.authorId) ? { authorId: (e.authorId ?? existing?.authorId) as string } : {}),
             ...((e.authorName ?? existing?.authorName)

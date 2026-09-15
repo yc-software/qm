@@ -28,7 +28,9 @@ export function toEvent(raw: unknown): IngestEvent | null {
   return {
     container: raw.container,
     ts: raw.ts,
-    ...(typeof raw.sub === "string" && raw.sub ? { sub: raw.sub } : {}),
+    ...(raw.sub === null || (typeof raw.sub === "string" && raw.sub) ? { sub: raw.sub } : {}),
+    ...(typeof raw.subtype === "string" ? { subtype: raw.subtype } : {}),
+    ...(typeof raw.broadcast === "boolean" ? { broadcast: raw.broadcast } : {}),
     ...(typeof raw.authorId === "string" ? { authorId: raw.authorId } : {}),
     ...(typeof raw.authorName === "string" ? { authorName: raw.authorName } : {}),
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),

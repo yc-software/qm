@@ -1,6 +1,7 @@
+import { slackMessageToIngestEvent } from "./mirror.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackContextSource } from "./config.ts";
-import { decodeSlackEntities, mentionsBot, resolveMentionsInText } from "./lib.ts";
+import { decodeSlackEntities, resolveMentionsInText } from "./lib.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { CachedMessage } from "../surface-cache/types.ts";
@@ -210,6 +211,7 @@ export function createSlackHistoryReader(deps: {
           .filter((m) => !m.deleted && (!before || m.ts < before))
           .map((m) => ({
             ts: m.ts,
+            ...(m.subtype !== undefined ? { subtype: m.subtype } : {}),
             text: m.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
             ...(m.mentionsSelf ? { mentionsSelf: true } : {}),
             ...(m.sub ? { thread_ts: m.sub } : {}),
@@ -239,26 +241,7 @@ export function createSlackHistoryReader(deps: {
           .rememberSurfaceHistory(
             page.messages
               .filter((m) => m.ts)
-              .map((m) => ({
-                container: channel,
-                ts: m.ts!,
-                ...(m.thread_ts && m.thread_ts !== m.ts ? { sub: m.thread_ts } : {}),
-                ...(m.user ? { authorId: m.user } : {}),
-                ...(m.username ? { authorName: m.username } : {}),
-                text: decodeSlackEntities(String(m.text ?? "")),
-                ...(mentionsBot(String(m.text ?? ""), deps.ids.botUserId) ? { mentionsSelf: true } : {}),
-                ...(m.user === deps.ids.botUserId ? { self: true } : {}),
-                ...(m.bot_id ? { bot: true } : {}),
-                ...(Number(m.edited?.ts) > 0 ? { editedAt: Math.round(Number(m.edited!.ts) * 1000) } : {}),
-                handled: true,
-                ...(m.files?.length
-                  ? {
-                      files: m.files
-                        .filter((f) => f.id)
-                        .map((f) => ({ fileId: f.id!, name: f.name, mimetype: f.mimetype })),
-                    }
-                  : {}),
-              })),
+              .map((m) => slackMessageToIngestEvent({ ...m, channel }, deps.ids, { handled: true })),
           )
           .catch((error) => swallow("slack: history mirror ingest", error));
       }
@@ -272,7 +255,7 @@ export function createSlackHistoryReader(deps: {
         for (const row of stored) if (row.deleted) deleted.add(row.ts);
       }
       const byTs = new Map<string, SlackHistoryMessage>();
-      for (const message of [...page.messages, ...mirrored])
+      for (const message of [...mirrored, ...page.messages])
         if (message.ts && !deleted.has(message.ts)) byTs.set(message.ts, message);
       return {
         raw: [...byTs.values()],

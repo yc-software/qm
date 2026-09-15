@@ -5,6 +5,7 @@ import { createMirror } from "../src/slack/mirror.ts";
 import { registerSlackEvents } from "../src/slack/events.ts";
 import { createDirectory, type BotIdentity } from "../src/slack/directory.ts";
 import { createTurnHandler, type TurnHandler } from "../src/slack/turn-handler.ts";
+import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createDeduper, createThreadTracker } from "../src/slack/lib.ts";
@@ -632,4 +633,51 @@ test("synthetic reaction turns preserve the canonical message snapshot", async (
     (error: unknown) => error === stop,
   );
   assert.deepEqual(await cache.readMessages("D1", { at: "2" }), before);
+});
+
+test("broadcast metadata survives reduced remirroring and partial edits across HTTP ingestion", async () => {
+  const cache = createMemorySurfaceCache();
+  const f = fixture({
+    ingest: async (events) => {
+      await cache.ingest(events.map((e) => toEvent(e)!));
+    },
+  });
+  await f.fire({
+    type: "message",
+    subtype: "thread_broadcast",
+    channel: "C1",
+    channel_type: "channel",
+    user: "UBOT",
+    ts: "2",
+    thread_ts: "1",
+    text: "reply",
+  });
+  await f.mirror.mirrorMessageEvent(
+    { channel: "C1", channel_type: "channel", user: "UBOT", ts: "2", thread_ts: "1", text: "reply" },
+    {},
+    { partial: true, handled: true },
+  );
+  await f.fire({
+    type: "message",
+    subtype: "message_changed",
+    channel: "C1",
+    channel_type: "channel",
+    ts: "3",
+    message: { user: "UBOT", ts: "2", text: "edited" },
+    previous_message: { text: "reply" },
+  });
+  const rows = await cache.readMessages("C1", { channelHistory: true });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.sub, "1");
+  assert.equal(rows[0]?.subtype, "thread_broadcast");
+  assert.equal(rows[0]?.broadcast, true);
+  assert.equal(rows[0]?.text, "edited");
+});
+
+test("dispatch retains known ordinary and file-share subtypes for direct messages", async () => {
+  for (const subtype of [undefined, "file_share"]) {
+    const f = fixture();
+    await f.fire({ type: "message", channel: "D1", channel_type: "im", user: "U1", ts: "10", text: "hello", subtype });
+    assert.equal(f.dispatches[0]?.[1].subtype, subtype ?? "");
+  }
 });

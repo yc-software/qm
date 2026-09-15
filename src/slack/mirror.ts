@@ -13,8 +13,60 @@ export interface Mirror {
   mirrorMessageEvent(
     m: Partial<SlackMessageEvent>,
     client: any,
-    opts?: { editedAt?: number; handled?: boolean; containerName?: string; kind?: "channel" | "dm" | "group" },
+    opts?: {
+      partial?: boolean;
+      editedAt?: number;
+      handled?: boolean;
+      containerName?: string;
+      kind?: "channel" | "dm" | "group";
+    },
   ): Promise<void>;
+}
+
+export function slackMessageToIngestEvent(
+  m: Partial<SlackMessageEvent>,
+  ids: BotIdentity,
+  opts: {
+    partial?: boolean;
+    text?: string;
+    mentions?: Record<string, string>;
+    editedAt?: number;
+    handled?: boolean;
+    containerName?: string;
+    kind?: "channel" | "dm" | "group";
+  } = {},
+): IngestEvent {
+  const content = messageWithForwardedContent(m);
+  const raw = content.text;
+  return {
+    container: m.channel!,
+    ts: m.ts!,
+    ...(m.subtype !== undefined || !opts.partial
+      ? { subtype: m.subtype ?? "", broadcast: m.subtype === "thread_broadcast" }
+      : {}),
+    ...(m.subtype === "tombstone" ? { deleted: true } : {}),
+    ...(m.thread_ts !== undefined || !opts.partial
+      ? { sub: m.thread_ts && m.thread_ts !== m.ts ? String(m.thread_ts) : null }
+      : {}),
+    ...(m.user ? { authorId: String(m.user) } : {}),
+    ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+    text: opts.text ?? decodeSlackEntities(raw),
+    ...((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)
+      ? { self: true, handled: true }
+      : {}),
+    files: content.files
+      .filter((file) => file.id)
+      .map((file) => ({ fileId: file.id!, name: file.name, mimetype: file.mimetype })),
+    ...(Object.keys(opts.mentions ?? {}).length ? { mentions: opts.mentions } : {}),
+    ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
+    ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
+    ...((opts.editedAt ?? Number(m.edited?.ts) * 1000) > 0
+      ? { editedAt: Math.round(opts.editedAt ?? Number(m.edited?.ts) * 1000) }
+      : {}),
+    ...(opts.handled ? { handled: true } : {}),
+    ...(opts.containerName ? { containerName: opts.containerName } : {}),
+    ...(opts.kind ? { kind: opts.kind } : {}),
+  };
 }
 
 export function createMirror(deps: {
@@ -54,7 +106,13 @@ export function createMirror(deps: {
   async function mirrorMessageEvent(
     m: Partial<SlackMessageEvent>,
     client: any,
-    opts: { editedAt?: number; handled?: boolean; containerName?: string; kind?: "channel" | "dm" | "group" } = {},
+    opts: {
+      partial?: boolean;
+      editedAt?: number;
+      handled?: boolean;
+      containerName?: string;
+      kind?: "channel" | "dm" | "group";
+    } = {},
   ): Promise<void> {
     const container = m.channel;
     const ts = m.ts;
@@ -81,30 +139,7 @@ export function createMirror(deps: {
     const content = messageWithForwardedContent(m);
     const raw = content.text;
     const { text, mentions } = await resolveTextMentions(client, decodeSlackEntities(raw));
-    await pushSurfaceEvents([
-      {
-        container,
-        ts,
-        ...(m.subtype === "thread_broadcast" ? { broadcast: true } : {}),
-        sub: m.thread_ts && m.thread_ts !== ts ? String(m.thread_ts) : null,
-        ...(m.user ? { authorId: String(m.user) } : {}),
-        ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
-        text,
-        ...((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)
-          ? { self: true, handled: true }
-          : {}),
-        files: content.files
-          .filter((file) => file.id)
-          .map((file) => ({ fileId: file.id!, name: file.name, mimetype: file.mimetype })),
-        ...(Object.keys(mentions).length ? { mentions } : {}),
-        ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
-        ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
-        ...(opts.editedAt ? { editedAt: opts.editedAt } : {}),
-        ...(opts.handled ? { handled: true } : {}),
-        ...(opts.containerName ? { containerName: opts.containerName } : {}),
-        kind,
-      },
-    ]);
+    await pushSurfaceEvents([slackMessageToIngestEvent(m, ids, { ...opts, text, mentions, kind })]);
   }
 
   return { pushSurfaceEvents, resolveTextMentions, mirrorMessageEvent };

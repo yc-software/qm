@@ -148,6 +148,7 @@ export function registerSlackEvents(
           userId: identity.userId,
           ...(identity.actor ? { actor: identity.actor } : {}),
           rawText: content.text,
+          subtype: e.subtype ?? "",
           files: content.files,
           threadTs: e.thread_ts,
           ts: e.ts,
@@ -213,6 +214,7 @@ export function registerSlackEvents(
         const editedAt = Number(m.message.edited?.ts) || (textChanged ? Number(m.ts) : 0);
         if (shouldMirrorMessage(m.message))
           await mirrorMessageEvent({ ...m.message, channel: m.channel, channel_type: m.channel_type }, client, {
+            partial: true,
             ...(!shouldProcessMessage(m.message, "", "") ? { handled: true } : {}),
             ...(editedAt > 0 ? { editedAt: Math.round(editedAt * 1000) } : {}),
             ...(m.channel_type === "im" ? { kind: "dm" as const } : {}),
@@ -264,6 +266,7 @@ export function registerSlackEvents(
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
             rawText: content.text,
+            subtype: m.subtype ?? "",
             files: content.files,
             threadTs: m.thread_ts,
             ts: m.ts,
@@ -309,6 +312,7 @@ export function registerSlackEvents(
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
             rawText: content.text,
+            subtype: m.subtype ?? "",
             files: content.files,
             threadTs: m.thread_ts,
             ts: m.ts,
