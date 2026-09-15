@@ -60,7 +60,9 @@ function fakeAws(
   ingress: {
     blueGreen?: boolean;
     sharedHost?: string;
+    sharedAppsHost?: string;
     siblingHost?: string;
+    siblingAppsHost?: string;
     siblingOwnTarget?: boolean;
     coreHosts?: string[];
     targetGroups?: Partial<Record<"core" | "portal", string>>;
@@ -127,14 +129,24 @@ function fakeAws(
   if (ingress.sharedHost) {
     (baseRules[0]!.Conditions as unknown[]).push({
       Field: "host-header",
-      HostHeaderConfig: { Values: [ingress.sharedHost] },
+      HostHeaderConfig: { Values: [ingress.sharedHost, ...(ingress.sharedAppsHost ? [ingress.sharedAppsHost] : [])] },
     });
     groups.push({ TargetGroupArn: "other-target", TargetGroupName: "other-target" });
     baseRules.push({
       RuleArn: "other-rule",
       IsDefault: false,
       Actions: [{ Type: "forward", TargetGroupArn: ingress.siblingOwnTarget ? targetArn : "other-target" }],
-      Conditions: [{ Field: "host-header", HostHeaderConfig: { Values: [ingress.siblingHost ?? "other.example"] } }],
+      Conditions: [
+        {
+          Field: "host-header",
+          HostHeaderConfig: {
+            Values: [
+              ingress.siblingHost ?? "other.example",
+              ...(ingress.siblingAppsHost ? [ingress.siblingAppsHost] : []),
+            ],
+          },
+        },
+      ],
     });
   }
   writeFileSync(log, "");
@@ -5088,18 +5100,43 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
     ],
   ]);
   const hostname = new URL(company.publicUrl).hostname;
-  for (const variant of ["valid", "same-host", "wildcard", "own-target", "wrong-host"]) {
+  for (const variant of [
+    "valid",
+    "same-host",
+    "wildcard",
+    "own-target",
+    "wrong-host",
+    "apps",
+    "apps-missing",
+    "apps-wrong",
+    "sibling-apps",
+  ]) {
+    const appDomain = `apps.${hostname}`;
+    const selected = variant.startsWith("apps")
+      ? {
+          ...company,
+          env: {
+            ...company.env,
+            core: { ...company.env.core, DEPLOY_APPS_DOMAIN: appDomain },
+            portal: { ...company.env.portal, PORTAL_APPS_DOMAIN: appDomain },
+          },
+        }
+      : company;
     const dir = mkdtempSync(join(tmpdir(), "qm-shared-alb-"));
     const fake = fakeAws(dir, "", "portal", {
       blueGreen: true,
       sharedHost: variant === "wrong-host" ? "wrong.example" : hostname,
+      ...(variant === "apps" ? { sharedAppsHost: `*.${appDomain}` } : {}),
+      ...(variant === "apps-wrong" ? { sharedAppsHost: `*.wrong.${hostname}` } : {}),
+      ...(variant === "sibling-apps" ? { siblingAppsHost: "*.apps.other.example" } : {}),
       siblingHost:
         ({ "same-host": hostname, wildcard: "*.example" } as Record<string, string>)[variant] ?? "other.example",
       siblingOwnTarget: variant === "own-target",
     });
     try {
-      if (variant === "valid") assert.equal(assertAwsPublicRouting(company, services).get("portal"), primary);
-      else assert.throws(() => assertAwsPublicRouting(company, services), /shared ALB/);
+      if (["valid", "apps", "sibling-apps"].includes(variant))
+        assert.equal(assertAwsPublicRouting(selected, services).get("portal"), primary);
+      else assert.throws(() => assertAwsPublicRouting(selected, services), /shared ALB/);
       assert.throws(
         () => assertAwsPublicRouting({ ...company, aws: { ...company.aws, sharedAlb: false } }, services),
         /unknown services/,

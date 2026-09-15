@@ -3295,6 +3295,21 @@ function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string)
   }
 }
 
+function awsPortalAppsDomain(config: QmConfig): string | undefined {
+  if (!config.aws?.services.portal) return undefined;
+  const domain = config.env.portal?.PORTAL_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
+  if (!domain) return undefined;
+  const coreDomain = (config.env.core?.DEPLOY_APPS_DOMAIN || config.env.core?.AWS_DEPLOY_APPS_DOMAIN)
+    ?.trim()
+    .toLowerCase()
+    .replace(/\.$/, "");
+  const company = new URL(config.publicUrl).hostname.toLowerCase();
+  if (!validAlbHostname(domain) || domain !== coreDomain || !domain.endsWith(`.${company}`)) {
+    throw new Error("portal apps domain must match core and remain beneath the company public hostname");
+  }
+  return domain;
+}
+
 function awsCoreHostnames(config: QmConfig): string[] {
   const hosts: string[] = [];
   const normalize = (value: string, source: string): string => {
@@ -3318,7 +3333,7 @@ function awsCoreHostnames(config: QmConfig): string[] {
     if (apiHost !== new URL(config.publicUrl).hostname.toLowerCase().replace(/\.$/, "")) hosts.push(apiHost);
   }
   const apps = config.env.core?.DEPLOY_APPS_DOMAIN?.trim() || config.env.core?.AWS_DEPLOY_APPS_DOMAIN?.trim();
-  if (apps)
+  if (apps && apps.trim().toLowerCase().replace(/\.$/, "") !== awsPortalAppsDomain(config))
     hosts.push(`*.${normalize(apps, "the apps domain (env.core.DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN)")}`);
   return [...new Set(hosts)];
 }
@@ -3448,17 +3463,42 @@ export function assertAwsPublicRouting(
   let nonDefault = rules.filter((rule) => !rule.IsDefault);
   if (aws.sharedAlb) {
     const hostname = new URL(config.publicUrl).hostname.toLowerCase();
+    const portalAppsDomain = awsPortalAppsDomain(config);
+    const expectedHosts = [hostname, ...(portalAppsDomain ? [`*.${portalAppsDomain}`] : [])];
+    const overlaps = (a: string, b: string): boolean => {
+      if (a === b) return true;
+      if (a.startsWith("*.")) return b.endsWith(a.slice(1));
+      if (b.startsWith("*.")) return a.endsWith(b.slice(1));
+      return false;
+    };
     const ownRule = productionRules.get("portal");
     for (const rule of nonDefault) {
       const hosts = rule.Conditions?.filter((condition) => condition.Field === "host-header");
-      const values = hosts?.[0]?.HostHeaderConfig?.Values ?? hosts?.[0]?.Values ?? [];
-      if (hosts?.length !== 1 || !values.length || values.some((value) => !validAlbHostname(value))) {
-        throw new Error("shared ALB rules require explicit non-wildcard hostnames");
+      const values = (hosts?.[0]?.HostHeaderConfig?.Values ?? hosts?.[0]?.Values ?? []).map((value) =>
+        value.toLowerCase(),
+      );
+      const companyHosts = values.filter((value) => validAlbHostname(value));
+      if (
+        hosts?.length !== 1 ||
+        companyHosts.length !== 1 ||
+        values.some(
+          (value) =>
+            !validAlbHostname(value) &&
+            !(
+              value.startsWith("*.") &&
+              validAlbHostname(value.slice(2)) &&
+              value.slice(2).endsWith(`.${companyHosts[0]}`)
+            ),
+        )
+      ) {
+        throw new Error("shared ALB rules require one company hostname and company-contained app wildcards");
       }
-      const matchesHost = values.some((value) => value.toLowerCase() === hostname);
+      const matchesHost = values.some((value) =>
+        expectedHosts.some((expected) => overlaps(value, expected) || overlaps(expected, value)),
+      );
       if (rule.RuleArn === ownRule) {
-        if (!matchesHost || values.length !== 1)
-          throw new Error("shared ALB portal rule must match only this company hostname");
+        if (values.length !== expectedHosts.length || expectedHosts.some((value) => !values.includes(value)))
+          throw new Error("shared ALB portal rule must match only this company and its configured app hostname");
       } else {
         const referencesOwnTarget = rule.Actions?.some(
           (action) =>
