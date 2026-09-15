@@ -73,9 +73,9 @@ export function channelSurfaceUrl(webUiPublicUrl: string | undefined, channelId:
 
 export function channelWelcomeMessage(surfaceUrl: string | undefined): string {
   if (!surfaceUrl) {
-    return "Hi! I'm the agent for this channel. Mention me and I'll help out — scheduled jobs, skills, files, and apps I run here are shared with everyone in the channel.";
+    return "QM here, ready to assist.";
   }
-  return `Hi! I'm the agent for this channel. Everyone here can see and manage what I'm doing — scheduled jobs, skills, files, and apps — on this channel's shared page: ${surfaceUrl}`;
+  return `QM here, ready to assist. Access my data and channel settings <${surfaceUrl}|here>.`;
 }
 
 export function surfaceHeaderText(facts: { modelName?: string }, projectUrl: string | undefined): string | undefined {
