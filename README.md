@@ -279,3 +279,11 @@ managed runtime and rejects subsequent managed installation callbacks. To return
 the managed app, disconnect the administrator-provided app in QM, then explicitly
 choose **Add to Slack**. Disconnecting alone does not permit old managed callbacks to
 restore an installation.
+
+Use the same Slack workspace when replacing the managed app, so existing conversations
+and memberships remain associated with that workspace. Invite the new bot to the
+channels it should serve; Slack does not transfer the old bot's memberships. Once
+replacement is verified, remove the old managed app from Slack to avoid two visible
+QM identities. QM rejects deliveries for the old installation as soon as the new
+credentials are saved. The replacement uses Socket Mode even if the deployment's
+environment previously selected HTTP events.

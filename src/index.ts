@@ -95,6 +95,7 @@ const slackRuntime = createSlackRuntimeReconciler({
           ...process.env,
           SLACK_BOT_TOKEN: stored.botToken,
           SLACK_APP_TOKEN: stored.appToken,
+          SLACK_EVENTS_MODE: stored.appToken ? "socket" : process.env.SLACK_EVENTS_MODE,
         },
         stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
       );

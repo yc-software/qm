@@ -10,15 +10,27 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
+import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(socketAppId = "A-ACME"): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(socketAppId = "A-ACME", managed = false): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "byo-route-")) }));
   const server = createInsecureTestServer(built.app, {
     oauthStateSecret: "byo-route-oauth-state-secret",
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
     slackInstallation: built.slackInstallation,
+    ...(managed
+      ? {
+          managedSlack: createManagedSlack({
+            serviceUrl: "https://bridge.example",
+            token: "test-token",
+            appId: "A123",
+            store: built.slackInstallation,
+          }),
+        }
+      : {}),
     slackInstallationFetch: (async (input: string | URL | Request) => {
       const url = String(input);
       return new Response(
@@ -203,6 +215,39 @@ test("the catalog endpoint exposes per-provider setup guidance (no secrets)", as
     assert.ok(google.setupGuide.steps.length >= 3);
     assert.match(google.setupGuide.url, /^https:\/\//);
     assert.equal(catalog.find((c) => c.provider === "github")!.consentMode, "github_app");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("managed deployments accept validated own apps and preserve credentials on invalid replacement", async () => {
+  const srv = start("A-ACME", true);
+  try {
+    await srv.built.slackInstallation.setManaged({
+      botToken: "xoxb-managed",
+      appId: "A123",
+      teamId: "T-ACME",
+      installId: "I1",
+      installedAt: 1,
+    });
+    const put = (botToken: string) =>
+      fetch(`${srv.base}/v1/admin/slack-installation`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ botToken, appToken: "xapp-own" }),
+      });
+    assert.equal((await put("invalid")).status, 400);
+    assert.equal((await srv.built.slackInstallation.get())?.botToken, "xoxb-managed");
+    assert.equal((await put("xoxb-own")).status, 200);
+    const status = (await (await fetch(`${srv.base}/v1/admin/slack-installation`, { headers: ADMIN })).json()) as {
+      source: string;
+      installAvailable: boolean;
+      createUrl: string;
+    };
+    assert.equal(status.source, "admin");
+    assert.equal(status.installAvailable, true);
+    assert.equal(new URL(status.createUrl).searchParams.get("new_app"), "1");
+    assert.equal((await srv.built.slackInstallation.get())?.botToken, "xoxb-own");
   } finally {
     await srv.close();
   }
