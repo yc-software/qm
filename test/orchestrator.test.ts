@@ -8,7 +8,7 @@ import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
-import type { Config } from "../src/config.ts";
+import { loadConfig, type Config } from "../src/config.ts";
 import type { ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
@@ -2698,6 +2698,7 @@ test("an enforced proxy outage fails open and audits the configured provider", a
     (entry) => entry.action === "security_screen.classify" && entry.status === "error",
   );
   assert.equal(event?.resource, "example-screen");
+  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("Auto fails open on vision attachments it cannot screen, flagging them unscreened to the model", async () => {
@@ -3864,4 +3865,27 @@ test("activated resource defaults preserve an existing computer and stop eager p
   assert.equal(newSession.status, "ok", newSession.reason);
   assert.equal(await built.sandboxResources.resolve("personal:new-user"), null);
   assert.equal(boxes.provisioned, 1);
+});
+
+test("default screening does not invoke a model for inbound data or tool results", async () => {
+  const built = freshApp({ securityScreenBackend: loadConfig({}).securityScreenBackend });
+  let captured: ProvisionOptions | undefined;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (layers, options) => {
+    captured = options;
+    return provision(layers, options);
+  };
+  const result = await built.app.turn(
+    dm("!run printf screening-default-ok", {
+      surface: "webhook",
+      triggered: true,
+      securityScreenData: "ordinary external event",
+    }),
+  );
+  assert.equal(result.status, "ok");
+  assert.match(result.reply ?? "", /screening-default-ok/);
+  assert.equal(built.screenSecurity, undefined);
+  const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims?.egress?.denyPrivateNetworks, true);
+  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
 });

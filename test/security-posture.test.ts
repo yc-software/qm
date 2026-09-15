@@ -37,14 +37,17 @@ test("narrower scopes may tighten but cannot weaken the org posture", () => {
 test("each posture resolves to exactly one mechanism", () => {
   assert.deepEqual(resolveSecurityPolicy("dangerous"), {
     inboundScreening: "off",
+    denyPrivateNetworks: false,
     toolApprovals: "none",
   });
   assert.deepEqual(resolveSecurityPolicy("auto"), {
     inboundScreening: "external",
+    denyPrivateNetworks: true,
     toolApprovals: "none",
   });
   assert.deepEqual(resolveSecurityPolicy("strict"), {
     inboundScreening: "off",
+    denyPrivateNetworks: false,
     toolApprovals: "all",
   });
 });

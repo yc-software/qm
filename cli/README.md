@@ -81,9 +81,11 @@ point (`aws rds restore-db-instance-to-point-in-time`);
 sandboxes boot their platform's stock image; tools and skills arrive through the
 deployment-layer sync, which every ordinary `up` performs.
 
-Auto uses its built-in model classifier unless `qm.config.jsonc` declares one
-`securityScreen` proxy with a provider label, HTTPS endpoint, and `shadow` or
-`enforce` rollout. The proxy token is routed separately through
+Model screening is off by default. Set `securityScreen: { "backend": "model" }`
+to opt in, or configure a `securityScreen` proxy with a provider label, HTTPS
+endpoint, and `enforce` rollout to use an external screener without model fallback.
+The optional `shadow` rollout explicitly runs the model classifier and compares
+the proxy verdict. Route the proxy token through
 `secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`.
 
 ## Commands

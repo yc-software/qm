@@ -95,6 +95,7 @@ test("resolution carries the durable effective security posture", async () => {
   const resolved = await res.resolve(conv, actor);
   assert.deepEqual(resolved.securityPolicy, {
     inboundScreening: "off",
+    denyPrivateNetworks: false,
     toolApprovals: "all",
   });
   assert.deepEqual(resolved.approvalGrantModes, { session: true, always: true }, "grant modes default to all-on");
@@ -115,4 +116,23 @@ test("resolution refreshes security config written by another instance", async (
   const resolved = await res.resolve(conv, actor);
   assert.match(resolved.systemPrompt, /FLEET_LIVE/);
   assert.deepEqual(resolved.egress.deniedHosts, ["blocked.example"]);
+});
+
+test("disabling screening preserves strict tool approvals and scoped posture", async () => {
+  const config = createMemoryConfigStore("default-org");
+  const res = createResolutionService("default-org", config, createAclStore(), false);
+  const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
+  await config.setSecurityPosture(scopeId("org", "default-org"), "auto");
+  assert.deepEqual((await res.resolve(conv, actor)).securityPolicy, {
+    inboundScreening: "off",
+    toolApprovals: "none",
+    denyPrivateNetworks: true,
+  });
+  await config.setSecurityPosture(scopeId("personal", "U1"), "strict");
+  assert.deepEqual((await res.resolve(conv, actor)).securityPolicy, {
+    inboundScreening: "off",
+    toolApprovals: "all",
+    denyPrivateNetworks: false,
+  });
+  assert.equal(await config.getSecurityPostureDurable(scopeId("personal", "U1")), "strict");
 });

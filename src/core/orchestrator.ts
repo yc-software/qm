@@ -1521,7 +1521,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             egress: egressClaimAllowingControlPlane(
               resolution.egress,
               deps.apiBaseUrl ?? "",
-              securityPolicy.inboundScreening === "external",
+              securityPolicy.denyPrivateNetworks,
             ),
             exp: Date.now() + CAPABILITY_TTL_MS,
           },

@@ -1011,7 +1011,7 @@ function runFlyDeploy(args: string[], cwd: string): Promise<void> {
 }
 
 function unsetDisabledSecurityScreenToken(config: QmConfig, appPrefix: string): void {
-  if (config.securityScreen) return;
+  if (config.securityScreen?.backend === "proxy") return;
   const app = `${appPrefix}-core`;
   if (!secretNames(app)?.has("SECURITY_SCREEN_PROXY_TOKEN")) return;
   fly(["secrets", "unset", "--stage", "-a", app, "SECURITY_SCREEN_PROXY_TOKEN"]);

@@ -11,6 +11,7 @@ import {
   loadConfigInDir,
   mockHarnessWarning,
   sandboxCoreEnv,
+  securityScreenEnv,
   updateConfigImageOverrides,
 } from "../src/config.ts";
 
@@ -1265,4 +1266,21 @@ test("blank model provider overrides preserve the declared provider in runtime a
       assert.equal(computedSecrets(config).find((secret) => secret.name === "OPENROUTER_API_KEY")?.required, true);
     },
   );
+});
+
+test("screening defaults off and model screening requires an explicit backend", () => {
+  assert.deepEqual(securityScreenEnv({}), { SECURITY_SCREEN_BACKEND: "off" });
+  for (const backend of ["off", "model"] as const) {
+    withConfig({ securityScreen: { backend } }, ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.deepEqual(securityScreenEnv(config), { SECURITY_SCREEN_BACKEND: backend });
+    });
+    withConfig({ securityScreen: { backend, rollout: "enforce" } }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /require backend proxy/),
+    );
+    withConfig(
+      { securityScreen: { backend }, secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "TOKEN" } } },
+      ({ path }) => assert.throws(() => loadConfigAt(path), /requires securityScreen/),
+    );
+  }
 });

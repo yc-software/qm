@@ -8,13 +8,14 @@ type ToolApprovalBehavior = "none" | "all";
 
 export interface ResolvedSecurityPolicy {
   readonly inboundScreening: InboundScreening;
+  readonly denyPrivateNetworks: boolean;
   readonly toolApprovals: ToolApprovalBehavior;
 }
 
 const POSTURE_POLICIES: Record<SecurityPosture, ResolvedSecurityPolicy> = {
-  dangerous: { inboundScreening: "off", toolApprovals: "none" },
-  auto: { inboundScreening: "external", toolApprovals: "none" },
-  strict: { inboundScreening: "off", toolApprovals: "all" },
+  dangerous: { inboundScreening: "off", toolApprovals: "none", denyPrivateNetworks: false },
+  auto: { inboundScreening: "external", toolApprovals: "none", denyPrivateNetworks: true },
+  strict: { inboundScreening: "off", toolApprovals: "all", denyPrivateNetworks: false },
 };
 
 export function resolveSecurityPolicy(posture: SecurityPosture): ResolvedSecurityPolicy {

@@ -8,6 +8,7 @@ export const TEST_CAPABILITY_SECRET = "test-capability-key-distinct-from-ingress
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({}),
+    securityScreenBackend: "model",
     port: 0,
     pluginSkillDirs: [],
     memoryCaptureQuietMs: 0,

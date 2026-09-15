@@ -22,7 +22,12 @@ export function conversationScope(
   return scopeId("channel", ref);
 }
 
-export function createResolutionService(orgId: string, config: ScopedConfigStore, acl: AclStore): ResolutionService {
+export function createResolutionService(
+  orgId: string,
+  config: ScopedConfigStore,
+  acl: AclStore,
+  screeningEnabled = true,
+): ResolutionService {
   const orgScope = scopeId("org", orgId);
 
   function scopeFor(conversation: Conversation, actor: Principal): ScopeId {
@@ -77,7 +82,8 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
-      const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope));
+      let securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope));
+      if (!screeningEnabled) securityPolicy = { ...securityPolicy, inboundScreening: "off" };
       const sharingPosture = await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
       const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
 

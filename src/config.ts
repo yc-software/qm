@@ -162,7 +162,7 @@ export interface Config {
   approvalSummaryTimeoutMs: number;
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
-  securityScreenBackend: "model" | "proxy";
+  securityScreenBackend: "off" | "model" | "proxy";
   securityScreenProxy?: {
     provider: string;
     endpoint: string;
@@ -915,11 +915,11 @@ function sharingPostureEnvStrict(value: string | undefined): SharingPosture {
 }
 
 function securityScreenBackendEnvStrict(value: string | undefined): Config["securityScreenBackend"] {
-  if (value === undefined || value.trim() === "") return "model";
+  if (value === undefined || value.trim() === "") return "off";
   const backend = value.trim().toLowerCase();
-  if (backend === "model" || backend === "proxy") return backend;
+  if (backend === "off" || backend === "model" || backend === "proxy") return backend;
   throw new Error(
-    `SECURITY_SCREEN_BACKEND=${JSON.stringify(value)} is not recognized — use model or proxy, or unset it.`,
+    `SECURITY_SCREEN_BACKEND=${JSON.stringify(value)} is not recognized — use off, model, or proxy, or unset it.`,
   );
 }
 
@@ -1100,7 +1100,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "SECURITY_SCREEN_BACKEND=proxy requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, SECURITY_SCREEN_PROXY_TOKEN, and SECURITY_SCREEN_PROXY_ROLLOUT",
     );
   }
-  if (securityScreenBackend === "model" && hasProxyConfig) {
+  if (securityScreenBackend !== "proxy" && hasProxyConfig) {
     throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_BACKEND=proxy");
   }
   if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {

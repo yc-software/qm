@@ -706,7 +706,12 @@ export function buildApp(
     config.databaseUrl && (config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined)
       ? createPostgresBudgetTracker(config.databaseUrl, budgetOpts)
       : createBudgetTracker(budgetOpts);
-  const resolution = createResolutionService(config.orgId, configStore, acl);
+  const resolution = createResolutionService(
+    config.orgId,
+    configStore,
+    acl,
+    config.securityScreenBackend !== "off" || Boolean(overrides.securityScreener),
+  );
 
   const workspace = createLocalWorkspaceStore(config.dataDir);
   const blobTransfer: BlobTransferStore =
@@ -1268,6 +1273,14 @@ export function buildApp(
       hydrateModelCatalog,
     );
   });
+
+  if (
+    config.securityScreenBackend !== "model" &&
+    !config.securityScreenProxy?.shadow &&
+    !overrides.securityScreener?.shadow
+  ) {
+    delete harness.models.screenSecurity;
+  }
 
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;

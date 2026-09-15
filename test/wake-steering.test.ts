@@ -785,3 +785,15 @@ test("steer path: a message whose run goes terminal mid-send is replayed and the
     "the raced signal was consumed by the inline drain",
   );
 });
+
+test("screening off delivers ambient updates to the existing run without a classifier", async () => {
+  const built = buildApp(testConfig({ securityScreenBackend: "off" }));
+  const first = await built.app.turn(mention("start work", "C-off", "100.1"));
+  const follow = await built.app.turn(overheard("build finished", "C-off", "100.1"));
+  assert.equal(follow.runId, first.runId);
+  const signals = await built.signals.takePending(first.runId!);
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]!.kind, "steer");
+  assert.match(signals[0]!.text ?? "", /build finished/);
+  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+});

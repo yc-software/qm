@@ -5242,7 +5242,7 @@
                   <div class="body">
                     <select id="security-posture" data-choice-state hidden>
                       <option value="dangerous">Dangerous — no content scans; nothing pauses between tool calls</option>
-                      <option value="auto">Auto — screen external content with proxy or model</option>
+                      <option value="auto">Auto — use the deployment’s configured screener</option>
                       <option value="strict">Strict — approve tool actions</option>
                     </select>
                     <div class="choice-stack">
@@ -5255,8 +5255,8 @@
                         /><span
                           ><strong>Auto</strong
                           ><small
-                            >Default. External content (web pages, tool output, files) is screened for prompt injection
-                            before the agent acts on it.</small
+                            >Default. Blocks private-network access. Screens external content when the deployment
+                            configures a screener; model screening is off by default.</small
                           ></span
                         ></label
                       >

@@ -102,9 +102,9 @@ can only tighten:
 
 - **Strict** — every harness tool call pauses for human approval, except the two
   no-effect turn enders.
-- **Auto** (default) — a classifier screens provenance-labelled external data and tool
-  results before they reach the model; a deployment can point that at its own screening
-  proxy.
+- **Auto** (default) — blocks private-network access and uses a content screener when
+  the deployment configures one. Model screening is off by default; deployments can
+  use an external proxy or explicitly opt into the built-in model classifier.
 - **Dangerous** — no content screening, no pauses between tool calls.
 
 The predeclared command policy — approval rules and hard denials for things like
