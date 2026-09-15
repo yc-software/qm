@@ -606,6 +606,26 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     networking: { cloudMapNamespace: "acme.internal" },
     services: { core: service },
   };
+  for (const scopeBackend of ["modal", "aws"]) {
+    withConfig(
+      {
+        target: "aws",
+        aws,
+        env: {
+          core: {
+            DEPLOY_PROVIDER: "fly",
+            SANDBOX_BACKEND: "sprites",
+            AWS_DEPLOY_IMAGE: "",
+            SANDBOX_SCOPE_BACKENDS: JSON.stringify({ personal: scopeBackend }),
+          },
+        },
+      },
+      ({ path }) => {
+        if (scopeBackend === "aws") assert.throws(() => loadConfigAt(path), /AWS_DEPLOY_IMAGE/);
+        else assert.equal(loadConfigAt(path).config.env.core?.DEPLOY_PROVIDER, "fly");
+      },
+    );
+  }
   withConfig({ target: "aws", aws }, ({ path }) =>
     assert.equal(loadConfigAt(path).config.aws?.imageLabel, "release-1"),
   );

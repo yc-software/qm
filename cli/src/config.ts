@@ -937,6 +937,18 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
   }
 }
 
+export function requiresAwsMicrovmImage(config: QmConfig): boolean {
+  if (config.target !== "aws") return false;
+  const core = config.env.core;
+  if ((core?.DEPLOY_PROVIDER?.trim() || "aws") === "aws") return true;
+  if ((core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws") return true;
+  const scopes: unknown = JSON.parse(core?.SANDBOX_SCOPE_BACKENDS || "{}");
+  if (!scopes || typeof scopes !== "object" || Array.isArray(scopes)) {
+    throw new CliError("SANDBOX_SCOPE_BACKENDS must be an object");
+  }
+  return Object.values(scopes).some((value) => typeof value === "string" && value.trim() === "aws");
+}
+
 function validateAwsFrontDoor(config: QmConfig, path: string): void {
   const hasPortal = config.services.includes("portal");
   const hasWebUi = config.services.includes("web-ui");
@@ -949,7 +961,10 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(`${path}: AWS apiUrl must use the same protocol as publicUrl`);
   }
   const deployImage = config.env.core?.AWS_DEPLOY_IMAGE?.trim();
-  if (isMissingOrPlaceholder(deployImage) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(deployImage!)) {
+  if (
+    (requiresAwsMicrovmImage(config) || Boolean(deployImage)) &&
+    (isMissingOrPlaceholder(deployImage) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(deployImage!))
+  ) {
     throw new CliError(
       `${path}: AWS requires env.core.AWS_DEPLOY_IMAGE to name a non-placeholder, stack-owned Lambda MicroVM image`,
     );

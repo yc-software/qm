@@ -489,6 +489,17 @@ test("GitHub environments remain compatible with AWS scaffolds created before th
   );
 });
 
+test("AWS Terraform renders valid reserved coordinates without an unused MicroVM image", () => {
+  const selected: QmConfig = {
+    ...config,
+    env: { core: { DEPLOY_PROVIDER: "fly", SANDBOX_BACKEND: "sprites" } },
+  };
+  const rendered = terraformVars(selected, "", declared);
+  assert.match(rendered, /deploy_microvm_image\s*= "acme"/);
+  assert.doesNotMatch(rendered, /undefined/);
+  assert.deepEqual(terraformVarsDrift(selected, rendered, declared), []);
+});
+
 test("terraform derives the transfer lifecycle prefix from the same core S3 prefix as runtime", () => {
   const unprefixed = terraformVars(config, "", declared);
   assert.match(unprefixed, /transfer_lifecycle_prefix\s*= "transfer\/"/);

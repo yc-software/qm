@@ -572,6 +572,24 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.equal(core.PORT, "8080");
 });
 
+test("AWS hosting preserves an explicit publishing provider independently of sandbox selection", () => {
+  for (const sandbox of [config.sandbox, undefined]) {
+    for (const provider of ["fly", "porter"]) {
+      const selected: QmConfig = {
+        ...config,
+        sandbox,
+        env: { ...config.env, core: { ...config.env.core, DEPLOY_PROVIDER: provider } },
+      };
+      const core = serviceEnvironment(selected, "core");
+      assert.equal(core.DEPLOY_PROVIDER, provider);
+      assert.equal(core.SANDBOX_BACKEND, sandbox?.backend ?? "aws");
+      assert.equal(core.SESSION_STORE, "postgres");
+      assert.equal(core.SNAPSHOT_STORE, "s3");
+      assert.equal(serviceEnvironment(selected, "portal").DEPLOY_PROVIDER, undefined);
+    }
+  }
+});
+
 test("a configured bot identity lands in the AWS core task env and only there", () => {
   const branded = { ...config, botName: "straylight", orgName: "Straylight Industries" };
   const core = serviceEnvironment(branded, "core");

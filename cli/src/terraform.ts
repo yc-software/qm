@@ -212,7 +212,7 @@ function derivedValues(
       ...(declared.includes("github_environment") ? { github_environment: aws.deployEnvironment ?? "" } : {}),
       object_store_bucket: awsObjectStoreBucket(config),
       transfer_lifecycle_prefix: `${config.env.core?.S3_PREFIX ?? ""}transfer/`,
-      deploy_microvm_image: config.env.core!.AWS_DEPLOY_IMAGE!,
+      deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
       deploy_microvm_execution_role_arn:
         config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
     },
