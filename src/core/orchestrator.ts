@@ -67,7 +67,7 @@ import {
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
-import { estimateCostUsd } from "../ratelimit/budget.ts";
+import { budgetInvocationId, createModelUsageMeter } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -288,14 +288,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   async function approvalSummary(
     scopeId: ScopeId,
+    principalId: string,
     command: string,
     reason: string,
     purpose?: string,
   ): Promise<string | undefined> {
     if (!deps.harness.models.summarizeApproval) return undefined;
     try {
+      const usageMeter = createModelUsageMeter(deps.budget, principalId, budgetInvocationId(`approval:${scopeId}`));
       const summary = await Promise.race([
-        deps.harness.models.summarizeApproval(command, reason, purpose),
+        deps.harness.models.summarizeApproval(command, reason, purpose, usageMeter),
         sleep(deps.approvalSummaryTimeoutMs ?? DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS).then(() => undefined),
       ]);
       return summary?.trim() || undefined;
@@ -328,7 +330,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     if (!transcript.trim()) return undefined;
     let title: string | undefined;
     try {
-      title = await deps.harness.models.generateTitle?.(transcript);
+      title = await deps.harness.models.generateTitle?.(
+        transcript,
+        createModelUsageMeter(deps.budget, principalId ?? "@system:title", budgetInvocationId(`title:${sessionId}`)),
+      );
     } catch (e) {
       deps.errors?.record({
         category: "session_title",
@@ -1165,6 +1170,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.sessions.addParticipant(session.id, actor.id);
 
       const isRetry = (input.attempt ?? 1) > 1;
+      const usageAttemptId = input.runId
+        ? `run:${input.runId}:attempt:${input.attempt ?? 1}`
+        : budgetInvocationId(`session:${session.id}:turn`);
+      const turnUsageMeter = createModelUsageMeter(deps.budget, actor.id, usageAttemptId);
       const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
         if (!input.runId || !deps.runs) return null;
         const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
@@ -1989,9 +1998,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { reactionGuidance: input.gatewayContext.reactionGuidance }
               : {}),
             history: detectHistory,
+            ...(turnUsageMeter ? { usageMeter: turnUsageMeter } : {}),
             recordModelCall: (rec) => {
               deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-              void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
             },
           });
           detectMs = Date.now() - detectStart;
@@ -3134,9 +3143,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onGapWork: (cb) => {
               harnessOnGapWork = cb;
             },
+            ...(turnUsageMeter ? { usageMeter: turnUsageMeter } : {}),
             recordModelCall: (rec) => {
               deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-              void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
             },
             recordLlmRequest: async (rec, signal) => {
               try {
@@ -3532,7 +3541,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const blocks = approvalBlocksInput(pa.kind, outcome);
             const command = pa.command;
             const requestId = commandApprovalId(session.id, command);
-            const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
+            const summary = pa.summary ?? (await approvalSummary(scopeId, actor.id, command, pa.reason, pa.purpose));
             prepared.push({
               requestId,
               record: {
@@ -3627,7 +3636,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
               ? {}
               : { grantModes: resolution.approvalGrantModes };
-          const summary = await approvalSummary(scopeId, err.command, err.approvalReason);
+          const summary = await approvalSummary(scopeId, actor.id, err.command, err.approvalReason);
           try {
             await withManagedRosterVersion(async () => {
               await pending.put(requestId, {

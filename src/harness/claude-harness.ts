@@ -28,6 +28,8 @@ import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.t
 import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
+import { countTokens } from "../util/tokens.ts";
+import { priceModelUsage } from "../ratelimit/budget.ts";
 import { compactTranscript, deterministicCompactSummary } from "./context-compaction.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import {
@@ -362,10 +364,39 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const taskStates = new Map<string, { callId: string; status: TaskStatus; resultEmitted: boolean }>();
     let backgroundTaskLevelSeen = false;
     let activeBackgroundTasks = new Set<string>();
-    const callUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>();
+    type ClaudeCallUsage = { model: string; input: number; output: number; cacheRead: number; cacheWrite: number };
+    const callUsage = new Map<string, ClaudeCallUsage>();
+    let resultCoveredCallUsage = new Map<string, ClaudeCallUsage>();
+    const cumulativeCallUsage = () =>
+      [...callUsage.values()].reduce(
+        (total, item) => ({
+          input: total.input + item.input,
+          output: total.output + item.output,
+          cacheRead: total.cacheRead + item.cacheRead,
+          cacheWrite: total.cacheWrite + item.cacheWrite,
+        }),
+        { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      );
+    const callCost = (item: ClaudeCallUsage) => {
+      const priced = priceModelUsage(item.model, item);
+      if (!priced.priced) throw new Error(`budget could not price Claude SDK message: ${priced.reason}`);
+      return priced.costUsd;
+    };
+    const uncoveredCallCost = () => {
+      let total = 0;
+      for (const [id, item] of callUsage) {
+        const covered = resultCoveredCallUsage.get(id);
+        if (covered && covered.model !== item.model)
+          throw new Error(`Claude SDK message ${id} changed models after result accounting`);
+        total += Math.max(0, callCost(item) - (covered ? callCost(covered) : 0));
+      }
+      return total;
+    };
     let stepCallIds = new Set<string>();
     let recordedSteps = 0;
     let lastTotalCostUsd = 0;
+    let lastResultUsage: { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined;
+    let budgetOperationId: string | undefined;
     let settled = false;
     const steerPrompts: string[] = [];
     let streamedText = "";
@@ -388,7 +419,17 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           : {}),
       });
     };
-    const authEnv = opts.authEnv ? await opts.authEnv() : undefined;
+    let authEnv: NodeJS.ProcessEnv | undefined;
+    try {
+      authEnv = opts.authEnv ? await opts.authEnv() : undefined;
+      budgetOperationId = await turn.usageMeter?.reserve(
+        model,
+        countTokens(JSON.stringify({ system: turn.systemPrompt, history: turn.history, prompt: initial })),
+      );
+    } catch (error) {
+      rmSync(jail, { recursive: true, force: true });
+      throw error;
+    }
     const sdkQuery = query({
       prompt: queue,
       options: {
@@ -523,7 +564,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       stepCallIds = new Set();
       const totalCostUsd = message.total_cost_usd ?? 0;
       const costUsd = Math.max(0, totalCostUsd - lastTotalCostUsd);
-      if (sawCalls) lastTotalCostUsd = Math.max(lastTotalCostUsd, totalCostUsd);
+      lastTotalCostUsd = Math.max(lastTotalCostUsd, totalCostUsd);
       const step = recordedSteps++;
       try {
         await turn.recordLlmRequest?.({
@@ -560,16 +601,20 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (message.type === "assistant") {
             const usage = message.message.usage;
             const seen = {
+              model: message.message.model || model,
               input: usage?.input_tokens ?? 0,
               output: usage?.output_tokens ?? 0,
               cacheRead: usage?.cache_read_input_tokens ?? 0,
               cacheWrite: usage?.cache_creation_input_tokens ?? 0,
             };
             const known = callUsage.get(message.message.id);
+            if (known && known.model !== seen.model)
+              throw new Error(`Claude SDK message ${message.message.id} changed models during usage reporting`);
             callUsage.set(
               message.message.id,
               known
                 ? {
+                    model: known.model,
                     input: Math.max(known.input, seen.input),
                     output: Math.max(known.output, seen.output),
                     cacheRead: Math.max(known.cacheRead, seen.cacheRead),
@@ -578,6 +623,14 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                 : seen,
             );
             stepCallIds.add(message.message.id);
+            if (budgetOperationId && turn.usageMeter) {
+              await turn.usageMeter.checkpoint(
+                budgetOperationId,
+                model,
+                cumulativeCallUsage(),
+                lastTotalCostUsd + uncoveredCallCost(),
+              );
+            }
             if (!known)
               turn.recordModelCall({
                 model,
@@ -663,7 +716,27 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           }
           if (message.type !== "result") continue;
           result = message;
+          lastResultUsage = {
+            input: message.usage.input_tokens,
+            output: message.usage.output_tokens,
+            cacheRead: message.usage.cache_read_input_tokens,
+            cacheWrite: message.usage.cache_creation_input_tokens,
+          };
           await recordStep(message);
+          resultCoveredCallUsage = new Map([...callUsage].map(([id, item]) => [id, { ...item }]));
+          if (budgetOperationId && turn.usageMeter) {
+            await turn.usageMeter.checkpoint(
+              budgetOperationId,
+              model,
+              {
+                input: message.usage.input_tokens,
+                output: message.usage.output_tokens,
+                cacheRead: message.usage.cache_read_input_tokens,
+                cacheWrite: message.usage.cache_creation_input_tokens,
+              },
+              lastTotalCostUsd,
+            );
+          }
           await flushThinking();
           const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
@@ -783,32 +856,41 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     } finally {
       settled = true;
       if (timer) clearTimeout(timer);
-      if (recordedSteps === 0) {
-        recordedSteps++;
-        try {
-          await turn.recordLlmRequest?.({
-            turnSeq: userEntry.seq,
-            step: 0,
-            model,
-            promptEnvelope: recordedEnvelope,
-            truncated: false,
-            transport: { modelId: model },
-          });
-        } catch (error) {
-          swallow("claude: llm request record", error);
+      try {
+        if (budgetOperationId && turn.usageMeter && (lastResultUsage || callUsage.size > 0)) {
+          const cumulative = callUsage.size
+            ? cumulativeCallUsage()
+            : (lastResultUsage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+          await turn.usageMeter.settle(budgetOperationId, model, cumulative, lastTotalCostUsd + uncoveredCallCost());
         }
-      }
-      queue.close();
-      if (!signalsStopped) await stopSignals?.();
-      turn.cancel?.removeEventListener("abort", onCancel);
-      for (const [taskId, task] of taskStates) {
-        if (task.status === "pending" || task.status === "in_progress") {
-          await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id);
+      } finally {
+        if (recordedSteps === 0) {
+          recordedSteps++;
+          try {
+            await turn.recordLlmRequest?.({
+              turnSeq: userEntry.seq,
+              step: 0,
+              model,
+              promptEnvelope: recordedEnvelope,
+              truncated: false,
+              transport: { modelId: model },
+            });
+          } catch (error) {
+            swallow("claude: llm request record", error);
+          }
         }
+        queue.close();
+        if (!signalsStopped) await stopSignals?.();
+        turn.cancel?.removeEventListener("abort", onCancel);
+        for (const [taskId, task] of taskStates) {
+          if (task.status === "pending" || task.status === "in_progress") {
+            await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id);
+          }
+        }
+        active.delete(sdkQuery);
+        sdkQuery.close();
+        rmSync(jail, { recursive: true, force: true });
       }
-      active.delete(sdkQuery);
-      sdkQuery.close();
-      rmSync(jail, { recursive: true, force: true });
     }
   };
 
@@ -835,7 +917,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             buildDetectionPrompt(detect.reactionGuidance),
             renderDetectPrompt(detect),
             undefined,
-            { recordModelCall: detect.recordModelCall },
+            {
+              recordModelCall: detect.recordModelCall,
+              ...(detect.usageMeter ? { usageMeter: detect.usageMeter } : {}),
+            },
             judgeModelId,
           );
           return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));
@@ -848,6 +933,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         try {
           const out = await single(CONTEXT_COMPACTION_PROMPT, compactTranscript(input.history), undefined, {
             recordModelCall: input.recordModelCall,
+            ...(input.usageMeter ? { usageMeter: input.usageMeter } : {}),
           });
           return out ?? deterministicCompactSummary(input.history);
         } catch (error) {

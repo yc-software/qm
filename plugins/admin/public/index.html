@@ -6412,11 +6412,16 @@
             placeholder="Write-only; blank on edit keeps the stored key"
         /></label>
         <label class="custom-provider-models"
-          >Models <span class="label-detail">one per line: id | name | context | max tokens</span
+          >Models
+          <span class="label-detail"
+            >One per line: id | name | context | max tokens | input $/M | output $/M | cache read $/M | cache write $/M.
+            Prices are USD per million tokens; cache read/write price cached-token reuse on providers that support
+            prompt caching. Leave a price blank when unknown — the model stays unpriced and is refused under an enabled
+            dollar budget. Enter 0 only for a genuinely free rate.</span
           ><textarea
             id="custom-provider-models"
             rows="4"
-            placeholder="deepseek-chat | DeepSeek V3.2 | 128000 | 8192"
+            placeholder="deepseek-chat | DeepSeek V3.2 | 128000 | 8192 | 0.28 | 1.42 | 0.028 | 0"
           ></textarea>
         </label>
         <label class="inline custom-provider-validation"
@@ -9742,19 +9747,45 @@
       };
 
       let customProvidersLoaded = [];
+      const CUSTOM_MODEL_NUMERIC_FIELDS = ["contextWindow", "maxTokens", "input", "output", "cacheRead", "cacheWrite"];
+      function parseCustomModelNumber(modelId, field, raw) {
+        if (raw === undefined || raw === "") return undefined;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) {
+          throw new Error(`Model "${modelId}": ${field} must be a non-negative number, got "${raw}".`);
+        }
+        return n;
+      }
       function parseCustomModels(text) {
         return text
           .split("\n")
           .map((line) => line.trim())
           .filter(Boolean)
           .map((line) => {
-            const [id, name, contextWindow, maxTokens] = line.split("|").map((part) => part.trim());
+            const [id, name, ...rest] = line.split("|").map((part) => part.trim());
+            if (!id) throw new Error("Every model line needs an id.");
             const model = { id };
             if (name) model.name = name;
-            if (contextWindow) model.contextWindow = Number(contextWindow);
-            if (maxTokens) model.maxTokens = Number(maxTokens);
+            CUSTOM_MODEL_NUMERIC_FIELDS.forEach((field, index) => {
+              const value = parseCustomModelNumber(id, field, rest[index]);
+              if (value !== undefined) model[field] = value;
+            });
             return model;
           });
+      }
+      function formatCustomModelLine(model) {
+        const fields = [
+          model.id,
+          model.name,
+          model.contextWindow,
+          model.maxTokens,
+          model.input,
+          model.output,
+          model.cacheRead,
+          model.cacheWrite,
+        ].map((value) => (value === undefined || value === null ? "" : String(value)));
+        while (fields.length > 1 && fields[fields.length - 1] === "") fields.pop();
+        return fields.join(" | ");
       }
       function closeCustomProviderEditor() {
         const dialog = $("custom-provider-dialog");
@@ -9768,13 +9799,7 @@
         $("custom-provider-protocol").value = provider?.protocol || "openai";
         $("custom-provider-url").value = provider?.baseUrl || "";
         $("custom-provider-key").value = "";
-        $("custom-provider-models").value = provider
-          ? provider.models
-              .map((model) =>
-                [model.id, model.name, model.contextWindow, model.maxTokens].filter((part) => part != null).join(" | "),
-              )
-              .join("\n")
-          : "";
+        $("custom-provider-models").value = provider ? provider.models.map(formatCustomModelLine).join("\n") : "";
         $("custom-provider-validate").checked = true;
         setStatus("st-custom-provider", "", "");
         $("custom-provider-dialog").showModal();
@@ -9876,7 +9901,13 @@
         const id = $("custom-provider-id").value.trim();
         const name = $("custom-provider-name").value.trim();
         const baseUrl = $("custom-provider-url").value.trim();
-        const models = parseCustomModels($("custom-provider-models").value);
+        let models;
+        try {
+          models = parseCustomModels($("custom-provider-models").value);
+        } catch (error) {
+          setStatus("st-custom-provider", error.message, "err");
+          return;
+        }
         if (!id || !name || !baseUrl || models.length === 0) {
           setStatus("st-custom-provider", "Provider id, name, base URL, and at least one model are required.", "err");
           return;

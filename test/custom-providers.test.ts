@@ -11,6 +11,7 @@ import {
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
 import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import { priceModelUsage } from "../src/ratelimit/budget.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
 
@@ -139,6 +140,54 @@ test("store validates specs on upsert", async () => {
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
+});
+
+test("legacy hydrated raw prices must be finite nonnegative numbers in all four fields", async () => {
+  const invalidRates: Array<[string, Record<string, unknown>]> = [
+    ["null-input", { input: null }],
+    ["string-output", { output: "1" }],
+    ["nan-cache-read", { cacheRead: Number.NaN }],
+    ["infinite-cache-write", { cacheWrite: Number.POSITIVE_INFINITY }],
+    ["negative-cache-read", { cacheRead: -1 }],
+  ];
+  for (const [id, invalid] of invalidRates) {
+    const backing = createMemoryMap<StoredCustomProvider>();
+    await backing.put(id, {
+      id,
+      name: id,
+      protocol: "openai",
+      baseUrl: "https://legacy.example.com/v1",
+      models: [{ id: `${id}/model`, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, ...invalid }],
+      updatedAt: 1,
+      updatedBy: "legacy",
+    } as unknown as StoredCustomProvider);
+    const store = createCustomProviderStore({ backing, keyMaterial: "k" });
+    setCustomProviders(await store.enabled());
+    assert.equal(
+      priceModelUsage(`${id}/model`, { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }).priced,
+      false,
+      id,
+    );
+    setCustomProviders([]);
+  }
+
+  const backing = createMemoryMap<StoredCustomProvider>();
+  await backing.put("legacy-zero", {
+    id: "legacy-zero",
+    name: "Legacy Zero",
+    protocol: "openai",
+    baseUrl: "https://legacy-zero.example.com/v1",
+    models: [{ id: "legacy-zero/model", input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+    updatedAt: 1,
+    updatedBy: "legacy",
+  });
+  const store = createCustomProviderStore({ backing, keyMaterial: "k" });
+  setCustomProviders(await store.enabled());
+  assert.deepEqual(priceModelUsage("legacy-zero/model", { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }), {
+    priced: true,
+    costUsd: 0,
+    basis: "api_equivalent",
+  });
 });
 
 test("registered models surface in the catalog and vanish on unregister", () => {

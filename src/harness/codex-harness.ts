@@ -135,6 +135,7 @@ type ActiveTurn = {
   usageByThread: Map<string, LlmCallUsage>;
   firstOutputAt: number | null;
   fallbackInputTokens: number;
+  budgetOperationId?: string;
   tapeError?: Error;
   interrupt?: () => Promise<void>;
   stopped: boolean;
@@ -185,10 +186,12 @@ export function codexUsageTotals(params: unknown): LlmCallUsage | null {
   if (!tokenUsage || typeof tokenUsage !== "object") return null;
   const total = (tokenUsage as Record<string, unknown>).total;
   if (!total || typeof total !== "object") return null;
-  const input = usageNumber(total, "inputTokens", "input_tokens");
+  const totalInput = usageNumber(total, "inputTokens", "input_tokens");
   const output = usageNumber(total, "outputTokens", "output_tokens");
   const cacheRead = usageNumber(total, "cachedInputTokens", "cached_input_tokens");
-  return { input, output, cacheRead, cacheWrite: 0, totalTokens: input + output, costUsd: 0 };
+  if (cacheRead > totalInput) return null;
+  const input = totalInput - cacheRead;
+  return { input, output, cacheRead, cacheWrite: 0, totalTokens: totalInput + output, costUsd: 0 };
 }
 
 function sumUsage(byThread: ReadonlyMap<string, LlmCallUsage>): LlmCallUsage | null {
@@ -485,7 +488,23 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         if (!state || state.server !== server) return;
         if (method === "thread/tokenUsage/updated") {
           const totals = codexUsageTotals(p);
-          if (totals) state.usageByThread.set(threadId, totals);
+          if (totals) {
+            state.usageByThread.set(threadId, totals);
+            const known = sumUsage(state.usageByThread);
+            if (known && state.budgetOperationId && state.turn.usageMeter && !state.tapeError) {
+              try {
+                await state.turn.usageMeter.checkpoint(state.budgetOperationId, state.model, {
+                  input: known.input,
+                  output: known.output,
+                  cacheRead: known.cacheRead,
+                  cacheWrite: known.cacheWrite,
+                });
+              } catch (error) {
+                state.tapeError = asError(error);
+                void state.interrupt?.();
+              }
+            }
+          }
           const usage = codexTokenUsageUpdate(p, state.usageInputTotals.get(threadId));
           if (!usage) return;
           state.usageInputTotals.set(threadId, usage.totalInputTokens);
@@ -1043,7 +1062,17 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       },
     };
     const startedAt = Date.now();
+    let budgetOperationId: string | undefined;
     const recordRequest = async (): Promise<void> => {
+      const usage = sumUsage(state.usageByThread);
+      if (budgetOperationId && usage && turn.usageMeter) {
+        await turn.usageMeter.settle(budgetOperationId, selectedModel, {
+          input: usage.input,
+          output: usage.output,
+          cacheRead: usage.cacheRead,
+          cacheWrite: usage.cacheWrite,
+        });
+      }
       if (!turn.recordLlmRequest) return;
       const recordAbort = new AbortController();
       let recordTimer: NodeJS.Timeout | undefined;
@@ -1059,7 +1088,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
               transport: { modelId: selectedModel },
               ttftMs: state.firstOutputAt ? state.firstOutputAt - startedAt : null,
               durationMs: Date.now() - startedAt,
-              usage: sumUsage(state.usageByThread),
+              usage,
             },
             recordAbort.signal,
           ),
@@ -1130,6 +1159,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     const cleanupErrors: unknown[] = [];
     let turnResult: HarnessTurnResult | undefined;
     try {
+      budgetOperationId = await turn.usageMeter?.reserve(selectedModel, state.fallbackInputTokens);
+      state.budgetOperationId = budgetOperationId;
       const turnStartSignals = [closeAbort.signal, turnStartAbort.signal];
       if (turn.cancel) turnStartSignals.push(turn.cancel);
       const turnStartTimeoutMs = deadline ? Math.max(1, deadline - Date.now()) : CODEX_START_TIMEOUT_MS;

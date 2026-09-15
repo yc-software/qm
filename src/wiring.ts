@@ -103,7 +103,7 @@ import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
-import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
+import { budgetInvocationId, createBudgetTracker, createModelUsageMeter } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
@@ -1441,8 +1441,19 @@ export function buildApp(
     seed: bootAdminGrantSeed(config.adminGrants, config.orgId, !!config.databaseUrl),
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
+  const memoryHarness = harness.models.oneShot
+    ? {
+        ...harness.models,
+        oneShot: (systemPrompt: string, prompt: string) =>
+          harness.models.oneShot!(
+            systemPrompt,
+            prompt,
+            createModelUsageMeter(budget, "@system:memory", budgetInvocationId("memory")),
+          ),
+      }
+    : harness.models;
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
-    harness: harness.models,
+    harness: memoryHarness,
     memory: baseMemory,
     workspace,
     ...(config.memoryConsolidateAfter !== undefined ? { consolidateAfter: config.memoryConsolidateAfter } : {}),
@@ -1775,9 +1786,9 @@ export function buildApp(
           modelId,
           systemPrompt,
           signal,
+          usageMeter: createModelUsageMeter(budget, actorId, budgetInvocationId(`security-probe:${scopeLabel}`)),
           recordModelCall: (rec) => {
             modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
-            void budget?.record(actorId, estimateCostUsd(rec.inputTokens));
           },
         })
     : undefined;
@@ -1843,7 +1854,16 @@ export function buildApp(
     reaperPoke: pokeReaper,
     surfaceCache,
     channelPolicy,
-    ...(harness.models.judge ? { ambientJudge: (s: string, pr: string) => harness.models.judge!(s, pr) } : {}),
+    ...(harness.models.judge
+      ? {
+          ambientJudge: (s: string, pr: string) =>
+            harness.models.judge!(
+              s,
+              pr,
+              createModelUsageMeter(budget, "@system:ambient", budgetInvocationId("ambient-judge")),
+            ),
+        }
+      : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
@@ -1879,7 +1899,16 @@ export function buildApp(
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
+    ...(harness.models.pickAckEmoji
+      ? {
+          pickAckEmoji: (t, c) =>
+            harness.models.pickAckEmoji!(
+              t,
+              c,
+              createModelUsageMeter(budget, "@system:ack", budgetInvocationId("ack-emoji")),
+            ),
+        }
+      : {}),
   });
   runs.onTerminal((run) => {
     void runs

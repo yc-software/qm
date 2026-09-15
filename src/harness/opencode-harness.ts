@@ -87,7 +87,14 @@ export function openCodeHarnessConfigOptions(config: Config): OpenCodeHarnessOpt
   };
 }
 
-type LlmCapture = { sessionId: string; step: number; model: string; request: unknown; at: number };
+type LlmCapture = {
+  sessionId: string;
+  step: number;
+  model: string;
+  request: unknown;
+  at: number;
+  budgetOperationId?: string;
+};
 
 type ActiveTurn = {
   turn: HarnessTurnInput;
@@ -385,6 +392,17 @@ function throwAssistantFailure(info: AssistantMessageInfo | undefined): void {
   throw failure.retryable ? new Error(failure.message) : new NonRetryableTurnError(failure.message);
 }
 
+function meteredUsageFromInfo(info: AssistantMessageInfo | undefined) {
+  const tokens = info?.tokens;
+  if (!tokens) return null;
+  return {
+    input: tokens.input ?? 0,
+    output: (tokens.output ?? 0) + (tokens.reasoning ?? 0),
+    cacheRead: tokens.cache?.read ?? 0,
+    cacheWrite: tokens.cache?.write ?? 0,
+  };
+}
+
 function usageFromInfo(info: AssistantMessageInfo | undefined): LlmCallUsage | null {
   const tokens = info?.tokens;
   if (!tokens) return null;
@@ -588,12 +606,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             if (sessionMatch[2] === "capture") {
               const request = JSON.parse((await body(req)).toString("utf8")) as Record<string, unknown>;
               const model = state.model;
+              const budgetOperationId = await state.turn.usageMeter?.reserve(
+                model,
+                countTokens(JSON.stringify(request)),
+              );
               state.captures.push({
                 sessionId: requestedSessionId,
                 step: state.captures.length,
                 model,
                 request,
                 at: Date.now(),
+                ...(budgetOperationId ? { budgetOperationId } : {}),
               });
               state.turn.recordModelCall({
                 model,
@@ -920,7 +943,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         : null;
     const flushLlmRequests = async () => {
       const captures = state.captures.splice(0);
-      if (!turn.recordLlmRequest || captures.length === 0) return;
+      if (captures.length === 0 || (!turn.recordLlmRequest && !turn.usageMeter)) return;
       const capturesBySession = new Map<string, LlmCapture[]>();
       for (const capture of captures) {
         const group = capturesBySession.get(capture.sessionId) ?? [];
@@ -947,6 +970,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         const info = infoByCapture.get(capture);
         const created = info?.time?.created;
         const completed = info?.time?.completed;
+        const metered = meteredUsageFromInfo(info);
+        if (capture.budgetOperationId && metered && turn.usageMeter) {
+          await turn.usageMeter.settle(capture.budgetOperationId, capture.model, metered);
+        }
+        if (!turn.recordLlmRequest) continue;
         try {
           await turn.recordLlmRequest({
             turnSeq: state.userSeq,

@@ -28,6 +28,8 @@ interface CustomModelSpec {
   input?: number;
   /** USD per million output tokens. Defaults to 0. */
   output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
 export interface CustomProviderSpec {
@@ -71,6 +73,8 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
       ["maxTokens", m.maxTokens],
       ["input", m.input],
       ["output", m.output],
+      ["cacheRead", m.cacheRead],
+      ["cacheWrite", m.cacheWrite],
     ] as const) {
       if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) {
         throw new Error(`model "${m.id}": ${field} must be a non-negative number`);
@@ -115,7 +119,12 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     baseUrl: provider.baseUrl,
     reasoning: false,
     input: ["text"],
-    cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
+    cost: {
+      input: m.input ?? 0,
+      output: m.output ?? 0,
+      cacheRead: m.cacheRead ?? 0,
+      cacheWrite: m.cacheWrite ?? 0,
+    },
     contextWindow: m.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: m.maxTokens ?? DEFAULT_MAX_TOKENS,
   };
@@ -131,6 +140,14 @@ let version = 0;
  * ids shadow custom ones at resolution, so a collision can't hijack a
  * built-in.
  */
+export function customModelPricingKnown(id: string): boolean {
+  const custom = providers.flatMap((provider) => provider.models).find((model) => model.id === id);
+  if (!custom) return true;
+  return [custom.input, custom.output, custom.cacheRead, custom.cacheWrite].every(
+    (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+  );
+}
+
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
   const snapshot = JSON.stringify(specs);
   if (snapshot === JSON.stringify(providers)) return;
@@ -184,7 +201,12 @@ export function customModelsJson(): { providers: Record<string, unknown> } | und
             name: m.name ?? m.id,
             contextWindow: m.contextWindow ?? 128_000,
             maxTokens: m.maxTokens ?? 8_192,
-            cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
+            cost: {
+              input: m.input ?? 0,
+              output: m.output ?? 0,
+              cacheRead: m.cacheRead ?? 0,
+              cacheWrite: m.cacheWrite ?? 0,
+            },
           })),
         },
       ]),

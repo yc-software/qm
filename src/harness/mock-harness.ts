@@ -126,7 +126,14 @@ export function createMockHarness(): Harness {
           totalTokens: prefixTokens + inputTokens + 8,
           costUsd: 0,
         });
+        const meterCall = async (step: number) => {
+          if (!turn.usageMeter) return;
+          const usage = callUsage(step);
+          const operationId = await turn.usageMeter.reserve("mock", inputTokens + prefixTokens);
+          await turn.usageMeter.settle(operationId, "mock", usage);
+        };
 
+        await meterCall(0);
         await turn.recordLlmRequest?.({
           turnSeq: userEntry.seq,
           step: 0,
@@ -819,6 +826,7 @@ export function createMockHarness(): Harness {
           reply = `You said: ${modelPrompt}`;
         }
         if (usedTool) {
+          await meterCall(1);
           await turn.recordLlmRequest?.({
             turnSeq: userEntry.seq,
             step: 1,

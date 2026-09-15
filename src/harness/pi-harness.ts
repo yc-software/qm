@@ -381,6 +381,7 @@ async function directAnthropicJson(
   systemPrompt: string,
   userPrompt: string,
   modelGateway?: ModelGatewayTransportConfig,
+  usageMeter?: HarnessTurnInput["usageMeter"],
 ): Promise<string | undefined> {
   if (
     !String(model.provider ?? "")
@@ -392,6 +393,7 @@ async function directAnthropicJson(
   const gateway = modelGatewayRequest(modelGateway, model);
   const requestModel = gateway?.model ?? model;
   const requestKey = gateway?.apiKey ?? apiKey;
+  const operationId = await usageMeter?.reserve(model.id, countTokens(systemPrompt) + countTokens(userPrompt));
   const res = await fetch(`${requestModel.baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
@@ -409,7 +411,23 @@ async function directAnthropicJson(
     signal: AbortSignal.timeout(2_000),
   });
   if (!res.ok) return undefined;
-  const json = (await res.json()) as { content?: Array<{ text?: string }> };
+  const json = (await res.json()) as {
+    content?: Array<{ text?: string }>;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
+  };
+  if (operationId && json.usage) {
+    await usageMeter!.settle(operationId, model.id, {
+      input: json.usage.input_tokens ?? 0,
+      output: json.usage.output_tokens ?? 0,
+      cacheRead: json.usage.cache_read_input_tokens ?? 0,
+      cacheWrite: json.usage.cache_creation_input_tokens ?? 0,
+    });
+  }
   return json.content?.[0]?.text;
 }
 
@@ -614,6 +632,7 @@ interface PiUsageShape {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheWrite1h?: number;
   totalTokens?: number;
   cost?: { total?: number };
 }
@@ -1252,7 +1271,11 @@ export async function oneShot(
   keys: ProviderKeys | string,
   systemPrompt: string,
   prompt: string,
-  opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig },
+  opts?: {
+    signal?: AbortSignal;
+    modelGateway?: ModelGatewayTransportConfig;
+    usageMeter?: HarnessTurnInput["usageMeter"];
+  },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
   const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
@@ -1273,6 +1296,7 @@ export async function oneShot(
     });
     const messagesBefore = session.messages.length;
     if (opts?.signal?.aborted) return undefined;
+    const operationId = await opts?.usageMeter?.reserve(model.id, countTokens(systemPrompt) + countTokens(prompt));
     const onAbort = () => {
       void session.abort().catch(() => undefined);
     };
@@ -1283,6 +1307,22 @@ export async function oneShot(
       throw piTurnError(session, err, messagesBefore);
     } finally {
       opts?.signal?.removeEventListener("abort", onAbort);
+    }
+    if (operationId) {
+      const assistant = session.messages
+        .slice(messagesBefore)
+        .findLast((message) => (message as { role?: string }).role === "assistant") as
+        { usage?: PiUsageShape } | undefined;
+      if (assistant?.usage) {
+        const usage = assistant.usage;
+        await opts!.usageMeter!.settle(operationId, model.id, {
+          input: usage.input ?? 0,
+          output: usage.output ?? 0,
+          cacheRead: usage.cacheRead ?? 0,
+          cacheWrite: usage.cacheWrite ?? 0,
+          ...(usage.cacheWrite1h !== undefined ? { cacheWrite1h: usage.cacheWrite1h } : {}),
+        });
+      }
     }
     return piLastAssistantTextOrThrow(session);
   } finally {
@@ -1670,6 +1710,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               swallow("pi: llm request capture", e);
             }
           }
+          if (ref.usageMeter) {
+            const meteredModel = (model as { id?: string } | undefined)?.id ?? "unknown";
+            const operationId = await ref.usageMeter.reserve(meteredModel, countTokens(JSON.stringify(finalPayload)));
+            ref.budgetReservations?.push({ operationId, model: meteredModel });
+          }
           return finalPayload;
         };
         const priorResponse = agent.onResponse;
@@ -1819,6 +1864,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const modelPrompt = [goalNote, turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
+          entry.ref.usageMeter = turn.usageMeter;
+          entry.ref.budgetReservations = [];
+          entry.ref.budgetSettlements = [];
           entry.ref.modelDispatch = [];
           entry.ref.pendingPrepareNextTurn = undefined;
           entry.ref.pendingTransformContext = undefined;
@@ -1915,6 +1963,18 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
               const end = Date.now();
               const u = (event.message as { usage?: PiUsageShape }).usage;
+              const reservation = entry.ref.budgetReservations?.shift();
+              if (reservation && u && entry.ref.usageMeter) {
+                entry.ref.budgetSettlements?.push(
+                  entry.ref.usageMeter.settle(reservation.operationId, reservation.model, {
+                    input: u.input ?? 0,
+                    output: u.output ?? 0,
+                    cacheRead: u.cacheRead ?? 0,
+                    cacheWrite: u.cacheWrite ?? 0,
+                    ...(u.cacheWrite1h !== undefined ? { cacheWrite1h: u.cacheWrite1h } : {}),
+                  }),
+                );
+              }
               meterGrindCall(
                 grindMeter,
                 piUsageToCallUsage(u),
@@ -2280,6 +2340,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             unsubscribe?.();
             await thinkTail;
             await drainCaptured();
+            await Promise.all(entry.ref.budgetSettlements ?? []);
+            entry.ref.usageMeter = undefined;
+            entry.ref.budgetReservations = undefined;
+            entry.ref.budgetSettlements = undefined;
             entry.ref.onGapWork = undefined;
             entry.ref.abortSignal = undefined;
             entry.ref.screenToolResult = undefined;
@@ -2419,7 +2483,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entryCount: detect.history.length,
           });
           const out = (
-            (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? ""
+            (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
+              modelGateway,
+              ...(detect.usageMeter ? { usageMeter: detect.usageMeter } : {}),
+            })) ?? ""
           ).trim();
           return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
         } catch {
@@ -2445,7 +2512,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             providerKeys,
             CONTEXT_COMPACTION_PROMPT,
             transcript,
-            { modelGateway },
+            { modelGateway, ...(input.usageMeter ? { usageMeter: input.usageMeter } : {}) },
           );
           return out ?? deterministicCompactSummary(input.history);
         } catch (error) {
@@ -2459,18 +2526,24 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         return contextTokenBudgetForModel(id);
       },
 
-      async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
+      async oneShot(systemPrompt: string, prompt: string, usageMeter): Promise<string | undefined> {
         const model = getRequiredModel(resolveModelId());
         const providerKeys = await resolveProviderKeys();
         if (!keyForModel(providerKeys, model)) return undefined;
-        return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
+        return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, {
+          modelGateway,
+          ...(usageMeter ? { usageMeter } : {}),
+        });
       },
 
-      async judge(systemPrompt: string, prompt: string): Promise<string | undefined> {
+      async judge(systemPrompt: string, prompt: string, usageMeter): Promise<string | undefined> {
         const model = getRequiredModel(judgeModelId());
         const providerKeys = await resolveProviderKeys();
         if (!keyForModel(providerKeys, model)) return undefined;
-        return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, { modelGateway });
+        return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
+          modelGateway,
+          ...(usageMeter ? { usageMeter } : {}),
+        });
       },
 
       async screenSecurity({
@@ -2480,6 +2553,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         signal,
         recordModelCall,
         recordLlmRequest,
+        usageMeter,
       }) {
         try {
           const modelId = configuredScreenModel ?? detectModelId();
@@ -2502,6 +2576,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
               signal,
               modelGateway,
+              ...(usageMeter ? { usageMeter } : {}),
             }),
           );
         } catch (e) {
@@ -2510,7 +2585,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         }
       },
 
-      async pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined> {
+      async pickAckEmoji(text: string, candidates: readonly string[], usageMeter): Promise<string | undefined> {
         if (!text.trim() || candidates.length === 0) return undefined;
         const ackModelId = auxiliaryModelForProvider("anthropic");
         if (!ackModelId) return undefined;
@@ -2520,7 +2595,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const apiKey = keyForModel(providerKeys, model);
           if (!apiKey) return undefined;
           const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-          const raw = await directAnthropicJson(model, apiKey, ACK_EMOJI_PROMPT, prompt, modelGateway);
+          const raw = await directAnthropicJson(model, apiKey, ACK_EMOJI_PROMPT, prompt, modelGateway, usageMeter);
           if (!raw) return undefined;
           const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
           return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
@@ -2529,7 +2604,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         }
       },
 
-      async generateTitle(transcript: string): Promise<string | undefined> {
+      async generateTitle(transcript: string, usageMeter): Promise<string | undefined> {
         if (!transcript.trim()) return undefined;
         const model = getRequiredModel(titleModelId());
         const providerKeys = await resolveProviderKeys();
@@ -2540,12 +2615,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           providerKeys,
           TITLE_GENERATION_PROMPT,
           titleUserPrompt(transcript),
-          { modelGateway },
+          { modelGateway, ...(usageMeter ? { usageMeter } : {}) },
         );
         return sanitizeTitle(out);
       },
 
-      async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
+      async summarizeApproval(
+        command: string,
+        reason: string,
+        purpose?: string,
+        usageMeter?,
+      ): Promise<string | undefined> {
         if (!command.trim()) return undefined;
         const model = getRequiredModel(titleModelId());
         const providerKeys = await resolveProviderKeys();
@@ -2560,7 +2640,10 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           .filter((l) => l !== undefined)
           .join("\n");
         const out = (
-          await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
+          await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, {
+            modelGateway,
+            ...(usageMeter ? { usageMeter } : {}),
+          })
         )?.trim();
         if (!out || out === "NONE") return undefined;
         return out.replace(/^["']|["']$/g, "").slice(0, 300);

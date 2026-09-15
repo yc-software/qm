@@ -249,7 +249,22 @@ test("OpenCode records requests without usage attribution when captures and assi
     rmSync(dir, { recursive: true, force: true });
   });
   const llmRows: HarnessLlmRequestRecord[] = [];
-  const result = await harness.turns.runTurn(turnInput([], llmRows));
+  const budgetEvents: string[] = [];
+  const turn = turnInput([], llmRows);
+  turn.usageMeter = {
+    async reserve(_model, _input) {
+      const operationId = `opencode-budget:${budgetEvents.filter((event) => event === "reserve").length}`;
+      budgetEvents.push("reserve");
+      return operationId;
+    },
+    async checkpoint() {
+      budgetEvents.push("checkpoint");
+    },
+    async settle() {
+      budgetEvents.push("settle");
+    },
+  };
+  const result = await harness.turns.runTurn(turn);
   assert.equal(result.reply, "hello from fake");
   assert.deepEqual(
     llmRows.map((row) => ({ step: row.step, usage: row.usage, durationMs: row.durationMs })),
@@ -258,6 +273,7 @@ test("OpenCode records requests without usage attribution when captures and assi
       { step: 1, usage: null, durationMs: null },
     ],
   );
+  assert.deepEqual(budgetEvents, ["reserve", "reserve"]);
 });
 
 test("latestAssistantParts skips errored and aborted messages, returning the latest successful reply", async () => {

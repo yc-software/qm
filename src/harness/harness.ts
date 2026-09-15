@@ -15,6 +15,7 @@ import type { OverheardEntryPayload } from "./replay.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
+import type { ModelUsageMeter } from "../ratelimit/budget.ts";
 
 export interface RuntimeChoice {
   harnessId: HarnessId;
@@ -57,6 +58,7 @@ export interface HarnessSecurityScreenInput {
   signal: AbortSignal;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  usageMeter?: ModelUsageMeter;
 }
 
 /**
@@ -109,6 +111,7 @@ export interface HarnessTurnInput {
   codexAuth?: CodexTurnAuth;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  usageMeter?: ModelUsageMeter;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
@@ -145,6 +148,7 @@ export interface HarnessDetectInput {
   reactionGuidance?: string;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  usageMeter?: ModelUsageMeter;
 }
 
 export interface HarnessDetectResult {
@@ -157,6 +161,7 @@ export interface HarnessCompactInput {
   session: Session;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  usageMeter?: ModelUsageMeter;
 }
 
 interface HarnessTurnController {
@@ -169,12 +174,17 @@ export interface HarnessModelUtilities {
   shouldRespond?(input: HarnessDetectInput): Promise<HarnessDetectResult>;
   compactHistory?(input: HarnessCompactInput): Promise<string>;
   contextTokenBudget?(scopeLabel?: string, model?: string): number | undefined;
-  oneShot?(systemPrompt: string, prompt: string): Promise<string | undefined>;
-  judge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
+  oneShot?(systemPrompt: string, prompt: string, usageMeter?: ModelUsageMeter): Promise<string | undefined>;
+  judge?(systemPrompt: string, prompt: string, usageMeter?: ModelUsageMeter): Promise<string | undefined>;
   screenSecurity?(input: HarnessSecurityScreenInput): Promise<SecurityScreenVerdict | undefined>;
-  pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
-  generateTitle?(transcript: string): Promise<string | undefined>;
-  summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
+  pickAckEmoji?(text: string, candidates: readonly string[], usageMeter?: ModelUsageMeter): Promise<string | undefined>;
+  generateTitle?(transcript: string, usageMeter?: ModelUsageMeter): Promise<string | undefined>;
+  summarizeApproval?(
+    command: string,
+    reason: string,
+    purpose?: string,
+    usageMeter?: ModelUsageMeter,
+  ): Promise<string | undefined>;
 }
 
 type HarnessControlTransport = "mock" | "in-process" | "sdk" | "http" | "json-rpc" | "api";

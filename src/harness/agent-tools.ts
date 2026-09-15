@@ -29,6 +29,7 @@ import {
 import { CAPABILITY_TTL_MS } from "../auth/capability-token.ts";
 import { CRON_FIRE_NOTE_MAX_CHARS } from "../api/control-service.ts";
 import { utcMinute } from "../util/time.ts";
+import type { ModelUsageMeter } from "../ratelimit/budget.ts";
 
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
   if (!a) return "Owned by you.";
@@ -70,6 +71,9 @@ export interface ToolContextRef {
     transport?: { modelId?: string; headers?: Record<string, string> };
   }>;
   modelCalls?: number;
+  usageMeter?: ModelUsageMeter;
+  budgetReservations?: Array<{ operationId: string; model: string }>;
+  budgetSettlements?: Array<Promise<void>>;
   modelDispatch?: Array<{
     start: number;
     first?: number;

@@ -134,7 +134,7 @@ export type OneShotRunner = (
   systemPrompt: string,
   prompt: string,
   signal?: AbortSignal,
-  observe?: Pick<HarnessTurnInput, "recordModelCall" | "recordLlmRequest">,
+  observe?: Pick<HarnessTurnInput, "recordModelCall" | "recordLlmRequest" | "usageMeter">,
   modelOverride?: string,
 ) => Promise<string | undefined>;
 
@@ -165,6 +165,7 @@ export function oneShotRunner(runPrompt: (turn: HarnessTurnInput) => Promise<Har
         return saved;
       },
       recordModelCall: observe?.recordModelCall ?? (() => {}),
+      ...(observe?.usageMeter ? { usageMeter: observe.usageMeter } : {}),
       ...(observe?.recordLlmRequest
         ? {
             recordLlmRequest: (rec: HarnessLlmRequestRecord, requestSignal?: AbortSignal) =>
@@ -181,12 +182,21 @@ export function oneShotModelUtilities(
   judgeModelId?: string,
 ): Pick<HarnessModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
   return {
-    oneShot: (system, prompt) => single(system, prompt),
-    judge: (system, prompt) => single(system, prompt, undefined, undefined, judgeModelId),
-    screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
+    oneShot: (system, prompt, usageMeter) =>
+      single(system, prompt, undefined, usageMeter ? { recordModelCall: () => {}, usageMeter } : undefined),
+    judge: (system, prompt, usageMeter) =>
+      single(
+        system,
+        prompt,
+        undefined,
+        usageMeter ? { recordModelCall: () => {}, usageMeter } : undefined,
+        judgeModelId,
+      ),
+    screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest, usageMeter }) =>
       parseSecurityScreenVerdict(
         await single(SECURITY_SCREEN_SYSTEM_PROMPT, payload, signal, {
           recordModelCall,
+          ...(usageMeter ? { usageMeter } : {}),
           ...(recordLlmRequest
             ? {
                 recordLlmRequest: (rec, requestSignal) =>
@@ -195,12 +205,21 @@ export function oneShotModelUtilities(
             : {}),
         }),
       ),
-    generateTitle: async (transcript) =>
-      sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
-    summarizeApproval: (command, reason, purpose) =>
+    generateTitle: async (transcript, usageMeter) =>
+      sanitizeTitle(
+        await single(
+          TITLE_GENERATION_PROMPT,
+          titleUserPrompt(transcript),
+          undefined,
+          usageMeter ? { recordModelCall: () => {}, usageMeter } : undefined,
+        ),
+      ),
+    summarizeApproval: (command, reason, purpose, usageMeter) =>
       single(
         "Explain this command in one plain-English sentence for an approver.",
         [command, reason, purpose].filter(Boolean).join("\n"),
+        undefined,
+        usageMeter ? { recordModelCall: () => {}, usageMeter } : undefined,
       ),
   };
 }

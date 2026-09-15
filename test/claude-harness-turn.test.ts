@@ -11,10 +11,12 @@ type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => Asy
 const toolHandlers = new Map<string, (args: unknown) => Promise<unknown>>();
 
 let currentScript: Script = async function* () {};
+let queryCalls = 0;
 
 mock.module("@anthropic-ai/claude-agent-sdk", {
   namedExports: {
     query: ({ prompt }: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+      queryCalls++;
       const generator = currentScript(prompt);
       return {
         async initializationResult() {
@@ -41,10 +43,10 @@ mock.module("@anthropic-ai/claude-agent-sdk", {
 
 const { createClaudeHarness } = await import("../src/harness/claude-harness.ts");
 
-function assistantMessage(id: string, text: string, usage: Record<string, number>): FakeSdkMessage {
+function assistantMessage(id: string, text: string, usage: Record<string, number>, model?: string): FakeSdkMessage {
   return {
     type: "assistant",
-    message: { id, role: "assistant", content: [{ type: "text", text }], usage },
+    message: { id, role: "assistant", content: [{ type: "text", text }], usage, ...(model ? { model } : {}) },
     parent_tool_use_id: null,
   };
 }
@@ -146,6 +148,48 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   return { turn, entries, modelCalls, llmRequests };
 }
 
+function budgetMeterCapture(): {
+  usageMeter: NonNullable<HarnessTurnInput["usageMeter"]>;
+  checkpoints: number[];
+  settlement(): number | undefined;
+} {
+  const checkpoints: number[] = [];
+  let settled: number | undefined;
+  return {
+    usageMeter: {
+      async reserve() {
+        return "claude-late-child:0";
+      },
+      async checkpoint(_operationId, _model, _usage, cost) {
+        if (cost !== undefined) checkpoints.push(cost);
+      },
+      async settle(_operationId, _model, _usage, cost) {
+        settled = cost;
+      },
+    },
+    checkpoints,
+    settlement: () => settled,
+  };
+}
+
+function rootUsageMessage(): FakeSdkMessage {
+  return assistantMessage(
+    "msg_root",
+    "parent",
+    { input_tokens: 1, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    "claude-sonnet-4-5",
+  );
+}
+
+function lateChildUsageMessage(): FakeSdkMessage {
+  return assistantMessage(
+    "msg_late_child",
+    "child",
+    { input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    "claude-haiku-4-5",
+  );
+}
+
 test("a steered turn persists every reply, not only the last result's", async () => {
   const signals = createMemoryRunSignalStore();
   const runId = "run-steer";
@@ -236,17 +280,21 @@ test("an empty task level closes even when the terminal notification is missing"
     await iterator.next();
     yield backgroundTasks("child");
     yield taskStarted("child");
-    yield resultMessage("parent result");
+    yield resultMessage("parent result", { total_cost_usd: 0.1 });
     assert.equal(await queueClosed(iterator), false);
+    yield lateChildUsageMessage();
     yield backgroundTasks();
     assert.equal((await iterator.next()).done, true);
   };
 
+  const meter = budgetMeterCapture();
   const harness = createClaudeHarness({});
-  const { turn, entries } = harnessTurn({ readOnly: false });
+  const { turn, entries } = harnessTurn({ readOnly: false, usageMeter: meter.usageMeter });
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.reply, "parent result");
+  assert.equal(meter.checkpoints.at(-1), 1.1);
+  assert.equal(meter.settlement(), 1.1);
   assert.equal(
     entries.some((entry) => entry.type === "tool_result"),
     false,
@@ -258,16 +306,20 @@ test("the task level remains sufficient when both edge messages are missing", as
     const iterator = prompts[Symbol.asyncIterator]();
     await iterator.next();
     yield backgroundTasks("child");
-    yield resultMessage("parent result");
+    yield rootUsageMessage();
+    yield resultMessage("parent result", { total_cost_usd: 0.1 });
+    yield lateChildUsageMessage();
     yield backgroundTasks();
     assert.equal((await iterator.next()).done, true);
   };
 
+  const meter = budgetMeterCapture();
   const harness = createClaudeHarness({});
-  const { turn } = harnessTurn({ readOnly: false });
+  const { turn } = harnessTurn({ readOnly: false, usageMeter: meter.usageMeter });
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.reply, "parent result");
+  assert.equal(meter.settlement(), 1.1);
 });
 
 test("a terminal notification then an empty task level closes without another root result", async () => {
@@ -276,17 +328,21 @@ test("a terminal notification then an empty task level closes without another ro
     await iterator.next();
     yield backgroundTasks("child");
     yield taskStarted("child");
-    yield resultMessage("parent result");
+    yield rootUsageMessage();
+    yield resultMessage("parent result", { total_cost_usd: 0.1 });
+    yield lateChildUsageMessage();
     yield taskNotification("child", "completed");
     yield backgroundTasks();
     assert.equal((await iterator.next()).done, true);
   };
 
+  const meter = budgetMeterCapture();
   const harness = createClaudeHarness({});
-  const { turn, entries } = harnessTurn({ readOnly: false });
+  const { turn, entries } = harnessTurn({ readOnly: false, usageMeter: meter.usageMeter });
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.reply, "parent result");
+  assert.equal(meter.settlement(), 1.1);
   assert.equal(entries.filter((entry) => entry.type === "tool_result").length, 1);
 });
 
@@ -296,17 +352,21 @@ test("an empty task level may precede its terminal notification", async () => {
     await iterator.next();
     yield backgroundTasks("child");
     yield taskStarted("child");
-    yield resultMessage("parent result");
+    yield rootUsageMessage();
+    yield resultMessage("parent result", { total_cost_usd: 0.1 });
+    yield lateChildUsageMessage();
     yield backgroundTasks();
     yield taskNotification("child", "completed");
     assert.equal((await iterator.next()).done, true);
   };
 
+  const meter = budgetMeterCapture();
   const harness = createClaudeHarness({});
-  const { turn, entries } = harnessTurn({ readOnly: false });
+  const { turn, entries } = harnessTurn({ readOnly: false, usageMeter: meter.usageMeter });
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.reply, "parent result");
+  assert.equal(meter.settlement(), 1.1);
   assert.equal(entries.filter((entry) => entry.type === "tool_result").length, 1);
 });
 
@@ -413,17 +473,39 @@ test("a user stop that surfaces as a non-success SDK result is a clean stop, and
   const runId = "run-stop-error";
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
+    yield assistantMessage("msg_partial", "partial", {
+      input_tokens: 4,
+      output_tokens: 2,
+      cache_read_input_tokens: 5,
+      cache_creation_input_tokens: 1,
+    });
     await signals.send(runId, { kind: "abort" });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
+    yield resultMessage("", {
+      subtype: "error_during_execution",
+      errors: ["turn interrupted"],
+      is_error: true,
+      total_cost_usd: 0.01,
+    });
   };
 
+  let settledCost: number | undefined;
+  const usageMeter: NonNullable<HarnessTurnInput["usageMeter"]> = {
+    async reserve() {
+      return "cancelled:0";
+    },
+    async checkpoint() {},
+    async settle(_operationId, _model, _usage, cost) {
+      settledCost = cost;
+    },
+  };
   const harness = createClaudeHarness({ signals });
-  const { turn } = harnessTurn({ runId });
+  const { turn } = harnessTurn({ runId, usageMeter });
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.stopped, true, "an interrupted turn the SDK calls an error is still a user stop");
   assert.equal(result.reply, "");
+  assert.equal(settledCost, 0.01);
   assert.deepEqual(
     (await signals.takePending(runId)).map((s) => s.kind),
     ["abort"],
@@ -498,6 +580,101 @@ test("recorded LLM requests carry real timing and usage instead of a hardcoded t
   });
 });
 
+test("Claude meters one native query across parent and background child messages without double charging", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield backgroundTasks("child-metered");
+    yield taskStarted("child-metered");
+    yield assistantMessage(
+      "msg_parent",
+      "parent",
+      {
+        input_tokens: 5,
+        output_tokens: 2,
+        cache_read_input_tokens: 10,
+        cache_creation_input_tokens: 1,
+      },
+      "claude-sonnet-4-5",
+    );
+    yield assistantMessage(
+      "msg_parent",
+      "parent complete",
+      {
+        input_tokens: 5,
+        output_tokens: 4,
+        cache_read_input_tokens: 10,
+        cache_creation_input_tokens: 1,
+      },
+      "claude-sonnet-4-5",
+    );
+    yield resultMessage("parent", { total_cost_usd: 0.1 });
+    yield assistantMessage(
+      "msg_child",
+      "child",
+      {
+        input_tokens: 7,
+        output_tokens: 3,
+        cache_read_input_tokens: 20,
+        cache_creation_input_tokens: 2,
+      },
+      "claude-haiku-4-5",
+    );
+    yield backgroundTasks();
+    yield taskNotification("child-metered", "completed");
+    yield resultMessage("done", { total_cost_usd: 0.3 });
+  };
+
+  const events: Array<{
+    kind: "reserve" | "checkpoint" | "settle";
+    usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    reported?: number;
+  }> = [];
+  const usageMeter: NonNullable<HarnessTurnInput["usageMeter"]> = {
+    async reserve() {
+      events.push({ kind: "reserve" });
+      return "claude-query:0";
+    },
+    async checkpoint(_operationId, _model, usage, reported) {
+      events.push({ kind: "checkpoint", usage, reported });
+    },
+    async settle(_operationId, _model, usage, reported) {
+      events.push({ kind: "settle", usage, reported });
+    },
+  };
+
+  const harness = createClaudeHarness({});
+  const { turn } = harnessTurn({ usageMeter });
+  await harness.turns.runTurn(turn);
+
+  assert.equal(events[0]!.kind, "reserve");
+  const reported = events.filter((event) => event.kind === "checkpoint" && event.reported !== undefined);
+  assert.deepEqual(
+    reported.map((event) => event.reported).filter((cost) => cost === 0.1 || cost === 0.3),
+    [0.1, 0.3],
+  );
+  const settled = events.at(-1)!;
+  assert.deepEqual(settled, {
+    kind: "settle",
+    usage: { input: 12, output: 7, cacheRead: 30, cacheWrite: 3 },
+    reported: 0.3,
+  });
+});
+
+test("Claude refuses an unpriceable query before constructing the SDK request", async () => {
+  const callsBefore = queryCalls;
+  const usageMeter: NonNullable<HarnessTurnInput["usageMeter"]> = {
+    async reserve() {
+      throw new Error("budget refused unpriced model request");
+    },
+    async checkpoint() {},
+    async settle() {},
+  };
+  const harness = createClaudeHarness({});
+  const { turn } = harnessTurn({ usageMeter });
+  await assert.rejects(harness.turns.runTurn(turn), /unpriced model request/);
+  assert.equal(queryCalls, callsBefore);
+});
+
 test("each steered prompt gets its own LLM request record", async () => {
   const signals = createMemoryRunSignalStore();
   const runId = "run-steps";
@@ -562,10 +739,21 @@ test("a turn that dies before its first result still records exactly one request
   assert.equal((llmRequests[0]!.promptEnvelope as { system: string }).system, "be brief");
 });
 
-test("the claude harness offers compaction and detection so a utility role cannot silently disable them", async () => {
+test("the claude harness offers metered compaction and detection so a utility role cannot silently disable them", async () => {
   const harness = createClaudeHarness({});
   assert.equal(typeof harness.models.compactHistory, "function");
   assert.equal(typeof harness.models.shouldRespond, "function");
+  let reservations = 0;
+  let settlements = 0;
+  const usageMeter: NonNullable<HarnessTurnInput["usageMeter"]> = {
+    async reserve() {
+      return `utility:${reservations++}`;
+    },
+    async checkpoint() {},
+    async settle() {
+      settlements++;
+    },
+  };
 
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
@@ -575,6 +763,7 @@ test("the claude harness offers compaction and detection so a utility role canno
     session: { id: "session-1" } as HarnessTurnInput["session"],
     history: [],
     recordModelCall: () => {},
+    usageMeter,
   });
   assert.equal(summary, "a compact summary of the thread");
 
@@ -589,8 +778,56 @@ test("the claude harness offers compaction and detection so a utility role canno
     systemPrompt: "be brief",
     history: [],
     recordModelCall: () => {},
+    usageMeter,
   });
   assert.equal(verdict.respond, true);
+  assert.equal(reservations, 2);
+  assert.equal(settlements, 2);
+});
+
+test("Claude one-shot, judge, security, title, and approval utilities all use native metering", async () => {
+  const harness = createClaudeHarness({});
+  let reservations = 0;
+  let settlements = 0;
+  const usageMeter: NonNullable<HarnessTurnInput["usageMeter"]> = {
+    async reserve() {
+      return `auxiliary:${reservations++}`;
+    },
+    async checkpoint() {},
+    async settle() {
+      settlements++;
+    },
+  };
+  const output = (text: string) => {
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield resultMessage(text);
+    };
+  };
+
+  output("one-shot");
+  assert.equal(await harness.models.oneShot!("system", "prompt", usageMeter), "one-shot");
+  output("judge");
+  assert.equal(await harness.models.judge!("system", "prompt", usageMeter), "judge");
+  output('{"decision":"auto"}');
+  assert.deepEqual(
+    await harness.models.screenSecurity!({
+      payload: "payload",
+      signal: new AbortController().signal,
+      recordModelCall: () => {},
+      usageMeter,
+    }),
+    { decision: "auto" },
+  );
+  output("Meter every model call");
+  assert.equal(await harness.models.generateTitle!("User: meter this", usageMeter), "Meter every model call");
+  output("Runs the selected command.");
+  assert.equal(
+    await harness.models.summarizeApproval!("echo done", "approval needed", undefined, usageMeter),
+    "Runs the selected command.",
+  );
+  assert.equal(reservations, 5);
+  assert.equal(settlements, 5);
 });
 
 test("Claude preserves a committed runtime handoff when SDK interruption returns an error", async () => {

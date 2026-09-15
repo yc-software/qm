@@ -37,6 +37,7 @@ import { CodexAppServer, redactCodexDiagnostics } from "../src/harness/codex-app
 import { DEFAULT_CODEX_MODEL_ID } from "../src/model/pi-models.ts";
 import { readCodexOAuthAuthFile } from "../src/harness/codex-auth.ts";
 import { acquireCodexOAuthAuthLock } from "../src/harness/codex-auth.ts";
+import { priceModelUsage } from "../src/ratelimit/budget.ts";
 
 const replaySmokeItems = [
   { type: "message", role: "user", content: [{ type: "input_text", text: "earlier question" }] },
@@ -93,12 +94,12 @@ rl.on("line", (line) => {
   if (msg.method === "thread/inject_items") return send({ id: msg.id, result: {} });
   if (msg.method === "turn/start") {
     send({ id: msg.id, result: { turn: { id: "turn-1", status: "inProgress", items: [] } } });
-    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100 }, last: { inputTokens: 100 } } } });
-    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100 }, last: { inputTokens: 100 } } } });
+    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100, outputTokens: 10, cachedInputTokens: 20 }, last: { inputTokens: 100 } } } });
+    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100, outputTokens: 10, cachedInputTokens: 20 }, last: { inputTokens: 100 } } } });
     send({ method: "item/started", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "inProgress", senderThreadId: "thread-1", receiverThreadIds: ["child-1"], prompt: "return ALPHA", agentsStates: { "child-1": { status: "running", message: null } } } } });
-    send({ method: "thread/tokenUsage/updated", params: { threadId: "child-1", tokenUsage: { total: { inputTokens: 70 }, last: { inputTokens: 70 } } } });
+    send({ method: "thread/tokenUsage/updated", params: { threadId: "child-1", tokenUsage: { total: { inputTokens: 70, outputTokens: 5, cachedInputTokens: 10 }, last: { inputTokens: 70 } } } });
     send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "completed", senderThreadId: "thread-1", receiverThreadIds: ["child-1"], prompt: "return ALPHA", agentsStates: { "child-1": { status: "completed", message: "ALPHA" } } } } });
-    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 250 }, last: { inputTokens: 150 } } } });
+    send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 250, outputTokens: 30, cachedInputTokens: 50 }, last: { inputTokens: 150 } } } });
     send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta: "hello" } });
     send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "item-1", text: "hello", phase: "final_answer", memoryCitation: null } } });
     return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [], itemsView: "notLoaded" } } });
@@ -1376,12 +1377,19 @@ test("Codex never classifies its own infrastructure failures as terminal", () =>
   );
 });
 
-test("Codex reads cumulative usage totals off the app-server's token notification", () => {
-  assert.deepEqual(
-    codexUsageTotals({
-      tokenUsage: { total: { inputTokens: 400, outputTokens: 90, cachedInputTokens: 120 }, last: { inputTokens: 40 } },
-    }),
-    { input: 400, output: 90, cacheRead: 120, cacheWrite: 0, totalTokens: 490, costUsd: 0 },
+test("Codex reads cumulative usage totals with cached input as a subset", () => {
+  const usage = codexUsageTotals({
+    tokenUsage: { total: { inputTokens: 400, outputTokens: 90, cachedInputTokens: 120 }, last: { inputTokens: 40 } },
+  });
+  assert.deepEqual(usage, { input: 280, output: 90, cacheRead: 120, cacheWrite: 0, totalTokens: 490, costUsd: 0 });
+  assert.deepEqual(usage && priceModelUsage("gpt-5.6-sol", usage), {
+    priced: true,
+    costUsd: 0.002968,
+    basis: "api_equivalent",
+  });
+  assert.equal(
+    codexUsageTotals({ tokenUsage: { total: { inputTokens: 10, cachedInputTokens: 11, outputTokens: 1 } } }),
+    null,
   );
   assert.equal(codexUsageTotals({ tokenUsage: { last: { inputTokens: 40 } } }), null);
   assert.equal(codexUsageTotals(null), null);
@@ -1521,8 +1529,26 @@ test("a user stop whose interrupted turn reports status=failed is a clean stop, 
 test("Codex records one llm row per turn carrying real timings and usage, even when the turn fails", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-telemetry-test-"));
   const records: HarnessLlmRequestRecord[] = [];
+  const budgetEvents: Array<{ kind: string; input?: number; output?: number; cacheRead?: number }> = [];
+  const usageMeter: NonNullable<HarnessTurnInput["usageMeter"]> = {
+    async reserve() {
+      budgetEvents.push({ kind: "reserve" });
+      return "codex-budget:0";
+    },
+    async checkpoint(_operationId, _model, usage) {
+      budgetEvents.push({
+        kind: "checkpoint",
+        input: usage.input,
+        output: usage.output,
+        cacheRead: usage.cacheRead,
+      });
+    },
+    async settle(_operationId, _model, usage) {
+      budgetEvents.push({ kind: "settle", input: usage.input, output: usage.output, cacheRead: usage.cacheRead });
+    },
+  };
   const scope = { kind: "org", id: "test" } as unknown as ScopeId;
-  const runWith = async (binaryPath: string, id: string) => {
+  const runWith = async (binaryPath: string, id: string, meter?: HarnessTurnInput["usageMeter"]) => {
     const harness = createCodexHarness({ binaryPath, env: testHarnessEnv(dir), turnWallClockMs: 5_000 });
     t.after(async () => await harness.turns.close?.());
     return await harness.turns.runTurn({
@@ -1535,20 +1561,36 @@ test("Codex records one llm row per turn carrying real timings and usage, even w
       orgScopeId: scope,
       emit: async (entry) => ({ ...entry, sessionId: id, seq: 4, createdAt: Date.now() }) as SessionEntry,
       recordModelCall: () => {},
+      ...(meter ? { usageMeter: meter } : {}),
       recordLlmRequest: (rec) => void records.push(rec),
     });
   };
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
-  await runWith(fakeCodexBinary(dir), "telemetry-ok");
+  await runWith(fakeCodexBinary(dir), "telemetry-ok", usageMeter);
   assert.equal(records.length, 1);
+  assert.deepEqual(budgetEvents, [
+    { kind: "reserve" },
+    { kind: "checkpoint", input: 80, output: 10, cacheRead: 20 },
+    { kind: "checkpoint", input: 80, output: 10, cacheRead: 20 },
+    { kind: "checkpoint", input: 140, output: 15, cacheRead: 30 },
+    { kind: "checkpoint", input: 260, output: 35, cacheRead: 60 },
+    { kind: "settle", input: 260, output: 35, cacheRead: 60 },
+  ]);
   const ok = records[0]!;
   assert.equal(ok.turnSeq, 4);
   assert.equal(ok.step, 0);
   assert.equal(ok.truncated, false);
   assert.ok(typeof ok.durationMs === "number" && ok.durationMs >= 0);
   assert.ok(typeof ok.ttftMs === "number" && ok.ttftMs >= 0);
-  assert.deepEqual(ok.usage, { input: 320, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 320, costUsd: 0 });
+  assert.deepEqual(ok.usage, {
+    input: 260,
+    output: 35,
+    cacheRead: 60,
+    cacheWrite: 0,
+    totalTokens: 355,
+    costUsd: 0,
+  });
 
   await assert.rejects(runWith(failingProviderCodexBinary(dir, "turnFailed"), "telemetry-fail"));
   assert.equal(records.length, 2);

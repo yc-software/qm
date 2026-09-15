@@ -304,8 +304,28 @@ test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
   const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
   assert(baseModel);
   const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
+  const metered: Array<{ operationId: string; model: string; input: number; output?: number }> = [];
+  const usageMeter = {
+    async reserve(modelId: string, input: number) {
+      metered.push({ operationId: "aux:0", model: modelId, input });
+      return "aux:0";
+    },
+    async checkpoint() {},
+    async settle(operationId: string, modelId: string, usage: { output: number }) {
+      metered.push({ operationId, model: modelId, input: 0, output: usage.output });
+    },
+  };
 
-  assert.equal(await oneShot("pi-positive-test", model, "test-key", "system", "hello"), "working");
+  assert.equal(await oneShot("pi-positive-test", model, "test-key", "system", "hello", { usageMeter }), "working");
+  assert.equal(metered.length, 2);
+  assert.deepEqual(
+    metered.map(({ operationId, model: modelId }) => [operationId, modelId]),
+    [
+      ["aux:0", "claude-haiku-4-5"],
+      ["aux:0", "claude-haiku-4-5"],
+    ],
+  );
+  assert.equal(metered[1]!.output, 1);
   assert.equal(apiKey, "test-key");
   assert.match(requestBody, /system/);
   assert.match(requestBody, /hello/);
