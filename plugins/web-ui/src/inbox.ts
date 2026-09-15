@@ -796,17 +796,19 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
                 >
                   ${icon(Send, 12)}<span>Send it</span>
                 </button>
-                ${(empty ? DRAFT_SUGGESTIONS : []).map(
-                  (prompt) =>
-                    html`<button
-                      class="inbox-chat-suggestion"
-                      type="button"
-                      ?disabled=${busy}
-                      @click=${(e: MouseEvent) => submit(e, prompt)}
-                    >
-                      ${prompt}
-                    </button>`,
-                )}
+                <div class="inbox-edit-suggestions">
+                  ${(empty ? DRAFT_SUGGESTIONS : []).map(
+                    (prompt) =>
+                      html`<button
+                        class="inbox-chat-suggestion"
+                        type="button"
+                        ?disabled=${busy}
+                        @click=${(e: MouseEvent) => submit(e, prompt)}
+                      >
+                        ${prompt}
+                      </button>`,
+                  )}
+                </div>
               </div>`
             : nothing
         }

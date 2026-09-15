@@ -8290,6 +8290,16 @@ h3.ambient-field-label {
 }
 .inbox-chat-suggestions {
   display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.inbox-chat-suggestions > .primary {
+  flex: none;
+}
+.inbox-edit-suggestions {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 6px;
   justify-content: center;
