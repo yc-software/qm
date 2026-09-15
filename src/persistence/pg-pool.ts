@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
+import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
@@ -29,6 +30,8 @@ export function configurePgPooling(config: PgPoolingConfig): void {
   }
   poolingConfig = { ...config };
 }
+
+const migrationQueue = createKeyedQueue();
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
@@ -334,18 +337,20 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     : [...registeredMigrations.entries()];
   for (const [databaseUrl, registered] of databases) {
     if (!registered?.size) continue;
-    const pg = (await import("pg")).default;
-    const pool = new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() });
-    pool.on("error", (error) => console.error("[pg] migration pool error:", errMessage(error)));
-    try {
-      await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
-      await applyPgMigrations(
-        pool,
-        [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
-      );
-    } finally {
-      await pool.end();
-    }
+    await migrationQueue(databaseUrl, async () => {
+      const pg = (await import("pg")).default;
+      const pool = new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() });
+      pool.on("error", (error) => console.error("[pg] migration pool error:", errMessage(error)));
+      try {
+        await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
+        await applyPgMigrations(
+          pool,
+          [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
+        );
+      } finally {
+        await pool.end();
+      }
+    });
   }
 }
 
@@ -394,12 +399,14 @@ export function createPgPool(
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
   async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
-    const instance = await retainPool(connectionString, "migration");
-    try {
-      return await fn(instance);
-    } finally {
-      await releasePool(connectionString, instance, "migration");
-    }
+    return migrationQueue(connectionString, async () => {
+      const instance = await retainPool(connectionString, "migration");
+      try {
+        return await fn(instance);
+      } finally {
+        await releasePool(connectionString, instance, "migration");
+      }
+    });
   }
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
