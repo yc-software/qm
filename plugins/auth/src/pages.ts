@@ -67,6 +67,9 @@ const STYLE = `<style>
     text-decoration:none; font:inherit; font-weight:600; border-radius:var(--radius-md); cursor:pointer;
     background:var(--text); color:var(--bg); border:1px solid var(--text); }
   .btn:hover{ opacity:.9; }
+  .alternative{ background:var(--surface); color:var(--text); border-color:var(--border); }
+  .divider{ display:flex; align-items:center; gap:16px; margin:24px 0; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:.08em; }
+  .divider::before,.divider::after{ content:""; flex:1; height:1px; background:var(--border); }
   .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
   .who{ display:block; margin:0 auto 22px; font-size:13px; color:var(--text); background:var(--secondary);
     border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px; word-break:break-word; }
@@ -80,6 +83,7 @@ const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height
 function page(o: {
   title: string;
   brandName: string;
+  trustedSignInLabel?: string;
   icon: string;
   warn?: boolean;
   heading: string;
@@ -104,6 +108,7 @@ ${STYLE}
       <p class="msg">${escapeHtml(o.msg)}</p>
       ${o.body ?? ""}
       <p class="help">${escapeHtml(o.help)}</p>
+      ${o.trustedSignInLabel ? `<div class="divider">OR</div><a class="btn alternative" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a>` : ""}
     </section>
   </main>
 </body>
@@ -112,6 +117,7 @@ ${STYLE}
 
 export function emailFormPage(o: {
   brandName: string;
+  trustedSignInLabel?: string;
   action: string;
   requestToken: string;
   email?: string;
@@ -120,6 +126,7 @@ export function emailFormPage(o: {
   return page({
     title: "Sign in",
     brandName: o.brandName,
+    trustedSignInLabel: o.trustedSignInLabel,
     icon: MAIL_ICON,
     heading: `Sign in to ${o.brandName}`,
     msg: "Enter your work email and we'll send you a one-time sign-in link.",
@@ -134,10 +141,16 @@ export function emailFormPage(o: {
   });
 }
 
-export function linkSentPage(o: { brandName: string; email: string; ttlMinutes: number }): string {
+export function linkSentPage(o: {
+  brandName: string;
+  trustedSignInLabel?: string;
+  email: string;
+  ttlMinutes: number;
+}): string {
   return page({
     title: "Check your email",
     brandName: o.brandName,
+    trustedSignInLabel: o.trustedSignInLabel,
     icon: SENT_ICON,
     heading: "Check your email",
     msg: `If that address can sign in, a one-time link is on its way. Open it in this browser. It works once and expires in ${o.ttlMinutes} minutes.`,
@@ -146,10 +159,11 @@ export function linkSentPage(o: { brandName: string; email: string; ttlMinutes: 
   });
 }
 
-export function confirmSignInPage(o: { brandName: string; action: string }): string {
+export function confirmSignInPage(o: { brandName: string; trustedSignInLabel?: string; action: string }): string {
   return page({
     title: "Finish signing in",
     brandName: o.brandName,
+    trustedSignInLabel: o.trustedSignInLabel,
     icon: LOCK_ICON,
     heading: `Finish signing in to ${o.brandName}`,
     msg: "Confirm below to complete sign-in. Your link is spent the moment you confirm, so do it in the browser you want to be signed in to.",
@@ -166,6 +180,7 @@ export function confirmSignInPage(o: { brandName: string; action: string }): str
 
 export function problemPage(o: {
   brandName: string;
+  trustedSignInLabel?: string;
   heading: string;
   msg: string;
   detail?: string;
@@ -177,6 +192,7 @@ export function problemPage(o: {
   return page({
     title: "Sign-in problem",
     brandName: o.brandName,
+    trustedSignInLabel: o.trustedSignInLabel,
     icon: ALERT_ICON,
     warn: true,
     heading: o.heading,

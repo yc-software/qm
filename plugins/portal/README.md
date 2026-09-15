@@ -71,6 +71,17 @@ grants but does not remove existing ones. Company login and Slack integration re
 existing configuration. Deployment CLI secret wiring, account linking, and live
 qualification are pending; this is not a released deployment feature.
 
+When `PORTAL_TRUSTED_OIDC_LABEL` is explicitly set, successful trusted sign-in
+makes the portal remember the configured issuer in a
+host-only, HttpOnly browser preference for one year. Ordinary
+`/auth/login` requests then return to the trusted route, including after logout
+or session expiry. Session renewal and logout also remember existing trusted
+sessions. A successful primary or operator sign-in clears the preference. The
+preference only selects a provider; it grants no identity or administrator access.
+A new browser or cleared cookies still uses the primary provider by default.
+Use `/auth/login?provider=primary` to explicitly select the primary provider; the
+trusted sign-in error page offers this alternative.
+
 ## Operator admin login without email
 
 Run `qm admin-login` with the deployment's configuration and secrets to generate
@@ -258,3 +269,11 @@ npm test
 
 See **`deploy/README.md` → Portal** for the public bring-up (IPs + cert, DNS, the Slack OIDC
 app, and secrets) and `deploy/portal/fly.toml`.
+
+With embedded auth, trusted OIDC, and `PORTAL_TRUSTED_OIDC_LABEL` explicitly set,
+all email sign-in pages offer a link
+to the trusted provider, including the email-unavailable and link-sent pages.
+The label is the provider display name. Without it, the email page and primary
+login routing retain their existing behavior. Switching keeps the destination
+from the signed email login transaction.
+The link is available without a remembered browser preference.

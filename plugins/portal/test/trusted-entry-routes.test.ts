@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT, compactVerify } from "jose";
 import { deriveKey, openSession } from "../src/session.ts";
 
+const preferenceEnabled = process.env.TRUSTED_LOGIN_LABEL_TEST !== "0";
 const adminEnabled = process.env.TRUSTED_ADMIN_ROUTE_TEST === "1";
 const claims = new Set<string>();
 let claimAvailable = true;
@@ -88,6 +89,7 @@ Object.assign(process.env, {
   CORE_SIGNING_SECRET: "test-core-secret",
   PORTAL_IDENTITY_SECRET: identitySecret,
   PORTAL_TRUSTED_OIDC_ADMIN: adminEnabled ? "1" : "0",
+  PORTAL_TRUSTED_OIDC_LABEL: preferenceEnabled ? "Company SSO" : "",
   WEB_UI_UPSTREAM: issuer,
   ADMIN_UPSTREAM: issuer,
   OIDC_AUTH_ENDPOINT: "https://primary.example.test/authorize",
@@ -160,7 +162,9 @@ test("durable claim service failure cannot issue a session", async () => {
   try {
     const response = await fetch(login.callback, { redirect: "manual", headers: { cookie: login.cookie } });
     assert.equal(response.status, 400);
-    assert.match(await response.text(), /href="\/auth\/trusted\/login"/);
+    const html = await response.text();
+    assert.match(html, /href="\/auth\/trusted\/login"/);
+    assert.equal(html.includes('href="/auth/login?provider=primary"'), preferenceEnabled);
     assert.ok(!response.headers.getSetCookie().some((cookie) => cookie.startsWith("portal_session=")));
   } finally {
     claimAvailable = true;
@@ -178,3 +182,79 @@ test("admin provisioning failure cannot issue a session", { skip: !adminEnabled 
     adminAvailable = true;
   }
 });
+
+test(
+  "trusted sign-in preference survives logout and preserves the requested destination",
+  { skip: !preferenceEnabled },
+  async () => {
+    const login = await start();
+    const callback = await fetch(login.callback, { redirect: "manual", headers: { cookie: login.cookie } });
+    const cookies = callback.headers.getSetCookie();
+    const preference = cookies.find((cookie) => cookie.startsWith("portal_login_provider="))!;
+    assert.ok(preference.includes("HttpOnly"));
+    assert.ok(preference.includes("SameSite=Lax"));
+    const session = cookies.find((cookie) => cookie.startsWith("portal_session="))!.split(";")[0]!;
+    const logout = await fetch(`${base}/auth/logout`, {
+      method: "POST",
+      headers: { origin: process.env.PORTAL_PUBLIC_URL!, cookie: session },
+    });
+    assert.equal(logout.status, 200);
+    assert.ok(logout.headers.getSetCookie().includes(preference));
+    const response = await fetch(`${base}/auth/login?returnTo=%2Fadmin%2F`, {
+      redirect: "manual",
+      headers: { cookie: preference.split(";")[0]! },
+    });
+    assert.equal(response.headers.get("location"), "/auth/trusted/login?returnTo=%2Fadmin%2F");
+    assert.ok(!response.headers.getSetCookie().some((cookie) => cookie.startsWith("portal_session=")));
+    const external = await fetch(`${base}/auth/login?returnTo=https://evil.example`, {
+      redirect: "manual",
+      headers: { cookie: preference.split(";")[0]! },
+    });
+    assert.equal(external.headers.get("location"), "/auth/trusted/login?returnTo=%2F");
+    const primary = await fetch(`${base}/auth/login?provider=primary`, {
+      redirect: "manual",
+      headers: { cookie: preference.split(";")[0]! },
+    });
+    assert.equal(new URL(primary.headers.get("location")!).origin, "https://primary.example.test");
+  },
+);
+
+test("unknown provider preferences retain primary sign-in", async () => {
+  const response = await fetch(`${base}/auth/login`, {
+    redirect: "manual",
+    headers: { cookie: "portal_login_provider=unknown" },
+  });
+  assert.equal(new URL(response.headers.get("location")!).origin, "https://primary.example.test");
+});
+
+test("switching from email retains its signed return destination", async () => {
+  const email = await fetch(`${base}/auth/login?provider=primary&returnTo=%2Fadmin%2F`, { redirect: "manual" });
+  const cookie = email.headers.getSetCookie()[0]!.split(";")[0]!;
+  const trusted = await fetch(`${base}/auth/trusted/login`, { redirect: "manual", headers: { cookie } });
+  const url = new URL(trusted.headers.get("location")!);
+  const code = `switch-${Math.random()}`;
+  codes.set(code, { nonce: url.searchParams.get("nonce")!, challenge: url.searchParams.get("code_challenge")! });
+  const response = await fetch(`${base}/auth/trusted/callback?code=${code}&state=${url.searchParams.get("state")}`, {
+    redirect: "manual",
+    headers: { cookie: trusted.headers.getSetCookie()[0]!.split(";")[0]! },
+  });
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("location"), "/admin/");
+});
+
+test(
+  "without an opt-in label trusted sessions do not change primary login routing",
+  { skip: preferenceEnabled },
+  async () => {
+    const login = await start();
+    const callback = await fetch(login.callback, { redirect: "manual", headers: { cookie: login.cookie } });
+    assert.equal(callback.status, 302);
+    assert.ok(!callback.headers.getSetCookie().some((cookie) => cookie.startsWith("portal_login_provider=")));
+    const preference = createHash("sha256").update(issuer).digest("hex");
+    const primary = await fetch(`${base}/auth/login`, {
+      redirect: "manual",
+      headers: { cookie: `portal_login_provider=${preference}` },
+    });
+    assert.equal(new URL(primary.headers.get("location")!).origin, "https://primary.example.test");
+  },
+);

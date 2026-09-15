@@ -24,6 +24,7 @@ export interface AuthDeps {
   sessions?: RememberedSessions;
   mailer: Mailer | null;
   brandName?: () => string;
+  trustedSignInLabel?: string;
   emailAllowed?: (email: string) => Promise<boolean>;
   now?: () => number;
   onBackgroundTask?: (task: Promise<void>) => void;
@@ -138,7 +139,17 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   };
 
   const problem = (res: ServerResponse, status: number, heading: string, msg: string, detail?: string): void =>
-    sendHtml(res, status, problemPage({ brandName: brandName(), heading, msg, ...(detail ? { detail } : {}) }));
+    sendHtml(
+      res,
+      status,
+      problemPage({
+        brandName: brandName(),
+        trustedSignInLabel: deps.trustedSignInLabel,
+        heading,
+        msg,
+        ...(detail ? { detail } : {}),
+      }),
+    );
 
   const emailUnavailable = (res: ServerResponse): void =>
     problem(
@@ -162,6 +173,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       400,
       problemPage({
         brandName: brandName(),
+        trustedSignInLabel: deps.trustedSignInLabel,
         heading: "This sign-in link no longer works",
         msg: "Sign-in links work once and expire quickly. Request a fresh one and open it right away.",
         ...(signInUrl ? { retryUrl: signInUrl } : {}),
@@ -259,7 +271,12 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     return sendHtml(
       res,
       200,
-      emailFormPage({ brandName: brandName(), action: formAction, requestToken: sealed.token }),
+      emailFormPage({
+        brandName: brandName(),
+        trustedSignInLabel: deps.trustedSignInLabel,
+        action: formAction,
+        requestToken: sealed.token,
+      }),
     );
   }
 
@@ -327,6 +344,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
         400,
         emailFormPage({
           brandName: brandName(),
+          trustedSignInLabel: deps.trustedSignInLabel,
           action: formAction,
           requestToken: sealed.token,
           problem: "That doesn't look like an email address.",
@@ -334,7 +352,16 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       );
     }
     const ip = clientIpOf(req);
-    sendHtml(res, 200, linkSentPage({ brandName: brandName(), email, ttlMinutes: linkTtlMinutes }));
+    sendHtml(
+      res,
+      200,
+      linkSentPage({
+        brandName: brandName(),
+        trustedSignInLabel: deps.trustedSignInLabel,
+        email,
+        ttlMinutes: linkTtlMinutes,
+      }),
+    );
     background(() => sendLink(request, email, ip, mailer));
   }
 
@@ -342,7 +369,11 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
     return sendHtml(
       res,
       200,
-      confirmSignInPage({ brandName: brandName(), action: `${cfg.publicPath}/verify` }),
+      confirmSignInPage({
+        brandName: brandName(),
+        trustedSignInLabel: deps.trustedSignInLabel,
+        action: `${cfg.publicPath}/verify`,
+      }),
       CONFIRM_PAGE_CSP,
     );
   }

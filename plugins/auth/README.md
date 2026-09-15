@@ -136,3 +136,9 @@ the authenticated email principal. The signed core endpoint
 from that user's portal identity or an authorized administrator. These operations
 prevent future silent reauthentication; already-issued stateless portal sessions
 remain valid until their normal expiry.
+
+When hosted by a portal with trusted OIDC and an explicit provider label configured,
+the embedded broker receives
+its trusted provider label and shows an alternate sign-in link throughout the
+email flow. The link starts a fresh trusted login through the portal, without
+submitting an email or linking the two identities. Standalone brokers omit it.

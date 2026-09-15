@@ -749,3 +749,34 @@ test("a remembered browser loses access when email eligibility is withdrawn", as
   });
   assert.equal(new URL(response.headers.get("location")!).searchParams.get("error"), "login_required");
 });
+
+test("trusted sign-in is available throughout the email flow only when configured", async () => {
+  for (const trustedSignInLabel of [undefined, "Company SSO"]) {
+    const h = await startHarness({ trustedSignInLabel });
+    try {
+      const page = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
+      const html = await page.text();
+      assert.equal(html.includes('href="/auth/trusted/login"'), Boolean(trustedSignInLabel));
+      if (trustedSignInLabel) assert.match(html, /Sign in with Company SSO/);
+      const request = hiddenRequestToken(html);
+      for (const email of ["invalid", "admin@example.com"]) {
+        const response = await fetch(`${h.base}/authorize`, form({ request, email }));
+        assert.equal((await response.text()).includes('href="/auth/trusted/login"'), Boolean(trustedSignInLabel));
+      }
+    } finally {
+      await h.settle();
+      await h.close();
+    }
+  }
+});
+
+test("trusted sign-in remains available when email is unavailable", async () => {
+  const h = await startHarness({ trustedSignInLabel: "Company SSO", env: { RESEND_API_KEY: undefined } });
+  try {
+    const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
+    assert.equal(response.status, 503);
+    assert.match(await response.text(), /href="\/auth\/trusted\/login"/);
+  } finally {
+    await h.close();
+  }
+});
