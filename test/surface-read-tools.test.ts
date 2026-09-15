@@ -25,7 +25,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     surface: "slack",
     actor,
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
-    deliveryTarget: `slack:${channel}:${root}`,
+    deliveryTarget: `${channel}:${root}`,
     text,
     liveActor: true,
     async: true,
@@ -83,21 +83,22 @@ test("whats_new returns POINTERS (counts of new-here + other active threads), ne
   }
 });
 
-test("search falls back to a live scan when no cache is wired, returning author+snippet pointers", async () => {
+test("search defaults to the current channel mirror and returns author/snippet pointers without a live pull", async () => {
   const built = freshApp();
   built.runtime.start();
   const root = "C11:1100.1";
-  const stop = startFulfiller(built.app, [
-    { ts: "1100.2", author: "Bob", text: "the budget doc is in shared/q2.md" },
-    { ts: "1100.3", author: "Cat", text: "unrelated chatter" },
+  await built.surfaceCache.ingest([
+    { container: "C11", ts: "1100.2", authorName: "Bob", text: "the budget doc is in shared/q2.md" },
+    { container: "C11", ts: "1100.3", authorName: "Cat", text: "unrelated chatter" },
+    { container: "CSECRET", ts: "1100.4", authorName: "Eve", text: "the secret budget" },
   ]);
   try {
     await built.app.turn(mention("!search budget", "C11", "1100.1"));
     const reply = await subToolResult(built, root, "search");
-    assert.match(reply, /search\(live\) 1 hit/);
+    assert.match(reply, /search\(cache\) 1 hit/);
+    assert.deepEqual(await built.app.pendingContextRequests("slack"), []);
     assert.match(reply, /first=Bob:the budget doc/);
   } finally {
-    await stop();
     await built.runtime.stop();
   }
 });
@@ -226,7 +227,7 @@ test("search/whats_new surface the mirror coverage window end-to-end once the mi
   await built.app.ingestSurfaceEvents(
     [
       {
-        container: "slack:C30:3000.1",
+        container: "C30",
         ts: "3000.1",
         authorId: "U2",
         authorName: "Bob",
@@ -241,8 +242,8 @@ test("search/whats_new surface the mirror coverage window end-to-end once the mi
     await built.app.turn(mention("!search budget", "C30", "3000.1"));
     const searchReply = await subToolResult(built, root, "search");
     assert.match(searchReply, /coverage=\d{4}-\d\d-\d\d/, "the search reply carries the mirror coverage floor");
-    await built.app.turn(mention("!whats_new", "C30", "3000.1"));
-    const wnReply = await subToolResult(built, root, "whats_new");
+    await built.app.turn(mention("!whats_new", "C30", "3000.2"));
+    const wnReply = await subToolResult(built, "C30:3000.2", "whats_new");
     assert.match(wnReply, /coverage=\d{4}-\d\d-\d\d/, "whats_new carries the mirror coverage floor");
   } finally {
     await stop();
