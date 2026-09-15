@@ -17,10 +17,9 @@ test("settled and streaming transcript blocks select direction from their conten
   assert.match(chat, /import \{ markdown \} from "\.\/message-markdown"/);
   assert.match(
     messageMarkdown,
-    /<markdown-block\s+dir="auto"\s+\.content=\$\{escapeLoneDollars\(normalizePlainTextFences\(text\)\)\}/,
+    /<qm-markdown\s+dir="auto"\s+\.content=\$\{escapeLoneDollars\(normalizePlainTextFences\(text\)\)\}/,
   );
-  assert.match(chat, /escapedSegs\.map\(\(seg\) => html`<markdown-block dir="auto"/);
-  assert.match(chat, /class="stream-tail"\s+dir="auto"/);
+  assert.match(chat, /\$\{markdown\(body\)\}/);
   assert.match(chat, /class="streaming-text \$\{isStreaming \? "live-stream" : ""\}" dir="auto"/);
 });
 
@@ -63,9 +62,9 @@ for (const content of [
   "Hello https://example.com user_42 10:30",
 ]) {
   test(`automatic direction remains content-level for ${content}`, () => {
-    const dom = new JSDOM('<main><textarea dir="auto"></textarea><markdown-block dir="auto"></markdown-block></main>');
+    const dom = new JSDOM('<main><textarea dir="auto"></textarea><qm-markdown dir="auto"></qm-markdown></main>');
     const textarea = dom.window.document.querySelector("textarea")!;
-    const block = dom.window.document.querySelector("markdown-block") as HTMLElement;
+    const block = dom.window.document.querySelector("qm-markdown") as HTMLElement;
     textarea.value = content;
     block.textContent = content;
     assert.equal(textarea.dir, "auto");

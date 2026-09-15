@@ -38,7 +38,10 @@ test("plain-text code fences stay compact without changing source-code fences", 
 
 test("long plain-text fences collapse by default and remain expandable", () => {
   assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*decorateTextCodeBlocks\(/);
-  assert.match(chat, /normalizePlainTextFences/);
+  assert.match(
+    readFileSync(new URL("../src/message-markdown.ts", import.meta.url), "utf8"),
+    /normalizePlainTextFences/,
+  );
   assert.match(
     css,
     /code-block\.text-code-collapsible\[data-expanded="false"\] \.text-code-body[^}]*max-height: 76px;[^}]*overflow: hidden;/s,

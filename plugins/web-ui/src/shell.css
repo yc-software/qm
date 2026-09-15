@@ -1736,34 +1736,34 @@ a.chat-row-open {
   font-size: 15px;
   line-height: 1.65;
 }
-.assistant-body markdown-block,
-.user-bubble markdown-block {
+.assistant-body :is(markdown-block, qm-markdown),
+.user-bubble :is(markdown-block, qm-markdown) {
   display: block;
 }
-:is(.assistant-body, .user-bubble) markdown-block a {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) a {
   color: var(--markdown-link);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 0.2em;
 }
-:is(.assistant-body, .user-bubble) markdown-block :is(th, td) a {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) :is(th, td) a {
   text-decoration: none;
 }
-:is(.assistant-body, .user-bubble) markdown-block a:is(:hover, :focus-visible) {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) a:is(:hover, :focus-visible) {
   text-decoration: underline;
   text-decoration-color: currentColor;
 }
-:is(.assistant-body, .user-bubble) markdown-block a:focus-visible {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) a:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 3px;
   border-radius: 2px;
 }
-:is(.assistant-body, .user-bubble) markdown-block .overflow-x-auto:has(> table) {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) .overflow-x-auto:has(> table) {
   margin-block: 1.5em;
   border: 0;
   border-radius: 0;
 }
-:is(.assistant-body, .user-bubble) markdown-block :is(th, td) {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) :is(th, td) {
   padding: 0.8em 1em;
   border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
@@ -1771,25 +1771,25 @@ a.chat-row-open {
   vertical-align: top;
   font-variant-numeric: tabular-nums;
 }
-:is(.assistant-body, .user-bubble) markdown-block th {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) th {
   border-bottom-color: color-mix(in srgb, var(--foreground) 20%, transparent);
 }
-:is(.assistant-body, .user-bubble) markdown-block :is(th, td):first-child {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) :is(th, td):first-child {
   padding-inline-start: 0;
 }
-:is(.assistant-body, .user-bubble) markdown-block :is(th, td):last-child {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) :is(th, td):last-child {
   padding-inline-end: 0;
 }
-:is(.assistant-body, .user-bubble) markdown-block :is(th, td)[align="center"] {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) :is(th, td)[align="center"] {
   text-align: center;
 }
-:is(.assistant-body, .user-bubble) markdown-block :is(th, td)[align="right"] {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) :is(th, td)[align="right"] {
   text-align: right;
 }
-:is(.assistant-body, .user-bubble) markdown-block tr:last-child td {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) tr:last-child td {
   border-bottom: 0;
 }
-:is(.assistant-body, .user-bubble) markdown-block :is(h1, h2, h3, h4, h5, h6) {
+:is(.assistant-body, .user-bubble) :is(markdown-block, qm-markdown) :is(h1, h2, h3, h4, h5, h6) {
   margin-block: 1.5em 0.6em;
 }
 .streaming-text {
@@ -1813,21 +1813,27 @@ a.chat-row-open {
     animation: none;
   }
 }
-.assistant-body markdown-block > *:first-child,
-.user-bubble markdown-block > *:first-child {
+.assistant-body :is(markdown-block, qm-markdown) > *:first-child,
+.user-bubble :is(markdown-block, qm-markdown) > *:first-child {
   margin-top: 0;
 }
-.assistant-body markdown-block > *:last-child,
-.user-bubble markdown-block > *:last-child {
+.assistant-body :is(markdown-block, qm-markdown) > *:last-child,
+.user-bubble :is(markdown-block, qm-markdown) > *:last-child {
   margin-bottom: 0;
 }
-.assistant-body .streaming-text markdown-block + markdown-block {
+.assistant-body .streaming-text :is(markdown-block, qm-markdown) + :is(markdown-block, qm-markdown) {
   margin-top: 1rem;
 }
-.assistant-body .streaming-text markdown-block:has(> div > .overflow-x-auto:last-child) + markdown-block {
+.assistant-body
+  .streaming-text
+  :is(markdown-block, qm-markdown):has(> div > .overflow-x-auto:last-child)
+  + :is(markdown-block, qm-markdown) {
   margin-top: 1.5em;
 }
-:is(.assistant-body, .user-bubble) markdown-block:first-of-type > div > :is(h1, h2, h3, h4, h5, h6):first-child {
+:is(.assistant-body, .user-bubble)
+  :is(markdown-block, qm-markdown):first-of-type
+  > div
+  > :is(h1, h2, h3, h4, h5, h6):first-child {
   margin-top: 0;
 }
 .message-bubble {
@@ -2926,24 +2932,24 @@ a.chat-row-open {
   transform: rotate(90deg);
 }
 
-.assistant-body markdown-block :not(pre) > code,
-.user-bubble markdown-block :not(pre) > code {
+.assistant-body :is(markdown-block, qm-markdown) :not(pre) > code,
+.user-bubble :is(markdown-block, qm-markdown) :not(pre) > code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.92em;
   padding: 1px 5px;
   border-radius: 5px;
   background: var(--secondary);
 }
-.assistant-body markdown-block pre,
-.user-bubble markdown-block pre {
+.assistant-body :is(markdown-block, qm-markdown) pre,
+.user-bubble :is(markdown-block, qm-markdown) pre {
   margin: 12px 0;
   padding: 14px 12px;
   border-radius: 8px;
   background: var(--secondary);
   overflow-x: auto;
 }
-.assistant-body markdown-block pre code,
-.user-bubble markdown-block pre code {
+.assistant-body :is(markdown-block, qm-markdown) pre code,
+.user-bubble :is(markdown-block, qm-markdown) pre code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 15px;
   line-height: 1.55;
@@ -10427,12 +10433,12 @@ h3.ambient-field-label {
     font-size: 16px;
     line-height: 1.55;
   }
-  .assistant-body markdown-block pre code,
-  .user-bubble markdown-block pre code {
+  .assistant-body :is(markdown-block, qm-markdown) pre code,
+  .user-bubble :is(markdown-block, qm-markdown) pre code {
     font-size: 13.5px;
   }
-  .assistant-body markdown-block pre,
-  .user-bubble markdown-block pre {
+  .assistant-body :is(markdown-block, qm-markdown) pre,
+  .user-bubble :is(markdown-block, qm-markdown) pre {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
   }

@@ -101,9 +101,7 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
-import { escapeLoneDollars } from "./markdown-dollars";
 import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
-import { splitStreamingMarkdown } from "./streaming-markdown";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import {
   transcriptModel,
@@ -141,7 +139,7 @@ import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
 import { tip } from "./tooltip";
 import { workSeconds, workedLabel } from "./work-duration";
-import { decorateTextCodeBlocks, normalizePlainTextFences } from "./text-code";
+import { decorateTextCodeBlocks } from "./text-code";
 
 import { createTranscriptViewport } from "./transcript-viewport";
 import { suggestedActivities } from "./suggested-activities";
@@ -149,7 +147,6 @@ import { suggestedActivities } from "./suggested-activities";
 installMarkdownSanitizer();
 
 const detachedAgents = new WeakSet<Agent>();
-const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 interface SettledRowKey {
   index: number;
   activity: WorkBlock["activity"] | undefined;
@@ -285,7 +282,6 @@ export function createChatSurface(
   let ctaThreadRef: string | null | undefined;
   let ctaText = CHAT_CTAS[0]!;
   let workTicker: ReturnType<typeof setInterval> | null = null;
-  let revealedTailLen = 0;
   let liveWorkExpanded = false;
 
   function notePendingSessionOnSend(): void {
@@ -1352,7 +1348,6 @@ export function createChatSurface(
       `,
       chatState.host,
     );
-    decorateStreamingTail();
     const host = chatState.host;
     requestAnimationFrame(() => {
       if (chatState.host !== host || chatState.agent !== agent || !host.isConnected) return;
@@ -1361,43 +1356,6 @@ export function createChatSurface(
       scrollTranscript(opts.forceScroll);
     });
     postCurrentPaneState();
-  }
-
-  function decorateStreamingTail(): void {
-    const blocks = chatState.host?.querySelectorAll<HTMLElement>(".streaming-text.live-stream markdown-block");
-    const block = blocks?.length ? blocks[blocks.length - 1] : undefined;
-    if (!block) {
-      revealedTailLen = 0;
-      return;
-    }
-    if (reduceMotion.matches) return;
-    const fullLen = (block.textContent ?? "").replace(/\s+$/u, "").length;
-    const grown = fullLen - revealedTailLen;
-    revealedTailLen = fullLen;
-    if (grown <= 0 || grown > 240) return;
-    const last = lastTextNode(block);
-    if (!last || !last.textContent) return;
-    const visibleEnd = last.textContent.replace(/\s+$/u, "").length;
-    const n = Math.min(grown, visibleEnd);
-    if (n <= 0) return;
-    const tail = last.splitText(visibleEnd - n);
-    if (tail.textContent && tail.textContent.length > n) tail.splitText(n);
-    const parent = tail.parentNode;
-    if (!parent) return;
-    const span = document.createElement("span");
-    span.className = "tok-in";
-    parent.insertBefore(span, tail);
-    span.appendChild(tail);
-  }
-
-  function lastTextNode(el: Node): Text | null {
-    for (let i = el.childNodes.length - 1; i >= 0; i--) {
-      const child = el.childNodes[i]!;
-      if (child.nodeType === Node.TEXT_NODE && /\S/u.test(child.textContent ?? "")) return child as Text;
-      const deep = lastTextNode(child);
-      if (deep) return deep;
-    }
-    return null;
   }
 
   function sessionTopbar(): TemplateResult {
@@ -1801,9 +1759,7 @@ export function createChatSurface(
         const body = links.length ? stripConnectorLinks(shown) : shown;
         if (body.trim())
           parts.push(
-            html`<div class="streaming-text ${isStreaming ? "live-stream" : ""}" dir="auto">
-              ${isStreaming ? streamingMarkdown(body) : markdown(body)}
-            </div>`,
+            html`<div class="streaming-text ${isStreaming ? "live-stream" : ""}" dir="auto">${markdown(body)}</div>`,
           );
         for (const link of links) parts.push(connectorWidget(link));
       }
@@ -1833,30 +1789,6 @@ export function createChatSurface(
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
     if (!files?.length) return nothing;
     return html`<div class="message-files">${files.map((f) => deliveredFileBadge(f))}</div>`;
-  }
-
-  let escapedSegs: string[] = [];
-  let escapedSrc: string[] = [];
-  function streamingMarkdown(text: string): TemplateResult {
-    const { segments, tail } = splitStreamingMarkdown(text);
-    if (segments.length < escapedSrc.length) {
-      escapedSrc = [];
-      escapedSegs = [];
-    }
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i] ?? "";
-      if (escapedSrc[i] !== seg) {
-        escapedSrc[i] = seg;
-        escapedSegs[i] = escapeLoneDollars(normalizePlainTextFences(seg));
-      }
-    }
-    escapedSrc.length = segments.length;
-    escapedSegs.length = segments.length;
-    return html`${escapedSegs.map((seg) => html`<markdown-block dir="auto" .content=${seg}></markdown-block>`)}<markdown-block
-        class="stream-tail"
-        dir="auto"
-        .content=${escapeLoneDollars(normalizePlainTextFences(tail))}
-      ></markdown-block>`;
   }
 
   function messageText(message: AgentMessage): string {

@@ -55,6 +55,8 @@ export function createTurnMethods(
   | "listSessionApprovals"
   | "pendingApprovalForThread"
   | "getRun"
+  | "subscribeRun"
+  | "syncRunStream"
   | "activeRunForThread"
   | "withdrawRun"
   | "signalRun"
@@ -561,6 +563,21 @@ export function createTurnMethods(
 
     pendingApprovalForThread(threadRef, viewer) {
       return pendingApprovalResultForThread(threadRef, viewer);
+    },
+
+    subscribeRun(runId, listener, onResync) {
+      return (
+        deps.runStreamEvents?.subscribe(
+          (event) => {
+            if (event.runId === runId) listener(event);
+          },
+          { onResync },
+        ) ?? (() => {})
+      );
+    },
+
+    syncRunStream(runId, offset) {
+      deps.runStreamEvents?.emit({ runId, kind: "sync", offset });
     },
 
     async getRun(runId, viewer) {

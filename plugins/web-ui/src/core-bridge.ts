@@ -1,3 +1,5 @@
+import { EventType } from "@tanstack/ai/client";
+import { fetchServerSentEvents, StreamProcessor } from "@tanstack/ai-client";
 import { postCallText, postResultOk } from "./surface-post.ts";
 import type { ModelMetadata } from "./pi-models.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -1409,7 +1411,7 @@ export function subscribeDeliveries(
   return () => es.close();
 }
 
-function streamRunViaSse(
+async function streamRunViaSse(
   stream: AssistantMessageEventStream,
   partial: AssistantMessage,
   runId: string,
@@ -1417,96 +1419,63 @@ function streamRunViaSse(
   signal?: AbortSignal,
   notify?: () => void,
 ): Promise<"done" | "fallback"> {
-  return new Promise((resolve) => {
-    if (typeof EventSource === "undefined") return resolve("fallback");
-    let settled = false;
-    let established = false;
-    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
-    const es = new EventSource(withBase(runPath(runId, "/events")));
-    const settle = (outcome: "done" | "fallback"): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(openTimer);
-      clearTimeout(silenceTimer);
-      signal?.removeEventListener("abort", onAbort);
-      es.close();
-      resolve(outcome);
-    };
-    const received = (): void => {
-      established = true;
-      clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => settle("fallback"), SSE_SILENCE_MS);
-    };
-    const onAbort = (): void => {
-      abortStream(stream, partial);
-      settle("done");
-    };
-    const openTimer = setTimeout(() => {
-      if (!established) settle("fallback");
-    }, SSE_OPEN_TIMEOUT_MS);
-    signal?.addEventListener("abort", onAbort);
-    if (signal?.aborted) return onAbort();
-
-    es.onopen = (): void => {
-      received();
-    };
-    es.addEventListener("partial", (e: MessageEvent) => {
-      received();
-      try {
-        const d = JSON.parse(e.data) as { partial?: string };
-        if (typeof d.partial === "string" && d.partial.length > st.acc.length) {
-          st.lastProgressAt = now();
-          pushDelta(stream, partial, st, d.partial);
-        }
-      } catch (e) {
-        swallow("web-ui: handle sse partial event", e);
-      }
-    });
-    es.addEventListener("activity", (e: MessageEvent) => {
-      received();
-      try {
-        const d = JSON.parse(e.data) as { activity?: unknown[]; startedAt?: number | null };
-        const work = (partial as AssistantWork).work;
-        const beforeActivity = work?.activity.length ?? 0;
-        if (mergeWork(work, d)) {
-          if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = now();
-          notify?.();
-        }
-      } catch (e) {
-        swallow("web-ui: handle sse activity event", e);
-      }
-    });
-    es.addEventListener("alive", () => {
-      received();
-      st.lastProgressAt = now();
-    });
-    es.addEventListener("stale", (e: MessageEvent) => {
-      received();
-      try {
-        const d = JSON.parse(e.data) as { stale?: boolean };
-        const stale = d.stale === true;
-        if (stale) st.staleSince ??= now();
-        else st.staleSince = undefined;
-        if (!stale || now() - (st.staleSince ?? 0) < STALE_GRACE_MS) st.lastProgressAt = now();
-        setWorkStale((partial as AssistantWork).work, stale, notify);
-      } catch (e) {
-        swallow("web-ui: handle sse stale event", e);
-      }
-    });
-    es.addEventListener("done", (e: MessageEvent) => {
-      received();
-      try {
-        applyRun(stream, partial, st, JSON.parse(e.data) as RunPoll, notify);
-        settle("done");
-      } catch {
-        settle("fallback");
-      }
-    });
-    es.addEventListener("failed", () => settle("fallback"));
-    es.onerror = (): void => {
-      settle("fallback");
-    };
+  if (typeof window === "undefined") return "fallback";
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) controller.abort();
+  let timer = setTimeout(abort, SSE_OPEN_TIMEOUT_MS);
+  const received = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(abort, SSE_SILENCE_MS);
+  };
+  const processor = new StreamProcessor({
+    initialMessages: [{ id: runId, role: "assistant", parts: [{ type: "text", content: st.acc }] }],
+    events: { onTextUpdate: (_id, text) => pushDelta(stream, partial, st, text) },
   });
+  processor.processChunk({ type: EventType.TEXT_MESSAGE_START, messageId: runId, role: "assistant" });
+  const append = (delta: string): void => {
+    if (!delta) return;
+    st.lastProgressAt = now();
+    processor.processChunk({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: runId, delta });
+  };
+  const transport = fetchServerSentEvents(withBase(runPath(runId, "/events")), {
+    credentials: "same-origin",
+  });
+  try {
+    for await (const event of transport.joinRun(runId, controller.signal)) {
+      received();
+      if (event.type !== "CUSTOM") continue;
+      if (event.name === "delta") {
+        const value = event.value as { offset?: unknown; delta?: unknown };
+        if (
+          typeof value.offset !== "number" ||
+          !Number.isSafeInteger(value.offset) ||
+          value.offset < 0 ||
+          typeof value.delta !== "string"
+        )
+          return "fallback";
+        if (value.offset > st.acc.length) return "fallback";
+        const delta = value.delta.slice(st.acc.length - value.offset);
+        append(delta);
+      } else if (event.name === "run") {
+        const run = event.value as RunPoll;
+        if (typeof run.partial === "string" && run.partial.length > st.acc.length)
+          append(run.partial.slice(st.acc.length));
+        // Completion must carry the final result, including files and approvals.
+        const terminal = run.status === "done" || run.status === "failed" || run.result != null;
+        if (applyRun(stream, partial, st, { ...run, replyComplete: terminal }, notify) === "terminal") return "done";
+        if (run.alive) st.lastProgressAt = now();
+      }
+    }
+    return "fallback";
+  } catch {
+    return "fallback";
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    controller.abort();
+  }
 }
 
 function fail(

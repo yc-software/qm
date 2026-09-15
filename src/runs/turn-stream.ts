@@ -45,6 +45,8 @@ interface Entry {
 export interface TurnStreamOptions {
   maxChars?: number;
   graceMs?: number;
+  onDelta?(runId: string, text: string, offset: number): void;
+  onChange?(runId: string): void;
 }
 
 const DEFAULT_MAX_CHARS = 200_000;
@@ -87,6 +89,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       const entry = runs.get(runId);
       if (entry) entry.replying = true;
       else runs.set(runId, makeEntry());
+      opts.onChange?.(runId);
     },
 
     replying(runId) {
@@ -103,7 +106,12 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       }
       if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
         entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
-      if (entry.text.length < maxChars) entry.text = (entry.text + delta).slice(0, maxChars);
+      const offset = entry.text.length;
+      if (offset < maxChars) {
+        const added = delta.slice(0, maxChars - offset);
+        entry.text += added;
+        opts.onDelta?.(runId, added, offset);
+      }
     },
 
     publishBlockStart(runId) {
@@ -111,7 +119,10 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (!entry) return;
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
-      if (entry.text.length < maxChars) entry.text = (entry.text + BLOCK_JOIN).slice(0, maxChars);
+      const offset = entry.text.length;
+      const added = BLOCK_JOIN.slice(0, Math.max(0, maxChars - offset));
+      entry.text += added;
+      if (added) opts.onDelta?.(runId, added, offset);
     },
 
     noteToolCall(runId) {
@@ -158,6 +169,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       const entry = runs.get(runId);
       if (entry) entry.replyDone = true;
       else runs.set(runId, makeEntry({ replyDone: true }));
+      opts.onChange?.(runId);
     },
 
     isReplyDone(runId) {

@@ -1,3 +1,6 @@
+import { createMemoryEventBus } from "./util/event-bus.ts";
+import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
+import { emitRunText, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
@@ -1307,17 +1310,37 @@ export function buildApp(
     ? createPostgresCredentialUsageSink(config.databaseUrl)
     : createCredentialUsageSink();
   const egressAudit = config.databaseUrl ? createPostgresEgressAuditSink(config.databaseUrl) : createEgressAuditSink();
-  const turnStream = createTurnStream();
+  const runStreamEvents = config.databaseUrl
+    ? createPostgresNotifyBus<RunStreamEvent>(config.databaseUrl, "run_stream", "run-stream")
+    : createMemoryEventBus<RunStreamEvent>("run-stream");
+  const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
+  const turnStream = createTurnStream({
+    onDelta: (runId, text, offset) => emitRunText(runStreamEvents, runId, text, offset),
+    onChange: refreshRunStream,
+  });
+  const stopStreamSync = runStreamEvents.subscribe((event) => {
+    if (event.kind !== "sync") return;
+    const text = turnStream.snapshot(event.runId);
+    if (text) emitRunText(runStreamEvents, event.runId, text.slice(event.offset), event.offset);
+  });
+  runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = config.databaseUrl
     ? createPostgresSessionStateBus(config.databaseUrl)
     : createMemorySessionStateBus();
   const ledgerEventBus: LedgerEventBus = config.databaseUrl
     ? createPostgresLedgerEventBus(config.databaseUrl)
     : createMemoryLedgerEventBus();
-  const runActivity: RunActivityStore =
+  const activityStore: RunActivityStore =
     runStoreKind === "postgres"
       ? createPostgresRunActivityStore(requireDbUrl("RUN_STORE"))
       : createMemoryRunActivityStore();
+  const runActivity: RunActivityStore = {
+    ...activityStore,
+    async append(runId, entry) {
+      await activityStore.append(runId, entry);
+      refreshRunStream(runId);
+    },
+  };
   const deployStore = createDeployStore({
     deployments: artifactMap<Deployment>("deployments"),
     ...(pgArtifactMap ? { pg: pgArtifactMap.pool } : {}),
@@ -1718,6 +1741,7 @@ export function buildApp(
     leaseTtlMs,
     maxAttempts,
     turnStream,
+    runStreamEvents,
     runActivity,
     signals: runSignals,
     tasks,
@@ -2125,6 +2149,8 @@ export function buildApp(
       void sessionStateBus.close?.();
       void ledgerEventBus.close?.();
       void runActivity.close?.();
+      stopStreamSync();
+      void runStreamEvents.close?.();
       await harness.turns.close?.();
       await tasks.close?.();
     },

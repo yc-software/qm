@@ -6,6 +6,7 @@ import { blobRoutes } from "./blobs.ts";
 import { sessionStateRawRoutes } from "./session-state.ts";
 import { loopItemEventsRawRoutes } from "./loop-item-events.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
+import { runEventRoutes } from "./run-events.ts";
 import { turnRoutes } from "./turns.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
@@ -57,6 +58,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...searchRoutes,
   ...deploymentLayerRoutes,
   ...turnRoutes,
+  ...runEventRoutes,
   ...credentialRoutes,
   ...keychainRoutes,
   ...secretDropRoutes,

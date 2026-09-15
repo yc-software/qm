@@ -12,6 +12,7 @@ class FakeEventSource {
   onerror: (() => void) | null = null;
   listeners = new Map<string, Array<(event: { data: string }) => void>>();
   closed = false;
+  controller?: ReadableStreamDefaultController<Uint8Array>;
   url: string;
   constructor(url: string) {
     this.url = url;
@@ -20,11 +21,29 @@ class FakeEventSource {
   addEventListener(name: string, listener: (event: { data: string }) => void) {
     this.listeners.set(name, [...(this.listeners.get(name) ?? []), listener]);
   }
+  response(signal?: AbortSignal | null) {
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        this.controller = controller;
+      },
+    });
+    signal?.addEventListener("abort", () => this.close(), { once: true });
+    this.controller!.enqueue(
+      new TextEncoder().encode(`data: ${JSON.stringify({ type: "RUN_STARTED", threadId: "r1", runId: "r1" })}\n\n`),
+    );
+    return new Response(body, { headers: { "content-type": "text/event-stream" } });
+  }
   emit(name: string, data: unknown) {
+    if (this.controller && !this.closed) {
+      const event = { type: "CUSTOM", name: "run", value: data };
+      this.controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+    }
     for (const listener of this.listeners.get(name) ?? []) listener({ data: JSON.stringify(data) });
   }
   close() {
+    if (this.closed) return;
     this.closed = true;
+    this.controller?.close();
   }
 }
 
@@ -96,9 +115,11 @@ test("post replies remain visible in new and continuing conversations", async (t
   let intercept: ((path: string) => Promise<Response> | undefined) | undefined;
   const requests: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     const path = String(input);
     requests.push(path);
+    if (path.includes("/api/runs/") && path.includes("/events"))
+      return new FakeEventSource(new URL(path, "http://localhost").pathname).response(init?.signal);
     const intercepted = intercept?.(path);
     if (intercepted) return intercepted;
     if (path.includes("runtime-config"))

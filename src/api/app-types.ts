@@ -1,3 +1,5 @@
+import type { EventBus } from "../util/event-bus.ts";
+import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
 import type {
@@ -266,6 +268,8 @@ export interface App {
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
+  subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
+  syncRunStream(runId: string, offset: number): void;
   getRun(
     runId: string,
     viewer?: string,
@@ -569,6 +573,7 @@ export interface AppDeps {
   maxAttempts: number;
   runWaitMs?: number;
   turnStream?: TurnStream;
+  runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
   tasks?: TaskStore;

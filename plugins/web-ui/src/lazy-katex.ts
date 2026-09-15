@@ -9,7 +9,7 @@ function escapeHtml(text: string): string {
 
 function rerenderMountedBlocks(): void {
   if (typeof document === "undefined") return;
-  for (const el of document.querySelectorAll("markdown-block")) {
+  for (const el of document.querySelectorAll("markdown-block, qm-markdown")) {
     (el as { requestUpdate?: () => void }).requestUpdate?.();
   }
 }

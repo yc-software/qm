@@ -112,10 +112,6 @@ const runOwners = new Map<string, string>();
 const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
 
-function ownsRun(runId: string, user: string): boolean {
-  return runOwners.get(runId) === user;
-}
-
 function threadKey(user: string, threadRef: string): string {
   return `${user}\0${threadRef}`;
 }
@@ -240,19 +236,6 @@ function relay(res: ServerResponse, r: { status: number; text: string }): void {
 
 function sendHtml(res: ServerResponse, status: number, html: string): void {
   sendBuffered(res, status, withSecurityHeaders({ "content-type": "text/html; charset=utf-8" }), html);
-}
-
-const SSE_CORE_POLL_MS = 100;
-const SSE_STALE_POLL_MS = 1_000;
-const SSE_IDLE_MS = 6 * 60_000;
-const SSE_STALE_GRACE_MS = 10 * 60_000;
-const SSE_HEARTBEAT_MS = 15_000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => {
-    const t = setTimeout(r, ms);
-    t.unref?.();
-  });
 }
 
 function sseEvent(res: ServerResponse, event: string, data: unknown): void {
@@ -462,6 +445,7 @@ async function drainWebDeliveries(): Promise<void> {
   }
 }
 
+const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
 interface SessionStateFrame {
@@ -2322,118 +2306,41 @@ const apiRoutes: readonly WebRoute[] = [
     method: "GET",
     path: "/api/runs/:id/events",
     handle: async (c) => {
-      const { req, res, user } = c;
+      const { res } = c;
       const id = c.params.id!;
-      let closed = false;
-      req.on("close", () => {
-        closed = true;
-      });
-      if (!ownsRun(id, user)) {
-        const auth = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-        if (auth.status < 200 || auth.status >= 300)
-          return json(res, auth.status === 404 ? 404 : 502, {
-            error: auth.status === 404 ? "not_found" : "upstream_error",
-          });
+      const controller = new AbortController();
+      res.on("close", () => controller.abort());
+      const path = withSourceAuthNonce(`/v1/runs/${encodeURIComponent(id)}/events`, CORE_SIGNING_SECRET);
+      const portalTok = portalTokenStore.getStore();
+      try {
+        const upstream = await fetch(`${CORE}${path}`, {
+          headers: {
+            ...signedHeaders(CORE_SIGNING_SECRET, "GET", path, ""),
+            ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+          },
+          signal: controller.signal,
+          redirect: "manual",
+        });
+        if (controller.signal.aborted) return;
+        if (!upstream.ok || !upstream.body) {
+          json(res, upstream.status, { error: "stream_unavailable" });
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        const source = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
+        source.on("error", () => res.destroy());
+        source.pipe(res);
+      } catch {
+        if (!controller.signal.aborted) {
+          if (res.headersSent) res.destroy();
+          else json(res, 502, { error: "stream_unavailable" });
+        }
       }
-      if (closed) return;
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-      res.write(": open\n\n");
-      let acc = "";
-      let activityLen = 0;
-      let lastStale: boolean | null = null;
-      let staleSince: number | null = null;
-      let lastProgressAt = Date.now();
-      let lastBeat = lastProgressAt;
-      for (;;) {
-        if (closed) return;
-        let r: { status: number; text: string };
-        try {
-          r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-        } catch {
-          try {
-            r = await coreFetch("GET", `/v1/runs/${encodeURIComponent(id)}`);
-          } catch {
-            sseEvent(res, "failed", { reason: "upstream_unreachable" });
-            break;
-          }
-        }
-        if (closed) return;
-        if (r.status < 200 || r.status >= 300) {
-          sseEvent(res, "failed", { reason: `HTTP ${r.status}` });
-          break;
-        }
-        let run: {
-          status?: string;
-          result?: unknown;
-          partial?: string;
-          alive?: boolean;
-          stale?: boolean;
-          replyComplete?: boolean;
-          activity?: unknown[];
-          startedAt?: number | null;
-          finishedAt?: number | null;
-        } = {};
-        let parsed = true;
-        try {
-          run = JSON.parse(r.text);
-        } catch {
-          parsed = false;
-        }
-        const now = Date.now();
-        const partial = typeof run.partial === "string" ? run.partial : "";
-        const activity = Array.isArray(run.activity) ? run.activity : [];
-        if (partial.length > acc.length) {
-          acc = partial;
-          sseEvent(res, "partial", { partial: acc });
-          lastProgressAt = now;
-          lastBeat = now;
-        }
-        if (activity.length > activityLen) {
-          activityLen = activity.length;
-          sseEvent(res, "activity", { activity, startedAt: run.startedAt ?? null });
-          lastProgressAt = now;
-          lastBeat = now;
-        }
-        if (parsed) {
-          if (run.stale === true) staleSince ??= now;
-          else staleSince = null;
-          if ((run.stale === true) !== lastStale) {
-            lastStale = run.stale === true;
-            sseEvent(res, "stale", { stale: lastStale });
-            lastBeat = now;
-          }
-        }
-        if (now - lastBeat > SSE_HEARTBEAT_MS) {
-          if (run.alive === true) sseEvent(res, "alive", { at: now });
-          else if (lastStale === true) sseEvent(res, "stale", { stale: true });
-          else res.write(": ping\n\n");
-          lastBeat = now;
-        }
-        if (run.alive === true || (staleSince !== null && now - staleSince < SSE_STALE_GRACE_MS)) lastProgressAt = now;
-        const terminal = run.status === "done" || run.status === "failed" || run.result != null;
-        if (terminal || run.replyComplete) {
-          forgetRun(id);
-          sseEvent(res, "done", {
-            status: run.status ?? null,
-            result: run.result ?? null,
-            partial: acc,
-            activity,
-            replyComplete: run.replyComplete ?? false,
-            startedAt: run.startedAt ?? null,
-            finishedAt: run.finishedAt ?? null,
-          });
-          break;
-        }
-        if (now - lastProgressAt > SSE_IDLE_MS) break;
-        await sleep(lastStale === true ? SSE_STALE_POLL_MS : SSE_CORE_POLL_MS);
-      }
-      if (!closed) res.end();
-      return;
     },
   },
   {
