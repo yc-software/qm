@@ -278,7 +278,7 @@ export function registerSlackEvents(
         const isMention = mentionsBot(m.text ?? "", ids.botUserId);
         const threadTs = m.thread_ts;
         const willDispatch = Boolean(
-          threadReply && !isMention && threadTs && (await botHasStakeInThread(client, m.channel, threadTs)),
+          threadReply && !isMention && threadTs && (await botHasStakeInThread(client, m.channel, threadTs, m.ts)),
         );
         await mirrorMessageEvent(m, client, willDispatch ? { handled: true } : {});
         if (!threadReply) return;

@@ -107,7 +107,7 @@ export interface TurnHandler {
   handleIncoming(inc: Incoming, client: any): Promise<void>;
   dispatch(key: string, inc: Incoming, client: any): Promise<void>;
   handleReactionEvent(evt: SlackReactionEvent, eventId: string | undefined, client: any, added: boolean): Promise<void>;
-  botHasStakeInThread(client: any, channel: string, threadTs: string): Promise<boolean>;
+  botHasStakeInThread(client: any, channel: string, threadTs: string, before?: string): Promise<boolean>;
 }
 
 function channelType(kind: SlackConversationKind, conversationKind: SlackConversationKind): string {
@@ -169,13 +169,25 @@ export function createTurnHandler(deps: {
 
   const reactionsInFlight = new Set<string>();
 
-  async function botHasStakeInThread(client: any, channel: string, threadTs: string): Promise<boolean> {
+  async function botHasStakeInThread(
+    client: any,
+    channel: string,
+    threadTs: string,
+    before?: string,
+  ): Promise<boolean> {
     const cached = threads.get(channel, threadTs);
     if (cached !== undefined) return cached;
     try {
       const messages = deps.readHistory
-        ? (await deps.readHistory(client, channel, threadTs)).raw
-        : ((await client.conversations.replies({ channel, ts: threadTs, limit: 200 })).messages ?? []);
+        ? (await deps.readHistory(client, channel, threadTs, before)).raw
+        : ((
+            await client.conversations.replies({
+              channel,
+              ts: threadTs,
+              limit: 200,
+              ...(before ? { latest: before, inclusive: false } : {}),
+            })
+          ).messages ?? []);
       const present = threadHasBotStake(messages, ids.botUserId, ids.ownBotId);
       threads.mark(channel, threadTs, present);
       return present;

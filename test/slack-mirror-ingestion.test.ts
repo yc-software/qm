@@ -4,7 +4,10 @@ import bolt from "@slack/bolt";
 import { createMirror } from "../src/slack/mirror.ts";
 import { registerSlackEvents } from "../src/slack/events.ts";
 import { createDirectory, type BotIdentity } from "../src/slack/directory.ts";
-import { createDeduper } from "../src/slack/lib.ts";
+import { createTurnHandler, type TurnHandler } from "../src/slack/turn-handler.ts";
+import { createSlackHistoryReader } from "../src/slack/history.ts";
+import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { createDeduper, createThreadTracker } from "../src/slack/lib.ts";
 import { createDeferredEnvelopeAck } from "../src/slack/deferred-ack.ts";
 
 const ids: BotIdentity = {
@@ -16,7 +19,14 @@ const ids: BotIdentity = {
   identityMode: "slack-id",
 };
 
-function fixture(options: { ingest?: (events: any[]) => Promise<void>; external?: boolean; directory?: any } = {}) {
+function fixture(
+  options: {
+    ingest?: (events: any[]) => Promise<void>;
+    external?: boolean;
+    directory?: any;
+    stake?: TurnHandler["botHasStakeInThread"];
+  } = {},
+) {
   const events: any[] = [];
   const dispatches: any[] = [];
   const directory = options.directory ?? {
@@ -63,7 +73,7 @@ function fixture(options: { ingest?: (events: any[]) => Promise<void>; external?
       dispatch: async (...args: any[]) => {
         dispatches.push(args);
       },
-      botHasStakeInThread: async () => false,
+      botHasStakeInThread: options.stake ?? (async () => false),
       handleReactionEvent: async (...args: any[]) => {
         dispatches.push(args);
       },
@@ -343,4 +353,92 @@ test("thread broadcast snapshots retain broadcast membership through metadata up
     previous_message: { text: "reply" },
   });
   assert.equal(f.events[1].broadcast, undefined);
+});
+
+test("real message handler checks prior stake before ingesting the current reply without a shadow miss", async (t) => {
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([
+    { container: "C1", ts: "1.000001", text: "root", authorId: "U1" },
+    { container: "C1", ts: "2.000001", sub: "1.000001", text: "prior reply", authorId: "UBOT", self: true },
+  ]);
+  const calls: any[] = [];
+  const records: any[] = [];
+  t.mock.method(console, "info", (text: string) => {
+    records.push(JSON.parse(text));
+  });
+  const currentTs = "3.000001";
+  const client = {
+    conversations: {
+      replies: async (args: any) => {
+        calls.push(args);
+        assert.deepEqual(args, { channel: "C1", ts: "1.000001", limit: 200, latest: currentTs, inclusive: false });
+        assert.equal((await cache.readMessages("C1", { at: currentTs })).length, 0);
+        return {
+          messages: [
+            { ts: "1.000001", user: "U1", text: "root" },
+            { ts: "2.000001", thread_ts: "1.000001", user: "UBOT", text: "prior reply" },
+          ],
+          has_more: false,
+        };
+      },
+    },
+  };
+  const reader = createSlackHistoryReader({
+    source: "shadow",
+    ids,
+    core: { readSurfaceMessages: (channel: string, opts: any) => cache.readMessages(channel, opts) } as any,
+    historyClient: client as never,
+  });
+  const threads = createThreadTracker();
+  const handler = createTurnHandler({ directory: {}, mirror: {}, flow: {}, ids, threads, readHistory: reader } as any);
+  const f = fixture({
+    stake: handler.botHasStakeInThread,
+    ingest: async (events) => {
+      await cache.ingest(events);
+    },
+  });
+  await f.fire({
+    type: "message",
+    channel: "C1",
+    channel_type: "channel",
+    user: "U1",
+    ts: currentTs,
+    thread_ts: "1.000001",
+    text: "follow-up",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.dispatches.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].liveMessages, 2);
+  assert.equal(records[0].matchingMessages, 2);
+  assert.equal(records[0].liveMessagesMissingFromStorage, 0);
+  assert.equal(records[0].liveMessagesMissingFromMirror, 0);
+  assert.equal(await handler.botHasStakeInThread(client, "C1", "1.000001", "4.000001"), true);
+  assert.equal(calls.length, 1);
+});
+
+test("stake fallback bounds Slack replies while omitted cutoff and negative tracking remain unchanged", async () => {
+  const calls: any[] = [];
+  const client = {
+    conversations: {
+      replies: async (args: any) => {
+        calls.push(args);
+        return { messages: [] };
+      },
+    },
+  };
+  const handler = createTurnHandler({
+    directory: {},
+    mirror: {},
+    flow: {},
+    ids,
+    threads: createThreadTracker(),
+  } as any);
+  assert.equal(await handler.botHasStakeInThread(client, "C1", "1", "3"), false);
+  assert.deepEqual(calls[0], { channel: "C1", ts: "1", limit: 200, latest: "3", inclusive: false });
+  assert.equal(await handler.botHasStakeInThread(client, "C1", "1", "4"), false);
+  assert.equal(calls.length, 1);
+  assert.equal(await handler.botHasStakeInThread(client, "C1", "5"), false);
+  assert.deepEqual(calls[1], { channel: "C1", ts: "5", limit: 200 });
 });
