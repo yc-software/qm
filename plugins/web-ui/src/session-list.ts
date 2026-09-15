@@ -211,3 +211,21 @@ export function conversationBackground(
   const row = list.find((s) => (sessionId ? s.id === sessionId : Boolean(threadRef) && s.threadRef === threadRef));
   return row ? rowIndicators(row, null).background : null;
 }
+
+export function shouldStartProactiveOpener(state: {
+  started: boolean;
+  sessionId: string | null;
+  scopeId: string | null;
+  messageCount: number;
+  loaded: boolean;
+  sessions: readonly Pick<CoreSession, "id" | "threadRef">[];
+}): boolean {
+  return (
+    !state.started &&
+    state.sessionId === null &&
+    state.scopeId === null &&
+    state.messageCount === 0 &&
+    state.loaded &&
+    !state.sessions.some((session) => session.id && !session.threadRef.startsWith("cron:"))
+  );
+}
