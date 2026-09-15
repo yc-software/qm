@@ -3042,7 +3042,7 @@ a.chat-row-open {
   margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
   border: 1px solid var(--border);
-  border-radius: 24px;
+  border-radius: 20px;
   background: var(--background);
   box-shadow:
     0 2px 5px rgb(0 0 0 / 0.06),
@@ -3065,7 +3065,7 @@ a.chat-row-open {
   font: inherit;
   font-size: var(--composer-font-size);
   line-height: 1.5;
-  padding: 3px 4px 8px;
+  padding: 7px 8px 8px;
   box-sizing: border-box;
 }
 .composer-input::placeholder {
@@ -10423,13 +10423,13 @@ h3.ambient-field-label {
     --composer-pad-inline: 10px;
     --composer-pad-end: 8px;
     padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
-    border-radius: 22px;
+    border-radius: 20px;
   }
   .composer-input {
     line-height: 1.4;
     min-height: 40px;
     max-height: 32vh;
-    padding: 8px 6px 6px;
+    padding: 12px 10px 6px;
   }
   .composer-wrap.compact .composer-toolbar {
     flex-wrap: nowrap;
