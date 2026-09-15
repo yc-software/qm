@@ -338,6 +338,7 @@ export function themeTokens(palette: Palette): ThemeTokens {
     "--card-foreground": fg,
     "--popover": step(0.1, 0),
     "--popover-foreground": fg,
+    "--markdown-link": link,
     "--primary": action,
     "--primary-foreground": textOn(action),
     "--secondary": step(0.09, 0.04),
