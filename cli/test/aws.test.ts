@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   assertAwsDeploymentStorage,
+  assertAwsServiceDiscovery,
   assertAwsPublicListener,
   assertAwsPublicRouting,
   assertGithubDeployTrust,
@@ -5091,3 +5092,43 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
     }
   }
 });
+
+for (const shared of [false, true]) {
+  test(`AWS doctor checks ${shared ? "shared" : "dedicated"} discovery through ECS registrations`, () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-discovery-"));
+    const namespace = shared ? "shared.internal" : "acme.internal";
+    const discoveryName = shared ? "acme-core" : "core";
+    const arn = "arn:aws:servicediscovery:us-west-2:123456789012:namespace/ns-shared";
+    const fake = fakeAws(
+      dir,
+      `
+if (a.includes("list-namespaces")) console.log(JSON.stringify({Namespaces:[{Id:"ns-shared",Name:${JSON.stringify(namespace)},Arn:${JSON.stringify(arn)}}]}));
+else if (a.includes("list-services")) console.log(JSON.stringify({Services:[{Name:${JSON.stringify(discoveryName)},Arn:"arn:registration"}]}));
+else console.log("");`,
+    );
+    try {
+      const endpoint = {
+        portName: "core",
+        discoveryName,
+        clientAliases: [{ dnsName: "core.acme.internal", port: 8080 }],
+      };
+      const connect = { enabled: true, namespace: arn, services: [endpoint] };
+      const services = new Map([
+        ["core", { deployments: [{ status: "PRIMARY", serviceConnectConfiguration: connect }] }],
+      ]);
+      assert.doesNotThrow(() => assertAwsServiceDiscovery(oneServiceConfig(), services));
+      endpoint.clientAliases[0]!.dnsName = "core.other.internal";
+      assert.throws(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /client alias/);
+      endpoint.clientAliases[0]!.dnsName = "core.acme.internal";
+      endpoint.discoveryName = "missing";
+      assert.throws(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /is missing from/);
+      endpoint.discoveryName = discoveryName;
+      connect.namespace = "missing.internal";
+      assert.throws(() => assertAwsServiceDiscovery(oneServiceConfig(), services), /missing Cloud Map namespace/);
+      assert.match(readFileSync(fake.log, "utf8"), /Values=ns-shared/);
+    } finally {
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
