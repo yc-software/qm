@@ -8258,33 +8258,6 @@ h3.ambient-field-label {
   display: none;
 }
 
-[data-density] .composer-wrap {
-  --composer-pad-block: 6px;
-  --composer-pad-inline: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 2px;
-  /* Chrome only: the column width and side gutters stay with the rules above, which key off
-     the surface's own width — a pane that fills a wide window centres the composer on the
-     transcript column instead of stretching across it, and a narrow one still runs full-bleed. */
-  margin-bottom: 10px;
-  padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
-  border-radius: 16px;
-}
-[data-density] .composer-input {
-  flex: 1 1 120px;
-  min-height: 0;
-  max-height: 120px;
-  padding: 6px 6px 7px;
-}
-[data-density] .composer-toolbar {
-  display: contents;
-}
-[data-density] .composer-left,
-[data-density] .composer-right {
-  width: auto;
-}
 [data-density] .composer-toolbar .icon-btn,
 [data-density] .composer-toolbar .menu-button,
 [data-density] .composer-toolbar .send-btn {
