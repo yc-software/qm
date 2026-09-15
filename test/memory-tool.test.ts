@@ -57,7 +57,7 @@ test("memorySearch() queries ONLY the session's resolved memory scope, and is bo
   assert.deepEqual(await channelCtx.memorySearch("billing"), []);
 });
 
-test("memorySearch() honors the explicit limit and never the model's scope (no scope param exists)", async () => {
+test("memorySearch() honors the explicit limit", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-lim-")));
   const memory = createMemoryService(workspace);
   const personal = scopeId("personal", "U1");
@@ -210,15 +210,15 @@ test("a read-only wake keeps `memory` but refuses its write actions", async () =
   assert.equal((await memory.read(personal)).includes("- x"), false);
 });
 
-test("the `memory` tool params expose NO scope field — the model cannot redirect the notebook", () => {
+test("the `memory` tool exposes a scope selector for authorized reads", () => {
   const memoryTool = createAgentTools({ current: null }).find((t) => t.name === "memory");
   assert.ok(memoryTool);
   const props = (memoryTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
-  assert.deepEqual(Object.keys(props).sort(), ["action", "content", "facts", "limit", "query"]);
-  assert.equal("scope" in props, false);
+  assert.deepEqual(Object.keys(props).sort(), ["action", "content", "facts", "limit", "query", "scope"]);
+  assert.equal("scope" in props, true);
 });
 
-test("capture-off policy: search still works, but read/remember/rewrite are unavailable (mirrors the self-API claim)", async () => {
+test("capture-off policy: search/read work, but remember/rewrite are unavailable", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-policy-")));
   const memory = createMemoryService(workspace);
   const personal = scopeId("personal", "U1");
@@ -242,7 +242,7 @@ test("capture-off policy: search still works, but read/remember/rewrite are unav
     memoryAccess: { read: [personal] },
   });
   assert.deepEqual(await ctx.memorySearch("billing"), ["(2026-05-31) Owns the billing service"]);
-  assert.equal(await ctx.memoryRead(), null);
+  assert.match((await ctx.memoryRead()) ?? "", /billing service/);
   assert.equal(await ctx.memoryRemember(["a fact"]), null);
   assert.equal(await ctx.memoryRewrite("# Memory\n"), null);
   assert.doesNotMatch(await memory.read(personal), /a fact/);
@@ -274,6 +274,23 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     memoryScopeId: personal,
     memoryAccess: { write: personal, read: [personal, org] },
   });
+  assert.match((await ctx.memoryRead(org)) ?? "", /### org:default-org[\s\S]*December/);
+  assert.equal(await ctx.memoryRead("personal:someone-else"), null);
+  assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);
+  assert.deepEqual(await ctx.memorySearch("deploys", 20, org), [
+    `[${org}] (2026-05-31) deploys are frozen in December`,
+  ]);
+  const ref: ToolContextRef = { current: ctx, emit: () => {}, scopeLabel: personal };
+  const tool = createAgentTools(ref).find((t) => t.name === "memory");
+  assert.match(textOf(await call(tool, { action: "read", scope: org })), /December/);
+  assert.match(textOf(await call(tool, { action: "read", scope: "personal:someone-else" })), /isn't available/);
+  assert.match(textOf(await call(tool, { action: "rewrite", scope: org, content: "stolen" })), /scope is only allowed/);
+  assert.match(
+    textOf(await call(tool, { action: "remember", scope: org, facts: ["stolen"] })),
+    /scope is only allowed/,
+  );
+  assert.doesNotMatch(await memory.read(org), /stolen/);
+  assert.doesNotMatch(await memory.read(personal), /stolen/);
   const hits = await ctx.memorySearch("deploys");
   assert.deepEqual(hits, [
     `[${personal}] (2026-05-31) deploys happen on Fridays`,

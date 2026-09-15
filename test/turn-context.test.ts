@@ -63,13 +63,19 @@ async function fixture() {
   };
 }
 
-test("one context loads full source-labelled notebooks and shares authority with search and files", async () => {
+test("one context bounds recall and shares authority with full notebook reads, search, and files", async () => {
   const { input, auditLog } = await fixture();
   const context = await resolveTurnContext(input);
   const recalled = await context.recall();
   assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
-  assert.match(recalled, /### channel:eng[\s\S]*SHARED_FACT[\s\S]*LAST_FACT/);
-  assert.ok(recalled.length > 12000, "no relevance or per-notebook recall truncation");
+  assert.match(recalled, /### channel:eng[\s\S]*LAST_FACT/);
+  assert.ok(recalled.length <= 6000, "one recall budget across notebooks");
+  const full = await context.readMemory("channel:eng");
+  assert.match(full ?? "", /SHARED_FACT[\s\S]*LAST_FACT/);
+  assert.ok(full!.length > 12000, "explicit reads still return the whole notebook");
+  assert.deepEqual(await context.searchMemory("SHARED_FACT", 20, "channel:eng"), ["[channel:eng] SHARED_FACT"]);
+  assert.equal(await context.readMemory("personal:other"), null);
+  assert.equal(await context.searchMemory("SHARED_FACT", 20, "personal:other"), null);
   assert.deepEqual(await context.searchMemory("LAST_FACT"), ["[channel:eng] LAST_FACT"]);
   assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
   assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
@@ -107,6 +113,8 @@ for (const mode of [
     const context = await resolveTurnContext(input);
     assert.doesNotMatch(await context.recall(), /SHARED_FACT|LAST_FACT/);
     assert.deepEqual((await context.searchMemory("LAST_FACT")) ?? [], []);
+    assert.equal(await context.readMemory("channel:eng"), null);
+    assert.equal(await context.searchMemory("LAST_FACT", 20, "channel:eng"), null);
     if (!mode.startsWith("memory-")) {
       assert.deepEqual(context.listFiles(), []);
       assert.equal(await context.readFile("shared/open-channel-eng/plan.txt"), null);
@@ -116,10 +124,11 @@ for (const mode of [
 
 test("fresh turn re-resolves membership after an earlier successful read", async () => {
   const { input, removeMember } = await fixture();
-  assert.match(await (await resolveTurnContext(input)).recall(), /SHARED_FACT/);
+  assert.match(await (await resolveTurnContext(input)).recall(), /LAST_FACT/);
   removeMember();
   const next = await resolveTurnContext(input);
-  assert.doesNotMatch(await next.recall(), /SHARED_FACT/);
+  assert.doesNotMatch(await next.recall(), /SHARED_FACT|LAST_FACT/);
+  assert.equal(await next.readMemory("channel:eng"), null);
   assert.equal(await next.readFile("shared/open-channel-eng/plan.txt"), null);
 });
 

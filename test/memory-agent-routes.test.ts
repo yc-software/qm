@@ -62,6 +62,34 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   const U1 = scopeId("personal", "U1");
   const ORG = scopeId("org", "default-org");
 
+  it("reads another authorized notebook without write permission", async () => {
+    await built.memory.replace(ORG, "- other scope fact");
+    const cap = await capFor("U1", { read: [U1, ORG] });
+    const response = await get(`/v1/memory/self?scope=${ORG}`, { "x-agent-capability": cap });
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { content: string }).content.trim(), "- other scope fact");
+  });
+
+  it("scope-selected search/read cannot escape the token and read access cannot write", async () => {
+    const readOnly = await capFor("U1", { read: [U1, ORG] });
+    const headers = { "x-agent-capability": readOnly };
+    await built.memory.replace(ORG, "- scope lookup remote");
+    const result = await post("/v1/memory/search", { query: "scope lookup", scope: ORG }, headers);
+    assert.equal(result.status, 200);
+    assert.deepEqual(((await result.json()) as { results: unknown[] }).results, [
+      { scopeId: ORG, fact: "scope lookup remote" },
+    ]);
+    assert.equal((await get("/v1/memory/self?scope=personal:U2", headers)).status, 403);
+    assert.equal(
+      (await post("/v1/memory/search", { query: "scope lookup", scope: "personal:U2" }, headers)).status,
+      403,
+    );
+    assert.equal((await post("/v1/memory/search", { query: "scope lookup", scope: [ORG] }, headers)).status, 400);
+    assert.equal((await put("/v1/memory/self", { content: "should not land", scope: ORG }, headers)).status, 400);
+    assert.equal((await put("/v1/memory/self", { content: "should not land", scope: "org" }, headers)).status, 403);
+    assert.doesNotMatch(await built.memory.read(ORG), /should not land/);
+  });
+
   it("appends facts to the token's writable scope and reads them back", async () => {
     const cap = await capFor("U1", { write: U1, read: [U1] });
     const res = await post(
@@ -187,7 +215,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       (await post("/v1/memory/facts", { facts: ["x"], scope: "personal:U2" }, { "x-agent-capability": cap })).status,
       400,
     );
-    assert.equal((await get("/v1/memory/self?scope=team", { "x-agent-capability": cap })).status, 400);
+    assert.equal((await get("/v1/memory/self?scope=team", { "x-agent-capability": cap })).status, 403);
   });
 
   it("403s search when the token carries no read scopes (recall off)", async () => {
@@ -198,7 +226,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   it("403s writes when the token carries no write scope (capture off)", async () => {
     const cap = await capFor("U1", { read: [U1] });
     assert.equal((await post("/v1/memory/facts", { facts: ["x"] }, { "x-agent-capability": cap })).status, 403);
-    assert.equal((await get("/v1/memory/self", { "x-agent-capability": cap })).status, 403);
+    assert.equal((await get("/v1/memory/self", { "x-agent-capability": cap })).status, 200);
     assert.equal((await put("/v1/memory/self", { content: "" }, { "x-agent-capability": cap })).status, 403);
   });
 
