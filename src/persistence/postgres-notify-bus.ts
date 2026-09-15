@@ -1,8 +1,8 @@
-import { createPgPool, type PoolClient } from "./pg-pool.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { createPgPool } from "./pg-pool.ts";
+import { swallowAs } from "../util/errors.ts";
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 
-const RECONNECT_DELAY_MS = 1_000;
+import { subscribePostgresChannel } from "./postgres-listener.ts";
 export const MAX_NOTIFY_PAYLOAD_BYTES = 7_500;
 
 function encodeCapped<T>(event: T): string | null {
@@ -20,50 +20,24 @@ export function createPostgresNotifyBus<T>(
   const pg = createPgPool(connectionString, []);
   const local = createMemoryEventBus<T>(label);
 
-  let listenClient: PoolClient | null = null;
-  let connecting = false;
+  let stopListening: (() => Promise<void>) | null = null;
   let closed = false;
+  let cleanup = Promise.resolve();
 
-  function dropListenClient(): void {
-    const client = listenClient;
-    listenClient = null;
-    if (client) client.release(true);
+  function dropListenClient() {
+    const stop = stopListening;
+    stopListening = null;
+    if (stop) cleanup = Promise.all([cleanup, stop()]).then(() => {});
   }
 
-  function ensureListening(): void {
-    if (closed || connecting || listenClient || local.size() === 0) return;
-    connecting = true;
-    void (async () => {
-      const client = await (await pg.sessionPool()).connect();
-      client.on("notification", (msg) => {
-        if (msg.channel !== channel || !msg.payload) return;
-        try {
-          local.emit(JSON.parse(msg.payload) as T);
-        } catch (e) {
-          swallow(`${label} notification parse`, e);
-        }
-      });
-      client.on("error", () => {
-        dropListenClient();
-        setTimeout(() => ensureListening(), RECONNECT_DELAY_MS).unref?.();
-      });
-      try {
-        await client.query(`LISTEN ${channel}`);
-      } catch (e) {
-        client.release(true);
-        throw e;
-      }
-      listenClient = client;
-      local.resync();
-    })()
-      .catch(swallowAs(`${label}: listen connect`, undefined))
-      .finally(() => {
-        connecting = false;
-        if (closed) dropListenClient();
-        else if (!listenClient && local.size() > 0) {
-          setTimeout(() => ensureListening(), RECONNECT_DELAY_MS).unref?.();
-        }
-      });
+  function ensureListening() {
+    if (closed || stopListening || local.size() === 0) return;
+    stopListening = subscribePostgresChannel(
+      connectionString,
+      channel,
+      (payload) => local.emit(JSON.parse(payload) as T),
+      () => local.resync(),
+    );
   }
 
   return {
@@ -76,12 +50,16 @@ export function createPostgresNotifyBus<T>(
     subscribe(cb, opts) {
       const off = local.subscribe(cb, opts);
       ensureListening();
-      return off;
+      return () => {
+        off();
+        if (local.size() === 0) dropListenClient();
+      };
     },
 
     async close() {
       closed = true;
       dropListenClient();
+      await cleanup;
       await pg.close();
     },
   };

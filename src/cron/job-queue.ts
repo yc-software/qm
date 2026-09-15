@@ -1,4 +1,5 @@
 import { PgBoss } from "pg-boss";
+import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 import { errMessage } from "../util/errors.ts";
 
@@ -31,15 +32,30 @@ export function createPgBossCronQueue(
   schema: string = "pgboss",
   fireConcurrency: number = 1,
 ): CronJobQueue {
-  const boss = new PgBoss({ connectionString: databaseUrl, schema, max: 5 });
+  let pg: PgPool | null = null;
+  const boss = new PgBoss({
+    schema,
+    db: {
+      executeSql: async (text, values) => {
+        if (!pg) throw new Error("Cron queue database is closed");
+        return (await pg.pool()).query(text, values);
+      },
+    },
+  });
+  async function closePool() {
+    const previous = pg;
+    pg = null;
+    await previous?.close();
+  }
   boss.on("error", (e) => console.error("[cron-queue] pg-boss error:", errMessage(e)));
   let ticker: Sweeper | null = null;
   let started = false;
   let lastSendOkAt = 0;
   return {
     async start(handlers, tickIntervalMs) {
-      await boss.start();
+      pg ??= createPgPool(databaseUrl, []);
       try {
+        await boss.start();
         await boss.createQueue(FIRE_QUEUE, { policy: "short", notify: true });
         await boss.createQueue(TICK_QUEUE, { policy: "short", notify: true });
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
@@ -53,6 +69,7 @@ export function createPgBossCronQueue(
         await boss.work(TICK_QUEUE, { pollingIntervalSeconds: 1 }, () => handlers.onTick());
       } catch (e) {
         await boss.stop({ close: true, graceful: false }).catch(() => {});
+        await closePool();
         throw e;
       }
       started = true;
@@ -83,7 +100,11 @@ export function createPgBossCronQueue(
     async stop() {
       started = false;
       ticker?.stop();
-      await boss.stop({ close: true, graceful: false });
+      try {
+        await boss.stop({ close: true, graceful: false });
+      } finally {
+        await closePool();
+      }
     },
   };
 }
