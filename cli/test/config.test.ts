@@ -822,10 +822,23 @@ test("AWS rejects coordinates that its Terraform-derived resources cannot accept
   );
 });
 
-test("sandbox.env (literals) + sandbox.secretEnv (resolved) become FLY_RESIDENT_ENV_<KEY>", () => {
+test("sandbox.env (literals) + sandbox.secretEnv (resolved) become FLY_RESIDENT_ENV_<KEY> (aws target, sprites backend)", () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    imageLabel: "release",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
+  };
   withConfig(
     {
+      target: "aws",
+      aws,
       sandbox: {
+        backend: "sprites",
         app: "acme-sandboxes",
         env: { TZ: "America/Los_Angeles" },
         secretEnv: ["COMPANY_API_TOKEN"],
@@ -843,6 +856,35 @@ test("sandbox.env (literals) + sandbox.secretEnv (resolved) become FLY_RESIDENT_
       assert.equal(missing.env.FLY_RESIDENT_ENV_TZ, "America/Los_Angeles");
     },
   );
+});
+
+test('target "docker" rejects sandbox.env/secretEnv on the default and sprites backends (dead Fly resident-env writes)', () => {
+  const cases: unknown[] = [
+    { app: "acme-sandboxes", env: { TZ: "UTC" } },
+    { app: "acme-sandboxes", secretEnv: ["COMPANY_API_TOKEN"] },
+    { app: "acme-sandboxes", env: { TZ: "UTC" }, secretEnv: ["COMPANY_API_TOKEN"] },
+    { app: "acme-sandboxes", secretEnv: [] },
+    { backend: "sprites", app: "acme-sandboxes", env: { TZ: "UTC" } },
+    { backend: "sprites", app: "acme-sandboxes", secretEnv: ["COMPANY_API_TOKEN"] },
+  ];
+  for (const sandbox of cases) {
+    withConfig({ sandbox }, ({ path }) =>
+      assert.throws(
+        () => loadConfigAt(path),
+        /target "docker" does not support .*org service credential.*"delivery": "env"/,
+        `expected ${JSON.stringify(sandbox)} rejected`,
+      ),
+    );
+  }
+});
+
+test('target "docker" still deploys sandbox.app-only configs (default and explicit sprites backend)', () => {
+  withConfig({ sandbox: { app: "acme-sandboxes" } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.sandbox?.app, "acme-sandboxes");
+  });
+  withConfig({ sandbox: { backend: "sprites", app: "acme-sandboxes" } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
+  });
 });
 
 test("no sandbox block → no injected env, lenient undefined app", () => {
