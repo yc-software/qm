@@ -527,7 +527,11 @@ test("stake fallback bounds Slack replies while omitted cutoff and negative trac
 
 test("reaction turns preserve the reacted message in the mirror", async () => {
   const cache = createMemorySurfaceCache();
-  const f = fixture({ ingest: (events) => cache.ingest(events) });
+  const f = fixture({
+    ingest: async (events) => {
+      await cache.ingest(events);
+    },
+  });
   const client = { reactions: { get: async () => ({ message: { text: "Original bot answer", user: "UBOT" } }) } };
   await f.mirror.mirrorMessageEvent(
     { channel: "D1", channel_type: "im", ts: "100.001", text: "Original bot answer", user: "UBOT" },
