@@ -212,7 +212,6 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
   if (!appState.mainEl) return;
   syncWebhookUrl(w.id, opts.push);
   const eventsHost = document.createElement("section");
-  eventsHost.className = "webhook-history";
   const notice = webhooksNotice || webhooksNoticeSticky;
   webhooksNotice = "";
   webhooksNoticeSticky = "";
@@ -301,7 +300,6 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
 }
 
 interface WebhookEventView {
-  deliveryId: string;
   receivedAt: number;
   payload: string;
   sessionId?: string;
@@ -327,16 +325,15 @@ async function loadWebhookEvents(id: string, host: HTMLElement): Promise<void> {
           events.length
             ? events.map(
                 (event) => html`
-                  <details class="webhook-event">
-                    <summary>
+                  <details class="code-card">
+                    <summary class="tool-payload-label">
                       <time datetime=${new Date(event.receivedAt).toISOString()}
                         >${new Date(event.receivedAt).toLocaleString()}</time
                       >
                     </summary>
-                    <div class="webhook-event-body">
-                      <div class="hint mono">${event.deliveryId}</div>
-                      ${event.sessionId ? html`<a href=${deepLinkPath(UI_BASE, "chats", event.sessionId)}>Open session</a>` : html`<span class="hint">No session available.</span>`}
-                      <pre class="webhook-event-payload">${event.payload}</pre>
+                    <pre class="tool-payload-body">${event.payload}</pre>
+                    <div class="code-card-foot">
+                      ${event.sessionId ? html`<a class="btn" href=${deepLinkPath(UI_BASE, "chats", event.sessionId)}>Open session</a>` : html`<span class="hint">No session available.</span>`}
                     </div>
                   </details>
                 `,

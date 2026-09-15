@@ -324,15 +324,17 @@ test("linear rejects signed untimed deliveries without firing a turn", async () 
   assert.equal(calls.length, 1);
 });
 
+const historyWebhook = {
+  ownerScopeId: scopeId("personal", "U1"),
+  owner: "U1",
+  createdBy: "U1",
+  action: "summarize",
+  verification: { scheme: "github" as const, secret: SECRET },
+};
+
 test("history records the agent payload once per delivery without request headers", async () => {
   const { webhooks, receiver } = harness();
-  const wh = await webhooks.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-    action: "summarize",
-    verification: { scheme: "github", secret: SECRET },
-  });
+  const wh = await webhooks.create(historyWebhook);
   const req = githubReq(JSON.stringify({ message: "<script>alert(1)</script>", long: "x".repeat(20_000) }));
   await Promise.all([receiver.deliver(wh.id, req), receiver.deliver(wh.id, req)]);
   await flush();
@@ -347,11 +349,7 @@ test("history records the agent payload once per delivery without request header
 test("history excludes rejected signatures, handshakes and filtered deliveries", async () => {
   const { webhooks, receiver } = harness();
   const wh = await webhooks.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-    action: "summarize",
-    verification: { scheme: "github", secret: SECRET },
+    ...historyWebhook,
     filters: [{ path: "action", in: ["opened"] }],
   });
   const bad = githubReq('{"action":"opened"}');
@@ -365,13 +363,7 @@ test("history excludes rejected signatures, handshakes and filtered deliveries",
 
 test("history capture failure rejects before acknowledging or starting a turn", async () => {
   const { webhooks, calls, receiver } = harness();
-  const wh = await webhooks.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-    action: "summarize",
-    verification: { scheme: "github", secret: SECRET },
-  });
+  const wh = await webhooks.create(historyWebhook);
   webhooks.recordEvent = async () => {
     throw new Error("history unavailable");
   };

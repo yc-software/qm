@@ -240,7 +240,7 @@ test("inbound per-webhook auth holds even in core dev mode (no core secret)", as
   }
 });
 
-test("history requires the webhook's viewer permission, including on signed requests", async () => {
+test("signed webhook history enforces viewer permissions and links to an owner-readable worklog", async () => {
   const srv = start(SECRET);
   try {
     const body = regBody();
@@ -261,21 +261,6 @@ test("history requires the webhook's viewer permission, including on signed requ
       if (status === 200) assert.deepEqual(await res.json(), { events: [] });
     }
     assert.equal((await fetch(`${srv.base}/v1/webhooks/${webhook.id}/events?viewer=U1`)).status, 401);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("signed ingress produces a history entry whose worklog is readable only by its owner", async () => {
-  const srv = start(SECRET);
-  try {
-    const body = regBody();
-    const created = await fetch(`${srv.base}/v1/webhooks`, {
-      method: "POST",
-      headers: sign("POST", "/v1/webhooks", body),
-      body,
-    });
-    const { webhook } = (await created.json()) as { webhook: { id: string } };
     const eventBody = JSON.stringify({ message: "agent message for worklog" });
     const accepted = await fetch(`${srv.base}/v1/webhooks/incoming/${webhook.id}`, {
       method: "POST",
