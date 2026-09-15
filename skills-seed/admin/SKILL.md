@@ -167,7 +167,8 @@ where the admin acts directly. If asked, point them there — don't try the API
   answer: the dashboard.
 - `409 that address already belongs to a member of the org …` — org email domain, Slack
   directory, sign-in allow-list, or someone who has already used the agent. They are not
-  external; point the admin at Users / Admins for that person instead.
+  external; to promote them, point the admin at Grant org admin in the dashboard and
+  tell them to enter the email as the principal ID. The person need not appear in Users first.
 - `409 that address holds an org admin grant of its own …` — the admin manages that grant
   under Admins in the dashboard first.
 - `403 capability token not valid for this route` — this core predates agent admin

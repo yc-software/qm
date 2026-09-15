@@ -224,7 +224,7 @@ test("an address that already belongs to an org member cannot be invited", async
     ]) {
       const r = await invite(s.base, { email, expiresAt });
       assert.equal(r.status, 409, email);
-      assert.match(((await r.json()) as any).message, /already belongs to a member/);
+      assert.match(((await r.json()) as any).message, /already belongs to a member.*Grant org admin.*email/s);
       assert.equal(s.built.identity.externalMember(email), undefined, email);
     }
     assert.equal(adminStatusFromGrants(await s.built.admin.listGrants(), "ceo@other.example").isAdmin, true);
