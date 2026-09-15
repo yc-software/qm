@@ -318,10 +318,7 @@ async function loadWebhookEvents(id: string, host: HTMLElement): Promise<void> {
     if (!host.isConnected) return;
     render(
       html`
-        <div class="resource-heading">
-          <h3>Message history</h3>
-          <button class="btn" @click=${() => void loadWebhookEvents(id, host)}>Refresh</button>
-        </div>
+        <h3>Message history</h3>
         <p class="hint">
           Latest 50 accepted events. Payloads show what was passed to the agent, capped at 16,000 characters. Earlier
           events are not backfilled.
