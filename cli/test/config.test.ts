@@ -934,6 +934,11 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
   withConfig({ target: "aws", aws, sandbox: { backend: "sprites", app: "acme-sandboxes" } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
   });
+  withConfig({ target: "aws", aws, sandbox: { backend: "sprites" } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.equal(config.sandbox?.backend, "sprites");
+    assert.equal(config.sandbox?.app, undefined);
+  });
   withConfig({ target: "aws", aws, sandbox: { backend: "aws" } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox?.backend, "aws");
   });

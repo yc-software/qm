@@ -1508,11 +1508,6 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   if (out.image && !out.app && out.backend !== "local") {
     throw new CliError(`${path}: "sandbox.image" requires "sandbox.app" unless "sandbox.backend" is "local"`);
   }
-  if (out.backend === "sprites" && !out.app) {
-    throw new CliError(
-      `${path}: "sandbox.backend": ${JSON.stringify(out.backend)} requires "sandbox.app" (the Fly app agents execute in)`,
-    );
-  }
   if (SANDBOX_BACKEND_POLICY[target].requireExplicit && out.backend === undefined) {
     throw new CliError(
       `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" runs Fly Sprites; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
