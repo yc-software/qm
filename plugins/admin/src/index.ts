@@ -347,6 +347,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const method = req.method ?? "GET";
 
   const serveShell = async (): Promise<void> => {
+    if (process.env.QM_SLACK_SERVICE_URL) res.setHeader("referrer-policy", "strict-origin");
     const shell = brandedShell(await brandCache.forRender());
     const gz = gzipAccepted(req);
     const etag = gz ? shell.gzipEtag : shell.etag;
