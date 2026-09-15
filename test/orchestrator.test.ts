@@ -511,6 +511,46 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
   }
 });
 
+test("granted env credentials are announced without secrets and disappear after revocation", async () => {
+  const { app, serviceCreds, acl } = freshApp({ apiBaseUrl: "https://core.example.com" });
+  const org = scopeId("org", "default-org");
+  await serviceCreds.setServiceCredential(org, {
+    slug: "composio",
+    name: "Composio",
+    delivery: "env",
+    envKey: "COMPOSIO_API_KEY",
+    secret: "synthetic-composio-secret",
+    host: "backend.composio.dev",
+  });
+  const prompt = async (suffix: string) => {
+    const result = await app.turn(
+      dm("!sysprompt", { conversation: { kind: "dm", threadRef: `dm:U1:discovery-${suffix}` } }),
+    );
+    assert.equal(result.status, "ok");
+    assert.doesNotMatch(result.reply ?? "", /synthetic-composio-secret/);
+    return result.reply ?? "";
+  };
+  assert.doesNotMatch(await prompt("ungranted"), /COMPOSIO_API_KEY/);
+  await grantCred(acl, org, "composio");
+  const granted = await prompt("granted");
+  assert.match(granted, /## Org credentials on your computer/);
+  assert.match(granted, /`composio`.*`COMPOSIO_API_KEY`/);
+  assert.doesNotMatch(granted, /Do not suggest or offer any app connection/);
+  await acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin@default-org");
+  assert.doesNotMatch(await prompt("revoked"), /COMPOSIO_API_KEY/);
+  await grantCred(acl, org, "composio");
+  await serviceCreds.setServiceCredential(org, {
+    slug: "composio",
+    name: "Composio",
+    delivery: "env",
+    envKey: "COMPOSIO_API_KEY",
+    secret: "synthetic-composio-secret",
+    host: "backend.composio.dev",
+    enabled: false,
+  });
+  assert.doesNotMatch(await prompt("disabled"), /COMPOSIO_API_KEY/);
+});
+
 test("org env-delivery credentials ride provision env under their envKey — read live, so a rotation applies next turn", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
@@ -594,8 +634,9 @@ test("a disabled or broker-delivery credential never rides provision env", async
     return realProvision(layers, opts);
   };
 
-  const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:env3" } }));
+  const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env3" } }));
   assert.equal(res.status, "ok");
+  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
   const env = captures.at(-1)?.env ?? {};
   assert.equal(env.STEEL_API_KEY, undefined, "disabled env credential stays home");
   assert.ok(
@@ -633,8 +674,9 @@ test("a credential flipped away from env between the metadata read and the secre
     return realProvision(layers, opts);
   };
 
-  const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:env4" } }));
+  const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env4" } }));
   assert.equal(res.status, "ok");
+  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a mid-flight env→broker flip never rides the env");
 });
 
@@ -663,7 +705,7 @@ test("env-delivery injection is all-internal only, and an existing env key (keyc
   };
 
   const externalRoom = await app.turn(
-    dm("!run echo keys", {
+    dm("!sysprompt", {
       conversation: {
         kind: "channel",
         threadRef: "ch:C9:t9",
@@ -674,6 +716,7 @@ test("env-delivery injection is all-internal only, and an existing env key (keyc
     }),
   );
   assert.equal(externalRoom.status, "ok");
+  assert.doesNotMatch(externalRoom.reply ?? "", /## Org credentials on your computer/);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a room with externals gets no org env credentials");
 });
 
@@ -700,13 +743,15 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
     return realProvision(layers, opts);
   };
 
-  let res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
+  let res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
   assert.equal(res.status, "ok");
+  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "ungranted env credential stays home");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "somebody-else"));
-  res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:gate2" } }));
+  res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate2" } }));
   assert.equal(res.status, "ok");
+  assert.doesNotMatch(res.reply ?? "", /## Org credentials on your computer/);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a grant to someone else does not admit this actor");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "U1"));

@@ -1338,6 +1338,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       perf.credsMs += Date.now() - credsStart;
       let sharedCredsBlock = "";
+      const envCredLines: string[] = [];
       let egressTokenForTurn: string | undefined;
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
@@ -1375,8 +1376,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
             continue;
           const rec = await deps.serviceCreds.getServiceCredentialSecret(orgScope, cred.slug);
-          if (rec?.secret && rec.delivery === "env" && rec.enabled && rec.envKey === cred.envKey)
+          if (rec?.secret && rec.delivery === "env" && rec.enabled && rec.envKey === cred.envKey) {
             connectorEnv[cred.envKey] = rec.secret;
+            envCredLines.push(`- \`${cred.slug}\` → \`${cred.envKey}\``);
+          }
         }
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
@@ -1808,6 +1811,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         systemPrompt += sharedCredsBlock;
+        if (envCredLines.length) {
+          systemPrompt +=
+            "\n\n## Org credentials on your computer\n" +
+            "These credentials are authorized for this conversation and supplied to commands on its scoped computer, not scratch computers. " +
+            "Use the matching access skill. Never print secret values or save them in source or workspace files.\n" +
+            envCredLines.join("\n");
+        }
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +

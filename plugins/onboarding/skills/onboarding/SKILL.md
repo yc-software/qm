@@ -10,7 +10,7 @@ their tools connected, a durable profile, and one or two useful automations prop
 running. Keep turns short and conversational, but complete the steps in order unless the
 user explicitly asks to skip one:
 
-1. Offer the app connections configured by the admin.
+1. Discover and offer app connections through an authorized access skill.
 2. Choose how you should sound.
 3. Read connected tools for a real work snapshot.
 4. Confirm your read, then propose and—with approval—create concrete help.
@@ -42,12 +42,17 @@ The surface already authenticated the user. Greet them by name; do not ask their
 role, and do not research them in the opening turn. Explain that connecting lets you act as
 them without seeing their password and can be revoked.
 
-Read the live Connected apps block. Offer only providers it says were configured by the
-admin. If it says none are enabled, skip this step without naming or suggesting
-other providers. The greeting and capability examples must follow that same allowlist:
-do not advertise, name, ask about, or promise a provider that is not listed. Otherwise
-ask which available services they use, mint links only for those choices, and present
-the returned `connectUrl` values together:
+Check the live credential inventory first. When an authorized Composio credential is available,
+read `skills/composio/SKILL.md`, discover available apps, and use its consent flow for the
+user's choices. Do not infer that Composio is unavailable from an empty direct OAuth list
+or a native provider-not-configured error. Explicit app restrictions and account permissions
+still apply; never switch credentials to evade a denial.
+
+For direct OAuth, the live Connected apps block is the complete allowlist of providers
+configured by the admin. Offer direct OAuth links only for that list. If it is empty and
+no other authorized access path is available, skip account connection without advertising
+unsupported apps. Otherwise ask which available services they use and present the returned
+`connectUrl` values together:
 
 ```bash
 curl -sS -X POST "$AGENT_API_URL/v1/connectors/oauth/consent/mint" \

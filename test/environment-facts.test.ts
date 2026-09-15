@@ -89,8 +89,8 @@ test("logins block: shows active with a check, inactive with its exact reauth co
 test("connected-apps block: lists only admin-configured providers and the exact connection URL", () => {
   const url = "https://qm.example/keychain";
   const unavailable = renderConnectedAppsBlock(null, [], url);
-  assert.match(unavailable, /No app connections are enabled by the admin/);
-  assert.match(unavailable, /Do not suggest or offer any app connection/);
+  assert.match(unavailable, /No direct OAuth app connections are configured/);
+  assert.match(unavailable, /does not describe app access through separately authorized credentials/);
 
   const none: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { google: { connected: false } } };
   const available = renderConnectedAppsBlock(none, ["google"], url);
