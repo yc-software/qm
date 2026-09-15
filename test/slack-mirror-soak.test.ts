@@ -158,3 +158,145 @@ test("secondary Slack accounts inherit the explicitly selected shadow mode", () 
   });
   assert.equal(account?.contextSource, "shadow");
 });
+
+test("shadow distinguishes stored messages with wrong parents from ingestion loss", async (t) => {
+  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([
+    { container: "C1", ts: "1", text: "root" },
+    { container: "C1", ts: "2", sub: "wrong", text: "reply" },
+  ]);
+  const logs: string[] = [];
+  t.mock.method(console, "info", (line: string) => logs.push(line));
+  const reader = createSlackHistoryReader({
+    ids,
+    source: "shadow",
+    core: {
+      readSurfaceMessages: cache.readMessages,
+      rememberSurfaceHistory: async () => {
+        throw new Error("shadow must never repair what it measures");
+      },
+    } as unknown as SlackCoreClient,
+  });
+  await reader(
+    {
+      conversations: {
+        replies: async () => ({
+          messages: [
+            { ts: "1", text: "root" },
+            { ts: "2", thread_ts: "1", text: "reply" },
+            { ts: "3", thread_ts: "1", text: "absent" },
+          ],
+        }),
+      },
+    },
+    "C1",
+    "1",
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const result = JSON.parse(logs[0]!);
+  assert.equal(result.liveMessagesMissingFromStorage, 1);
+  assert.equal(result.liveMessagesMissingFromMirror, 2);
+  assert.equal(result.threadParentMismatches, 1);
+  assert.equal(result.storedMessages, 2);
+  assert.equal(result.matchingMessages, 1);
+});
+
+test("shadow normalizes mentions without erasing literal entity or attachment differences", async (t) => {
+  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([
+    { container: "C1", ts: "1", text: "Hi <@U1> &lt;", mentions: { U1: "Alice" } },
+    { container: "C1", ts: "2", text: "<" },
+    { container: "C1", ts: "3", text: "file", files: [{ fileId: "old" }] },
+  ]);
+  const logs: string[] = [];
+  t.mock.method(console, "info", (line: string) => logs.push(line));
+  const reader = createSlackHistoryReader({
+    ids,
+    source: "shadow",
+    core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
+  });
+  await reader(
+    {
+      conversations: {
+        history: async () => ({
+          messages: [
+            { ts: "3", text: "file", files: [{ id: "new" }] },
+            { ts: "2", text: "&amp;lt;" },
+            { ts: "1", text: "Hi <@U1> &amp;lt;" },
+          ],
+        }),
+      },
+    },
+    "C1",
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const result = JSON.parse(logs[0]!);
+  assert.equal(result.textMismatches, 1);
+  assert.equal(result.fileMismatches, 1);
+  assert.equal(result.matchingMessages, 1);
+  assert.equal(result.liveMessagesMissingFromStorage, 0);
+});
+
+test("mirror selects channel roots and expands five recent threads with Slack page ordering", async () => {
+  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
+  const cache = createMemorySurfaceCache();
+  const ts = (n: number) => String(n).padStart(6, "0");
+  await cache.ingest(Array.from({ length: 205 }, (_, i) => ({ container: "C1", ts: ts(i), text: "root" })));
+  await cache.ingest(
+    Array.from({ length: 250 }, (_, i) => ({ container: "C1", ts: ts(300 + i), sub: ts(204), text: "reply" })),
+  );
+  const read = createSlackHistoryReader({
+    ids,
+    source: "mirror",
+    core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
+  });
+  const roots = await read({}, "C1");
+  assert.equal(roots.raw.length, 200);
+  assert.equal(roots.raw[0]?.ts, ts(5));
+  assert.equal(roots.raw.at(-1)?.ts, ts(204));
+  const thread = await read({}, "C1", ts(204));
+  assert.equal(thread.raw.length, 200);
+  assert.equal(thread.raw[0]?.ts, ts(204));
+  assert.equal(thread.raw.at(-1)?.ts, ts(498));
+  const expanded = await read({}, "C1", undefined, undefined, true);
+  assert.equal(expanded.raw.length, 399);
+  assert.equal(expanded.raw.at(-1)?.ts, ts(498));
+});
+
+test("shadow never certifies failed or truncated live thread expansion as complete", async (t) => {
+  const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
+  const cache = createMemorySurfaceCache();
+  await cache.ingest([{ container: "C1", ts: "1", text: "root" }]);
+  const logs: string[] = [];
+  t.mock.method(console, "info", (line: string) => logs.push(line));
+  for (const fail of [true, false]) {
+    const reader = createSlackHistoryReader({
+      ids,
+      source: "shadow",
+      core: { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient,
+    });
+    await reader(
+      {
+        conversations: {
+          history: async () => ({ messages: [{ ts: "1", text: "root", reply_count: 1 }] }),
+          replies: async () => {
+            if (fail) throw new Error("rate limited");
+            return { messages: [{ ts: "1", text: "root" }], has_more: true };
+          },
+        },
+      },
+      "C1",
+      undefined,
+      undefined,
+      true,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const result = JSON.parse(logs.at(-1)!);
+    assert.equal(result.matchingMessages, 1);
+    assert.equal(result.liveComplete, false);
+    assert.equal(result.liveExpansionFailures, fail ? 1 : 0);
+    assert.equal(result.liveTruncatedExpansions, fail ? 0 : 1);
+  }
+});

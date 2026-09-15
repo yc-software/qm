@@ -164,7 +164,7 @@ export function createTurnHandler(deps: {
     externalParticipantsEnabled,
   } = deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
-  const { mirrorSelfPost, mirrorMessageEvent } = mirror;
+  const { mirrorMessageEvent } = mirror;
   const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
@@ -228,16 +228,12 @@ export function createTurnHandler(deps: {
       });
       if (idempotencyKey) {
         const res = await postWithVerify(client, replyArgs(msg, true) as PostMessageArgs, idempotencyKey);
-        for (const part of res.parts ?? [{ ts: res.ts, text: msg }]) {
-          mirrorSelfPost(inc.channel, part.ts, part.text, { sub: replyThreadTs });
-        }
         return res.ts;
       }
       const parts = blocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
       let firstTs: string | undefined;
       for (const [i, part] of parts.entries()) {
         const ts = (await client.chat.postMessage(replyArgs(part, parts.length === 1))).ts as string | undefined;
-        mirrorSelfPost(inc.channel, ts, part, { sub: replyThreadTs });
         if (i === 0) firstTs = ts;
       }
       return firstTs;
@@ -370,9 +366,7 @@ export function createTurnHandler(deps: {
               ...(metadata ? { metadata } : {}),
               ...botIdentityArgs(),
             })
-            .then(() => {
-              mirrorSelfPost(inc.channel, ts, text, { sub: replyThreadTs, editedAt: Date.now() });
-            }),
+            .then(() => {}),
         checkpoint: async (ts) => {
           if (queuedRunId) await core.reportRunEditRef(queuedRunId, ts);
         },
@@ -385,9 +379,7 @@ export function createTurnHandler(deps: {
       goalNotice = createGoalNoticePresenter({
         post: (text, blocks) => postReply(text, blocks),
         update: (ts, text, blocks) =>
-          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {
-            mirrorSelfPost(inc.channel, ts, text, { sub: replyThreadTs, editedAt: Date.now() });
-          }),
+          client.chat.update({ channel: inc.channel, ts, text, blocks, ...botIdentityArgs() }).then(() => {}),
         onError: (error) => console.error("[slack-plugin] goal notice update failed:", (error as Error).message),
       });
     }
@@ -402,6 +394,7 @@ export function createTurnHandler(deps: {
           channel: inc.channel,
           ts: inc.ts,
           text: inc.rawText,
+          files: inc.files,
           user: inc.userId,
           thread_ts: inc.threadTs,
           channel_type: channelType(inc.kind, conversationKind),

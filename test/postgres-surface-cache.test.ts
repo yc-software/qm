@@ -303,3 +303,141 @@ test("pg mirror reads sanitize NUL, retain files and preserve newer text on a ha
     await cache.close();
   }
 });
+
+test("cache revisions preserve attachments and parent against stale handled events", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  try {
+    const base = { container: "CSNAPSHOT", ts: "2.0" };
+    await cache.ingest([{ ...base, sub: "1.0", text: "latest", editedAt: 20, files: [{ fileId: "F1", name: "one" }] }]);
+    await cache.ingest([
+      { ...base, sub: "wrong", text: "stale", editedAt: 10, handled: true, files: [{ fileId: "F2" }] },
+    ]);
+    let [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.text, "latest");
+    assert.equal(message?.sub, "1.0");
+    assert.equal(message?.handled, true);
+    assert.deepEqual(
+      message?.files?.map((f) => f.fileId),
+      ["F1"],
+    );
+    await cache.ingest([{ ...base, sub: null, text: "root corrected", editedAt: 30 }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.sub, undefined);
+    assert.deepEqual(
+      message?.files?.map((f) => f.fileId),
+      ["F1"],
+    );
+    await cache.ingest([{ ...base, text: "replacement", editedAt: 40, files: [{ fileId: "F2", name: "renamed" }] }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.sub, undefined);
+    assert.deepEqual(
+      message?.files?.map((f) => [f.fileId, f.name]),
+      [["F2", "renamed"]],
+    );
+    await cache.ingest([{ ...base, text: "empty", editedAt: 50, files: [] }]);
+    await cache.ingest([{ ...base, text: "stale", editedAt: 40, files: [{ fileId: "F2" }] }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.text, "empty");
+    assert.equal(message?.files?.length ?? 0, 0);
+    await cache.ingest([{ ...base, deleted: true }]);
+    await cache.ingest([{ ...base, sub: "wrong", text: "revive", editedAt: 60, files: [{ fileId: "F3" }] }]);
+    [message] = await cache.readMessages(base.container, { at: base.ts, includeDeleted: true });
+    assert.equal(message?.deleted, true);
+    assert.equal(message?.text, "empty");
+    assert.equal(message?.sub, undefined);
+    assert.equal(message?.files?.length ?? 0, 0);
+  } finally {
+    await cache.close();
+  }
+});
+
+test("cache selects exact timestamps and oldest pages with live reply counts", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  try {
+    const container = "CSELECT";
+    await cache.ingest([
+      { container, ts: "1.0", sub: null, text: "first" },
+      { container, ts: "2.0", sub: "1.0", text: "reply" },
+      { container, ts: "3.0", sub: "1.0", text: "deleted reply", deleted: true },
+      { container, ts: "4.0", sub: null, text: "second root" },
+      { container: "OTHER", ts: "5.0", sub: "1.0", text: "other container" },
+    ]);
+    assert.deepEqual(
+      (await cache.readMessages(container, { timestamps: ["4.0", "1.0", "missing"] })).map((m) => m.ts),
+      ["1.0", "4.0"],
+    );
+    assert.deepEqual(await cache.readMessages(container, { timestamps: [] }), []);
+    await assert.rejects(cache.readMessages(container, { timestamps: Array(501).fill("1.0") }), /500/);
+    const [oldest] = await cache.readMessages(container, { sub: null, oldestFirst: true, limit: 1 });
+    assert.equal(oldest?.ts, "1.0");
+    assert.equal(oldest?.replyCount, 1);
+    assert.deepEqual(
+      (await cache.readMessages(container, { sub: null, limit: 1 })).map((m) => m.ts),
+      ["4.0"],
+    );
+    assert.deepEqual(
+      (await cache.readMessages(container, { sub: "1.0", oldestFirst: true })).map((m) => m.ts),
+      ["2.0"],
+    );
+    await cache.ingest([{ container, ts: "2.0", sub: null, text: "corrected" }]);
+    assert.equal((await cache.readMessages(container, { at: "1.0" }))[0]?.replyCount, 0);
+  } finally {
+    await cache.close();
+  }
+});
+
+test("pg attachment snapshots roll back with a failed ingestion transaction", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  try {
+    const base = { container: "CATOMIC", ts: "1.0" };
+    await cache.ingest([{ ...base, text: "original", files: [{ fileId: "F1" }], editedAt: 10 }]);
+    await assert.rejects(
+      cache.ingest([
+        { ...base, text: "replacement", files: [], editedAt: 20 },
+        { container: base.container, ts: "invalid timestamp", text: "invalid" },
+      ]),
+    );
+    const [message] = await cache.readMessages(base.container, { at: base.ts });
+    assert.equal(message?.text, "original");
+    assert.deepEqual(
+      message?.files?.map((f) => f.fileId),
+      ["F1"],
+    );
+  } finally {
+    await cache.close();
+  }
+});
+
+test("channel history includes broadcasts while exact roots exclude them", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  try {
+    const container = "CBROADCAST";
+    await cache.ingest([
+      { container, ts: "1.0", sub: null, text: "root" },
+      { container, ts: "2.0", sub: "1.0", text: "ordinary reply" },
+      { container, ts: "3.0", sub: "1.0", text: "broadcast", broadcast: true, editedAt: 20 },
+    ]);
+    await cache.ingest([
+      { container, ts: "3.0", sub: "1.0", text: "stale", broadcast: false, editedAt: 10, handled: true },
+    ]);
+    await cache.ingest([{ container, ts: "3.0", sub: "1.0", text: "edit without subtype", editedAt: 30 }]);
+    assert.deepEqual(
+      (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
+      ["1.0", "3.0"],
+    );
+    assert.deepEqual(
+      (await cache.readMessages(container, { sub: null })).map((m) => m.ts),
+      ["1.0"],
+    );
+    assert.equal((await cache.readMessages(container, { at: "3.0" }))[0]?.broadcast, true);
+    await cache.ingest([
+      { container, ts: "3.0", sub: "1.0", text: "corrected subtype", broadcast: false, editedAt: 40 },
+    ]);
+    assert.deepEqual(
+      (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
+      ["1.0"],
+    );
+  } finally {
+    await cache.close();
+  }
+});

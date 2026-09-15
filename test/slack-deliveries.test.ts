@@ -33,7 +33,6 @@ async function deliver(
   const acknowledgements: string[] = [];
   const uploads: Record<string, unknown>[] = [];
   const posts: Record<string, unknown>[] = [];
-  const mirrors: Array<{ ts?: string; text: string }> = [];
   const marks: Array<{ channel: string; ts: string }> = [];
   const probes: Record<string, unknown>[] = [];
   const history = row.history ?? [];
@@ -78,15 +77,12 @@ async function deliver(
       fetchBlobFromCore: async (id: string) => Buffer.from(id),
       fetchFileArtifactFromCore: async () => Buffer.from("artifact"),
     } as never,
-    mirror: {
-      mirrorSelfPost: (_channel: string, ts: string | undefined, text: string) => void mirrors.push({ ts, text }),
-    } as never,
     threads: { mark: (channel: string, ts: string) => void marks.push({ channel, ts }) } as never,
     clientForIdentity: () => client,
   });
 
   await poller.pollDeliveries(client);
-  return { acknowledgements, uploads, posts, mirrors, marks, probes };
+  return { acknowledgements, uploads, posts, marks, probes };
 }
 
 for (const type of ["slack", "group", "principal"]) {
@@ -141,7 +137,7 @@ test("cron deliveries omit settings when the web UI is unavailable", async () =>
 
 for (const type of ["slack", "group", "principal"]) {
   test(`${type} deliveries mark text for recovery and batch mixed attachments`, async () => {
-    const { acknowledgements, uploads, posts, mirrors, marks } = await deliver({ type });
+    const { acknowledgements, uploads, posts, marks } = await deliver({ type });
 
     assert.equal(uploads.length, 1);
     assert.equal(posts.length, 1);
@@ -154,7 +150,6 @@ for (const type of ["slack", "group", "principal"]) {
     assert.equal(uploads[0]!.initial_comment, undefined);
     assert.deepEqual(uploadedNames(uploads), ["first.png", "second.jpg", "notes.pdf"]);
     assert.deepEqual(acknowledgements, ["D1"]);
-    assert.deepEqual(mirrors, [{ ts: "separate-message", text: "two screenshots and the notes" }]);
     assert.deepEqual(marks, type === "principal" ? [] : [{ channel: "C1", ts: "100.200" }]);
   });
 
@@ -260,14 +255,7 @@ for (const type of ["group", "principal"]) {
 for (const type of ["group", "principal"]) {
   test(`${type} long relays split within Slack's block limit and keep the footer last`, async () => {
     const text = "x".repeat(145_000);
-    const { posts, mirrors } = await deliver({ type, relaySender: "josh" }, undefined, undefined, text);
-    assert.equal(
-      mirrors
-        .map((mirror) => mirror.text)
-        .join("")
-        .replaceAll("\n", ""),
-      text,
-    );
+    const { posts } = await deliver({ type, relaySender: "josh" }, undefined, undefined, text);
     assert.equal(posts.length, 2);
     const blocks = posts.flatMap((post) => {
       const batch = post.blocks as Array<{ type: string; text?: { text: string }; elements?: unknown[] }>;

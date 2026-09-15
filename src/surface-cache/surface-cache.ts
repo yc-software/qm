@@ -115,6 +115,10 @@ export function createPostgresSurfaceCache(
             ON channel_messages(org_id, container, deleted_at) WHERE deleted_at > 0`,
       ],
     },
+    {
+      id: "surface-cache/store/0004",
+      statements: [`ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS broadcast BOOLEAN NOT NULL DEFAULT FALSE`],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -124,9 +128,11 @@ export function createPostgresSurfaceCache(
       container: r.container as string,
       ts: r.ts as string,
       ...(r.sub != null ? { sub: r.sub as string } : {}),
+      ...(r.broadcast ? { broadcast: true } : {}),
       ...(r.author_id != null ? { authorId: r.author_id as string } : {}),
       ...(r.author_name != null ? { authorName: r.author_name as string } : {}),
       text: (r.text as string) ?? "",
+      ...(r.reply_count != null ? { replyCount: Number(r.reply_count) } : {}),
       ...(r.mentions != null ? { mentions: r.mentions as Record<string, string> } : {}),
       ...(r.self ? { self: true } : {}),
       ...(r.bot ? { bot: true } : {}),
@@ -152,24 +158,26 @@ export function createPostgresSurfaceCache(
           const e = normalizeEvent(event);
           if (!e.container || !e.ts) continue;
           const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16)
+            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE))
              ON CONFLICT (org_id, container, ts) DO UPDATE SET
-               sub = COALESCE(EXCLUDED.sub, channel_messages.sub),
-               author_id = COALESCE(EXCLUDED.author_id, channel_messages.author_id),
-               author_name = COALESCE(EXCLUDED.author_name, channel_messages.author_name),
-               text = CASE WHEN EXCLUDED.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.text ELSE EXCLUDED.text END,
-               mentions = CASE WHEN EXCLUDED.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.mentions ELSE COALESCE(EXCLUDED.mentions, channel_messages.mentions) END,
-               self = channel_messages.self OR EXCLUDED.self,
-               bot = channel_messages.bot OR EXCLUDED.bot,
-               mentions_self = channel_messages.mentions_self OR EXCLUDED.mentions_self,
-               edited_at = GREATEST(COALESCE(EXCLUDED.edited_at, 0), COALESCE(channel_messages.edited_at, 0)),
+               sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
+               broadcast = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR $18::boolean IS NULL THEN channel_messages.broadcast ELSE EXCLUDED.broadcast END,
+               author_id = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.author_id ELSE COALESCE(EXCLUDED.author_id, channel_messages.author_id) END,
+               author_name = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.author_name ELSE COALESCE(EXCLUDED.author_name, channel_messages.author_name) END,
+               text = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.text ELSE EXCLUDED.text END,
+               mentions = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.mentions ELSE COALESCE(EXCLUDED.mentions, channel_messages.mentions) END,
+               self = channel_messages.self OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.self),
+               bot = channel_messages.bot OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.bot),
+               mentions_self = channel_messages.mentions_self OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.mentions_self),
+               edited_at = CASE WHEN channel_messages.deleted OR EXCLUDED.deleted THEN channel_messages.edited_at ELSE GREATEST(COALESCE(EXCLUDED.edited_at, 0), COALESCE(channel_messages.edited_at, 0)) END,
                deleted = channel_messages.deleted OR EXCLUDED.deleted,
                deleted_at = COALESCE(channel_messages.deleted_at, EXCLUDED.deleted_at),
                handled = channel_messages.handled OR EXCLUDED.handled
              WHERE EXCLUDED.deleted
                 OR COALESCE(EXCLUDED.edited_at, 0) >= COALESCE(channel_messages.edited_at, 0)
-                OR EXCLUDED.handled`,
+                OR EXCLUDED.handled
+             RETURNING NOT deleted AND COALESCE(edited_at, 0) = COALESCE($12::bigint, 0) AS content_accepted`,
             [
               orgId,
               e.container,
@@ -187,17 +195,26 @@ export function createPostgresSurfaceCache(
               e.handled ?? false,
               e.createdAt ?? now,
               e.deleted ? now : null,
+              e.sub !== undefined,
+              e.broadcast ?? null,
             ],
           );
           upserted += res.rowCount ?? 0;
-          for (const f of e.files ?? []) {
-            if (!f.fileId) continue;
-            await client.query(
-              `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at)
+          if (res.rows[0]?.content_accepted && e.files !== undefined) {
+            await client.query("DELETE FROM channel_files WHERE org_id = $1 AND container = $2 AND ts = $3", [
+              orgId,
+              e.container,
+              e.ts,
+            ]);
+            for (const f of e.files) {
+              if (!f.fileId) continue;
+              await client.query(
+                `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7)
                ON CONFLICT (org_id, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype`,
-              [orgId, e.container, e.ts, f.fileId, f.name ?? null, f.mimetype ?? null, e.createdAt ?? now],
-            );
+                [orgId, e.container, e.ts, f.fileId, f.name ?? null, f.mimetype ?? null, e.createdAt ?? now],
+              );
+            }
           }
           await client.query(
             `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at)
@@ -241,7 +258,15 @@ export function createPostgresSurfaceCache(
         args.push(opts.at);
         conds.push(`ts = $${args.length}`);
       }
-      if (opts.sub) {
+      if (opts.timestamps !== undefined) {
+        if (opts.timestamps.length > MAX_READ_LIMIT) throw new RangeError("At most 500 message timestamps are allowed");
+        if (!opts.timestamps.length) return [];
+        args.push(opts.timestamps);
+        conds.push(`ts = ANY($${args.length}::text[])`);
+      }
+      if (opts.channelHistory) conds.push("(sub IS NULL OR broadcast = TRUE)");
+      if (opts.sub === null) conds.push("sub IS NULL");
+      else if (opts.sub !== undefined) {
         args.push(opts.sub);
         conds.push(`sub = $${args.length}`);
       }
@@ -256,10 +281,11 @@ export function createPostgresSurfaceCache(
       if (!opts.includeDeleted) conds.push("deleted = FALSE");
       args.push(limit);
       const rows = await q(
-        `SELECT channel_messages.*, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts DESC LIMIT $${args.length}`,
+        `SELECT channel_messages.*, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
         args,
       );
-      const hit = rows.map(rowToMessage).reverse();
+      const hit = rows.map(rowToMessage);
+      if (!opts.oldestFirst) hit.reverse();
       if (hit.length === 0 && liveFallback && !opts.noFallback && !opts.before) {
         const live = await liveFallback(container, opts);
         if (live) return live;
@@ -423,11 +449,15 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
         const m = containerMsgs(e.container);
         const existing = m.get(e.ts);
         const deleted = (existing?.deleted ?? false) || (e.deleted ?? false);
-        if (!existing || e.deleted || (e.editedAt ?? 0) >= (existing.editedAt ?? 0)) {
+        const accepted = !existing?.deleted && !e.deleted && (e.editedAt ?? 0) >= (existing?.editedAt ?? 0);
+        if (accepted || !existing) {
           m.set(e.ts, {
             container: e.container,
             ts: e.ts,
-            ...((e.sub ?? existing?.sub) ? { sub: (e.sub ?? existing?.sub) as string } : {}),
+            ...((e.sub === undefined ? existing?.sub : e.sub)
+              ? { sub: (e.sub === undefined ? existing?.sub : e.sub) as string }
+              : {}),
+            ...((e.broadcast ?? existing?.broadcast) ? { broadcast: true } : {}),
             ...((e.authorId ?? existing?.authorId) ? { authorId: (e.authorId ?? existing?.authorId) as string } : {}),
             ...((e.authorName ?? existing?.authorName)
               ? { authorName: (e.authorName ?? existing?.authorName) as string }
@@ -449,24 +479,25 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
           });
           upserted++;
         }
+        if (existing && e.deleted)
+          m.set(e.ts, { ...m.get(e.ts)!, deleted: true, deletedAt: existing.deletedAt ?? now });
         if (existing && e.handled && !existing.handled) m.set(e.ts, { ...m.get(e.ts)!, handled: true });
-        if (e.files?.length) {
+        if (accepted && e.files !== undefined) {
           const k = key(e.container);
-          const arr = files.get(k) ?? [];
-          for (const f of e.files) {
-            if (!f.fileId) continue;
-            if (!arr.some((x) => x.ts === e.ts && x.fileId === f.fileId)) {
-              arr.push({
-                container: e.container,
-                ts: e.ts,
-                fileId: f.fileId,
-                ...(f.name ? { name: f.name } : {}),
-                ...(f.mimetype ? { mimetype: f.mimetype } : {}),
-                createdAt: e.createdAt ?? now,
-              });
-            }
-          }
-          files.set(k, arr);
+          const attached = new Map(
+            e.files
+              .filter((f) => f.fileId)
+              .map((f) => [
+                f.fileId,
+                {
+                  container: e.container,
+                  ts: e.ts,
+                  ...f,
+                  createdAt: e.createdAt ?? now,
+                },
+              ]),
+          );
+          files.set(k, [...(files.get(k) ?? []).filter((f) => f.ts !== e.ts), ...attached.values()]);
         }
         const k = key(e.container);
         const st = state.get(k) ?? { container: e.container, members: [], updatedAt: now };
@@ -492,16 +523,30 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
       const limit = clampLimit(o.limit, DEFAULT_READ_LIMIT);
       let all = [...containerMsgs(container).values()];
       if (o.at) all = all.filter((x) => x.ts === o.at);
-      if (o.sub) all = all.filter((x) => x.sub === o.sub);
+      if (o.timestamps !== undefined) {
+        if (o.timestamps.length > MAX_READ_LIMIT) throw new RangeError("At most 500 message timestamps are allowed");
+        if (!o.timestamps.length) return [];
+        const selected = new Set(o.timestamps);
+        all = all.filter((x) => selected.has(x.ts));
+      }
+      if (o.channelHistory) all = all.filter((x) => x.sub === undefined || x.broadcast);
+      if (o.sub === null) all = all.filter((x) => x.sub === undefined);
+      else if (o.sub !== undefined) all = all.filter((x) => x.sub === o.sub);
       if (o.after) all = all.filter((x) => x.ts > o.after!);
       if (o.before) all = all.filter((x) => x.ts < o.before!);
       if (!o.includeDeleted) all = all.filter((x) => !x.deleted);
       all.sort(compareTs);
-      const hit = all.slice(-limit).map((m) => {
+      const hit = (o.oldestFirst ? all.slice(0, limit) : all.slice(-limit)).map((m) => {
         const attached = (files.get(key(container)) ?? []).filter((f) => f.ts === m.ts);
-        return attached.length
-          ? { ...m, files: attached.map(({ fileId, name, mimetype }) => ({ fileId, name, mimetype })) }
-          : m;
+        return {
+          ...m,
+          replyCount: [...containerMsgs(container).values()].filter(
+            (reply) => reply.sub === m.ts && reply.ts !== m.ts && !reply.deleted,
+          ).length,
+          ...(attached.length
+            ? { files: attached.map(({ fileId, name, mimetype }) => ({ fileId, name, mimetype })) }
+            : {}),
+        };
       });
       if (hit.length === 0 && liveFallback && !o.noFallback && !o.before) {
         const live = await liveFallback(container, o);

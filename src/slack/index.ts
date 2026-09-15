@@ -165,6 +165,7 @@ export async function startSlackPlugin(
   };
   const app = new App({
     token: BOT_TOKEN,
+    ignoreSelf: false,
     receiver: receiver(),
     logLevel: parseLogLevel(cfg.logLevel),
     clientOptions: { ...CLIENT_OPTIONS },
@@ -342,7 +343,6 @@ export async function startSlackPlugin(
   const deliveries = createDeliveryPoller({
     core,
     flow,
-    mirror,
     threads,
     clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,

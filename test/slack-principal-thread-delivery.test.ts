@@ -36,7 +36,6 @@ test("a threaded principal delivery posts and records the DM thread", async () =
       ackDelivery: async (id: string, body: unknown) => void acks.push({ id, body }),
     } as any,
     flow: { inFlightRuns: { add() {}, delete() {}, has: () => false } } as never,
-    mirror: { mirrorSelfPost: () => undefined } as any,
     threads: { mark: () => undefined } as any,
     clientForIdentity: () => client,
   });

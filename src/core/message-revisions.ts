@@ -156,7 +156,9 @@ export async function recordMessageRevisions(
   retry: IdleRetry = DEFAULT_IDLE_RETRY,
 ): Promise<void> {
   for (const event of events.filter(isRevisionEvent)) {
-    const refs = await sessions.sessionsByThreadRefs(slackThreadRefCandidates(event.container, event.ts, event.sub));
+    const refs = await sessions.sessionsByThreadRefs(
+      slackThreadRefCandidates(event.container, event.ts, event.sub ?? undefined),
+    );
     for (const ref of refs) await recordWhenIdle(sessions, ref, event, retry);
   }
 }

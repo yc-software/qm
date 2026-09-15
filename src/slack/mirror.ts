@@ -9,12 +9,6 @@ import { MAX_NAME_LOOKUPS } from "./conversation-view.ts";
 
 export interface Mirror {
   pushSurfaceEvents(events: IngestEvent[]): Promise<void>;
-  mirrorSelfPost(
-    container: string,
-    ts: unknown,
-    text: string,
-    opts?: { sub?: string; editedAt?: number; kind?: "channel" | "dm" | "group" },
-  ): void;
   resolveTextMentions(client: any, text: string): Promise<{ text: string; mentions: Record<string, string> }>;
   mirrorMessageEvent(
     m: Partial<SlackMessageEvent>,
@@ -34,31 +28,7 @@ export function createMirror(deps: {
 
   async function pushSurfaceEvents(events: IngestEvent[]): Promise<void> {
     if (!events.length) return;
-    try {
-      await core.ingestSurfaceEvents(events, { name: ids.botHandle, mentionId: ids.botUserId });
-    } catch (e) {
-      swallow("slack: surface-cache ingest", e);
-    }
-  }
-
-  function mirrorSelfPost(
-    container: string,
-    ts: unknown,
-    text: string,
-    opts: { sub?: string; editedAt?: number; kind?: "channel" | "dm" | "group" } = {},
-  ): void {
-    if (!ts) return;
-    void pushSurfaceEvents([
-      {
-        container,
-        ts: String(ts),
-        ...(opts.sub ? { sub: opts.sub } : {}),
-        self: true,
-        text,
-        ...(opts.editedAt ? { editedAt: opts.editedAt } : {}),
-        ...(opts.kind ? { kind: opts.kind } : {}),
-      },
-    ]);
+    await core.ingestSurfaceEvents(events, { name: ids.botHandle, mentionId: ids.botUserId });
   }
 
   async function resolveTextMentions(
@@ -96,10 +66,12 @@ export function createMirror(deps: {
       let gate = ambientRoomGate.get(container);
       if (!gate || Date.now() - gate.at > 5_000) {
         const info = kind === "group" ? undefined : await directory.getChannelInfo(client, container);
+        if (kind !== "group" && !info) throw new Error("Slack mirror room lookup unavailable");
         const rosters = await directory.allInternalRosters(client, [{ id: container, ...(info ? { info } : {}) }], {
           plural: "ambient rooms",
           authz: "ambient-work",
           item: "room",
+          requireComplete: true,
         });
         gate = { allowed: rosters.has(container), at: Date.now() };
         ambientRoomGate.set(container, gate);
@@ -113,17 +85,17 @@ export function createMirror(deps: {
       {
         container,
         ts,
-        ...(m.thread_ts && m.thread_ts !== ts ? { sub: String(m.thread_ts) } : {}),
+        ...(m.subtype === "thread_broadcast" ? { broadcast: true } : {}),
+        sub: m.thread_ts && m.thread_ts !== ts ? String(m.thread_ts) : null,
         ...(m.user ? { authorId: String(m.user) } : {}),
         ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
         text,
-        ...(content.files.length
-          ? {
-              files: content.files
-                .filter((f) => f.id)
-                .map((f) => ({ fileId: f.id!, name: f.name, mimetype: f.mimetype })),
-            }
+        ...((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)
+          ? { self: true, handled: true }
           : {}),
+        files: content.files
+          .filter((file) => file.id)
+          .map((file) => ({ fileId: file.id!, name: file.name, mimetype: file.mimetype })),
         ...(Object.keys(mentions).length ? { mentions } : {}),
         ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
         ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
@@ -135,5 +107,5 @@ export function createMirror(deps: {
     ]);
   }
 
-  return { pushSurfaceEvents, mirrorSelfPost, resolveTextMentions, mirrorMessageEvent };
+  return { pushSurfaceEvents, resolveTextMentions, mirrorMessageEvent };
 }

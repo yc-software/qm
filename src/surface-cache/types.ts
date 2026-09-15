@@ -2,9 +2,11 @@ export interface CachedMessage {
   container: string;
   ts: string;
   sub?: string;
+  broadcast?: boolean;
   authorId?: string;
   authorName?: string;
   text: string;
+  replyCount?: number;
   files?: Array<{ fileId: string; name?: string; mimetype?: string }>;
   mentions?: Record<string, string>;
   self?: boolean;
@@ -46,7 +48,8 @@ export interface ActiveThread {
 export interface IngestEvent {
   container: string;
   ts: string;
-  sub?: string;
+  sub?: string | null;
+  broadcast?: boolean;
   authorId?: string;
   authorName?: string;
   text?: string;
@@ -71,7 +74,10 @@ export interface ContainerSummary extends ContainerState {
 
 export interface ReadMessagesOpts {
   at?: string;
-  sub?: string;
+  sub?: string | null;
+  timestamps?: string[];
+  oldestFirst?: boolean;
+  channelHistory?: boolean;
   limit?: number;
   after?: string;
   before?: string;

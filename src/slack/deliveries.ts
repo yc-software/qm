@@ -23,7 +23,6 @@ import {
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { Delivery } from "../types.ts";
 import type { TurnFlow } from "./turn-flow.ts";
-import type { Mirror } from "./mirror.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
@@ -54,19 +53,17 @@ export function createDeliveryPoller(deps: {
   core: SlackCoreClient;
   webUiPublicUrl?: string;
   flow: TurnFlow;
-  mirror: Mirror;
   threads: ReturnType<typeof createThreadTracker>;
   clientForIdentity(identity: string): any;
   claimMs?: number;
   slowDrainMs?: number;
 }): { pollDeliveries(client: any): Promise<boolean> } {
-  const { core, flow, mirror, threads, clientForIdentity } = deps;
+  const { core, flow, threads, clientForIdentity } = deps;
   const claimMs = deps.claimMs ?? DELIVERY_CLAIM_MS;
   const slowDrainMs = deps.slowDrainMs ?? SLOW_DRAIN_ALARM_MS;
   const claimMargin = Math.min(DELIVERY_CLAIM_MARGIN_MS, Math.floor(claimMs / 3));
   const recoveredRow = (d: Delivery): boolean => typeof d.createdAt === "number" && Date.now() - d.createdAt > claimMs;
   const { inFlightRuns } = flow;
-  const { mirrorSelfPost } = mirror;
 
   async function drainClaimed(
     types: string[],
@@ -274,17 +271,15 @@ export function createDeliveryPoller(deps: {
                         ...botIdentityArgs(),
                       });
                       preserved = true;
-                      mirrorSelfPost(channel, d.destination.editRef, taskList, { sub: threadTs, editedAt: Date.now() });
                     } catch (error) {
                       swallow("slack: preserve recovered task list", error);
                     }
                   }
                   if (!preserved) {
-                    const posted = await client.chat.postMessage({
+                    await client.chat.postMessage({
                       ...slackReplyArgs(channel, taskList, threadTs, { threadOnly: Boolean(threadTs) }),
                       blocks: [{ type: "section", text: { type: "mrkdwn", text: taskList } }],
                     });
-                    mirrorSelfPost(channel, posted?.ts, taskList, { sub: threadTs });
                   }
                 } else if (d.destination.editRef) {
                   await client.chat
@@ -319,7 +314,6 @@ export function createDeliveryPoller(deps: {
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   });
                   if (threadTs) threads.mark(channel, threadTs, true);
-                  mirrorSelfPost(channel, d.destination.editRef, text, { sub: threadTs, editedAt: Date.now() });
                   if (!alreadyDelivered) await replayAttachments(threadTs);
                   return undefined;
                 } catch (e) {
@@ -339,11 +333,6 @@ export function createDeliveryPoller(deps: {
               );
               const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
               if (root) threads.mark(channel, root, true);
-              if (!d.destination.identity) {
-                for (const part of res.parts ?? [{ ts: res?.ts, text }]) {
-                  mirrorSelfPost(channel, part.ts, part.text, { sub: threadTs });
-                }
-              }
               if (!res.reused) await replayAttachments(root);
               return undefined;
             } finally {
@@ -392,9 +381,6 @@ export function createDeliveryPoller(deps: {
                     : undefined,
                 );
                 reused = Boolean(posted.reused);
-                for (const part of posted.parts ?? [{ ts: posted?.ts, text }]) {
-                  mirrorSelfPost(channel, part.ts, part.text, { kind: "dm", sub: threadTs });
-                }
               }
               if (d.attachments?.length && !reused) {
                 try {

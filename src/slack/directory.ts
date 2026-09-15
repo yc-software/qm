@@ -56,7 +56,7 @@ interface ChannelRef {
   info: ChannelMeta;
 }
 
-type RosterKind = { plural: string; authz: string; item: string; limit?: number };
+type RosterKind = { plural: string; authz: string; item: string; limit?: number; requireComplete?: boolean };
 
 const MEMBERS_PAGE_LIMIT = 200;
 const ROSTER_FETCH_CONCURRENCY = 4;
@@ -258,6 +258,7 @@ export function createDirectory(deps: {
           try {
             memberIds = await fetchChannelMemberIds(client, ref.id);
           } catch (err) {
+            if (kind.requireComplete) throw err;
             console.error(
               "%s",
               `[slack-plugin] members fetch failed for ${kind.item} ${ref.id}:`,
@@ -270,7 +271,10 @@ export function createDirectory(deps: {
           for (const id of memberIds) {
             const { actor, ok } = await classifyUserCached(client, id);
             actors.push(actor);
-            if (!ok) complete = false;
+            if (!ok) {
+              if (kind.requireComplete) throw new Error("Slack mirror member classification unavailable");
+              complete = false;
+            }
           }
           rosters.set(ref.id, { actors, complete });
         }

@@ -65,7 +65,8 @@ export function registerSlackEvents(
     if (!allowActor) return true;
     if (!userId) return false;
     if (userId === ids.botUserId) return true;
-    const { actor } = await directory.classifyUserCached(client, userId);
+    const { actor, ok } = await directory.classifyUserCached(client, userId);
+    if (ok === false) throw new Error("Slack event actor lookup unavailable");
     return allowActor(actor);
   };
   const denyDirectApproach = async (
@@ -117,187 +118,207 @@ export function registerSlackEvents(
   };
 
   app.event("app_mention", async ({ event, body, client, context }: EventArgs) => {
-    const e = parseMessageEvent(event);
-    const identity = await eventIdentity(client, e);
-    if (allowActor && !(await actorAllowed(client, identity.userId))) {
-      if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.ts }))) return;
-      await denyDirectApproach(client, {
-        channel: e.channel,
-        userId: identity.userId,
-        kind: "channel",
-        isBot: Boolean(e.bot_id || identity.actor?.isBot),
-      });
-      return;
-    }
-    const key = dedupeKey({
-      event_id: parseEventId(body),
-      client_msg_id: e.client_msg_id,
-      channel: e.channel,
-      ts: e.ts,
-    });
-    const content = messageWithForwardedContent(e);
-    await dispatch(
-      key,
-      {
-        kind: "channel",
-        channel: e.channel,
-        userId: identity.userId,
-        ...(identity.actor ? { actor: identity.actor } : {}),
-        rawText: content.text,
-        files: content.files,
-        threadTs: e.thread_ts,
-        ts: e.ts,
-        ...(e.bot_id || e.subtype === "bot_message" ? { botAuthored: true } : {}),
-        ackGate: context.ackGate,
-      },
-      client,
-    );
-  });
-
-  app.message(async ({ message, body, client, context }: MessageArgs) => {
-    const m = parseMessageEvent(message);
-    const eventId = parseEventId(body);
-    const privacyChange = channelPrivacyChange(m);
-    if (privacyChange) {
-      await forceDirectorySync(client, privacyChange.channel);
-      return;
-    }
-    if (isGroupMembershipMessage(m)) {
-      await forceDirectorySync(client);
-      return;
-    }
-    const ackGate = context.ackGate;
-    if (m.channel && m.ts && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
-      deps.inboxMessage?.(client, {
-        channel: m.channel,
-        ts: m.ts,
-        ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
-        ...(typeof m.text === "string" && m.text ? { text: m.text } : {}),
-        ...(m.user ? { senderSlackId: m.user } : {}),
-      });
-    }
-    if (m.subtype === "message_changed" && m.message?.subtype === "tombstone" && m.message.ts && m.channel) {
-      await pushSurfaceEvents([{ container: m.channel, ts: m.message.ts, deleted: true }]);
-      return;
-    }
-    if (!(await actorAllowed(client, m.user ?? m.message?.user ?? m.previous_message?.user))) {
-      if (m.channel_type === "im" && shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) {
+    try {
+      const e = parseMessageEvent(event);
+      if (!shouldProcessMessage(e, ids.botUserId, ids.ownBotId)) return;
+      const identity = await eventIdentity(client, e);
+      if (allowActor && !(await actorAllowed(client, identity.userId))) {
+        if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.ts }))) return;
         await denyDirectApproach(client, {
-          channel: m.channel,
-          userId: m.user,
-          kind: "dm",
-          threadTs: m.thread_ts,
-          isBot: Boolean(m.bot_id || m.subtype === "bot_message"),
-        });
-      }
-      return;
-    }
-    if (m.subtype === "message_changed" && m.message) {
-      const textChanged = m.previous_message?.text === undefined || m.previous_message.text !== m.message.text;
-      if (shouldProcessMessage(m.message, ids.botUserId, ids.ownBotId))
-        await mirrorMessageEvent({ ...m.message, channel: m.channel, channel_type: m.channel_type }, client, {
-          ...(textChanged
-            ? {
-                editedAt:
-                  Number(m.message.edited?.ts) > 0 ? Math.round(Number(m.message.edited!.ts) * 1000) : Date.now(),
-              }
-            : {}),
-          ...(m.channel_type === "im" ? { kind: "dm" as const } : {}),
-        });
-      return;
-    }
-    if (m.subtype === "message_deleted" && m.deleted_ts) {
-      const type = m.channel_type;
-      const prev = m.previous_message;
-      const selfDelete = Boolean(
-        prev && ((ids.botUserId && prev.user === ids.botUserId) || (ids.ownBotId && prev.bot_id === ids.ownBotId)),
-      );
-      if (m.channel && (type === "channel" || type === "group" || type === "mpim" || type === "im"))
-        await pushSurfaceEvents([
-          {
-            container: m.channel,
-            ts: m.deleted_ts,
-            deleted: true,
-            ...(prev?.thread_ts && prev.thread_ts !== m.deleted_ts ? { sub: prev.thread_ts } : {}),
-            ...(selfDelete ? { self: true } : {}),
-          },
-        ]);
-      return;
-    }
-    if (!shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) return;
-
-    if (m.channel_type === "im") {
-      const identity = await eventIdentity(client, m);
-      const key = dedupeKey({
-        event_id: eventId,
-        client_msg_id: m.client_msg_id,
-        channel: m.channel,
-        ts: m.ts,
-      });
-      const content = messageWithForwardedContent(m);
-      await dispatch(
-        key,
-        {
-          kind: "dm",
-          channel: m.channel,
+          channel: e.channel,
           userId: identity.userId,
-          ...(identity.actor ? { actor: identity.actor } : {}),
-          ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
-          rawText: content.text,
-          files: content.files,
-          threadTs: m.thread_ts,
-          ts: m.ts,
-          ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
-          ackGate,
-        },
-        client,
-      );
-      return;
-    }
-
-    if (m.channel_type === "channel" || m.channel_type === "group" || m.channel_type === "mpim") {
-      if (m.channel_type === "mpim" && m.channel) syncForUnseenGroup(client, m.channel);
-      const threadReply = isThreadReply(m);
-      const isMention = mentionsBot(m.text ?? "", ids.botUserId);
-      const threadTs = m.thread_ts;
-      const willDispatch = Boolean(
-        threadReply && !isMention && threadTs && (await botHasStakeInThread(client, m.channel, threadTs)),
-      );
-      await mirrorMessageEvent(m, client, willDispatch ? { handled: true } : {});
-      if (!threadReply) return;
-      if (isMention) return;
-      if (!willDispatch) {
-        console.error(
-          `[slack-plugin] thread-follow skipped: no bot stake detected in thread ch=${m.channel} thread_ts=${m.thread_ts} ts=${m.ts}`,
-        );
+          kind: "channel",
+          isBot: Boolean(e.bot_id || identity.actor?.isBot),
+        });
         return;
       }
       const key = dedupeKey({
-        event_id: eventId,
-        client_msg_id: m.client_msg_id,
-        channel: m.channel,
-        ts: m.ts,
+        event_id: parseEventId(body),
+        client_msg_id: e.client_msg_id,
+        channel: e.channel,
+        ts: e.ts,
       });
-      const identity = await eventIdentity(client, m);
-      const content = messageWithForwardedContent(m);
+      const content = messageWithForwardedContent(e);
       await dispatch(
         key,
         {
           kind: "channel",
-          channel: m.channel,
+          channel: e.channel,
           userId: identity.userId,
           ...(identity.actor ? { actor: identity.actor } : {}),
-          ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
           rawText: content.text,
           files: content.files,
-          threadTs: m.thread_ts,
-          ts: m.ts,
-          unprompted: true,
-          ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
-          ackGate,
+          threadTs: e.thread_ts,
+          ts: e.ts,
+          ...(e.bot_id || e.subtype === "bot_message" ? { botAuthored: true } : {}),
+          ackGate: context.ackGate,
         },
         client,
       );
+    } catch (error) {
+      context.ackGate?.failed("Slack mention processing failed");
+      throw error;
+    }
+  });
+
+  app.message(async ({ message, body, client, context }: MessageArgs) => {
+    try {
+      const m = parseMessageEvent(message);
+      const eventId = parseEventId(body);
+      const privacyChange = channelPrivacyChange(m);
+      if (privacyChange) {
+        await forceDirectorySync(client, privacyChange.channel);
+        return;
+      }
+      if (isGroupMembershipMessage(m)) {
+        await forceDirectorySync(client);
+        return;
+      }
+      const ackGate = context.ackGate;
+      if (m.channel && m.ts && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
+        deps.inboxMessage?.(client, {
+          channel: m.channel,
+          ts: m.ts,
+          ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
+          ...(typeof m.text === "string" && m.text ? { text: m.text } : {}),
+          ...(m.user ? { senderSlackId: m.user } : {}),
+        });
+      }
+      if (m.subtype === "message_changed" && m.message?.subtype === "tombstone" && m.message.ts && m.channel) {
+        await pushSurfaceEvents([{ container: m.channel, ts: m.message.ts, deleted: true }]);
+        return;
+      }
+      const ownMessage = (event: { user?: string; bot_id?: string }): boolean =>
+        Boolean((ids.botUserId && event.user === ids.botUserId) || (ids.ownBotId && event.bot_id === ids.ownBotId));
+      if (
+        !(await actorAllowed(
+          client,
+          ownMessage(m.message ?? m.previous_message ?? m)
+            ? ids.botUserId
+            : (m.user ?? m.message?.user ?? m.previous_message?.user),
+        ))
+      ) {
+        if (m.channel_type === "im" && shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) {
+          await denyDirectApproach(client, {
+            channel: m.channel,
+            userId: m.user,
+            kind: "dm",
+            threadTs: m.thread_ts,
+            isBot: Boolean(m.bot_id || m.subtype === "bot_message"),
+          });
+        }
+        return;
+      }
+      if (m.subtype === "message_changed" && m.message) {
+        const textChanged = m.previous_message?.text === undefined || m.previous_message.text !== m.message.text;
+        const editedAt = Number(m.message.edited?.ts) || (textChanged ? Number(m.ts) : 0);
+        if (shouldProcessMessage(m.message, "", ""))
+          await mirrorMessageEvent({ ...m.message, channel: m.channel, channel_type: m.channel_type }, client, {
+            ...(editedAt > 0 ? { editedAt: Math.round(editedAt * 1000) } : {}),
+            ...(m.channel_type === "im" ? { kind: "dm" as const } : {}),
+          });
+        return;
+      }
+      if (m.subtype === "message_deleted" && m.deleted_ts) {
+        const type = m.channel_type;
+        const prev = m.previous_message;
+        const selfDelete = Boolean(
+          prev && ((ids.botUserId && prev.user === ids.botUserId) || (ids.ownBotId && prev.bot_id === ids.ownBotId)),
+        );
+        if (m.channel && (type === "channel" || type === "group" || type === "mpim" || type === "im"))
+          await pushSurfaceEvents([
+            {
+              container: m.channel,
+              ts: m.deleted_ts,
+              deleted: true,
+              ...(prev?.thread_ts && prev.thread_ts !== m.deleted_ts ? { sub: prev.thread_ts } : {}),
+              ...(selfDelete ? { self: true } : {}),
+            },
+          ]);
+        return;
+      }
+      if (ownMessage(m) && shouldProcessMessage(m, "", "")) {
+        await mirrorMessageEvent(m, client, { ...(m.channel_type === "im" ? { kind: "dm" as const } : {}) });
+        return;
+      }
+      if (!shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) return;
+
+      if (m.channel_type === "im") {
+        const identity = await eventIdentity(client, m);
+        const key = dedupeKey({
+          event_id: eventId,
+          client_msg_id: m.client_msg_id,
+          channel: m.channel,
+          ts: m.ts,
+        });
+        const content = messageWithForwardedContent(m);
+        await dispatch(
+          key,
+          {
+            kind: "dm",
+            channel: m.channel,
+            userId: identity.userId,
+            ...(identity.actor ? { actor: identity.actor } : {}),
+            ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+            rawText: content.text,
+            files: content.files,
+            threadTs: m.thread_ts,
+            ts: m.ts,
+            ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            ackGate,
+          },
+          client,
+        );
+        return;
+      }
+
+      if (m.channel_type === "channel" || m.channel_type === "group" || m.channel_type === "mpim") {
+        if (m.channel_type === "mpim" && m.channel) syncForUnseenGroup(client, m.channel);
+        const threadReply = isThreadReply(m);
+        const isMention = mentionsBot(m.text ?? "", ids.botUserId);
+        const threadTs = m.thread_ts;
+        const willDispatch = Boolean(
+          threadReply && !isMention && threadTs && (await botHasStakeInThread(client, m.channel, threadTs)),
+        );
+        await mirrorMessageEvent(m, client, willDispatch ? { handled: true } : {});
+        if (!threadReply) return;
+        if (isMention) return;
+        if (!willDispatch) {
+          console.error(
+            `[slack-plugin] thread-follow skipped: no bot stake detected in thread ch=${m.channel} thread_ts=${m.thread_ts} ts=${m.ts}`,
+          );
+          return;
+        }
+        const key = dedupeKey({
+          event_id: eventId,
+          client_msg_id: m.client_msg_id,
+          channel: m.channel,
+          ts: m.ts,
+        });
+        const identity = await eventIdentity(client, m);
+        const content = messageWithForwardedContent(m);
+        await dispatch(
+          key,
+          {
+            kind: "channel",
+            channel: m.channel,
+            userId: identity.userId,
+            ...(identity.actor ? { actor: identity.actor } : {}),
+            ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+            rawText: content.text,
+            files: content.files,
+            threadTs: m.thread_ts,
+            ts: m.ts,
+            unprompted: true,
+            ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            ackGate,
+          },
+          client,
+        );
+      }
+    } catch (error) {
+      context.ackGate?.failed("Slack message processing failed");
+      throw error;
     }
   });
 
@@ -349,9 +370,13 @@ export function registerSlackEvents(
   app.event("assistant_thread_context_changed", async () => {});
 
   app.event("reaction_added", async ({ event, body, client }: EventArgs) => {
-    await handleReactionEvent(parseReactionEvent(event), parseEventId(body), client, true);
+    const reaction = parseReactionEvent(event);
+    if (reaction.user === ids.botUserId) return;
+    await handleReactionEvent(reaction, parseEventId(body), client, true);
   });
   app.event("reaction_removed", async ({ event, body, client }: EventArgs) => {
-    await handleReactionEvent(parseReactionEvent(event), parseEventId(body), client, false);
+    const reaction = parseReactionEvent(event);
+    if (reaction.user === ids.botUserId) return;
+    await handleReactionEvent(reaction, parseEventId(body), client, false);
   });
 }
