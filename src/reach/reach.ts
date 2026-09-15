@@ -256,11 +256,6 @@ export async function resolveReachTarget(
   };
 }
 
-export function attributeRelay(text: string, senderDisplayName: string | undefined): string {
-  const who = senderDisplayName?.trim();
-  return who ? `${who} asked me to pass on:\n${text}` : text;
-}
-
 export interface ReachEnqueueInput {
   deliveries: DeliveryStore;
   destination: Destination;
@@ -312,12 +307,10 @@ export async function reachEnqueue(input: ReachEnqueueInput): Promise<Delivery> 
       ...(input.shadow ? { shadow: true } : {}),
     });
   }
-  const relayPrefixed = isThirdPartyRelay(input.destination, input.attributeAs)
-    ? attributeRelay(input.text, input.attributeAs)
-    : input.text;
+  const relaySender = isThirdPartyRelay(input.destination, input.attributeAs) ? input.attributeAs?.trim() : undefined;
   return input.deliveries.enqueue({
-    destination: input.destination,
-    text: relayPrefixed,
+    destination: relaySender ? { ...input.destination, relaySender } : input.destination,
+    text: input.text,
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     idempotencyKey: input.idempotencyKey,
     ...(input.provenance ? { provenance: input.provenance } : {}),

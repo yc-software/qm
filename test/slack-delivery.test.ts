@@ -1149,3 +1149,26 @@ test("split parts verify strictly when the caller asked for verification, best-e
     "a caller that asked for verification keeps strict verification on every part",
   );
 });
+
+test("postWithVerify: a replay of split blocks posts only the missing batch", async () => {
+  const blocks = Array.from({ length: 51 }, (_, i) => ({
+    type: "section",
+    text: { type: "mrkdwn", text: `Part ${i}` },
+  }));
+  const h = verifyHarness({
+    postResults: [{ ok: { ts: "9.2", channel: "C1" } }],
+    historyMessages: [{ ts: "9.1", metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: KEY } } }],
+  });
+  const res = await postWithVerify(h.client, { channel: "C1", text: "Full fallback", blocks }, KEY, {
+    verifyFirst: true,
+  });
+  assert.equal(h.postCalls, 1);
+  assert.equal(h.postArgs[0].metadata.event_payload.idempotency_key, `${KEY}#p2`);
+  assert.deepEqual(h.postArgs[0].blocks, blocks.slice(50));
+  assert.equal(res.ts, "9.1");
+  assert.ok(!res.reused);
+  assert.deepEqual(
+    res.parts?.map((part) => part.reused ?? false),
+    [true, false],
+  );
+});

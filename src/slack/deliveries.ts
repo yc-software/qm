@@ -145,15 +145,20 @@ export function createDeliveryPoller(deps: {
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
 
-  function cronFooter(d: Delivery): Array<Record<string, unknown>> {
+  function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
     const base = deps.webUiPublicUrl?.trim().replace(/\/+$/, "");
     const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
-    if (!base || !id) return [];
+    const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
+    const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
+    if (!base || !id) return attribution;
     const title = (d.provenance?.sourceTitle?.trim() || "Cron")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;");
-    return [{ type: "mrkdwn", text: `${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`, verbatim: true }];
+    return [
+      ...attribution,
+      { type: "mrkdwn", text: `${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`, verbatim: true },
+    ];
   }
 
   const deliveryTracker = createDeliveryTracker();
@@ -242,9 +247,9 @@ export function createDeliveryPoller(deps: {
                     .catch(swallowAs("slack: post upload-failure note", undefined));
                 }
               };
-              const settingsFooter = cronFooter(d);
+              const messageFooter = deliveryFooter(d);
               const footer = [
-                ...settingsFooter,
+                ...messageFooter,
                 ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
               ];
               const taskList = d.destination.taskList?.length ? renderTaskList(d.destination.taskList) : undefined;
@@ -256,7 +261,7 @@ export function createDeliveryPoller(deps: {
                       ...(footer.length ? [{ type: "context", elements: footer }] : []),
                     ]
                   : undefined;
-              if (!text.trim() && !(settingsFooter.length && d.attachments?.length)) {
+              if (!text.trim() && !(messageFooter.length && d.attachments?.length)) {
                 if (taskList) {
                   let preserved = false;
                   if (d.destination.editRef) {
@@ -368,7 +373,7 @@ export function createDeliveryPoller(deps: {
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);
               const threadTs = d.destination.threadTs;
-              const footer = cronFooter(d);
+              const footer = deliveryFooter(d);
               const blocks = footer.length
                 ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
                 : undefined;

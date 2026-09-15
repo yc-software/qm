@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import {
   resolveReachTarget,
-  attributeRelay,
   reachEnqueue,
   withReact,
   withDelete,
@@ -184,11 +183,6 @@ describe("Reach: person-keyed parity (delivery never re-derives it from scope la
 });
 
 describe("Reach: verbatim relay attribution", () => {
-  it("prefixes a third-party relay with the sender's name; passes through when no name", () => {
-    assert.equal(attributeRelay("ship it", "Carol"), "Carol asked me to pass on:\nship it");
-    assert.equal(attributeRelay("ship it", undefined), "ship it");
-  });
-
   it("reachEnqueue attributes a third-party DM but not a self-reminder or a channel post", async () => {
     const deliveries = createDeliveryStore();
     const toAlice: Destination = {
@@ -225,7 +219,10 @@ describe("Reach: verbatim relay attribution", () => {
       idempotencyKey: "k4",
       attributeAs: "Carol",
     });
-    assert.equal(d1.text, "Carol asked me to pass on:\nping");
+    assert.equal(d1.text, "ping");
+    assert.equal(d1.destination.relaySender, "Carol");
+    assert.equal(d2.destination.relaySender, undefined);
+    assert.equal(d3.destination.relaySender, undefined);
     assert.equal(d2.text, "remember milk");
     assert.equal(d3.text, "heads up team");
   });
@@ -403,7 +400,8 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
     assert.equal(out.authzFailed, false);
     const pending = await deps.deliveries.pending("principal");
     assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.text, "Carol asked me to pass on:\nthe deploy is done 🚀");
+    assert.equal(pending[0]!.text, "the deploy is done 🚀");
+    assert.equal(pending[0]!.destination.relaySender, "Carol");
   });
 
   it("a fire's attachments ride the delivery with the reply (the tweet-digest regression)", async () => {

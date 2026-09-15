@@ -500,12 +500,24 @@ export async function postWithVerify(
   opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
 ): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
   const fullText = typeof args.text === "string" ? args.text : "";
-  if (args.blocks) {
-    if (fullText.length > SLACK_TEXT_LIMIT - 1_000) args.text = safeClip(fullText, SLACK_TEXT_LIMIT - 1_000);
-  } else if (fullText.length > SLACK_POST_SPLIT_LIMIT) {
+  const batches: PostMessageArgs[] = [];
+  if (Array.isArray(args.blocks) && args.blocks.length > 50) {
+    for (let offset = 0; offset < args.blocks.length; offset += 50) {
+      const blocks = args.blocks.slice(offset, offset + 50);
+      const text = blocks
+        .filter((block) => block.type === "section" && typeof block.text?.text === "string")
+        .map((block) => block.text.text)
+        .join("\n");
+      batches.push({ ...args, blocks, text });
+    }
+  } else if (!args.blocks && fullText.length > SLACK_POST_SPLIT_LIMIT) {
+    batches.push(...safeChunks(fullText, SLACK_POST_SPLIT_LIMIT).map((text) => ({ ...args, text })));
+  }
+  if (batches.length) {
     const parts: PostedPart[] = [];
-    for (const [i, text] of safeChunks(fullText, SLACK_POST_SPLIT_LIMIT).entries()) {
-      const res = await postWithVerify(client, { ...args, text }, splitPostKey(idempotencyKey, i), {
+    for (const [i, batch] of batches.entries()) {
+      const text = batch.text ?? "";
+      const res = await postWithVerify(client, batch, splitPostKey(idempotencyKey, i), {
         ...opts,
         verifyFirst: true,
         verifyBestEffort: !opts?.verifyFirst,
@@ -524,6 +536,9 @@ export async function postWithVerify(
       ...(parts.every((p) => p.reused) ? { reused: true } : {}),
       parts,
     };
+  }
+  if (args.blocks && fullText.length > SLACK_TEXT_LIMIT - 1_000) {
+    args.text = safeClip(fullText, SLACK_TEXT_LIMIT - 1_000);
   }
   const maxAttempts = opts?.attempts ?? 3;
   const verifyOldest = opts?.verifyOldest ?? String((Date.now() - 5_000) / 1000);

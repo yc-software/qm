@@ -223,3 +223,68 @@ for (const type of ["slack", "group", "principal"]) {
     assert.deepEqual(acknowledgements, ["D1"]);
   });
 }
+
+for (const type of ["group", "principal"]) {
+  for (const sender of ["josh", "@josh", "<@U123> & <!channel>"]) {
+    test(`${type} relay attribution is a plain-text footer for ${sender}`, async () => {
+      const { posts } = await deliver({ type, relaySender: sender }, undefined, undefined, "Ship it");
+      assert.equal(posts.length, 1);
+      assert.equal(posts[0]!.text, "Ship it");
+      assert.deepEqual(posts[0]!.blocks, [
+        { type: "section", text: { type: "mrkdwn", text: "Ship it" } },
+        {
+          type: "context",
+          elements: [{ type: "plain_text", text: `Sent for @${sender.replace(/^@+/, "")}`, emoji: false }],
+        },
+      ]);
+    });
+  }
+
+  test(`${type} attachment-only relay retains its attribution alongside cron settings`, async () => {
+    const { posts, uploads } = await deliver(
+      { type, relaySender: "josh" },
+      "cron:c1:fire:123",
+      "https://agent.example/web-ui",
+      "",
+    );
+    assert.equal(posts.length, 1);
+    const blocks = posts[0]!.blocks as Array<{ type: string; elements: Array<{ type: string; text: string }> }>;
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0]!.type, "context");
+    assert.deepEqual(blocks[0]!.elements[0], { type: "plain_text", text: "Sent for @josh", emoji: false });
+    assert.equal(blocks[0]!.elements[1]!.type, "mrkdwn");
+    assert.ok(uploads.length);
+  });
+}
+
+for (const type of ["group", "principal"]) {
+  test(`${type} long relays split within Slack's block limit and keep the footer last`, async () => {
+    const text = "x".repeat(145_000);
+    const { posts, mirrors } = await deliver({ type, relaySender: "josh" }, undefined, undefined, text);
+    assert.equal(
+      mirrors
+        .map((mirror) => mirror.text)
+        .join("")
+        .replaceAll("\n", ""),
+      text,
+    );
+    assert.equal(posts.length, 2);
+    const blocks = posts.flatMap((post) => {
+      const batch = post.blocks as Array<{ type: string; text?: { text: string }; elements?: unknown[] }>;
+      assert.ok(batch.length <= 50);
+      return batch;
+    });
+    assert.equal(
+      blocks
+        .filter((block) => block.type === "section")
+        .map((block) => block.text!.text)
+        .join(""),
+      text,
+    );
+    assert.deepEqual(blocks.at(-1), {
+      type: "context",
+      elements: [{ type: "plain_text", text: "Sent for @josh", emoji: false }],
+    });
+    assert.equal(blocks.filter((block) => block.type === "context").length, 1);
+  });
+}
