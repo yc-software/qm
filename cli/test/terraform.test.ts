@@ -620,7 +620,7 @@ test("AWS module reuses account OIDC, guards account and passes configured task 
     /Sid\s*= "ManageDeploymentLayers"[\s\S]*"s3:GetObject", "s3:PutObject"[\s\S]*deployment\/layers\/\*/,
   );
   assert.match(mainTf, /Sid\s*= "InspectGithubOidcProvider"[\s\S]*iam:GetOpenIDConnectProvider/);
-  assert.match(mainTf, /"ecs:GetTaskProtection", "ecs:UpdateTaskProtection"/);
+  assert.match(mainTf, /"ecs:GetTaskProtection", "ecs:UpdateTaskProtection", "ecs:DescribeTasks"/);
   assert.match(mainTf, /task\/\$\{var\.cluster_name\}\/\*/);
   assert.match(mainTf, /"lambda:RunMicrovm"[\s\S]*"lambda:CreateMicrovmAuthToken"/);
   assert.match(mainTf, /"lambda:ListMicrovmImages"/);

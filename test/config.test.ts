@@ -742,6 +742,7 @@ test("Fly shared application name is passed to the deployment provider", () => {
   const config = loadConfig({
     DEPLOY_PROVIDER: "fly",
     FLY_DEPLOY_SHARED_APP_NAME: "qm-example-apps",
+    FLY_DEPLOY_WIREGUARD_PEERS: "[]",
     FLY_DEPLOY_API_TOKEN: "test-token",
     FLY_DEPLOY_DATA_VOLUME_SIZE_GB: "1",
   });

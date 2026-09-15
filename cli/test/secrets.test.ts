@@ -400,3 +400,22 @@ test("scope-selected providers require both Modal and Sprites credentials", () =
   for (const name of ["SPRITES_TOKEN", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"])
     assert.ok(required.includes(name), name);
 });
+
+test("shared Fly publishing requires private peers only when selected", () => {
+  for (const provider of ["fly", "aws"]) {
+    for (const shared of [false, true]) {
+      const config = makeConfig({
+        target: "aws",
+        env: {
+          core: {
+            DEPLOY_PROVIDER: provider,
+            ...(shared ? { FLY_DEPLOY_SHARED_APP_NAME: "acme-apps" } : {}),
+          },
+        },
+      });
+      const peer = computedSecrets(config).find((secret) => secret.name === "FLY_DEPLOY_WIREGUARD_PEERS");
+      assert.equal(Boolean(peer?.required), provider === "fly" && shared);
+      if (provider === "fly" && shared) assert.doesNotMatch(renderEnvExample(config), /tokens create org/);
+    }
+  }
+});

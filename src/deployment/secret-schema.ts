@@ -11,6 +11,7 @@ type SecretGate =
   | "porter"
   | "agent37"
   | "porter-deploy"
+  | "fly-shared-deploy"
   | "fly-deploy"
   | "aws-deploy-gate"
   | "google-oauth"
@@ -45,6 +46,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "MODAL_TOKEN_SECRET", requiredWhen: "modal" },
   { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: ["porter", "porter-deploy"] },
   { name: "FLY_DEPLOY_API_TOKEN", requiredWhen: "fly-deploy" },
+  { name: "FLY_DEPLOY_WIREGUARD_PEERS", requiredWhen: "fly-shared-deploy" },
   { name: "AWS_DEPLOY_GATE_SECRET", requiredWhen: "aws-deploy-gate" },
   { name: "GOOGLE_OAUTH_CLIENT_SECRET", requiredWhen: "google-oauth" },
   { name: "DROPBOX_OAUTH_CLIENT_SECRET", requiredWhen: "dropbox-oauth" },
@@ -70,6 +72,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   porter: (env) => sandboxBackendSelected(env, "porter"),
   agent37: (env) => sandboxBackendSelected(env, "agent37"),
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
+  "fly-shared-deploy": (env) => env.DEPLOY_PROVIDER === "fly" && Boolean(env.FLY_DEPLOY_SHARED_APP_NAME?.trim()),
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN),
   "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),

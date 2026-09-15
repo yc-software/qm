@@ -13,6 +13,7 @@ import {
   flyLiveSessionCommand,
   flyS3ProbeCommand,
   flyUp,
+  verifyLocalFlyTokens,
 } from "../src/backends/fly.ts";
 import type { ResolvedPlugin } from "../src/plugins.ts";
 
@@ -1166,6 +1167,30 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     );
   } finally {
     console.log = log;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shared publisher authorization uses app-scoped access without organization listing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-app-token-"));
+  const fake = fakeFly(dir, 'if (a !== "machines list -a acme-apps --json") process.exit(1);');
+  try {
+    const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
+    verifyLocalFlyTokens(
+      {
+        ...config,
+        env: {
+          core: {
+            DEPLOY_PROVIDER: "fly",
+            FLY_DEPLOY_SHARED_APP_NAME: "acme-apps",
+          },
+        },
+      },
+      new Map([["FLY_DEPLOY_API_TOKEN", "app-scoped-test-token"]]),
+    );
+    assert.equal(readFileSync(fake.log, "utf8").trim(), "machines list -a acme-apps --json");
+  } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
