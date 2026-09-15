@@ -3044,7 +3044,9 @@ a.chat-row-open {
   border: 1px solid var(--border);
   border-radius: 24px;
   background: var(--background);
-  box-shadow: var(--chat-surface-shadow);
+  box-shadow:
+    0 2px 5px rgb(0 0 0 / 0.06),
+    0 8px 24px rgb(0 0 0 / 0.07);
 }
 .composer-input {
   width: 100%;
