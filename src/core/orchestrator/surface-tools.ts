@@ -384,7 +384,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
               "on an autonomous turn just say what you couldn't search]",
           };
         if (result.note && !result.messages?.length) return { ok: false, message: result.note };
-        return withCoverage({ ok: true, hits: shapeHits(result.messages ?? [], true), source: "slack" });
+        return withCoverage({
+          ok: true,
+          hits: shapeHits(result.messages ?? [], true),
+          source: "slack",
+          ...(result.note ? { message: result.note } : {}),
+        });
       }
       const container = dest.target ?? conversation.channelRef ?? conversation.threadRef;
       if (deps.slackContextSource === "mirror" && deps.surfaceCache && dest.type === "slack" && container) {
@@ -430,7 +435,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };
-      return withCoverage({ ok: true, hits: shapeHits(result.messages ?? []), source: "live" });
+      return withCoverage({
+        ok: true,
+        hits: shapeHits(result.messages ?? []),
+        source: "live",
+        ...(result.note ? { message: result.note } : {}),
+      });
     },
     readMembers: async () => {
       const roster = (conversation.publishMembers ?? conversation.audience).filter((p) => p.type === "internal");

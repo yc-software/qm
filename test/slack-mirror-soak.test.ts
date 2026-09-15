@@ -130,7 +130,12 @@ test("live and shadow default search cannot source mirror data", async () => {
             return [{ text: "mirror secret" }];
           },
         },
-        surfaceContext: { pull: async () => ({ messages: [{ ts: "1", text: "live match" }] }) },
+        surfaceContext: {
+          pull: async () => ({
+            messages: [{ ts: "1", text: "live match" }],
+            note: "Retry in 60 seconds; setup at https://qm.test/admin/?setup=slack",
+          }),
+        },
       },
       input: { surface: "slack", surfaceTools: true },
       actor: { id: "U1" },
@@ -140,6 +145,7 @@ test("live and shadow default search cannot source mirror data", async () => {
     const result = await tools.search("match");
     assert.equal(result.source, "live");
     assert.equal(result.hits?.[0]?.snippet, "live match");
+    assert.match(result.message!, /60 seconds.*setup=slack/);
     assert.equal((await tools.search("match", { source: "mirror" })).ok, false);
     assert.equal(cacheReads, 0);
   }
