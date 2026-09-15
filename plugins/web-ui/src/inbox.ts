@@ -31,11 +31,19 @@ import { brandName, icon, initials, relTime, slackMark, workingWave } from "./ui
 
 export type InboxSource = "gmail" | "slack";
 
+interface InboxAttachment {
+  artifactId: string;
+  name: string;
+  mimetype: string;
+  sizeBytes: number;
+}
+
 export interface InboxDraft {
   to?: string[];
   cc?: string[];
   subject?: string;
   body: string;
+  attachments?: InboxAttachment[];
 }
 
 export interface InboxContextMessage {
@@ -94,6 +102,7 @@ export interface InboxItem {
   externalReplyText?: string;
   reactions?: string[];
   probablyResolved?: boolean;
+  compose?: true;
   images?: string[];
   updatedAt: number;
 }
@@ -200,7 +209,7 @@ function viewSources(viewId: string): InboxSource[] {
 export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[] {
   const sources = viewSources(viewId);
   return inboxState.items.filter(
-    (i) => sources.includes(i.source) && (status === "open" ? i.status === "open" : i.status !== "open"),
+    (i) => !i.compose && sources.includes(i.source) && (status === "open" ? i.status === "open" : i.status !== "open"),
   );
 }
 
@@ -214,11 +223,15 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v 
 function draftOf(item: LedgerItem): InboxDraft | undefined {
   const data = item.proposal?.data;
   if (!data || typeof data.body !== "string") return undefined;
+  const attachments = Array.isArray(data.attachments)
+    ? (data.attachments as InboxAttachment[]).filter((a) => str(a?.artifactId) && str(a?.name))
+    : [];
   return {
     body: data.body,
     ...(Array.isArray(data.to) ? { to: data.to as string[] } : {}),
     ...(Array.isArray(data.cc) ? { cc: data.cc as string[] } : {}),
     ...(str(data.subject) ? { subject: data.subject as string } : {}),
+    ...(attachments.length ? { attachments } : {}),
   };
 }
 
@@ -257,6 +270,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(payload.slack ? { slack: payload.slack as InboxItem["slack"] } : {}),
     ...(reactions?.length ? { reactions } : {}),
     ...(payload.probablyResolved === true ? { probablyResolved: true } : {}),
+    ...(payload.compose === true ? { compose: true } : {}),
     ...(Array.isArray(payload.images)
       ? { images: (payload.images as unknown[]).filter((u): u is string => typeof u === "string") }
       : {}),

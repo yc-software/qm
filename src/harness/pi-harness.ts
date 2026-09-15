@@ -1529,6 +1529,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     tapeFold?: unknown[],
     tape?: HarnessTurnInput["tape"],
     turnProviderKeys?: ProviderKeys,
+    emailDrafts?: boolean,
   ): Promise<{ entry: TurnSession; compileMs: number }> {
     const compileStart = Date.now();
     let reconstructed: PiReplayMessage[] | null;
@@ -1591,6 +1592,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ...(surfaceTools ? { surfaceTools: true } : {}),
           ...(surfaceName ? { surfaceName } : {}),
           ...(readOnly ? { readOnly: true } : {}),
+          ...(emailDrafts ? { emailDrafts: true } : {}),
           ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
           ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),
           ...(opts?.backgroundJobTtlMs !== undefined ? { backgroundJobTtlMs: opts.backgroundJobTtlMs } : {}),
@@ -1756,6 +1758,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.tapeFold,
           turn.tape,
           turn.providerKeys,
+          turn.emailDrafts,
         );
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;

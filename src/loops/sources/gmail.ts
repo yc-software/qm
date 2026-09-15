@@ -1,4 +1,5 @@
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import { randomUUID } from "node:crypto";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -16,7 +17,7 @@ import {
   type SourceActionResult,
 } from "./adapter.ts";
 
-const GMAIL_HOST = "gmail.googleapis.com";
+export const GMAIL_HOST = "gmail.googleapis.com";
 
 interface GmailMeta {
   threadId: string;
@@ -74,36 +75,111 @@ function wrap76(s: string): string {
 export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   const explicit = draft.subject?.trim();
   if (explicit) return explicit;
-  const original = metaOf(item)?.subject?.trim() ?? titleOf(item).trim();
+  const meta = metaOf(item);
+  const original = meta?.subject?.trim() ?? titleOf(item).trim();
+  if (!meta) return original;
   if (!original) return "Re:";
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): string | null {
+interface MimeAttachment {
+  name: string;
+  mimetype: string;
+  bytes: Uint8Array;
+}
+
+export const MAX_EMAIL_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_FILENAME_CHARS = 150;
+
+function textPart(text: string): string[] {
+  return [
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap76(b64(new TextEncoder().encode(text))),
+  ];
+}
+
+function filenameParams(name: string): string {
+  const trimmed = name.slice(0, MAX_FILENAME_CHARS);
+  const ascii = trimmed.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  if (ascii === trimmed) return `filename="${ascii}"`;
+  return `filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(trimmed)}`;
+}
+
+function attachmentPart(file: MimeAttachment): string[] {
+  return [
+    `Content-Type: ${file.mimetype}`,
+    `Content-Disposition: attachment; ${filenameParams(file.name)}`,
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap76(b64(file.bytes)),
+  ];
+}
+
+export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft, files: MimeAttachment[] = []): string | null {
   const meta = metaOf(item);
   const to = (draft.to?.length ? draft.to : meta?.to) ?? [];
   if (to.length === 0) return null;
   const cc = draft.cc ?? meta?.cc ?? [];
   const rfcId = meta?.rfcMessageId;
-  const lines = [
+  const mixed = `mixed-${randomUUID()}`;
+  const headers = [
     `To: ${to.join(", ")}`,
     ...(cc.length ? [`Cc: ${cc.join(", ")}`] : []),
     `Subject: ${headerValue(replySubject(item, draft))}`,
     ...(rfcId ? [`In-Reply-To: ${rfcId}`, `References: ${rfcId}`] : []),
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    wrap76(b64(new TextEncoder().encode(draft.body))),
   ];
-  return lines.join("\r\n");
+  const body = files.length
+    ? [
+        `Content-Type: multipart/mixed; boundary="${mixed}"`,
+        "",
+        `--${mixed}`,
+        ...textPart(draft.body),
+        ...files.flatMap((file) => [`--${mixed}`, ...attachmentPart(file)]),
+        `--${mixed}--`,
+      ]
+    : textPart(draft.body);
+  return [...headers, ...body].join("\r\n");
+}
+
+async function loadAttachments(
+  deps: SourceActionDeps,
+  draft: ReplyDraft,
+): Promise<{ ok: true; files: MimeAttachment[] } | { ok: false; message: string }> {
+  const wanted = draft.attachments ?? [];
+  if (!wanted.length) return { ok: true, files: [] };
+  if (!deps.files) return { ok: false, message: "attachments are not available on this deployment" };
+  const tooLarge = `attachments exceed ${Math.floor(MAX_EMAIL_ATTACHMENT_BYTES / 1024 / 1024)} MB in total`;
+  const files: MimeAttachment[] = [];
+  let total = 0;
+  for (const a of wanted) {
+    const opened = await deps.files.open(a.artifactId);
+    if (!opened)
+      return { ok: false, message: `attachment "${a.name}" is no longer available; remove it and send again` };
+    total += opened.sizeBytes;
+    if (total > MAX_EMAIL_ATTACHMENT_BYTES) {
+      opened.stream.destroy();
+      return { ok: false, message: tooLarge };
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of opened.stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const bytes = Buffer.concat(chunks);
+    total += Math.max(0, bytes.length - opened.sizeBytes);
+    if (total > MAX_EMAIL_ATTACHMENT_BYTES) return { ok: false, message: tooLarge };
+    files.push({ name: opened.name, mimetype: opened.mimetype, bytes });
+  }
+  return { ok: true, files };
 }
 
 async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const token = await tokenFor(deps.tokens, GMAIL_HOST, deps.owner);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
-  const mime = buildGmailReplyMime(item, draft);
+  const loaded = await loadAttachments(deps, draft);
+  if (!loaded.ok) return { ok: false, reason: "bad_item", message: loaded.message };
+  const mime = buildGmailReplyMime(item, draft, loaded.files);
   if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const threadId = metaOf(item)?.threadId;
   const res = await fetchImpl(`https://${GMAIL_HOST}/gmail/v1/users/me/messages/send`, {
