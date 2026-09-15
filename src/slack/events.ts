@@ -238,7 +238,7 @@ export function registerSlackEvents(
         return;
       }
       if (ownMessage(m) && shouldProcessMessage(m, "", "")) {
-        await mirrorMessageEvent(m, client, { ...(m.channel_type === "im" ? { kind: "dm" as const } : {}) });
+        await mirrorMessageEvent(m, client, m.channel_type === "im" ? { kind: "dm" } : {});
         return;
       }
       if (!shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) return;
