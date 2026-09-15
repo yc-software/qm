@@ -737,3 +737,14 @@ test("sandbox scope defaults parse exact scope kinds and reject malformed mappin
   ])
     assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
 });
+
+test("Fly shared application name is passed to the deployment provider", () => {
+  const config = loadConfig({
+    DEPLOY_PROVIDER: "fly",
+    FLY_DEPLOY_SHARED_APP_NAME: "qm-example-apps",
+    FLY_DEPLOY_API_TOKEN: "test-token",
+    FLY_DEPLOY_DATA_VOLUME_SIZE_GB: "1",
+  });
+  assert.equal(config.flyDeploy.sharedAppName, "qm-example-apps");
+  assert.equal(config.flyDeploy.dataVolumeSizeGb, 1);
+});

@@ -10,7 +10,13 @@ import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { DeployEndpoint } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 
-function svc(opts: { managedScaleToZero?: boolean; resolve?: () => Promise<DeployEndpoint | null> } = {}) {
+function svc(
+  opts: {
+    managedScaleToZero?: boolean;
+    resolve?: () => Promise<DeployEndpoint | null>;
+    setAlwaysOn?: DeployProvider["setAlwaysOn"];
+  } = {},
+) {
   const deployStore = createDeployStore();
   let applies = 0;
   let resolves = 0;
@@ -21,6 +27,7 @@ function svc(opts: { managedScaleToZero?: boolean; resolve?: () => Promise<Deplo
       return { host: "127.0.0.1", port: 5000 };
     },
     destroy: async () => {},
+    ...(opts.setAlwaysOn ? { setAlwaysOn: opts.setAlwaysOn } : {}),
     ...(opts.resolve
       ? {
           resolveEndpoint: async () => {
@@ -184,4 +191,39 @@ test("keepAlwaysOnWarm relaunches when the platform has torn the app down", asyn
   assert.equal(warmed, 1);
   assert.ok(ctx.applies > appliesBefore, "expected a re-apply when no live endpoint exists");
   assert.equal((await deployStore.get(d.id))!.status, "running");
+});
+
+test("always-on reaches the provider before persisting and retains the flag on failure", async () => {
+  const seen: boolean[] = [];
+  let reject = false;
+  const { deploy, deployStore } = svc({
+    setAlwaysOn: async (_d, enabled) => {
+      if (reject) throw new Error("provider unavailable");
+      seen.push(enabled);
+    },
+  });
+  const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
+  await deploy.setDeploymentAlwaysOn(d.id, true);
+  assert.deepEqual(seen, [true]);
+  reject = true;
+  await assert.rejects(deploy.setDeploymentAlwaysOn(d.id, false), /provider unavailable/);
+  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+  await deploy.archiveDeployment(d.id);
+  await deploy.setDeploymentAlwaysOn(d.id, false);
+  assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
+  assert.deepEqual(seen, [true]);
+});
+
+test("repair publication and rollback apply always-on with the version instead of restarting the old app", async () => {
+  const { deploy, deployStore } = svc({
+    setAlwaysOn: async () => {
+      throw new Error("old runtime is broken");
+    },
+  });
+  const d = await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "first", files: [] });
+  await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "fixed", files: [], alwaysOn: true });
+  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+  await deploy.deployOrUpdate({ ...owner, name: "repair-app", rollbackTo: 1, alwaysOn: false });
+  assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
+  assert.equal((await deployStore.get(d.id))!.appliedVersion, 1);
 });

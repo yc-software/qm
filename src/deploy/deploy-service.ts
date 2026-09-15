@@ -66,11 +66,17 @@ export interface DeployService {
   deploy(input: DeployInput): Promise<Deployment>;
   redeploy(
     id: string,
-    input: { entrypoint: string; files: DeployFile[]; homeFiles?: DeployFile[]; env?: Record<string, string> },
+    input: {
+      entrypoint: string;
+      files: DeployFile[];
+      homeFiles?: DeployFile[];
+      env?: Record<string, string>;
+      alwaysOn?: boolean;
+    },
   ): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
   listDeployments(): Promise<Deployment[]>;
-  rollbackDeployment(id: string, version: number): Promise<void>;
+  rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean }): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
   renameDeployment(id: string, name: string): Promise<Deployment>;
@@ -378,6 +384,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async redeploy(id, input) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
+        if (input.alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, input.alwaysOn);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
         const v = await deps.deployStore.addVersion(id, {
@@ -410,9 +417,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return deps.deployStore.list();
     },
 
-    async rollbackDeployment(id, version) {
+    async rollbackDeployment(id, version, options) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
+        if (options?.alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(id, options.alwaysOn);
         await deps.deployStore.setCurrentVersion(id, version);
         const v = await deps.deployStore.versionOf(id, version);
         const d = await deps.deployStore.get(id);
@@ -513,6 +521,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return withDeployLock(id, async () => {
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown deployment: ${id}`);
+        if (d.status === "running" && Boolean(d.alwaysOn) !== alwaysOn) await deps.provider.setAlwaysOn?.(d, alwaysOn);
         await deps.deployStore.setAlwaysOn(id, alwaysOn);
         deps.auditLog.record({
           at: Date.now(),
@@ -645,18 +654,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           resource: existing.id,
           scopeLabel: existing.ownerScopeId,
         });
-        if (input.alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(existing.id, input.alwaysOn);
         if ((input.entrypoint !== undefined || input.files !== undefined) && input.files) {
           const entrypoint = requiredEntrypoint(input.entrypoint, existing);
           await this.redeploy(existing.id, {
             entrypoint,
             files: input.files,
+            ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
             ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
             ...(input.env ? { env: input.env } : {}),
           });
           if (input.defaultAudience)
             await reconcileDefaultAudience((await deps.deployStore.get(existing.id))!, input.defaultAudience, false);
-        }
+        } else if (input.alwaysOn !== undefined) await this.setDeploymentAlwaysOn(existing.id, input.alwaysOn);
         if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
@@ -667,8 +676,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!existing) throw new Error(`no deployment named: ${input.name}`);
         if (!(await canManage(existing, ownerScopeId, createdBy, input.createdInScope)))
           throw new Error(`not authorized to manage deployment: ${input.name}`);
-        if (input.alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(existing.id, input.alwaysOn);
-        await this.rollbackDeployment(existing.id, input.rollbackTo);
+        await this.rollbackDeployment(
+          existing.id,
+          input.rollbackTo,
+          input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : undefined,
+        );
         if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
@@ -684,11 +696,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ) {
           throw new Error(`deployment name taken: ${input.name}`);
         }
-        if (input.alwaysOn !== undefined) await deps.deployStore.setAlwaysOn(existing.id, input.alwaysOn);
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
         d = await this.redeploy(existing.id, {
           entrypoint,
           files,
+          ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
           ...(input.env ? { env: input.env } : {}),
         });

@@ -1,0 +1,66 @@
+# Fly published application acceptance
+
+Status: prototype; not approved as an AWS MicroVM replacement.
+
+The Fly adapter must retain QM's application access controls and durable application data while delegating idle suspension and request-driven wake-up to Fly Proxy. Existing deployments remain on their current provider until the following checks pass against the candidate source and a real QM instance.
+
+| Area           | Required live evidence                                                                                                             |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Publishing     | Publish through QM, open the resulting URL, verify actual application responses                                                    |
+| Authentication | Signed-out, unrelated-user and unrelated-company denial; authorized-user success; direct-origin bypass denied                      |
+| Idle and wake  | Observe automatic suspension with zero active Machines, then wake through the normal QM URL; repeat with concurrent first requests |
+| Cold start     | Force a stopped state, then verify request-driven boot and data recovery                                                           |
+| Persistence    | Write SQLite and file data, verify after suspend, stop, update, rollback and replacement                                           |
+| Updates        | Publish v2 and roll back to v1 without losing data; failed entrypoint must preserve the working version                            |
+| Transport      | Streaming responses, WebSockets, uploads, cookies, redirects and proxy headers                                                     |
+| Lifecycle      | Always-on enable/disable, explicit stop/restart, deletion, core restart and overlapping core instances                             |
+| Isolation      | Company credentials cannot inspect, modify or delete another company's apps; application code cannot reach sibling networks        |
+| Capacity       | Bounded concurrent publishes and wake-ups; retry partial failures without orphaning resources                                      |
+
+Record candidate commit, image digest, timestamps, HTTP assertions, machine states, data checks and cleanup in private receipts. Unit tests and direct provider calls are supporting evidence, not end-to-end acceptance.
+
+The prototype adds Fly service autostop/suspend, autostart and a zero minimum. The application reaper must not delete provider-managed sleeping apps. AWS-to-Fly company-isolated private connectivity remains unresolved.
+
+Observed live results from the initial prototype:
+
+- Publish v1 succeeded with private Flycast ingress.
+- A tunnel on the application's custom network could not reach its Flycast address allocated on the organization network. Using a tunnel on the matching organization network returned HTTP 200. Production connectivity still needs a company-isolated path from AWS.
+- Forced suspension was confirmed through the Machines API. A normal request through Flycast resumed it in 0.37 seconds, preserving a file counter.
+- Replacement publish v2 succeeded, but the file counter reset from 1 to 0. This is a failing acceptance check; the existing ephemeral filesystem cannot provide durable application data across replacement.
+- Automatic idle suspension was observed after about five minutes. A request resumed the app in 0.83 seconds and preserved the counter. This used a private Flycast tunnel, not the complete QM request path.
+
+Set `FLY_DEPLOY_DATA_VOLUME_SIZE_GB` to a positive integer to opt into persistent `/data`. The prototype creates one encrypted volume per application, updates the attached Machine in place, and retains the volume on archive. It refuses to silently convert existing ephemeral applications or downgrade a volume-backed app when configuration is missing. Volumes are host-local; this is not replicated storage or high availability. Machine replacement must retain the existing volume, and host-loss recovery needs separate qualification.
+
+The direct live volume fixture passed file and SQLite persistence after an update, failed-entrypoint rollback, explicit version rollback, cold stop/request wake, and archive/recreation. Follow-up tests passed both always-on toggles and recovery after confirming a broken configuration had stopped, then recreating the provider. The fixture uses a private file-backed configuration store; application wiring uses Postgres, which still needs full QM qualification. Unit tests cover accepted-create response loss, missing volume configuration, failed configuration persistence, rollback after provider recreation, and always-on changes.
+
+The first live always-on toggle from suspension failed: updating the Machine configuration left it stopped. Treat configuration acceptance and a running application as separate conditions. The candidate now requests a start when either the update response or subsequent readiness polling reports stopped/suspended. The successful retry verified the toggle, live data, and persisted rollback recovery. Durable mode requires Postgres in application wiring; an in-memory configuration map does not qualify restart recovery.
+
+A possible credential arrangement is one pre-created Fly app per company with an app-scoped token and multiple deployment Machines. The proposed routing uses a distinct raw TCP external port for each deployment. This requires live wake/routing tests and durable port ownership before it is accepted. No company credentials or production provider settings have changed for this prototype.
+
+An app-scoped token passed direct Machines API operations but failed `flyctl proxy`'s organization lookup. Do not distribute an organization-wide token to work around this. Network policies and a separately provisioned private tunnel are being evaluated for company-isolated ingress. Policies do not filter Fly Proxy traffic, so direct-ingress restrictions alone cannot establish isolation. The API also rejects an ingress rule with no allowed ports; do not assume an empty rule means deny-all.
+
+The live network fixture established direct private-IP access to port 8080, then denied that access with an ingress policy allowing only managed SSH on port 22. Flycast continued serving the fixture and its data. A separately provisioned custom-network WireGuard peer and userspace wireproxy tunnel also returned HTTP 200 without a Fly API token at runtime. This was one local tunnel, not an AWS core deployment.
+
+Design review identified two further requirements. Prefer a distinct raw TCP external port per deployment over the HTTP force-instance header: an untrusted app can emit Fly replay instructions when the HTTP handler is enabled. Port assignments need durable collision-free ownership. Also give simultaneously running core tunnels distinct WireGuard peers; sharing one peer causes endpoint roaming between replicas. Exclusive peer assignment and blue-green overlap remain unimplemented and unqualified.
+
+A live two-Machine fixture in the same Fly app passed six raw TCP routing assertions: plain responses, `fly-replay` headers, and replay JSON each stayed on the assigned deployment port, both with and without a forged `fly-force-instance-id` request header targeting the sibling Machine. Replay instructions were returned as ordinary bytes; sibling application data was not returned. The initial requests ran before the new service was ready and received empty replies; after a successful plain-response baseline, all six assertions passed. This supports raw TCP port routing, but does not qualify port allocation, concurrent wake-up, QM authentication, or overlapping core tunnels.
+
+The same two Machines were then confirmed suspended and received 16 concurrent requests split evenly between their raw TCP ports. All 16 returned the correct application response, both Machines started, and the durable fixture retained its file and SQLite counters. Requests completed in 0.56–0.67 seconds; total request wall time was 0.675 seconds. This is a two-Machine private-tunnel measurement, not a fleet throughput estimate or a full QM cold-start measurement.
+
+The provider now has an optional shared-app mode requiring a durable configuration store, durable port claims, and persistent volumes. Machine metadata selects the owning deployment; each deployment keeps its volume and port across archive and restore. Tests cover sibling preservation through update, always-on, archive and restore, plus an occupied initial port and provider recreation. Set `FLY_DEPLOY_SHARED_APP_NAME` to select this mode; wiring supplies Postgres-backed port and configuration maps. The shared app and private ingress must already exist. Private transport integration remains unfinished, and this mode has not been exercised through QM.
+
+Independent review found no additional sibling resource deletion or port collision defect, but rejected a database lease alone as fencing for WireGuard peer reuse: a paused core can leave its tunnel child alive after the database releases the lock. Peer reuse must wait for authoritative previous-task termination or equivalent fencing. Acceptance must include a paused core plus server-side database-session termination. Shared provisioning must also establish and verify the separate ingress network and direct-Machine ingress restrictions; the provider's private-IP check alone does not establish this boundary.
+
+The shared provider itself passed a live two-deployment fixture: parallel publish assigned distinct ports, a file/SQLite write in one deployment left its sibling unchanged, archiving that deployment left the sibling serving, and provider recreation restored the original port and persisted data. This fixture uses file-backed maps and the existing local tunnel; Postgres-backed QM and AWS task lifecycle remain unqualified.
+
+The peer-claim prototype now uses sticky ECS task ARN ownership, exact STOPPED verification, and atomic compare-and-swap on reclamation. Unit tests cover concurrent tasks, stale observations, missing records and lookup errors. Independent review accepted the cross-task fencing premise for a tunnel contained in a Fargate task, but requires one manager per task and trusted task metadata. Integration must persist STOPPED evidence promptly or replace stranded peers because ECS task history is temporary. This claim helper is not yet connected to a running tunnel or fleet rollout scripts.
+
+Peer claims can now retain confirmed termination evidence and reuse it after ECS history disappears; tests ensure that evidence is cleared on reassignment and cannot mark a replacement owner stopped. The collector still needs runtime scheduling and rollout recovery integration. The local tunnel lifecycle passed two start/serve/stop cycles against the live shared provider, preserving file and SQLite data and rejecting an occupied listener. This does not yet prove task identity, singleton behavior across process failure, or ECS rollout handoff.
+
+QM HTTP deployment proxy and agent fetch now support the local SOCKS tunnel. A live route fixture reached the shared Fly app and preserved data: unsigned requests returned 401, unrelated actors 404, owners 200, and the ordinary proxy 200. Authorization decisions were stubbed, so this proves transport and route enforcement, not Bookface or real scope ACL acceptance. The affected proxy/fetch and peer-claim tests passed (29 tests).
+
+Runtime wiring now constructs a lazy Fargate tunnel manager from `FLY_DEPLOY_WIREGUARD_PEERS`, requires private connectivity for shared-app mode, and persists SOCKS routing on deployment endpoints. Task-termination collection runs while the tunnel manager is active. The core Dockerfile builds wireproxy v1.1.2 in a separate stage; that image has not yet been built or deployed. Hostname resolution through the private tunnel passed the live route fixture. ECS startup, task failure and deployment overlap still need live qualification.
+
+Runtime review fixes now have tests: concurrent requests restart a confirmed-dead tunnel once; termination collection starts with core runtime even without application traffic; and peer claim IDs derive from the actual X25519 public identity, preventing duplicate private-key identities or label changes from bypassing ownership. The initial local core-image build is in progress; the final source must be rebuilt before image qualification.
+
+The local ARM64 core image built successfully after the review fixes (`sha256:3b5e80d716c48902f06d580bf73fdef0116d29b84e8dd547cb215be1fb208b4f`). Its wireproxy executable runs. The pinned v1.1.2 source reports its upstream hard-coded `1.0.8-dev` banner when built without release linker flags; source/module provenance, rather than that banner, identifies this build. This image is not yet an ECS candidate or a production release.

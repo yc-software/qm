@@ -1,3 +1,4 @@
+import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import {
@@ -29,6 +30,12 @@ import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { portalSessionSub } from "../../deploy/viewer-session.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+
+function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
+  if (port === undefined) return {};
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid deployment SOCKS port");
+  return { agent: new SocksProxyAgent(`socks5h://127.0.0.1:${port}`, { keepAlive: false }) };
+}
 
 function isDeployInput(b: unknown): b is DeployInput {
   return (
@@ -538,15 +545,25 @@ async function proxyReach(
     return;
   }
   const htmlNav = wantsWarmingPage(req, method);
-  const up = requestFn({ hostname: host, port, path: subPath + url.search, method, headers }, (upRes) => {
-    up.setTimeout(0);
-    markUpstreamUp(upstreamKey);
-    upRes.on("error", () => res.destroy());
-    armThrottleShield(upstreamKey, upRes.statusCode ?? 0, upRes);
-    const headers = gatewaySafeResponseHeaders(upRes.headers, opts?.sandbox ?? false);
-    res.writeHead(upRes.statusCode ?? 502, headers);
-    upRes.pipe(res);
-  });
+  const up = requestFn(
+    {
+      hostname: host,
+      port,
+      path: subPath + url.search,
+      method,
+      headers,
+      ...deploymentProxyAgent(reach.endpoint.socksProxyPort),
+    },
+    (upRes) => {
+      up.setTimeout(0);
+      markUpstreamUp(upstreamKey);
+      upRes.on("error", () => res.destroy());
+      armThrottleShield(upstreamKey, upRes.statusCode ?? 0, upRes);
+      const headers = gatewaySafeResponseHeaders(upRes.headers, opts?.sandbox ?? false);
+      res.writeHead(upRes.statusCode ?? 502, headers);
+      upRes.pipe(res);
+    },
+  );
   const dialMs = warmingDialTimeoutMs(
     upstreamKey,
     htmlNav,
@@ -623,7 +640,14 @@ function deploymentFetchHttp1(
     const { host, port, tls, proxyHeaders } = endpoint.endpoint;
     const requestFn = tls ? httpsRequest : httpRequest;
     const request = requestFn(
-      { hostname: host, port, path, method: "GET", headers: { ...proxyHeaders, "accept-encoding": "identity" } },
+      {
+        hostname: host,
+        port,
+        path,
+        method: "GET",
+        headers: { ...proxyHeaders, "accept-encoding": "identity" },
+        ...deploymentProxyAgent(endpoint.endpoint.socksProxyPort),
+      },
       async (response) => {
         clearTimeout(timeout);
         try {

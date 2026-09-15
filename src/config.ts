@@ -742,18 +742,28 @@ function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {
 interface FlyDeployEnv {
   token: string;
   appPrefix: string;
+  sharedAppName?: string;
+  wireguardPeers?: string;
+  metadataUri?: string;
   baseImage: string;
   org: string;
   region?: string;
+  dataVolumeSizeGb?: number;
 }
 
 function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
   return {
     token: env.FLY_DEPLOY_API_TOKEN ?? "",
     appPrefix: env.FLY_DEPLOY_APP_PREFIX ?? "",
+    ...(env.FLY_DEPLOY_SHARED_APP_NAME ? { sharedAppName: env.FLY_DEPLOY_SHARED_APP_NAME } : {}),
+    ...(env.FLY_DEPLOY_WIREGUARD_PEERS ? { wireguardPeers: env.FLY_DEPLOY_WIREGUARD_PEERS } : {}),
+    ...(env.ECS_CONTAINER_METADATA_URI_V4 ? { metadataUri: env.ECS_CONTAINER_METADATA_URI_V4 } : {}),
     baseImage: env.FLY_DEPLOY_BASE_IMAGE ?? "",
     org: env.FLY_ORG ?? "",
     ...(env.FLY_REGION ? { region: env.FLY_REGION } : {}),
+    ...(env.FLY_DEPLOY_DATA_VOLUME_SIZE_GB !== undefined
+      ? { dataVolumeSizeGb: Number(env.FLY_DEPLOY_DATA_VOLUME_SIZE_GB) }
+      : {}),
   };
 }
 

@@ -1,6 +1,13 @@
+FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS wireproxy-build
+
+RUN apk add --no-cache go \
+  && CGO_ENABLED=0 GOBIN=/out go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.2
+
 FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
 
 RUN apk add --no-cache ca-certificates curl git git-daemon docker-cli
+
+COPY --from=wireproxy-build /out/wireproxy /usr/local/bin/wireproxy
 
 WORKDIR /app
 
