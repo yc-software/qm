@@ -322,7 +322,14 @@ export async function startSlackPlugin(
   approvals.registerActions(app);
   const inboxMessage = (
     client: unknown,
-    msg: { channel: string; ts: string; threadTs?: string; text?: string; senderSlackId?: string },
+    msg: {
+      channel: string;
+      ts: string;
+      threadTs?: string;
+      text?: string;
+      senderSlackId?: string;
+      isDirectMessage?: boolean;
+    },
   ): void => {
     void (async () => {
       let senderEmail: string | undefined;
@@ -337,6 +344,7 @@ export async function startSlackPlugin(
       await core.inboxSlackMessage({
         channel: msg.channel,
         ts: msg.ts,
+        ...(msg.isDirectMessage !== undefined ? { isDirectMessage: msg.isDirectMessage } : {}),
         ...(msg.threadTs ? { threadTs: msg.threadTs } : {}),
         ...(msg.text ? { text: msg.text } : {}),
         ...(senderEmail ? { senderEmail } : {}),

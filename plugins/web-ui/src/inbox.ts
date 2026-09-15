@@ -63,6 +63,8 @@ export interface InboxContextMessage {
   at?: number;
   text: string;
   images?: string[];
+  reply?: boolean;
+  nearby?: boolean;
 }
 
 export interface LedgerThreadMessage {
@@ -124,6 +126,9 @@ export interface InboxItem {
   probablyResolved?: boolean;
   images?: string[];
   updatedAt: number;
+  sourceContextFetched?: boolean;
+  sourceContextPartial?: boolean;
+  sourceRefreshError?: string;
 }
 
 export interface InboxView {
@@ -387,6 +392,9 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     thread: entry.thread,
     updatedAt: entry.updatedAt,
     ...(str(payload.fromDetail) ? { fromDetail: payload.fromDetail as string } : {}),
+    sourceContextFetched: payload.sourceContextFetched === true,
+    sourceContextPartial: payload.sourceContextPartial === true,
+    ...(typeof payload.sourceRefreshError === "string" ? { sourceRefreshError: payload.sourceRefreshError } : {}),
     ...(Array.isArray(payload.context) ? { context: payload.context as InboxContextMessage[] } : {}),
     ...(str(payload.externalUrl) ? { externalUrl: payload.externalUrl as string } : {}),
     ...(draft ? { draft } : {}),
@@ -804,10 +812,18 @@ function actionPath(item: InboxItem, leaf: "action" | "followup"): string {
   return `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}/${leaf}`;
 }
 
-async function refetchItem(item: InboxItem): Promise<void> {
+const sourceRefreshAt = new Map<string, number>();
+function ensureItemSource(item: InboxItem): void {
+  if (!item.slack || Date.now() - (sourceRefreshAt.get(item.id) ?? 0) < 60_000) return;
+  for (const [id, at] of sourceRefreshAt) if (Date.now() - at >= 60_000) sourceRefreshAt.delete(id);
+  sourceRefreshAt.set(item.id, Date.now());
+  void refetchItem(item, true);
+}
+
+async function refetchItem(item: InboxItem, refreshSource = false): Promise<void> {
   try {
     const { item: fresh } = await api<{ item: LedgerItem }>(
-      `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}`,
+      `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}${refreshSource ? "?refreshSource=1" : ""}`,
     );
     updateSentChat(fresh);
     replaceItem({ ...toInboxItem(fresh), detailLoaded: true });
@@ -1071,21 +1087,35 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
 }
 
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
-  const rows = [
-    ...(item.context ?? []).map((message, index) => ({ ...message, imageIndex: index })),
-    { author: item.from, at: item.receivedAt, text: item.snippet, images: item.images, imageIndex: -1 },
-  ];
+  const context = (item.context ?? []).map((message, index) => ({ ...message, imageIndex: index }));
+  const rows = item.sourceContextFetched
+    ? context
+    : [
+        ...context.filter((m) => !item.slack || m.nearby === true),
+        {
+          author: item.from,
+          at: item.receivedAt,
+          text: item.snippet,
+          images: item.images,
+          imageIndex: -1,
+          reply: false,
+          nearby: false,
+        },
+      ];
   return html`<div class="inbox-context">
+    ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
+    ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
     ${rows.map((m) => {
       const name = participantName(m.author) || m.author;
       return html`
-        <div class="inbox-context-msg">
+        <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
           <span class="inbox-avatar" style=${`--avatar-hue:${avatarHue(participantKey(m.author))}`} aria-hidden="true"
             >${initials(name)}</span
           >
           <div class="inbox-context-body">
             <div class="inbox-context-head">
               <span class="inbox-context-author">${name}</span>
+              ${m.nearby ? html`<span class="inbox-context-at">Nearby in channel</span>` : nothing}
               ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
             </div>
             <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
@@ -1768,6 +1798,8 @@ function drawSurface(surface: InboxSurface): void {
   if (!surface.host.isConnected && surface.pane) return;
   keepingChatLogsPinned(surface.host, () => render(surfaceTpl(surface), surface.host));
   sizeChatInputs(surface.host);
+  const selected = inboxState.items.find((item) => item.id === surface.selectedId);
+  if (selected) ensureItemSource(selected);
 }
 
 let fullSurface: InboxSurface | null = null;
@@ -1841,6 +1873,7 @@ function drawFull(): void {
   keepingChatLogsPinned(host, () => render(page, host));
   sizeAside(host);
   sizeChatInputs(host);
+  if (openItem) ensureItemSource(openItem);
 }
 
 /**

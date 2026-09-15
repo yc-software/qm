@@ -12882,3 +12882,17 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--foreground);
   text-decoration: underline;
 }
+
+.inbox-thread-reply {
+  margin-left: 28px;
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+.inbox-source-notice,
+.inbox-nearby-context {
+  color: var(--muted-foreground);
+}
+.inbox-source-notice {
+  font-size: 12px;
+  padding: 8px 0;
+}

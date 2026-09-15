@@ -149,6 +149,7 @@ import {
   createPostgresLedgerEventBus,
   type LedgerEventBus,
 } from "./loops/ledger-events.ts";
+import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
@@ -2925,7 +2926,16 @@ export function serverDeps(
     channelPolicy: built.channelPolicy,
     ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
-    ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
+    ...(built.keychain
+      ? {
+          loopSourceTokens: built.keychain,
+          inboxSourceRefresh: createInboxSourceRefresh({
+            items: built.loops.items,
+            tokens: built.keychain,
+            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+          }),
+        }
+      : {}),
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,

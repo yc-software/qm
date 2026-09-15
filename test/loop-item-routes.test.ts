@@ -34,6 +34,7 @@ function fakeRes() {
 }
 
 interface World {
+  sourceRefresh?: import("../src/loops/inbox-source-refresh.ts").InboxSourceRefresh;
   loops: LoopServiceDeps;
   crons: Map<string, Cron>;
   sent: Array<{ host: string; body: unknown }>;
@@ -143,6 +144,7 @@ async function call(
     deps: {
       featureFlags: { enabled: async () => true },
       loops: w.loops,
+      ...(w.sourceRefresh ? { inboxSourceRefresh: w.sourceRefresh } : {}),
       sessions: {
         getByThread: async (threadRef: string) =>
           over.sessionForThread && threadRef === "thread-9" ? { id: over.sessionForThread } : null,
@@ -846,4 +848,130 @@ test("a conversational send refuses a stale draft before starting an agent turn"
   });
   assert.equal(accepted.status, 200);
   assert.equal(w.followUps.length, 1);
+});
+
+test("inbox list refreshes open Gmail items before returning counts, but not another owner's loop", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  const refreshes: string[] = [];
+  // Exercise the route with the real refresher via the same dependency used by wiring.
+  const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
+  w.sourceRefresh = createInboxSourceRefresh({
+    items: w.loops.items,
+    tokens: { connectorAccessToken: async () => "synthetic" },
+    fetchImpl: async (url) => {
+      refreshes.push(String(url));
+      return Response.json({ messages: [{ internalDate: "2000", labelIds: ["SENT"], snippet: "Already replied" }] });
+    },
+  });
+  await w.loops.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "gmail",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { gmail: { threadId: "thread" } },
+      proposal: { by: "agent", data: { body: "Draft" } },
+    },
+  ]);
+  const denied = await call(w, {
+    method: "GET",
+    path: `/v1/loops/${loop.id}/items`,
+    actor: "outsider",
+    capability: null,
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(refreshes.length, 0);
+  const result = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items` });
+  assert.equal(result.status, 200);
+  assert.equal((result.body as { counts: Record<string, number> }).counts.dismissed, 1);
+  assert.equal(refreshes.length, 1);
+});
+
+test("Slack thread keys reuse a legacy item's identity, edits, and replied watermark", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await w.loops.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "D1",
+      source: "slack",
+      sourceAt: 2000,
+      sourcePayload: { slack: { channelId: "D1", ts: "1.0", threadTs: "1.0" } },
+      proposal: { by: "human", data: { body: "Keep this edit" } },
+    },
+  ]);
+  const [original] = await w.loops.items.byLoop(loop.id);
+  const ingest = () =>
+    call(w, {
+      method: "POST",
+      path: `/v1/loops/${loop.id}/items`,
+      body: {
+        items: [
+          {
+            ...ITEM,
+            sourceKey: "D1:1.0",
+            receivedAt: 2000,
+            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0" },
+            draft: { body: "Agent replacement" },
+          },
+        ],
+      },
+    });
+  assert.equal((await ingest()).status, 200);
+  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
+  assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
+  await w.loops.items.recordAction(original!.id, { kind: "replied", outcome: "dismissed", sourceAt: 3000 });
+  await ingest();
+  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
+  assert.equal((await w.loops.items.get(original!.id))!.status, "skipped");
+});
+
+test("ordinary item reads do not hydrate Slack; the selected-item refresh flag does", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  let refreshes = 0;
+  w.sourceRefresh = async () => {
+    refreshes++;
+  };
+  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
+  assert.equal(refreshes, 0);
+  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
+  assert.equal(refreshes, 1);
+});
+
+test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", async () => {
+  const w = world();
+  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  await w.loops.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "D1",
+      source: "slack",
+      sourceAt: 2000,
+      sourcePayload: { slack: { channelId: "D1", ts: "2.0", isDirectMessage: true } },
+      proposal: { by: "human", data: { body: "Keep this edit" } },
+    },
+  ]);
+  const [original] = await w.loops.items.byLoop(loop.id);
+  const result = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items`,
+    body: {
+      items: [
+        {
+          ...ITEM,
+          sourceKey: "D1:1.0",
+          receivedAt: 3000,
+          slack: { channelId: "D1", ts: "3.0", threadTs: "1.0", isDirectMessage: true },
+          draft: { body: "Other ask" },
+        },
+      ],
+    },
+  });
+  assert.equal(result.status, 200);
+  assert.equal((await w.loops.items.byLoop(loop.id)).length, 2);
+  assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
 });

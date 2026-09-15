@@ -1653,11 +1653,13 @@ const apiRoutes: readonly WebRoute[] = [
     method: "GET",
     path: "/api/loops/:id/items/:itemId",
     handle: async (c) => {
-      const { res, user, params } = c;
+      const { res, user, params, url } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      if (url.searchParams.get("refreshSource") === "1") qs.set("refreshSource", "1");
       return relayCore(
         res,
         "GET",
-        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?principalId=${encodeURIComponent(user)}`,
+        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
       );
     },
   },
