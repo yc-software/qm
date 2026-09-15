@@ -1161,6 +1161,7 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
   assert.match(reply, /\/v1\/credentials\/broker/);
   assert.match(reply, /x-agent-capability: \$AGENT_CREDENTIAL_TOKEN/);
   assert.match(reply, /x-firehose.*X firehose.*api\.x\.com.*GET.*\/2\/tweets\/search\//s);
+  assert.match(reply, /clone\/fetch\/push using a shared org credential/);
   assert.match(reply, /configured org account, not automatically the requesting user's account/);
   assert.match(reply, /live personal OAuth connector does not switch this route's identity/);
   assert.match(reply, /Choose among credentials authorized for this conversation/);

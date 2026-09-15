@@ -1495,7 +1495,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 '  -d \'{"credential":"<slug>","method":"GET","url":"https://<host>/<path>?<query>"}\'\n' +
                 "```\n" +
                 'The reply is `{"status":<upstream status>,"contentType":…,"body":"<upstream text>"}` — parse `body`. ' +
-                "For Git smart HTTP clone/fetch/push, use core as the Git remote so the token stays server-side: " +
+                "For Git smart HTTP clone/fetch/push using a shared org credential, use core as the Git remote " +
+                "so the token stays server-side: " +
                 "`$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git`, with " +
                 '`git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" ...`. ' +
                 "Git through this route uses the configured org account, not automatically the requesting user's account; " +
