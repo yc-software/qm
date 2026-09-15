@@ -6,6 +6,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
+import { formatMessageTime } from "./message-time";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   Activity,
@@ -1586,7 +1587,7 @@ export function createChatSurface(
     const forkable = Boolean(index >= 0 && chatState.threadRef && chatState.sessionId && chatState.agent);
     return html`
       <div class="message-meta">
-        ${ts !== undefined ? html`<span class="message-time">${formatClock(ts)}</span>` : nothing}
+        ${ts !== undefined ? html`<span class="message-time">${formatMessageTime(ts)}</span>` : nothing}
         ${
           text
             ? html`<button
@@ -1653,14 +1654,6 @@ export function createChatSurface(
     } catch (err) {
       ctx.composer.state.error = errMessage(err, "Could not fork the conversation.");
       drawActiveChat();
-    }
-  }
-
-  function formatClock(ms: number): string {
-    try {
-      return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    } catch {
-      return "";
     }
   }
 
