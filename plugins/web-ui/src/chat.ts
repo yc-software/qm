@@ -1706,7 +1706,7 @@ export function createChatSurface(
     >
       <span class="connector-widget-icon">${icon(Plug, 18)}</span>
       <span class="connector-widget-text"
-        ><strong>Connect ${name}</strong
+        ><strong>${(composio && link.label) || `Connect ${name}`}</strong
         ><small>${composio ? "Authorize access via Composio" : "Authorize access in a new tab"}</small></span
       >
       ${icon(ChevronRight, 16)}

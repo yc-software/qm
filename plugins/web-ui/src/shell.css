@@ -4510,6 +4510,7 @@ a.chat-row-open {
   line-height: 1.3;
 }
 .connector-widget-text strong {
+  overflow-wrap: anywhere;
   font-size: 14px;
   font-weight: 600;
 }

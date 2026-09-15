@@ -83,7 +83,13 @@ test("Composio supports bare, markdown, autolink and emphasized links", () => {
     `**[Connect Gmail](<${COMPOSIO_URL}>)**`,
   ]) {
     const links = connectorLinksIn(text, "https://agent.example.com");
-    assert.deepEqual(links, [{ provider: "composio", url: COMPOSIO_URL }]);
+    assert.deepEqual(links, [
+      {
+        provider: "composio",
+        url: COMPOSIO_URL,
+        ...(text.includes("[Connect Gmail]") ? { label: "Connect Gmail" } : {}),
+      },
+    ]);
     assert.equal(stripConnectorLinks(text, links), "");
   }
 });
@@ -119,4 +125,28 @@ test("stripping a card does not remove the prefix of an unrecognized URL", () =>
   const other = `${URL}unknown`;
   const text = `${URL}\n${other}`;
   assert.equal(stripConnectorLinks(text, connectorLinksIn(text, "https://agent.example.com")), other);
+});
+
+test("multiple Composio cards retain their own arbitrary link labels and order", () => {
+  const labels = ["Connect Calendar", "Connect Gmail", "Connect Google Drive", "Authorize Paper Lantern 🌙"];
+  const text = labels.map((label, i) => `[${label}](https://connect.composio.dev/link/lk_test${i})`).join("\n");
+  assert.deepEqual(
+    connectorLinksIn(text),
+    labels.map((label, i) => ({
+      provider: "composio",
+      url: `https://connect.composio.dev/link/lk_test${i}`,
+      label,
+    })),
+  );
+  assert.equal(stripConnectorLinks(text), "");
+});
+
+test("a labeled duplicate gives an earlier bare URL its label without another card", () => {
+  const text = `${COMPOSIO_URL}\n[  Authorize anything  ](${COMPOSIO_URL})\n[Other label](${COMPOSIO_URL})`;
+  assert.deepEqual(connectorLinksIn(text), [{ provider: "composio", url: COMPOSIO_URL, label: "Authorize anything" }]);
+});
+
+test("empty labels retain the generic fallback and native names cannot be relabeled", () => {
+  assert.deepEqual(connectorLinksIn(`[  ](${COMPOSIO_URL})`), [{ provider: "composio", url: COMPOSIO_URL }]);
+  assert.deepEqual(connectorLinksIn(`[Something else](${URL})`), [{ provider: "google", url: URL }]);
 });

@@ -13,9 +13,15 @@ export const CONNECTOR_NAMES: Record<string, string> = {
 export interface ConnectorLink {
   provider: string;
   url: string;
+  label?: string;
 }
 
 export function connectorLinksIn(text: string, trustedOrigin?: string): ConnectorLink[] {
+  const labels = new Map<string, string>();
+  for (const m of text.matchAll(/\[([^\]\n]*)\]\(\s*<?(https?:\/\/[^\s)>]+)>?\s*\)/gi)) {
+    const label = m[1]!.trim();
+    if (label && !labels.has(m[2]!)) labels.set(m[2]!, label);
+  }
   const out: ConnectorLink[] = [];
   for (const m of text.matchAll(LINK_RE)) {
     const url = m[0].replace(/[*_]+$/, "");
@@ -27,7 +33,8 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
     }
     if (parsed.username || parsed.password) continue;
     if (parsed.origin === "https://connect.composio.dev" && /^\/link\/lk_[A-Za-z0-9_-]+$/.test(parsed.pathname)) {
-      if (!out.some((l) => l.url === url)) out.push({ provider: "composio", url });
+      const label = labels.get(url);
+      if (!out.some((l) => l.url === url)) out.push({ provider: "composio", url, ...(label ? { label } : {}) });
       continue;
     }
     if (trustedOrigin && parsed.origin !== trustedOrigin) continue;
