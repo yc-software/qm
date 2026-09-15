@@ -104,3 +104,44 @@ test("a layer with no install files never touches the machine", async () => {
   assert.deepEqual(io.scripts, []);
   assert.deepEqual(io.writes, []);
 });
+
+test("combined preparation still runs with no deployment tools", async () => {
+  const io = fakeIo({ probe: 0 });
+  await createLayerToolInstaller(() => [])(io, "mkdir -p /workspace");
+  assert.deepEqual(io.scripts, ["(mkdir -p /workspace) || exit 125; true"]);
+  assert.equal(io.writes.length, 0);
+});
+
+test("failed preparation cannot be mistaken for an outdated tool", async () => {
+  const io = fakeIo({ probe: 0 });
+  io.exec = async () => ({ code: 125, stdout: "", stderr: "permission denied" });
+  await assert.rejects(createLayerToolInstaller(() => FILES)(io, "false"), /provision prep failed.*permission denied/);
+  assert.equal(io.writes.length, 0);
+});
+
+test("combined preparation installs outdated tools and snapshots the desired files once", async () => {
+  let reads = 0;
+  const io = fakeIo({ probe: 1 });
+  const exec = io.exec;
+  io.exec = async (script, timeout) => {
+    if (script.startsWith("(mkdir")) {
+      io.scripts.push(script);
+      return { code: 1, stdout: "", stderr: "" };
+    }
+    return exec(script, timeout);
+  };
+  await createLayerToolInstaller(() => {
+    reads++;
+    return FILES;
+  })(io, "mkdir -p /workspace");
+  assert.equal(reads, 1);
+  assert.equal(io.writes.length, FILES.length);
+  assert.ok(io.scripts.at(-1)!.includes("chmod 0755"));
+});
+
+test("a timed-out combined preparation fails without writing deployment tools", async () => {
+  const io = fakeIo({ probe: 0 });
+  io.exec = async () => ({ code: 124, stdout: "", stderr: "timeout" });
+  await assert.rejects(createLayerToolInstaller(() => FILES)(io, "sleep 100"), /provision prep failed/);
+  assert.equal(io.writes.length, 0);
+});

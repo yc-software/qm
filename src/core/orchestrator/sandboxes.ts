@@ -8,11 +8,6 @@ import {
   removeDeviceFlowLogins,
 } from "../../credentials/device-flow-persist.ts";
 import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
-import {
-  probeResidentAuth,
-  residentAuthProbeIsStale,
-  type ResidentAuthConnector,
-} from "../../credentials/resident-auth.ts";
 import { expandServiceAliases } from "../../credentials/resident-paths.ts";
 import { shq } from "../../util/shell.ts";
 import { createSkillMaterializer, safeSkillDirName } from "../../skills/materialize.ts";
@@ -50,7 +45,6 @@ export interface TurnSandboxContext {
   visibleSkills: SkillResolution[];
   visibleSkillsForTurn: () => Promise<SkillResolution[]>;
   skillMaterializer: ReturnType<typeof createSkillMaterializer>;
-  residentAuthConnectors: () => ResidentAuthConnector[];
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
   perf: { credsMs: number };
 }
@@ -81,7 +75,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     visibleSkills,
     visibleSkillsForTurn,
     skillMaterializer,
-    residentAuthConnectors,
     emitGapWork,
     perf,
   } = ctx;
@@ -124,7 +117,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     used: boolean;
     provisionMs?: number;
     materializeMs?: number;
-    residentAuthProbe?: Promise<void>;
   } = { handle: null, pending: null, used: false };
   const scratchBox: { handle: SandboxHandle | null; provisionMs?: number } = { handle: null };
   const ownerAuthBox: { handle: SandboxHandle | null; pending: SandboxHandle | null; provisionMs?: number } = {
@@ -278,8 +270,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.provisionMs = Date.now() - provisionStart;
     await prepareCredentials(handle, emit);
     const dirCleanupStart = Date.now();
-    await deps.sandbox.removeDir(handle, turnSessionDir);
-    await sweepStaleTurnFiles(handle);
+    await prepareTurnFiles(handle);
     emit("dir_cleanup", dirCleanupStart, Date.now());
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
       const procReconcileStart = Date.now();
@@ -296,32 +287,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       } finally {
         emit("proc_reconcile", procReconcileStart, Date.now());
       }
-    }
-    if (deps.livenessCache) {
-      const cache = deps.livenessCache;
-      box.residentAuthProbe = (async () => {
-        try {
-          const cached = await cache.get(memoryScopeId);
-          if (residentAuthProbeIsStale(cached, Date.now())) {
-            await probeResidentAuth({
-              sandbox: deps.sandbox,
-              handle,
-              cache,
-              scopeId: memoryScopeId,
-              now: Date.now(),
-              connectors: residentAuthConnectors(),
-            });
-          }
-        } catch (err) {
-          deps.errors?.record({
-            category: "agent_computer",
-            code: "resident_auth_probe_failed",
-            message: errMessage(err),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          });
-        }
-      })();
     }
     if (deps.skills) {
       const materializeStart = Date.now();
@@ -390,8 +355,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       });
       resourcePendingHandles.set(id, handle);
       await prepareCredentials(handle, emitGapWork);
-      await deps.sandbox.removeDir(handle, turnSessionDir);
-      await sweepStaleTurnFiles(handle);
+      await prepareTurnFiles(handle);
       if (deps.skills)
         await skillMaterializer.materializeIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
       resourceHandles.set(id, handle);
@@ -529,10 +493,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     }
   };
-  const sweepStaleTurnFiles = async (handle: SandboxHandle): Promise<void> => {
+  const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
+    const paths = deps.sandbox.removeDirAndList
+      ? await deps.sandbox.removeDirAndList(handle, turnSessionDir, TURN_FILES_DIR)
+      : await (async () => {
+          await deps.sandbox.removeDir(handle, turnSessionDir);
+          return deps.sandbox.listDir(handle, TURN_FILES_DIR);
+        })();
     const stale = new Set<string>();
-    for (const path of await deps.sandbox.listDir(handle, TURN_FILES_DIR)) {
+    for (const path of paths) {
       const parts = path.split("/");
       const startedAt = Number.parseInt(parts[2]?.split("-")[0] ?? "", 36);
       if (parts[0] === TURN_FILES_DIR && parts[1] && parts[2] && Number.isFinite(startedAt) && startedAt < cutoff) {
@@ -566,10 +536,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           await deps.sandbox.teardown(h, { keepWarm: true }).catch(() => {});
           return;
         }
-        const roomHasComputer = !!(await deps.livenessCache
-          ?.get(target)
-          .catch(swallowAs("orchestrator: reach computer check", null)));
-        await deps.sandbox.teardown(h, roomHasComputer ? undefined : { destroy: true }).catch(() => {});
+        await deps.sandbox.teardown(h).catch(() => {});
       }),
     );
     const ownerHandle = ownerAuthBox.handle ?? ownerAuthBox.pending;
@@ -640,7 +607,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return;
     }
     await clearTurnFiles(handle);
-    if (box.residentAuthProbe) await box.residentAuthProbe.catch(() => {});
     let keepWarm = false;
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
       try {

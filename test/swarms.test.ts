@@ -891,7 +891,6 @@ test("the orchestrator sandbox path selects worker storage without changing auth
     quarantinedServices: [],
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
-    residentAuthConnectors: () => [],
     emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);

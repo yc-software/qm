@@ -188,6 +188,7 @@ export interface Sandbox {
   importFiles?(handle: SandboxHandle, entries: ReadonlyArray<{ path: string; data: Uint8Array }>): Promise<void>;
   listDir(handle: SandboxHandle, relDir: string): Promise<string[]>;
   removeDir(handle: SandboxHandle, relDir: string): Promise<void>;
+  removeDirAndList?(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]>;
   exportFiles?(handle: SandboxHandle, opts?: AgentComputerExportOptions): Promise<AgentComputerExportEntry[]>;
   startRegisteredProcess?(
     handle: SandboxHandle,

@@ -353,15 +353,13 @@ test("DM + directory + flag: execute(scope:#room) runs on that channel's own com
   );
 });
 
-test("reach teardown destroys a visited room that has no computer of its own (no leaked box)", async () => {
+test("reach preserves a durable workspace even without a login-probe cache", async () => {
   const built = freshApp({ reachExecEnabled: true });
   await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
-  await built.app.turn(dm("!reach #project-alpha echo hi"));
-  assert.equal(
-    fakeSprites.names().some((n) => n.startsWith("qm-channel-c-ph-")),
-    false,
-    "the visitor box is destroyed",
-  );
+  await built.app.turn(dm("!reach #project-alpha printf retained > keep.txt"));
+  assert.ok(fakeSprites.names().some((n) => n.startsWith("qm-channel-c-ph-")));
+  const result = await built.app.turn(dm("!reach #project-alpha cat keep.txt"));
+  assert.equal(result.reply, "retained");
 });
 
 test("reach teardown keeps (does not destroy) a room with its own computer", async () => {

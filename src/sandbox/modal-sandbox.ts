@@ -455,9 +455,10 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     withSession(name, (session) => session.writeFileBytes(absPath, data));
   const readAbsBytes = (name: string, absPath: string): Promise<Uint8Array | null> =>
     withSession(name, (session) => session.readFileBytes(absPath));
-  const installLayerTools = opts.layerToolFiles ? createLayerToolInstaller(opts.layerToolFiles) : null;
+  const installLayerTools = createLayerToolInstaller(opts.layerToolFiles ?? (() => []));
 
   const execFileOps = createExecFileOps({
+    combineRemoveAndList: true,
     label: "modal",
     exec: (id, script, t) => execRaw(id, script, t),
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
@@ -539,9 +540,13 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
       try {
         const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`modal provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
+        await installLayerTools(
+          {
+            exec: (script, t) => execRaw(name, script, t),
+            writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
+          },
+          `mkdir -p ${shq(workspaceDir)}${credLinks}`,
+        );
 
         await materializeRoLayers(
           workspace,
@@ -554,10 +559,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           },
           { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "modal" },
         );
-        await installLayerTools?.({
-          exec: (script, t) => execRaw(name, script, t),
-          writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
-        });
 
         return handle;
       } catch (err) {

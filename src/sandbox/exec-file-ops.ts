@@ -28,6 +28,7 @@ export function posixJoin(base: string, rel: string): string {
 
 export interface ExecFileOpsDeps {
   label: string;
+  combineRemoveAndList?: boolean;
   exec(id: string, script: string, timeoutSec: number): Promise<{ code: number; stdout: string; stderr: string }>;
   writeInline(id: string, abs: string, data: Uint8Array, label: string): Promise<void>;
 }
@@ -39,9 +40,10 @@ export interface ExecFileOps {
   ): Promise<void>;
   listDir(handle: SandboxHandle, relDir: string): Promise<string[]>;
   removeDir(handle: SandboxHandle, relDir: string): Promise<void>;
+  removeDirAndList?(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]>;
 }
 
-export function createExecFileOps({ label, exec, writeInline }: ExecFileOpsDeps): ExecFileOps {
+export function createExecFileOps({ label, exec, writeInline, combineRemoveAndList }: ExecFileOpsDeps): ExecFileOps {
   return {
     async importFiles(handle, entries): Promise<void> {
       const list = [...entries];
@@ -73,6 +75,26 @@ export function createExecFileOps({ label, exec, writeInline }: ExecFileOpsDeps)
         .filter(Boolean);
     },
 
+    ...(combineRemoveAndList
+      ? {
+          async removeDirAndList(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]> {
+            const remove = removeRelDir.replace(/^\/+/, "");
+            const abs = posixJoin(handle.rootDir, remove);
+            const prep = remove && abs !== handle.rootDir ? `rm -rf ${shq(abs)} || exit $?; ` : "";
+            const rel = listRelDir.replace(/^\/+/, "") || ".";
+            const r = await exec(
+              handle.id,
+              `${prep}listing=$(cd ${shq(handle.rootDir)} 2>/dev/null && find ${shq(rel)} -type f 2>/dev/null) && printf '%s\\n' "$listing"; exit 0`,
+              60,
+            );
+            if (r.code !== 0) throw new Error(`${label} removeDir ${removeRelDir} failed: ${r.stderr}`);
+            return r.stdout
+              .split("\n")
+              .map((s) => s.trim().replace(/^\.\//, ""))
+              .filter(Boolean);
+          },
+        }
+      : {}),
     async removeDir(handle, relDir): Promise<void> {
       const rel = relDir.replace(/^\/+/, "");
       if (!rel) return;

@@ -268,7 +268,8 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     homeDir: HOME_DIR,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
-    ...(opts.layerToolFiles ? { installLayerTools: createLayerToolInstaller(opts.layerToolFiles) } : {}),
+    installLayerTools: createLayerToolInstaller(opts.layerToolFiles ?? (() => [])),
+    combineLayerToolPrep: true,
     egressProxyUrl: opts.egressProxyUrl,
     deleteFailureCode: "sprite_delete_failed",
     onError: opts.onError,
@@ -355,6 +356,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const procSessions = createExecProcessSessions(procIo);
 
   const execFileOps = createExecFileOps({
+    combineRemoveAndList: true,
     label: "sprites",
     exec: (id, script, t) => execRaw(id, script, t),
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),

@@ -47,6 +47,7 @@ export interface ExecSandboxBaseDeps {
   forgetInstance?(name: string): void;
   ensureEgress?(name: string): Promise<void>;
   installLayerTools?: LayerToolInstaller;
+  combineLayerToolPrep?: boolean;
 }
 
 export interface ExecSandboxBase {
@@ -163,9 +164,18 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       };
       if (Object.keys(env).length) handle.env = env;
       const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
-      const prep = await deps.exec(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
-      if (prep.code !== 0)
-        throw new Error(`${label} provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`);
+      const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
+      const toolIo = {
+        exec: (script: string, t: number) => deps.exec(name, script, t),
+        writeAbs: (abs: string, data: Uint8Array) => deps.writeAbsBytes(name, abs, data),
+      };
+      if (deps.combineLayerToolPrep && deps.installLayerTools) {
+        await deps.installLayerTools(toolIo, prepare);
+      } else {
+        const prep = await deps.exec(name, prepare, PREP_TIMEOUT_SEC);
+        if (prep.code !== 0)
+          throw new Error(`${label} provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`);
+      }
 
       await materializeRoLayers(
         workspace,
@@ -178,10 +188,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
         },
         { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label },
       );
-      await deps.installLayerTools?.({
-        exec: (script, t) => deps.exec(name, script, t),
-        writeAbs: (abs, data) => deps.writeAbsBytes(name, abs, data),
-      });
+      if (!deps.combineLayerToolPrep) await deps.installLayerTools?.(toolIo);
 
       return handle;
     } catch (err) {

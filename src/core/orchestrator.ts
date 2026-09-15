@@ -59,13 +59,12 @@ import {
 } from "../credentials/device-flow-persist.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { DeviceFlowCutoverMode } from "../credentials/device-flow-cutover.ts";
-import { type ResidentAuthConnector, RESIDENT_AUTH_CONNECTORS, mergeConnectors } from "../credentials/resident-auth.ts";
 import {
   configuredConnectorProviders,
   connectorStatusIsStale,
   refreshConnectorStatus,
 } from "../credentials/connector-status.ts";
-import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
+import { renderComputerBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
@@ -244,8 +243,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
   const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
   const skillMaterializer = createSkillMaterializer(deps.advisoryLock);
-  const residentAuthConnectors = (): ResidentAuthConnector[] =>
-    mergeConnectors(RESIDENT_AUTH_CONNECTORS, deps.deploymentLayer?.connectors ?? []);
   const pending = deps.approvals ?? createMemoryMap<PendingApprovalRecord>();
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants ?? createMemoryMap<CommandApprovalGrant>();
@@ -1634,7 +1631,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         visibleSkills,
         visibleSkillsForTurn,
         skillMaterializer,
-        residentAuthConnectors,
         emitGapWork,
         perf,
       });
@@ -1896,17 +1892,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
             ...audienceMembers,
           ].map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) }));
-          const detectedByOwner = new Map<string, string[]>();
-          if (deps.livenessCache) {
-            for (const m of members) {
-              const rec = await deps.livenessCache.get(personalScope(m.id)).catch(() => null);
-              if (!rec) continue;
-              const labels = residentAuthConnectors()
-                .filter((c) => rec.connectors[c.id] === "active")
-                .map((c) => c.label);
-              if (labels.length) detectedByOwner.set(m.id, labels);
-            }
-          }
           const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks, ownerAsks] = await Promise.all([
             deps.keychain.listByOwners(members.map((m) => m.id)),
             deps.keychain.listConnectorsByOwners(members.map((m) => m.id)),
@@ -1923,24 +1908,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             connectorsByOwner,
             scopeGrants,
             injected: keychainInjected,
-            detectedByOwner,
             scopeAsks,
             ownerAsks,
           });
           if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;
-        }
-        if (!strictReadOnly && deps.livenessCache) {
-          const liveness = await deps.livenessCache
-            .get(memoryScopeId)
-            .catch(swallowAs("orchestrator: liveness cache read", null));
-          const loginsBlock = renderResidentLoginsBlock(liveness, residentAuthConnectors());
-          if (loginsBlock) {
-            systemPrompt += `\n\n${loginsBlock}`;
-            if (deps.scratchExec) {
-              systemPrompt +=
-                '\nThese logins live on your scoped computer — `execute` reaches them only with scope:"scoped"; a scratch run has none of them.';
-            }
-          }
         }
         if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
           let status = null;

@@ -19,14 +19,6 @@ export const RESIDENT_AUTH_CONNECTORS: readonly ResidentAuthConnector[] = [
   },
 ];
 
-export function mergeConnectors(
-  base: readonly ResidentAuthConnector[],
-  extra: readonly ResidentAuthConnector[],
-): ResidentAuthConnector[] {
-  const extraIds = new Set(extra.map((c) => c.id));
-  return [...base.filter((c) => !extraIds.has(c.id)), ...extra];
-}
-
 type ResidentAuthState = "active" | "inactive" | "absent";
 
 export interface ScopeLivenessRecord {

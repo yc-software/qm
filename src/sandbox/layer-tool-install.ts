@@ -8,7 +8,7 @@ export interface LayerToolInstallIo {
   writeAbs(absPath: string, data: Uint8Array): Promise<void>;
 }
 
-export type LayerToolInstaller = (io: LayerToolInstallIo) => Promise<void>;
+export type LayerToolInstaller = (io: LayerToolInstallIo, prepare?: string) => Promise<void>;
 
 const STEP_TIMEOUT_SEC = 60;
 
@@ -44,11 +44,14 @@ export function layerToolContentSha(content: string): string {
 }
 
 export function createLayerToolInstaller(files: () => readonly LayerInstallFile[]): LayerToolInstaller {
-  return async (io) => {
+  return async (io, prepare) => {
     const wanted = staged(files());
-    if (wanted.length === 0) return;
-    const probe = layerToolProbeScript(wanted);
-    if ((await io.exec(probe, STEP_TIMEOUT_SEC)).code === 0) return;
+    if (wanted.length === 0 && !prepare) return;
+    const probe = wanted.length ? layerToolProbeScript(wanted) : "true";
+    const result = await io.exec(prepare ? `(${prepare}) || exit 125; ${probe}` : probe, STEP_TIMEOUT_SEC);
+    if (prepare && result.code !== 0 && result.code !== 1)
+      throw new Error(`sandbox provision prep failed (rc=${result.code}): ${result.stderr.slice(0, 200)}`);
+    if (result.code === 0) return;
     const dirs = [...new Set(wanted.map((file) => dirname(file.to)))];
     const prep = await io.exec(`mkdir -p ${dirs.map(shq).join(" ")}`, STEP_TIMEOUT_SEC);
     if (prep.code !== 0) {

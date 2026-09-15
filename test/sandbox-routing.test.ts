@@ -320,3 +320,54 @@ test("missing scope provider refuses substitution", async () => {
   });
   await assert.rejects(router.provision(layersFor("personal:new")), /unavailable: modal/);
 });
+
+for (const combined of [true, false]) {
+  test(`cleanup and listing share one resource lock (provider combined=${combined})`, async () => {
+    const backend = fakeBackend("sprites");
+    let locked = false;
+    let acquisitions = 0;
+    const calls: string[] = [];
+    backend.removeDir = async (_h, path) => {
+      assert.ok(locked);
+      calls.push(`remove:${path}`);
+    };
+    backend.listDir = async (_h, path) => {
+      assert.ok(locked);
+      calls.push(`list:${path}`);
+      return ["keep/file"];
+    };
+    if (combined)
+      backend.removeDirAndList = async (_h, remove, list) => {
+        assert.ok(locked);
+        calls.push(`combined:${remove}:${list}`);
+        return ["keep/file"];
+      };
+    const resources = {
+      use: async (_id: string, action: () => Promise<unknown>) => {
+        acquisitions++;
+        locked = true;
+        try {
+          return await action();
+        } finally {
+          locked = false;
+        }
+      },
+    } as unknown as import("../src/sandbox/sandbox-resources.ts").SandboxResources;
+    const router = createSandboxRouter({
+      backends: { sprites: backend },
+      routes: createMemoryMap(),
+      defaultBackend: "sprites",
+      resources,
+    });
+    assert.deepEqual(
+      await router.removeDirAndList!(
+        { id: "box", rootDir: "/workspace", backend: "sprites", resourceId: "resource" },
+        "old",
+        "keep",
+      ),
+      ["keep/file"],
+    );
+    assert.equal(acquisitions, 1);
+    assert.deepEqual(calls, combined ? ["combined:old:keep"] : ["remove:old", "list:keep"]);
+  });
+}

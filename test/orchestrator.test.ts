@@ -3934,3 +3934,38 @@ test("default screening does not invoke a model for inbound data or tool results
   assert.equal(claims?.egress?.denyPrivateNetworks, true);
   assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
 });
+
+test("ordinary turns neither probe native logins nor advertise cached login state", async () => {
+  const built = freshApp();
+  const checkedAt = 1;
+  await built.livenessCache.put({ scopeId: scopeId("personal", "U1"), checkedAt, connectors: { gh: "active" } });
+  const commands: string[] = [];
+  const run = built.sandbox.run.bind(built.sandbox);
+  built.sandbox.run = async (handle, command, opts) => {
+    commands.push(command);
+    return run(handle, command, opts);
+  };
+  const prompt = await built.app.turn(dm("!sysprompt"));
+  assert.doesNotMatch(prompt.reply ?? "", /## Your logins|GitHub — ✓ signed in/);
+  await built.app.turn(dm("!run printf ready"));
+  assert.ok(commands.some((c) => c.includes("printf ready")));
+  assert.ok(commands.every((c) => !c.includes("gh auth status") && !c.includes("gcloud auth print-access-token")));
+  assert.equal((await built.livenessCache.get(scopeId("personal", "U1")))?.checkedAt, checkedAt);
+});
+
+for (const combined of [true, false]) {
+  test(`turn cleanup retains recent and malformed paths and removes stale files (combined=${combined})`, async () => {
+    const built = freshApp();
+    if (!combined) built.sandbox.removeDirAndList = undefined;
+    const handle = await built.sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
+    const old = `.agent-turn/owner/${(Date.now() - 48 * 3600_000).toString(36)}-nonce/file`;
+    const recent = `.agent-turn/owner/${Date.now().toString(36)}-nonce/file`;
+    const malformed = ".agent-turn/owner/!invalid/file";
+    for (const path of [old, recent, malformed]) await built.sandbox.writeFile(handle, path, "retained");
+    const result = await built.app.turn(dm("!run true"));
+    assert.equal(result.status, "ok", result.reason);
+    assert.equal(await built.sandbox.readFile(handle, old), null);
+    assert.equal(await built.sandbox.readFile(handle, recent), "retained");
+    assert.equal(await built.sandbox.readFile(handle, malformed), "retained");
+  });
+}
