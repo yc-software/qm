@@ -4903,7 +4903,23 @@
         color: var(--text);
       }
       #card-slack-installation #slack-installation-start {
-        color: var(--text);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 40px;
+        padding: 0 12px;
+        border: 1px solid #c7c7c7;
+        border-radius: 5px;
+        background: #fff;
+        color: #1d1c1d;
+        font-size: 14px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      #card-slack-installation #slack-installation-start:hover:not(:disabled) {
+        background: #f8f8f8;
+        border-color: #868686;
       }
       #slack-own-app-guide {
         margin-top: 4px;
@@ -6256,7 +6272,27 @@
                     <p class="hint" id="slack-installation-description">Add the QM app to get started.</p>
                   </div>
                   <div class="slack-connection-actions">
-                    <button class="primary hidden" id="slack-installation-start">Add to Slack</button>
+                    <button class="hidden" id="slack-installation-start">
+                      <svg width="20" height="20" viewBox="0 0 127 127" aria-hidden="true" focusable="false">
+                        <path
+                          d="M27.2 80c0 7.3-5.9 13.2-13.2 13.2C6.7 93.2.8 87.3.8 80c0-7.3 5.9-13.2 13.2-13.2h13.2V80zm6.6 0c0-7.3 5.9-13.2 13.2-13.2 7.3 0 13.2 5.9 13.2 13.2v33c0 7.3-5.9 13.2-13.2 13.2-7.3 0-13.2-5.9-13.2-13.2V80z"
+                          fill="#E01E5A"
+                        />
+                        <path
+                          d="M47 27c-7.3 0-13.2-5.9-13.2-13.2C33.8 6.5 39.7.6 47 .6c7.3 0 13.2 5.9 13.2 13.2V27H47zm0 6.7c7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2H13.9C6.6 60.1.7 54.2.7 46.9c0-7.3 5.9-13.2 13.2-13.2H47z"
+                          fill="#36C5F0"
+                        />
+                        <path
+                          d="M99.9 46.9c0-7.3 5.9-13.2 13.2-13.2 7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2H99.9V46.9zm-6.6 0c0 7.3-5.9 13.2-13.2 13.2-7.3 0-13.2-5.9-13.2-13.2V13.8C66.9 6.5 72.8.6 80.1.6c7.3 0 13.2 5.9 13.2 13.2v33.1z"
+                          fill="#2EB67D"
+                        />
+                        <path
+                          d="M80.1 99.8c7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2-7.3 0-13.2-5.9-13.2-13.2V99.8h13.2zm0-6.6c-7.3 0-13.2-5.9-13.2-13.2 0-7.3 5.9-13.2 13.2-13.2h33.1c7.3 0 13.2 5.9 13.2 13.2 0 7.3-5.9 13.2-13.2 13.2H80.1z"
+                          fill="#ECB22E"
+                        />
+                      </svg>
+                      <span id="slack-installation-start-label">Add to Slack</span>
+                    </button>
                     <button class="danger hidden" id="slack-installation-delete">Disconnect</button>
                   </div>
                 </div>
@@ -10395,7 +10431,7 @@
           r.data.configured && r.data.source === "admin"
             ? "Remove your current connection before switching to the hosted app."
             : "";
-        $("slack-installation-start").textContent = r.data.configured ? "Re-add to Slack" : "Add to Slack";
+        $("slack-installation-start-label").textContent = r.data.configured ? "Re-add to Slack" : "Add to Slack";
         $("slack-installation-description").textContent = r.data.configured
           ? r.data.source === "service"
             ? "QM app"
