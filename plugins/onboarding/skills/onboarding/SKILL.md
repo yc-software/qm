@@ -53,6 +53,15 @@ admin-only status. Reuse an installed bot, respect disabled or deferred setup, a
 never ask regular users to provision it. Personal Slack or Composio access does not
 install the separate bot. Continue onboarding if setup is declined or blocked.
 
+When the admin needs a Slack app configuration token, include this walkthrough with
+brief written instructions from the admin skill (not instead of them). In web chat,
+embed the GIF; on surfaces without inline images, share its link:
+
+![Where to generate a Slack app configuration token](https://raw.githubusercontent.com/yc-software/qm/main/docs/images/slack-app-config-token-setup.gif)
+
+The walkthrough stops at workspace selection. Have them select their own workspace
+and paste the access token only into QM's secure setup form, never into chat.
+
 ### Personal connections
 
 Check the live credential inventory first. When an authorized Composio credential is available,
