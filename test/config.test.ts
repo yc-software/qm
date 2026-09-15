@@ -214,8 +214,10 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
     REACH_EXEC: "off",
     COMMAND_SCOPED_CREDENTIALS: "off",
     PI_CAPTURE_REQUESTS: "off",
+    EAGER_PROVISION: "off",
   });
   assert.equal(off.seedSkills, false);
+  assert.equal(off.eagerProvisionEnabled, false);
   assert.equal(off.scratchExecEnabled, false);
   assert.equal(off.reachExecEnabled, false);
   assert.equal(off.sharedOwnerAuthIsolation, false);
@@ -237,6 +239,7 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const unset = loadConfig({});
   assert.equal(unset.piCaptureRequests, true, "capture defaults on");
   assert.equal(unset.piSystemCacheSplit, false, "cache split defaults off");
+  assert.equal(unset.eagerProvisionEnabled, true, "eager provision defaults on");
 });
 
 test("numEnv: empty and non-numeric values fall back instead of poisoning config with NaN", () => {
