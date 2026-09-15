@@ -66,12 +66,6 @@ function guardedPool(pool: Pool): Pool {
   return pool;
 }
 
-export function pooledClientsWaiting(): number {
-  let waiting = 0;
-  for (const { pool } of sharedPools.values()) waiting += pool.waitingCount;
-  return waiting;
-}
-
 async function releasePool(
   connectionString: string,
   pool: Pool,
