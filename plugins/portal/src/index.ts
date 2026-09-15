@@ -1036,6 +1036,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 400, { error: "bad_request", message: "illegal path" });
   }
 
+  if (
+    (pathname === "/v1/slack/managed/installation" && (method === "POST" || method === "DELETE")) ||
+    (pathname === "/v1/slack/managed/events" && method === "POST")
+  ) {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, [
+      "authorization",
+      "content-type",
+      "content-length",
+    ]);
+  }
+
   if (method === "POST" && /^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname)) {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_WEBHOOK_HEADERS);
   }

@@ -40,6 +40,8 @@ import {
   getSlackEmojiList,
   getSlackInstallation,
   putSlackInstallation,
+  startSlackInstallation,
+  managedSlackRequest,
 } from "./admin/slack-installation.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
@@ -64,6 +66,10 @@ const timed =
   };
 
 const routes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "POST", path: "/v1/admin/slack-installation/start", auth: "either", handle: startSlackInstallation },
+  { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
+  { method: "DELETE", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
+  { method: "POST", path: "/v1/slack/managed/events", auth: "public", handle: managedSlackRequest },
   { method: "GET", path: "/v1/admin/slack-installation", auth: "either", handle: getSlackInstallation },
   { method: "GET", path: "/v1/admin/slack-emoji", auth: "either", handle: getSlackEmojiList },
   { method: "PUT", path: "/v1/admin/slack-installation", auth: "either", handle: putSlackInstallation },

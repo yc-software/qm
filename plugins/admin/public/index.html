@@ -6147,6 +6147,7 @@
                     >Create Slack app from manifest ↗</a
                   >
                 </p>
+                <button class="primary hidden" id="slack-installation-start">Add to Slack</button>
                 <p class="hint" id="slack-installation-state">Not configured.</p>
                 <div class="hidden" id="slack-token-editor">
                   <label style="display: block; margin-bottom: 8px"
@@ -10232,6 +10233,9 @@
           setStatus("st-slack-installation", r.data?.message || "Failed to load Slack status.", "err");
           return;
         }
+        $("slack-installation-start").classList.toggle("hidden", !r.data.installAvailable);
+        $("slack-installation-create").classList.toggle("hidden", !!r.data.installAvailable);
+        $("slack-rotate").classList.toggle("hidden", !!r.data.installAvailable);
         if (r.data.createUrl) $("slack-installation-create").href = r.data.createUrl;
         $("slack-installation-state").textContent =
           r.data.source === "environment"
@@ -10247,6 +10251,18 @@
                   : "Not configured.";
         $("slack-installation-delete").disabled = !r.data.configured;
       }
+      $("slack-installation-start").onclick = async () => {
+        $("slack-installation-start").disabled = true;
+        const r = await api("POST", "/api/slack-installation/start", {});
+        $("slack-installation-start").disabled = false;
+        if (r.ok && r.data.url) {
+          const form = document.createElement("form");
+          form.method = "POST";
+          form.action = r.data.url;
+          document.body.appendChild(form);
+          form.submit();
+        } else setStatus("st-slack-installation", "Could not start Slack installation. Please try again.", "err");
+      };
       $("slack-installation-save").onclick = async () => {
         const botToken = $("slack-bot-token").value.trim();
         const appToken = $("slack-app-token").value.trim();

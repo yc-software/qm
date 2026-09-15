@@ -43,10 +43,10 @@ export async function startSlackPlugin(
   if (!cfg.botToken) {
     throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
   }
-  if (EVENTS_MODE === "socket" && !cfg.appToken) {
+  if (!cfg.receiverFactory && EVENTS_MODE === "socket" && !cfg.appToken) {
     throw new Error("Slack plugin needs appToken (SLACK_APP_TOKEN, xapp-…) in socket events mode");
   }
-  if (EVENTS_MODE === "http" && (!cfg.signingSecret || !cfg.eventsPort)) {
+  if (!cfg.receiverFactory && EVENTS_MODE === "http" && (!cfg.signingSecret || !cfg.eventsPort)) {
     throw new Error(
       "Slack plugin needs signingSecret (SLACK_SIGNING_SECRET) and eventsPort (SLACK_EVENTS_PORT) in http events mode",
     );
@@ -140,33 +140,37 @@ export async function startSlackPlugin(
     }
   }
 
+  const stagingAccount = cfg.installationId ? `${ACCOUNT_LABEL}:${cfg.installationId}` : ACCOUNT_LABEL;
   const staging = core.stagedEnvelopes
-    ? createEnvelopeStaging(core.stagedEnvelopes, { account: ACCOUNT_LABEL })
+    ? createEnvelopeStaging(core.stagedEnvelopes, { account: stagingAccount })
     : undefined;
+  const receiver = () => {
+    if (cfg.receiverFactory) return cfg.receiverFactory(staging);
+    return EVENTS_MODE === "http"
+      ? createHttpEventsReceiver({
+          signingSecret: cfg.signingSecret!,
+          port: cfg.eventsPort!,
+          ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
+          ...(staging ? { staging } : {}),
+        })
+      : createDeferredAckReceiver({
+          appToken: APP_TOKEN!,
+          ...(cfg.logLevel ? { logLevel: cfg.logLevel } : {}),
+          ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
+          ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
+          ...(staging ? { staging } : {}),
+        });
+  };
   const app = new App({
     token: BOT_TOKEN,
-    receiver:
-      EVENTS_MODE === "http"
-        ? createHttpEventsReceiver({
-            signingSecret: cfg.signingSecret!,
-            port: cfg.eventsPort!,
-            ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
-            ...(staging ? { staging } : {}),
-          })
-        : createDeferredAckReceiver({
-            appToken: APP_TOKEN!,
-            ...(cfg.logLevel ? { logLevel: cfg.logLevel } : {}),
-            ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
-            ...(cfg.ackCapMs !== undefined ? { capMs: cfg.ackCapMs } : {}),
-            ...(staging ? { staging } : {}),
-          }),
+    receiver: receiver(),
     logLevel: parseLogLevel(cfg.logLevel),
     clientOptions: { ...CLIENT_OPTIONS },
   });
   const replaySweeper = staging
     ? createSweeper(
         () =>
-          core.holdEnvelopeReplay(ACCOUNT_LABEL, () =>
+          core.holdEnvelopeReplay(stagingAccount, () =>
             staging.sweep((body, ackGate) =>
               app.processEvent({
                 body,

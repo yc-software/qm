@@ -42,7 +42,7 @@ const ADMIN_CSP = [
   "connect-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
-  "form-action 'self'",
+  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin}` : ""}`,
   "object-src 'none'",
 ].join("; ");
 
@@ -288,7 +288,7 @@ const WRITES = new Map<string, string[]>([
   ["skills", ["DELETE"]],
   ["skill-packs", ["POST", "PATCH", "DELETE"]],
   ["users", ["PUT", "POST"]],
-  ["slack-installation", ["PUT", "DELETE"]],
+  ["slack-installation", ["POST", "PUT", "DELETE"]],
   ["model-providers", ["PUT", "DELETE"]],
   ["model-registry", ["POST", "PUT", "DELETE"]],
   ["custom-providers", ["PUT", "DELETE"]],

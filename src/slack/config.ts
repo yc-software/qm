@@ -1,9 +1,13 @@
+import type { Receiver } from "@slack/bolt";
+import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { botIdentityFromEnv } from "./delivery.ts";
 import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
 
 export const NO_RETRY = { retryConfig: { retries: 0 } } as const;
 
 export interface SlackPluginConfig {
+  installationId?: string;
+  receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
   botToken: string;
   accountId?: string;
   allowFrom?: string[];
@@ -41,11 +45,14 @@ export function parseAckEmoji(raw: string | undefined): string[] {
   return out;
 }
 
-export function slackPluginConfigFromEnv(env: Record<string, string | undefined>): SlackPluginConfig | null {
+export function slackPluginConfigFromEnv(
+  env: Record<string, string | undefined>,
+  receiverFactory?: SlackPluginConfig["receiverFactory"],
+): SlackPluginConfig | null {
   const eventsMode = env.SLACK_EVENTS_MODE?.trim() === "http" ? "http" : "socket";
   if (!env.SLACK_BOT_TOKEN) return null;
-  if (eventsMode === "socket" && !env.SLACK_APP_TOKEN) return null;
-  if (eventsMode === "http" && !env.SLACK_SIGNING_SECRET) return null;
+  if (!receiverFactory && eventsMode === "socket" && !env.SLACK_APP_TOKEN) return null;
+  if (!receiverFactory && eventsMode === "http" && !env.SLACK_SIGNING_SECRET) return null;
   const num = (v: string | undefined): number | undefined => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -56,6 +63,7 @@ export function slackPluginConfigFromEnv(env: Record<string, string | undefined>
   ): Partial<SlackPluginConfig> => (value === undefined ? {} : ({ [key]: value } as Partial<SlackPluginConfig>));
   return {
     botToken: env.SLACK_BOT_TOKEN,
+    ...(receiverFactory ? { receiverFactory } : {}),
     ...opt("appToken", env.SLACK_APP_TOKEN),
     ...opt("apiUrl", env.SLACK_API_URL),
     ...(eventsMode === "http" ? { eventsMode } : {}),

@@ -1,3 +1,4 @@
+import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { loadConfig } from "./config.ts";
@@ -22,7 +23,19 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const server = createServer(built.app, serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken));
+const managedSlack = process.env.QM_SLACK_SERVICE_URL
+  ? createManagedSlack({
+      serviceUrl: process.env.QM_SLACK_SERVICE_URL,
+      token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
+      appId: process.env.QM_SLACK_APP_ID ?? "",
+      store: built.slackInstallation,
+      reconcile: config.backgroundWorkEnabled ? () => slackRuntime.reconcile() : undefined,
+    })
+  : undefined;
+const server = createServer(built.app, {
+  ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
+  managedSlack,
+});
 
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
@@ -76,11 +89,16 @@ const slackRuntime = createSlackRuntimeReconciler({
     const status = await built.slackInstallation.status();
     const stored = await built.slackInstallation.get();
     if (stored) {
-      const dynamic = slackPluginConfigFromEnv({
-        ...process.env,
-        SLACK_BOT_TOKEN: stored.botToken,
-        SLACK_APP_TOKEN: stored.appToken,
-      });
+      if (stored.installId && !managedSlack) return null;
+      const dynamic = slackPluginConfigFromEnv(
+        {
+          ...process.env,
+          SLACK_BOT_TOKEN: stored.botToken,
+          SLACK_APP_TOKEN: stored.appToken,
+        },
+        stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
+      );
+      if (dynamic && stored.installId) dynamic.installationId = stored.installId;
       return dynamic ? { version: stored.version, config: dynamic } : null;
     }
     if (status.managed) return null;

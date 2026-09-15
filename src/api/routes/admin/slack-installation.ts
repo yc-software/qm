@@ -36,6 +36,10 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   });
   const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
   const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
+  if (ctx.deps.managedSlack) {
+    const status = await ctx.deps.slackInstallation.status();
+    return sendJson(ctx.res, 200, { ...status, source: "service", installAvailable: true });
+  }
   const stored = await ctx.deps.slackInstallation.status();
   if (stored.managed) return sendJson(ctx.res, 200, { ...stored, source: "admin", createUrl });
   if (ctx.deps.slackEnvironmentState === "configured") {
@@ -54,6 +58,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
+  if (ctx.deps.managedSlack) return sendJson(ctx.res, 409, { error: "use_managed_installation" });
   const body = ctx.body as { botToken?: unknown; appToken?: unknown };
   const botToken = typeof body.botToken === "string" ? body.botToken.trim() : "";
   const appToken = typeof body.appToken === "string" ? body.appToken.trim() : "";
@@ -122,4 +127,21 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     return sendJson(ctx.res, 502, { error: "slack_unreachable", message: errMessage(error) });
   }
+}
+
+export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
+  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  if (!actor) return;
+  if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  try {
+    const result = await ctx.deps.managedSlack.start();
+    return sendJson(ctx.res, 200, result);
+  } catch {
+    return sendJson(ctx.res, 502, { error: "slack_installation_unavailable" });
+  }
+}
+
+export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
+  if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  await ctx.deps.managedSlack.handle(ctx.req, ctx.res, ctx.body);
 }
