@@ -29,7 +29,12 @@ function fixture(
 ) {
   const events: any[] = [];
   const dispatches: any[] = [];
+  const refreshes: any[] = [];
+  const inbox: any[] = [];
   const directory = options.directory ?? {
+    forceDirectorySync: async (...args: any[]) => {
+      refreshes.push(args);
+    },
     getChannelInfo: async () => ({ id: "C1" }),
     allInternalRosters: async () =>
       new Map([
@@ -65,6 +70,9 @@ function fixture(
   });
   app.error(async () => {});
   registerSlackEvents(app, {
+    inboxMessage: (...args: any[]) => {
+      inbox.push(args);
+    },
     ids,
     mirror,
     directory,
@@ -87,8 +95,82 @@ function fixture(
     });
     gate?.gate.persisted();
   }
-  return { mirror, events, dispatches, fire };
+  return { mirror, events, dispatches, refreshes, inbox, fire };
 }
+
+test("visible Slack system messages and their edits mirror without agent dispatch", async () => {
+  const f = fixture();
+  for (const subtype of [
+    "channel_join",
+    "channel_leave",
+    "channel_topic",
+    "channel_purpose",
+    "channel_name",
+    "channel_convert_to_private",
+    "channel_convert_to_public",
+    "group_join",
+    "group_leave",
+  ]) {
+    const base = {
+      type: "message",
+      subtype,
+      channel: "C1",
+      channel_type: subtype.startsWith("group_") ? "mpim" : "channel",
+      user: "U1",
+      ts: "3.000001",
+      text: "system context",
+    };
+    await f.fire(base);
+    await f.fire({
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      channel_type: base.channel_type,
+      ts: "4.000001",
+      message: { ...base, text: "updated context", edited: { ts: "4.000001" } },
+    });
+  }
+  assert.equal(f.events.length, 18);
+  assert.equal(f.refreshes.length, 4);
+  assert.equal(f.dispatches.length, 0);
+  assert.ok(f.events.every((e) => e.handled === true));
+  assert.ok(f.events.filter((_, i) => i % 2 === 1).every((e) => e.text === "updated context" && e.editedAt === 4000));
+});
+
+test("hidden messages never enter context or dispatch", async () => {
+  const f = fixture();
+  const message = {
+    type: "message",
+    channel: "C1",
+    channel_type: "channel",
+    user: "U1",
+    ts: "3.000001",
+    text: "hidden control",
+    hidden: true,
+  };
+  await f.fire(message);
+  await f.fire({ ...message, subtype: "channel_topic" });
+  await f.fire({ ...message, hidden: false, subtype: "message_replied" });
+  await f.fire({ type: "message", subtype: "message_changed", channel: "C1", channel_type: "channel", message });
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.dispatches, []);
+  assert.deepEqual(f.inbox, []);
+});
+
+test("a system-message edit arriving first is already handled", async () => {
+  const f = fixture();
+  await f.fire({
+    type: "message",
+    subtype: "message_changed",
+    channel: "C1",
+    channel_type: "channel",
+    ts: "4.000001",
+    message: { subtype: "channel_topic", ts: "3.000001", user: "U1", text: "new topic", edited: { ts: "4.000001" } },
+  });
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].handled, true);
+  assert.deepEqual(f.dispatches, []);
+});
 
 test("real Bolt ingests own channel/DM messages and edits without responses or self reactions", async () => {
   const f = fixture();
@@ -441,4 +523,43 @@ test("stake fallback bounds Slack replies while omitted cutoff and negative trac
   assert.equal(calls.length, 1);
   assert.equal(await handler.botHasStakeInThread(client, "C1", "5"), false);
   assert.deepEqual(calls[1], { channel: "C1", ts: "5", limit: 200 });
+});
+
+test("reaction turns preserve the reacted message in the mirror", async () => {
+  const cache = createMemorySurfaceCache();
+  const f = fixture({ ingest: (events) => cache.ingest(events) });
+  const client = { reactions: { get: async () => ({ message: { text: "Original bot answer", user: "UBOT" } }) } };
+  await f.mirror.mirrorMessageEvent(
+    { channel: "D1", channel_type: "im", ts: "100.001", text: "Original bot answer", user: "UBOT" },
+    client,
+    { kind: "dm" },
+  );
+  const before = await cache.readMessages("D1", { limit: 10 });
+  const turns: any[] = [];
+  const handler = createTurnHandler({
+    core: {},
+    flow: {
+      callCore: async (turn: any) => {
+        turns.push(turn);
+        return { status: "silent" };
+      },
+    },
+    directory: { classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Teammate" } }) },
+    mirror: f.mirror,
+    ids,
+    threads: createThreadTracker(),
+    deduper: createDeduper(),
+  } as any);
+  for (const added of [true, false]) {
+    await handler.handleReactionEvent(
+      { user: "U1", reaction: "thumbsup", item_user: "UBOT", item: { type: "message", channel: "D1", ts: "100.001" } },
+      `reaction-${added}`,
+      client,
+      added,
+    );
+  }
+  assert.equal(turns.length, 2);
+  assert.match(turns[0].text, /\[Slack reaction\].*reacted/);
+  assert.match(turns[1].text, /\[Slack reaction\].*removed/);
+  assert.deepEqual(await cache.readMessages("D1", { limit: 10 }), before);
 });

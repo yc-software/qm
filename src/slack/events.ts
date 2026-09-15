@@ -18,6 +18,7 @@ import type { DenyResponder } from "./allow-from.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Mirror } from "./mirror.ts";
 import type { TurnHandler } from "./turn-handler.ts";
+import { shouldMirrorMessage } from "./message-gating.ts";
 
 interface EventArgs {
   event: unknown;
@@ -168,14 +169,12 @@ export function registerSlackEvents(
       const privacyChange = channelPrivacyChange(m);
       if (privacyChange) {
         await forceDirectorySync(client, privacyChange.channel);
-        return;
       }
       if (isGroupMembershipMessage(m)) {
         await forceDirectorySync(client);
-        return;
       }
       const ackGate = context.ackGate;
-      if (m.channel && m.ts && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
+      if (m.channel && m.ts && !m.hidden && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
         deps.inboxMessage?.(client, {
           channel: m.channel,
           ts: m.ts,
@@ -212,8 +211,9 @@ export function registerSlackEvents(
       if (m.subtype === "message_changed" && m.message) {
         const textChanged = m.previous_message?.text === undefined || m.previous_message.text !== m.message.text;
         const editedAt = Number(m.message.edited?.ts) || (textChanged ? Number(m.ts) : 0);
-        if (shouldProcessMessage(m.message, "", ""))
+        if (shouldMirrorMessage(m.message))
           await mirrorMessageEvent({ ...m.message, channel: m.channel, channel_type: m.channel_type }, client, {
+            ...(!shouldProcessMessage(m.message, "", "") ? { handled: true } : {}),
             ...(editedAt > 0 ? { editedAt: Math.round(editedAt * 1000) } : {}),
             ...(m.channel_type === "im" ? { kind: "dm" as const } : {}),
           });
@@ -237,11 +237,14 @@ export function registerSlackEvents(
           ]);
         return;
       }
-      if (ownMessage(m) && shouldProcessMessage(m, "", "")) {
-        await mirrorMessageEvent(m, client, m.channel_type === "im" ? { kind: "dm" } : {});
+      if (!shouldMirrorMessage(m)) return;
+      if (ownMessage(m) || !shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) {
+        await mirrorMessageEvent(m, client, {
+          handled: true,
+          ...(m.channel_type === "im" ? { kind: "dm" } : {}),
+        });
         return;
       }
-      if (!shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) return;
 
       if (m.channel_type === "im") {
         const identity = await eventIdentity(client, m);

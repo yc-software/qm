@@ -22,6 +22,7 @@ export interface SlackMessageEvent {
   channel: string;
   channel_type?: string;
   subtype?: string;
+  hidden?: boolean;
   user?: string;
   username?: string;
   bot_id?: string;
@@ -56,6 +57,7 @@ export function parseMessageEvent(event: unknown): SlackMessageEvent {
     channel: coerced(e.channel) ?? "",
     channel_type: str(e.channel_type),
     subtype: str(e.subtype),
+    hidden: e.hidden === true,
     user: str(e.user),
     username: str(e.username),
     bot_id: str(e.bot_id),

@@ -35,6 +35,14 @@ export function shouldProcessMessage(
   return true;
 }
 
+export function shouldMirrorMessage(m: { hidden?: boolean; subtype?: string; ts?: string }): boolean {
+  return (
+    Boolean(m.ts) &&
+    m.hidden !== true &&
+    !["message_changed", "message_deleted", "message_replied", "tombstone"].includes(m.subtype ?? "")
+  );
+}
+
 export function isGroupMembershipMessage(m: { channel_type?: string; subtype?: string }): boolean {
   return m.channel_type === "mpim" && (m.subtype === "group_join" || m.subtype === "group_leave");
 }
