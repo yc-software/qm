@@ -211,6 +211,8 @@ function copyRow(text: string) {
 function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
   if (!appState.mainEl) return;
   syncWebhookUrl(w.id, opts.push);
+  const eventsHost = document.createElement("section");
+  eventsHost.className = "webhook-history";
   const notice = webhooksNotice || webhooksNoticeSticky;
   webhooksNotice = "";
   webhooksNoticeSticky = "";
@@ -282,6 +284,7 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
               </div>`
             : ""
         }
+        ${eventsHost}
         <div class="actions">
           ${
             w.enabled
@@ -294,6 +297,67 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
     host,
   );
   appState.mainEl.replaceChildren(host);
+  void loadWebhookEvents(w.id, eventsHost);
+}
+
+interface WebhookEventView {
+  deliveryId: string;
+  receivedAt: number;
+  payload: string;
+  sessionId?: string;
+}
+
+async function loadWebhookEvents(id: string, host: HTMLElement): Promise<void> {
+  render(
+    html`<h3>Message history</h3>
+      <p class="hint" role="status">Loading messages…</p>`,
+    host,
+  );
+  try {
+    const { events } = await api<{ events: WebhookEventView[] }>(`/api/webhooks/${encodeURIComponent(id)}/events`);
+    if (!host.isConnected) return;
+    render(
+      html`
+        <div class="resource-heading">
+          <h3>Message history</h3>
+          <button class="btn" @click=${() => void loadWebhookEvents(id, host)}>Refresh</button>
+        </div>
+        <p class="hint">
+          Latest 50 accepted events. Payloads show what was passed to the agent, capped at 16,000 characters. Earlier
+          events are not backfilled.
+        </p>
+        ${
+          events.length
+            ? events.map(
+                (event) => html`
+                  <details class="webhook-event">
+                    <summary>
+                      <time datetime=${new Date(event.receivedAt).toISOString()}
+                        >${new Date(event.receivedAt).toLocaleString()}</time
+                      >
+                    </summary>
+                    <div class="webhook-event-body">
+                      <div class="hint mono">${event.deliveryId}</div>
+                      ${event.sessionId ? html`<a href=${deepLinkPath(UI_BASE, "chats", event.sessionId)}>Open session</a>` : html`<span class="hint">No session available.</span>`}
+                      <pre class="webhook-event-payload">${event.payload}</pre>
+                    </div>
+                  </details>
+                `,
+              )
+            : html`<p class="hint">No messages recorded yet.</p>`
+        }
+      `,
+      host,
+    );
+  } catch (error) {
+    if (!host.isConnected) return;
+    render(
+      html`<h3>Message history</h3>
+        <p role="alert">${errMessage(error, "Couldn't load messages.")}</p>
+        <button class="btn" @click=${() => void loadWebhookEvents(id, host)}>Retry</button>`,
+      host,
+    );
+  }
 }
 
 async function setWebhookEnabled(id: string, enabled: boolean): Promise<void> {

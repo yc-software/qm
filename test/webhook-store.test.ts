@@ -125,3 +125,46 @@ test("re-creating a byte-identical disabled webhook re-enables it", async () => 
   assert.equal(second.enabled, true);
   assert.equal((await store.get(first.id))?.enabled, true);
 });
+
+test("history survives reconstruction without entering webhook listings", async () => {
+  const history = createMemoryMap<import("../src/webhooks/webhook-store.ts").WebhookHistory>();
+  const backing = createMemoryMap<Webhook>();
+  const store = createWebhookStore(backing, history);
+  const wh = await store.create(base);
+  const event = { deliveryId: "one", receivedAt: 1, payload: "hello" };
+  await store.recordEvent(wh.id, event);
+  const restored = createWebhookStore(backing, history);
+  assert.deepEqual(await restored.listEvents(wh.id), [event]);
+  assert.equal(JSON.stringify(await restored.list()).includes("hello"), false);
+  assert.deepEqual(await restored.listEvents("unknown"), []);
+});
+
+test("history atomically retains the latest 50 and bounds payloads", async () => {
+  const store = createWebhookStore();
+  const wh = await store.create(base);
+  await Promise.all(
+    Array.from({ length: 70 }, (_, i) =>
+      store.recordEvent(wh.id, {
+        deliveryId: `delivery-${i}`,
+        receivedAt: i,
+        payload: "x".repeat(20_000),
+      }),
+    ),
+  );
+  const events = await store.listEvents(wh.id);
+  assert.equal(events.length, 50);
+  assert.equal(events[0]?.receivedAt, 69);
+  assert.equal(events[1]?.payload.length, 16_100);
+  assert.equal(events.at(-1)?.receivedAt, 20);
+  events.pop();
+  assert.equal((await store.listEvents(wh.id)).length, 50);
+});
+
+test("a repeated receipt preserves the original payload and timestamp", async () => {
+  const store = createWebhookStore();
+  const wh = await store.create(base);
+  const original = { deliveryId: "one", receivedAt: 1, payload: "hello" };
+  await store.recordEvent(wh.id, original);
+  await store.recordEvent(wh.id, { ...original, receivedAt: 2, payload: "changed" });
+  assert.deepEqual(await store.listEvents(wh.id), [original]);
+});

@@ -2,7 +2,8 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
+import { scopeId, type Webhook, type Cron } from "../src/types.ts";
 import {
   createKeychain,
   KeychainError,
@@ -21,7 +22,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -308,4 +309,39 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
     await first.pool.close();
     await second.pool.close();
   }
+});
+
+test("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const makeStore = () =>
+    createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));
+  const a = makeStore();
+  const b = makeStore();
+  const webhook = await a.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "summarize",
+    verification: { scheme: "github", secret: "test-only" },
+  });
+  await Promise.all(
+    Array.from({ length: 60 }, (_, i) =>
+      (i % 2 ? a : b).recordEvent(webhook.id, {
+        deliveryId: `event-${i}`,
+        receivedAt: i,
+        payload: "hello 🌊",
+      }),
+    ),
+  );
+  await b.recordEvent(webhook.id, {
+    deliveryId: "event-59",
+    receivedAt: 59,
+    payload: "hello 🌊",
+  });
+  const events = await makeStore().listEvents(webhook.id);
+  assert.equal(events.length, 50);
+  assert.equal(events[0]?.receivedAt, 59);
+  assert.equal(events[0]?.payload, "hello 🌊");
+  assert.equal(events.at(-1)?.receivedAt, 10);
+  assert.equal(new Set(events.map((e) => e.deliveryId)).size, 50);
 });

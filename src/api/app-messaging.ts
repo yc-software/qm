@@ -49,6 +49,7 @@ export function createMessagingMethods(
   | "createWebhook"
   | "getWebhook"
   | "listWebhooks"
+  | "listWebhookEvents"
   | "setWebhookEnabled"
   | "setWebhookRecipientConsent"
   | "pendingDeliveries"
@@ -275,6 +276,16 @@ export function createMessagingMethods(
     },
     getWebhook(id) {
       return deps.webhooks.get(id);
+    },
+    async listWebhookEvents(id, viewer) {
+      const events = await deps.webhooks.listEvents(id);
+      return Promise.all(
+        events.map(async (event) => {
+          const session = await deps.sessions.getByThread(`webhook:${id}:${event.deliveryId}`);
+          const visible = session && (await h.sessionForViewer(session.id, viewer));
+          return { ...event, ...(visible ? { sessionId: session.id } : {}) };
+        }),
+      );
     },
     listWebhooks() {
       return deps.webhooks.list();

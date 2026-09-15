@@ -125,6 +125,10 @@ export function createTurnMethods(
         }
       }
 
+      if (req.surface === "webhook" && req.triggered && !sessionParticipantIds) {
+        sessionParticipantIds = [actor.id];
+      }
+
       const orgRuntimeScope = scopeId("org", orgIdOf());
       const turnRuntimeScope =
         req.conversation.kind === "dm"

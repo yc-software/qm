@@ -69,6 +69,7 @@ const USER_SCOPED: Rule[] = [
   pat("POST", "/v1/soul", { in: "body", name: "actorId" }),
   pat("POST", "/v1/webhooks", { in: "body", name: "createdBy" }),
   pat("GET", "/v1/webhooks", { in: "query", name: "viewer" }),
+  pat("GET", "/v1/webhooks/:id/events", { in: "query", name: "viewer" }),
   pat("GET", "/v1/crons", { in: "query", name: "viewer" }),
   pat("POST", "/v1/crons", { in: "body", name: "createdBy" }),
   pat("GET", "/v1/crons/:id", { in: "query", name: "principalId" }),

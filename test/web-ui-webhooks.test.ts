@@ -216,3 +216,20 @@ test("public web creation rejects unauthenticated verification and malformed fil
   );
   assert.equal(destination.status, 400);
 });
+
+test("webhook history is relayed with the authenticated viewer, not a query-string impersonation", async () => {
+  const res = await fetch(
+    `${webBase}/api/webhooks`,
+    asUser("history-owner", {
+      method: "POST",
+      body: JSON.stringify({ action: "history test", verification: { scheme: "github" } }),
+    }),
+  );
+  const { webhook } = (await res.json()) as { webhook: { id: string } };
+  const path = `${webBase}/api/webhooks/${webhook.id}/events`;
+  const owner = await fetch(path, asUser("history-owner"));
+  assert.equal(owner.status, 200);
+  assert.deepEqual(await owner.json(), { events: [] });
+  const stranger = await fetch(`${path}?viewer=history-owner`, asUser("stranger"));
+  assert.equal(stranger.status, 404);
+});

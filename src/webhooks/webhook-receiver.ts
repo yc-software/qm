@@ -106,6 +106,11 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
 
       const event = renderEvent(wh, deliveryId, parsed, req.rawBody);
       const destination: Destination | undefined = wh.destination;
+      await deps.webhooks.recordEvent(wh.id, {
+        deliveryId,
+        receivedAt: Date.now(),
+        payload: event.securityScreenData,
+      });
 
       void runTrigger(triggerDeps, {
         owner: wh.owner,

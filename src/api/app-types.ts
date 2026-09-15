@@ -52,7 +52,7 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CronFireRecord } from "../cron/fire-store.ts";
-import type { WebhookStore, CreateWebhookInput } from "../webhooks/webhook-store.ts";
+import type { WebhookStore, WebhookEvent, CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type {
   ChannelMembership,
@@ -409,6 +409,7 @@ export interface App {
   setCronRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
+  listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   setWebhookRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;

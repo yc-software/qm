@@ -2376,6 +2376,18 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/webhooks/:id/events",
+    handle: async ({ res, user, params }) =>
+      relay(
+        res,
+        await coreFetch(
+          "GET",
+          `/v1/webhooks/${encodeURIComponent(params.id!)}/events?viewer=${encodeURIComponent(user)}`,
+        ),
+      ),
+  },
+  {
     method: "POST",
     path: "/api/loops",
     handle: async (c) => {

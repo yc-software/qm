@@ -239,3 +239,68 @@ test("inbound per-webhook auth holds even in core dev mode (no core secret)", as
     await srv.close();
   }
 });
+
+test("history requires the webhook's viewer permission, including on signed requests", async () => {
+  const srv = start(SECRET);
+  try {
+    const body = regBody();
+    const created = await fetch(`${srv.base}/v1/webhooks`, {
+      method: "POST",
+      headers: sign("POST", "/v1/webhooks", body),
+      body,
+    });
+    const { webhook } = (await created.json()) as { webhook: { id: string } };
+    for (const [suffix, status] of [
+      ["?viewer=U1", 200],
+      ["?viewer=U2", 404],
+      ["", 404],
+    ] as const) {
+      const path = `/v1/webhooks/${webhook.id}/events${suffix}`;
+      const res = await fetch(`${srv.base}${path}`, { headers: sign("GET", path, "") });
+      assert.equal(res.status, status);
+      if (status === 200) assert.deepEqual(await res.json(), { events: [] });
+    }
+    assert.equal((await fetch(`${srv.base}/v1/webhooks/${webhook.id}/events?viewer=U1`)).status, 401);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("signed ingress produces a history entry whose worklog is readable only by its owner", async () => {
+  const srv = start(SECRET);
+  try {
+    const body = regBody();
+    const created = await fetch(`${srv.base}/v1/webhooks`, {
+      method: "POST",
+      headers: sign("POST", "/v1/webhooks", body),
+      body,
+    });
+    const { webhook } = (await created.json()) as { webhook: { id: string } };
+    const eventBody = JSON.stringify({ message: "agent message for worklog" });
+    const accepted = await fetch(`${srv.base}/v1/webhooks/incoming/${webhook.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-hub-signature-256": githubSig(eventBody) },
+      body: eventBody,
+    });
+    assert.equal(accepted.status, 202);
+    const historyPath = `/v1/webhooks/${webhook.id}/events?viewer=U1`;
+    let events: Array<{ sessionId?: string; payload: string }> = [];
+    for (let i = 0; i < 100; i++) {
+      const history = await fetch(`${srv.base}${historyPath}`, { headers: sign("GET", historyPath, "") });
+      ({ events } = (await history.json()) as { events: typeof events });
+      if (events[0]?.sessionId) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(events.length, 1);
+    assert.ok(events[0]?.sessionId);
+    assert.match(events[0]!.payload, /agent message for worklog/);
+    const sessionPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U1`;
+    const worklog = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });
+    assert.equal(worklog.status, 200);
+    assert.match(JSON.stringify(await worklog.json()), /agent message for worklog/);
+    const otherPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U2`;
+    assert.equal((await fetch(`${srv.base}${otherPath}`, { headers: sign("GET", otherPath, "") })).status, 404);
+  } finally {
+    await srv.close();
+  }
+});

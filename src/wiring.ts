@@ -133,7 +133,7 @@ import {
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
-import { createWebhookStore } from "./webhooks/webhook-store.ts";
+import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
@@ -1508,7 +1508,7 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
-  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"));
+  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
     legacyId: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",

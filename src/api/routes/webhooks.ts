@@ -144,6 +144,16 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, capability, actor, url } = ctx;
+  const webhook = await app.getWebhook(params.id!);
+  const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
+  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer))) {
+    return sendJson(res, 404, { error: "not_found" });
+  }
+  return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
+}
+
 async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   const { res, app, params, capability, actor, url } = ctx;
   const id = params.id!;
@@ -171,6 +181,7 @@ export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/webhooks", auth: "either", handle: createWebhook },
   { method: "GET", path: "/v1/webhooks", auth: "either", handle: listWebhooks },
+  { method: "GET", path: "/v1/webhooks/:id/events", auth: "either", handle: listWebhookEvents },
   { method: "POST", path: "/v1/webhooks/:id/disable", auth: "either", handle: disableWebhook },
   { method: "POST", path: "/v1/webhooks/:id/enable", auth: "either", handle: enableWebhook },
 ];
