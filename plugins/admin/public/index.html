@@ -5024,7 +5024,7 @@
                 /></label>
               </div>
               <div class="foot">
-                <button class="primary" id="onboarding-model-save">Validate and save</button
+                <button class="primary" id="onboarding-model-save">Validate and connect</button
                 ><button class="danger" id="onboarding-model-delete">Disable this provider</button
                 ><span class="status" id="st-onboarding-model"></span>
               </div>
@@ -6138,17 +6138,50 @@
                 </p>
               </div>
               <div class="body">
-                <p>
-                  <a
-                    id="slack-installation-create"
-                    href="https://api.slack.com/apps?new_app=1"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    >Create Slack app from manifest ↗</a
-                  >
-                </p>
                 <button class="primary hidden" id="slack-installation-start">Add to Slack</button>
                 <p class="hint" id="slack-installation-state">Not configured.</p>
+                <details id="slack-own-app-guide">
+                  <summary>Set up your own Slack app</summary>
+                  <p>
+                    Use a workspace-owned app with your bot's name. You'll need permission to install apps in Slack.
+                    Slack still applies rate limits; this does not provide unlimited history.
+                  </p>
+                  <ol>
+                    <li>
+                      <a
+                        id="slack-installation-create"
+                        href="https://api.slack.com/apps?new_app=1"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        >Create your preconfigured Slack app ↗</a
+                      >. Choose your company workspace, review the permissions, and click <strong>Create</strong>. The
+                      manifest sets up the bot, message events, buttons, and Socket Mode for you.
+                    </li>
+                    <li>
+                      In <strong>OAuth &amp; Permissions</strong>, click <strong>Install to Workspace</strong> and
+                      approve access. Copy the <strong>Bot User OAuth Token</strong> starting with <code>xoxb-</code>.
+                    </li>
+                    <li>
+                      In <strong>Basic Information → App-Level Tokens</strong>, click
+                      <strong>Generate Token and Scopes</strong>. Name it <strong>QM connection</strong>, add
+                      <code>connections:write</code>, and generate it. Copy the token starting with <code>xapp-</code>.
+                    </li>
+                    <li>
+                      Paste both tokens below and click <strong>Validate and connect</strong>. Keep this page open while
+                      you work in Slack. Tokens must come from the same app.
+                    </li>
+                    <li>
+                      Invite your new bot to a channel, mention it, then send it a DM to check both surfaces. It only
+                      sees conversations it can access; older history may be incomplete.
+                    </li>
+                  </ol>
+                  <p class="hint">
+                    Replacing a connected app changes the Slack bot identity. Invite the new bot to your channels and
+                    start a new DM with it. The old app stays installed in Slack until a workspace admin removes it. To
+                    switch back to the hosted app, remove this connection first, then choose Add to Slack.
+                  </p>
+                  <button type="button" id="slack-enter-tokens">I have both tokens</button>
+                </details>
                 <div class="hidden" id="slack-token-editor">
                   <label style="display: block; margin-bottom: 8px"
                     >Bot User OAuth Token
@@ -6176,7 +6209,7 @@
               </div>
               <div class="foot">
                 <button type="button" id="slack-rotate">Rotate tokens…</button
-                ><button class="primary hidden" id="slack-installation-save">Validate and save</button
+                ><button class="primary hidden" id="slack-installation-save">Validate and connect</button
                 ><button class="danger" id="slack-installation-delete">Remove</button
                 ><span class="status" id="st-slack-installation"></span>
               </div>
@@ -7131,6 +7164,7 @@
           const path = scopeInPath ? API_BASE + "/history/scopes/" + scopeSegment : API_BASE + "/history";
           return q ? path + "?" + q : path;
         }
+        if (st.view === "connectors" && st.setup === "slack") p.set("setup", "slack");
         if (st.scope && SCOPED.has(st.view)) p.set("scope", st.scope);
         if (st.view === "errors" && st.page > 1) p.set("page", st.page);
         if (st.principal) p.set("principal", st.principal);
@@ -7173,7 +7207,7 @@
           if (segs[1] === "s") pathSession = decodePathSegment(segs[2] ?? "");
           else if (segs[1] === "scopes") pathScope = decodePathSegment(segs[2] ?? "");
         }
-        const raw = p.get("view") || fromPath;
+        const raw = p.get("setup") === "slack" ? "connectors" : p.get("view") || fromPath;
 
         const v = raw === "skill-packs" ? "skills" : raw;
         const session = pathSession || p.get("session") || null;
@@ -7188,6 +7222,7 @@
         else if (session) resolvedView = "history";
         return {
           view: resolvedView,
+          setup: p.get("setup"),
           scope:
             pathScope ||
             p.get("scope") ||
@@ -10234,8 +10269,16 @@
           return;
         }
         $("slack-installation-start").classList.toggle("hidden", !r.data.installAvailable);
-        $("slack-installation-create").classList.toggle("hidden", !!r.data.installAvailable);
-        $("slack-rotate").classList.toggle("hidden", !!r.data.installAvailable);
+        $("slack-installation-start").disabled = r.data.configured && r.data.source === "admin";
+        $("slack-installation-start").title =
+          r.data.configured && r.data.source === "admin"
+            ? "Remove your current connection before switching to the hosted app."
+            : "";
+        $("slack-rotate").textContent = r.data.configured ? "Replace connection…" : "Set up your own app…";
+        if (new URLSearchParams(location.search).get("setup") === "slack") {
+          $("slack-own-app-guide").open = true;
+          $("card-slack-installation").scrollIntoView({ block: "start" });
+        }
         if (r.data.createUrl) $("slack-installation-create").href = r.data.createUrl;
         $("slack-installation-state").textContent =
           r.data.source === "environment"
@@ -10283,9 +10326,17 @@
         $("slack-token-editor").classList.add("hidden");
         $("slack-installation-save").classList.add("hidden");
         await loadSlackInstallation();
-        setStatus("st-slack-installation", "Saved. Slack is activating.", "ok");
+        setStatus(
+          "st-slack-installation",
+          "Tokens verified and saved. Allow a few seconds, then test a mention and DM in Slack.",
+          "ok",
+        );
       };
       $("slack-rotate").onclick = () => {
+        $("slack-own-app-guide").open = true;
+        $("slack-own-app-guide").scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+      $("slack-enter-tokens").onclick = () => {
         $("slack-token-editor").classList.remove("hidden");
         $("slack-installation-save").classList.remove("hidden");
         $("slack-bot-token").focus();
