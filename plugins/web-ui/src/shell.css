@@ -17,6 +17,7 @@
   --meta-lane: 24px;
   --brand-accent: #4f46e5;
   --dev-accent: #8a5a00;
+  --markdown-link: #2563b8;
   --brand-mark: none;
   --cta: oklch(0.27 0.062 250);
   --cta-hover: oklch(0.33 0.07 250);
@@ -27,6 +28,7 @@
 }
 
 .dark {
+  --markdown-link: #4c8edb;
   --cta: oklch(0.42 0.085 250);
   --cta-hover: oklch(0.48 0.09 250);
   --cta-foreground: oklch(0.99 0 0);
@@ -1738,6 +1740,58 @@ a.chat-row-open {
 .user-bubble markdown-block {
   display: block;
 }
+:is(.assistant-body, .user-bubble) markdown-block a {
+  color: var(--markdown-link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 0.2em;
+}
+:is(.assistant-body, .user-bubble) markdown-block :is(th, td) a {
+  text-decoration: none;
+}
+:is(.assistant-body, .user-bubble) markdown-block a:is(:hover, :focus-visible) {
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+}
+:is(.assistant-body, .user-bubble) markdown-block a:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+:is(.assistant-body, .user-bubble) markdown-block .overflow-x-auto:has(> table) {
+  margin-block: 1.5em;
+  border: 0;
+  border-radius: 0;
+}
+:is(.assistant-body, .user-bubble) markdown-block :is(th, td) {
+  padding: 0.8em 1em;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
+  background: transparent;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+:is(.assistant-body, .user-bubble) markdown-block th {
+  border-bottom-color: color-mix(in srgb, var(--foreground) 20%, transparent);
+}
+:is(.assistant-body, .user-bubble) markdown-block :is(th, td):first-child {
+  padding-inline-start: 0;
+}
+:is(.assistant-body, .user-bubble) markdown-block :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+:is(.assistant-body, .user-bubble) markdown-block :is(th, td)[align="center"] {
+  text-align: center;
+}
+:is(.assistant-body, .user-bubble) markdown-block :is(th, td)[align="right"] {
+  text-align: right;
+}
+:is(.assistant-body, .user-bubble) markdown-block tr:last-child td {
+  border-bottom: 0;
+}
+:is(.assistant-body, .user-bubble) markdown-block :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1.5em 0.6em;
+}
 .streaming-text {
   position: relative;
 }
@@ -1767,14 +1821,14 @@ a.chat-row-open {
 .user-bubble markdown-block > *:last-child {
   margin-bottom: 0;
 }
-/* A streaming reply renders as two stacked blocks (committed prefix + live tail). Restore the
-   paragraph gap at their seam that the edge-trim rules above would otherwise remove; `revert`
-   is the UA-default margin, which is what an uncut paragraph boundary gets. */
-.assistant-body .streaming-text markdown-block:not(:first-of-type) > *:first-child {
-  margin-top: revert;
+.assistant-body .streaming-text markdown-block + markdown-block {
+  margin-top: 1rem;
 }
-.assistant-body .streaming-text markdown-block:not(:last-of-type) > *:last-child {
-  margin-bottom: revert;
+.assistant-body .streaming-text markdown-block:has(> div > .overflow-x-auto:last-child) + markdown-block {
+  margin-top: 1.5em;
+}
+:is(.assistant-body, .user-bubble) markdown-block:first-of-type > div > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
 }
 .message-bubble {
   min-width: 0;

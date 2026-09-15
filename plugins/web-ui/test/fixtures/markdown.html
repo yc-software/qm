@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Markdown rendering</title>
+    <style>
+      main {
+        max-width: 820px;
+        margin: 40px auto;
+        padding: 0 24px 40px;
+      }
+      nav {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 32px;
+      }
+      button {
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav><button id="theme">Toggle theme</button><button id="stream">Toggle streaming</button></nav>
+      <article class="assistant-body" id="response"></article>
+    </main>
+    <script type="module">
+      import "../../src/shell.css";
+      import { html, render } from "lit";
+      import { markdown } from "../../src/message-markdown";
+      import { splitStreamingMarkdown } from "../../src/streaming-markdown";
+      import text from "./markdown.md?raw";
+      let streaming = false;
+      const response = document.querySelector("#response");
+      function draw() {
+        const parts = streaming ? splitStreamingMarkdown(text, 240) : null;
+        render(
+          parts
+            ? html`<div class="streaming-text">${parts.segments.map(markdown)}${markdown(parts.tail)}</div>`
+            : markdown(text),
+          response,
+        );
+      }
+      document.querySelector("#theme").onclick = () => document.documentElement.classList.toggle("dark");
+      document.querySelector("#stream").onclick = () => {
+        streaming = !streaming;
+        draw();
+      };
+      draw();
+    </script>
+  </body>
+</html>
