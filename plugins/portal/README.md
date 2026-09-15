@@ -20,6 +20,9 @@ deployment gateway before its own routes. Core authorizes each app request and
 removes gateway cookies before forwarding to the app. Each app has a separate
 browser origin; cross-origin browser writes are rejected. Keep the session cookie
 domain within the company, never a parent shared with other companies.
+For companies using the additional trusted OIDC entry, set core
+`DEPLOY_APPS_LOGIN_PATH=/auth/trusted/login` so app sign-in uses that identity
+provider. The default remains `/auth/login`.
 
 It is a thin `node:http` server (native TS type-stripping), like the other
 surfaces, and it does **not** import the core.

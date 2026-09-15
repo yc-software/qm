@@ -169,6 +169,7 @@ export interface ServerDeps {
   deployGateSecret?: string;
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;
+  deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
   scheduler?: Scheduler;
   webhookReceiver?: WebhookReceiver;
   identity?: IdentityService;

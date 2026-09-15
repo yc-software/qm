@@ -93,6 +93,30 @@ function httpGet(
   });
 }
 
+test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
+  const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], {
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate",
+    deployAppsSessionSecret: SESSION_SECRET,
+    deployAppsLoginUrl: LOGIN_URL,
+    deployAppsLoginPath: "/auth/trusted/login",
+  });
+  server.listen(0);
+  try {
+    const result = await httpGet((server.address() as AddressInfo).port, "/counter?x=1", {
+      Host: "counter.apps.example.com",
+      Accept: "text/html",
+    });
+    assert.equal(result.status, 302);
+    const redirect = new URL(result.headers.location as string);
+    assert.equal(redirect.origin, LOGIN_URL);
+    assert.equal(redirect.pathname, "/auth/trusted/login");
+    assert.equal(redirect.searchParams.get("returnTo"), "https://counter.apps.example.com/counter?x=1&dpl_signin=1");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 function httpPost(
   port: number,
   path: string,

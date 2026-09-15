@@ -633,6 +633,16 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   });
   assert.equal(derived.deployAppsLoginUrl, "https://qm.example.com");
   assert.equal(derived.deployAppsSessionSecret, "s");
+  assert.equal(derived.deployAppsLoginPath, "/auth/login");
+  assert.equal(
+    loadConfig({
+      DEPLOY_APPS_SESSION_SECRET: "s",
+      PUBLIC_WEB_URL: "https://qm.example.com",
+      DEPLOY_APPS_LOGIN_PATH: "/auth/trusted/login",
+    }).deployAppsLoginPath,
+    "/auth/trusted/login",
+  );
+  assert.throws(() => loadConfig({ DEPLOY_APPS_LOGIN_PATH: "//evil.example" }), /DEPLOY_APPS_LOGIN_PATH/);
   const explicit = loadConfig({
     DEPLOY_APPS_SESSION_SECRET: "s",
     DEPLOY_APPS_LOGIN_URL: "https://portal.example.com/",

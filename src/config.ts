@@ -150,6 +150,7 @@ export interface Config {
   deployDialTimeoutMs: number;
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;
+  deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
   deepIdleMachineMs: number;
   devIdleMachineMs: number;
   cronFireConcurrency: number;
@@ -620,7 +621,11 @@ interface AwsDeployEnv {
 function deployAppsEnv(
   env: NodeJS.ProcessEnv,
   defaultLoginUrl: string | undefined,
-): { deployAppsSessionSecret?: string; deployAppsLoginUrl?: string } {
+): {
+  deployAppsSessionSecret?: string;
+  deployAppsLoginUrl?: string;
+  deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
+} {
   const explicit = env.DEPLOY_APPS_SESSION_SECRET;
   const shared = env.PORTAL_SESSION_SECRET;
   const loginUrl = env.DEPLOY_APPS_LOGIN_URL ?? (explicit || shared ? defaultLoginUrl : undefined);
@@ -631,8 +636,16 @@ function deployAppsEnv(
     throw new Error("DEPLOY_APPS_SESSION_SECRET needs a sign-in address — set DEPLOY_APPS_LOGIN_URL or PUBLIC_WEB_URL");
   }
   const secret = explicit ?? (loginUrl ? shared : undefined);
+  const loginPath = env.DEPLOY_APPS_LOGIN_PATH ?? "/auth/login";
+  if (loginPath !== "/auth/login" && loginPath !== "/auth/trusted/login") {
+    throw new Error("DEPLOY_APPS_LOGIN_PATH must be /auth/login or /auth/trusted/login");
+  }
   if (!secret || !loginUrl) return {};
-  return { deployAppsSessionSecret: secret, deployAppsLoginUrl: loginUrl.replace(/\/$/, "") };
+  return {
+    deployAppsSessionSecret: secret,
+    deployAppsLoginUrl: loginUrl.replace(/\/$/, ""),
+    deployAppsLoginPath: loginPath,
+  };
 }
 
 const SHARED_PLATFORM_SUFFIXES = [
