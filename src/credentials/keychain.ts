@@ -49,6 +49,7 @@ interface BrokerDelivery {
 }
 
 interface CredentialRefresh {
+  tenantRequired?: boolean;
   refreshTokenEnc?: string;
   idTokenEnc?: string;
   accountId?: string;
@@ -222,6 +223,7 @@ export interface ServiceCredentialStore extends ServiceCredentialReader {
 }
 
 export interface OAuthToken {
+  tenantRequired?: boolean;
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
@@ -244,6 +246,8 @@ export interface DerivedOAuthAuth {
 }
 
 export interface OAuthTokenStatus {
+  needsTenantSelection?: boolean;
+  accountId?: string;
   connected: boolean;
   expiresAt?: number;
   hasRefreshToken?: boolean;
@@ -271,6 +275,13 @@ interface ConnectorMeta {
 }
 
 export interface ConnectorTokenStore {
+  selectConnectorTenant?(
+    host: string,
+    principalId: string,
+    accountId: string,
+    expectedAccessToken: string,
+    accountType?: string,
+  ): Promise<void>;
   setConnectorToken(host: string, principalId: string, token: OAuthToken, accountType?: string): Promise<void>;
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
@@ -280,7 +291,12 @@ export interface ConnectorTokenStore {
    * account id), refreshing single-flight if stale. The refresh token never
    * leaves the keychain record.
    */
-  connectorDerivedAuth(host: string, principalId: string, accountType?: string): Promise<DerivedOAuthAuth | null>;
+  connectorDerivedAuth(
+    host: string,
+    principalId: string,
+    accountType?: string,
+    allowUnselected?: boolean,
+  ): Promise<DerivedOAuthAuth | null>;
 }
 
 interface SaveCredentialInput {
@@ -668,6 +684,7 @@ export function createKeychain(deps: {
       origin: "connector-oauth",
       ...(token.expiresAt !== undefined ? { expiresAt: token.expiresAt } : {}),
       refresh: {
+        ...(token.tenantRequired ? { tenantRequired: true } : {}),
         ...(token.refreshToken ? { refreshTokenEnc: encryptSecret(token.refreshToken, deps.key) } : {}),
         ...(token.idToken ? { idTokenEnc: encryptSecret(token.idToken, deps.key) } : {}),
         ...(token.accountId ? { accountId: token.accountId } : {}),
@@ -694,6 +711,7 @@ export function createKeychain(deps: {
   function recToOAuthToken(rec: KeychainCredential): OAuthToken {
     return {
       accessToken: decryptSecret(rec.secretEnc, deps.key),
+      ...(rec.refresh?.tenantRequired ? { tenantRequired: true } : {}),
       ...(rec.refresh?.refreshTokenEnc ? { refreshToken: decryptSecret(rec.refresh.refreshTokenEnc, deps.key) } : {}),
       ...(rec.refresh?.idTokenEnc ? { idToken: decryptSecret(rec.refresh.idTokenEnc, deps.key) } : {}),
       ...(rec.refresh?.accountId ? { accountId: rec.refresh.accountId } : {}),
@@ -736,6 +754,7 @@ export function createKeychain(deps: {
       });
       if (!fresh.accessToken) throw new Error("refresh returned an empty access token");
       const merged: OAuthToken = {
+        ...(stored.tenantRequired ? { tenantRequired: true } : {}),
         ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
         ...(stored.accountType ? { accountType: stored.accountType } : {}),
         ...(stored.orgId ? { orgId: stored.orgId } : {}),
@@ -769,7 +788,11 @@ export function createKeychain(deps: {
   const oauthExpired = (rec: KeychainCredentialMeta, t: number) =>
     rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
 
-  async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
+  async function connectorAuthForRecord(
+    rec: KeychainCredential,
+    allowUnselected = false,
+  ): Promise<{ record: KeychainCredential; token: OAuthToken } | null> {
+    if (rec.refresh?.tenantRequired && !rec.refresh.accountId && !allowUnselected) return null;
     const t = now();
     const refreshable = rec.refresh?.refreshTokenEnc && deps.refreshConnector && rec.host ? rec.host : null;
     if (refreshable && rec.expiresAt !== undefined && t >= rec.expiresAt - oauthRefreshMargin) {
@@ -779,10 +802,15 @@ export function createKeychain(deps: {
         inflightRefreshes.set(rec.id, pending);
         void pending.finally(() => inflightRefreshes.delete(rec.id));
       }
-      return pending;
+      if (!(await pending)) return null;
+      const fresh = await deps.creds.get(rec.id);
+      if (!fresh) return null;
+      rec = fresh;
     }
+    if (rec.refresh?.tenantRequired && !rec.refresh.accountId && !allowUnselected) return null;
     if (oauthExpired(rec, t) && !refreshable) return null;
-    return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
+    const token = tryDecrypt(rec, recToOAuthToken);
+    return token ? { record: rec, token } : null;
   }
 
   function connectorMeta(rec: KeychainCredentialMeta, t: number): ConnectorMeta {
@@ -894,12 +922,21 @@ export function createKeychain(deps: {
     throw new KeychainError(503, `credential for ${service} is being written concurrently — retry`);
   }
 
+  function connectorEnv(cred: KeychainCredential, value: string): Array<{ key: string; value: string }> {
+    const env = [{ key: envKey(cred.host!), value }];
+    if (cred.refresh?.tenantRequired && cred.refresh.accountId)
+      env.push({ key: envKey(cred.host!).replace("VAULT_TOKEN_", "VAULT_TENANT_"), value: cred.refresh.accountId });
+    return env;
+  }
+
   async function materializeConnectorEnv(
     cred: KeychainCredential,
     extra?: { grantId: string; purpose: string },
   ): Promise<MaterializedCred> {
-    const value = cred.host ? await connectorTokenForRecord(cred) : null;
-    if (!value || !cred.host) {
+    if (cred.refresh?.tenantRequired && !cred.refresh.accountId)
+      throw new KeychainError(409, "its owner must choose an organization in Keychain before using this connector");
+    const auth = cred.host ? await connectorAuthForRecord(cred) : null;
+    if (!auth || !cred.host) {
       throw new KeychainError(
         410,
         "connector token expired and could not be refreshed — its owner must reconnect the app",
@@ -910,7 +947,7 @@ export function createKeychain(deps: {
       credentialId: cred.id,
       ownerId: cred.ownerId,
       service: cred.service,
-      env: [{ key: envKey(cred.host), value }],
+      env: connectorEnv(auth.record, auth.token.accessToken),
       ...extra,
     };
   }
@@ -1278,6 +1315,17 @@ export function createKeychain(deps: {
       await deleteCredential(oauthId(host, principalId, accountType));
     },
 
+    async selectConnectorTenant(host, principalId, accountId, expectedAccessToken, accountType) {
+      if (!deps.creds.update) throw new KeychainError(503, "atomic credential updates unavailable");
+      const selected = await deps.creds.update(oauthId(host, principalId, accountType), (rec) => {
+        if (decryptSecret(rec.secretEnc, deps.key) !== expectedAccessToken)
+          throw new KeychainError(409, "connection changed; load organizations again");
+        if (!rec.refresh?.tenantRequired) throw new KeychainError(400, "connector does not require tenant selection");
+        return { ...rec, refresh: { ...rec.refresh, accountId }, updatedAt: now() };
+      });
+      if (!selected) throw new KeychainError(404, "connector not connected");
+    },
+
     async connectorTokenStatus(host, principalId, accountType) {
       const rec = await connectorRecord(host, principalId, accountType);
       if (!rec) return { connected: false };
@@ -1287,6 +1335,8 @@ export function createKeychain(deps: {
       const tokenExpired = oauthExpired(rec, now());
       return {
         connected: true,
+        ...(rec.refresh?.tenantRequired && !rec.refresh.accountId ? { needsTenantSelection: true } : {}),
+        ...(rec.refresh?.accountId ? { accountId: rec.refresh.accountId } : {}),
         ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
         ...(hasRefresh ? { hasRefreshToken: true } : {}),
         ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
@@ -1300,18 +1350,15 @@ export function createKeychain(deps: {
     async connectorAccessToken(host, principalId, accountType) {
       const rec = await connectorRecord(host, principalId, accountType);
       if (!rec) return null;
-      return connectorTokenForRecord(rec);
+      return (await connectorAuthForRecord(rec))?.token.accessToken ?? null;
     },
 
-    async connectorDerivedAuth(host, principalId, accountType) {
+    async connectorDerivedAuth(host, principalId, accountType, allowUnselected = false) {
       const rec = await connectorRecord(host, principalId, accountType);
       if (!rec) return null;
-      const accessToken = await connectorTokenForRecord(rec);
-      if (accessToken === null) return null;
-      // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
-      const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
-      const token = tryDecrypt(fresh, recToOAuthToken);
-      if (!token) return null;
+      const auth = await connectorAuthForRecord(rec, allowUnselected);
+      if (!auth) return null;
+      const { token } = auth;
       return {
         accessToken: token.accessToken,
         ...(token.idToken ? { idToken: token.idToken } : {}),
@@ -1393,13 +1440,13 @@ export function createKeychain(deps: {
         const cred = await deps.creds.get(grant.credentialId);
         if (!cred || cred.kind !== "env") continue;
         if (cred.managed === "connector") {
-          const value = cred.host ? await connectorTokenForRecord(cred) : null;
-          if (value && cred.host) {
+          const auth = cred.host ? await connectorAuthForRecord(cred) : null;
+          if (auth && cred.host) {
             out.push({
               credentialId: cred.id,
               ownerId: cred.ownerId,
               service: cred.service,
-              env: [{ key: envKey(cred.host), value }],
+              env: connectorEnv(auth.record, auth.token.accessToken),
               grantId: grant.id,
               purpose: grant.purpose,
             });

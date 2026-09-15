@@ -1,3 +1,4 @@
+import { PROVIDERS, type OAuthProviderConfig } from "../connectors/oauth.ts";
 import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
 import type { ResidentAuthConnector, ScopeLivenessRecord } from "../credentials/resident-auth.ts";
 import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
@@ -67,13 +68,19 @@ export function renderConnectedAppsBlock(
   record: ConnectorStatusRecord | null,
   availableProviders: readonly string[] = [],
   connectionsUrl?: string,
+  providers: Record<string, OAuthProviderConfig> = PROVIDERS,
 ): string {
   const allowed = new Set(availableProviders);
   const entries = Object.entries(record?.providers ?? {}).filter(([name]) => allowed.has(name));
-  const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
+  const connected = entries
+    .filter(([, e]) => e.connected && !e.needsReconnect)
+    .map(([name]) => connectorLabel(name, providers));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
-    .map(([name, e]) => `${connectorLabel(name)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
+    .map(
+      ([name, e]) =>
+        `${connectorLabel(name, providers)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`,
+    );
   const lines = ["## Connected apps"];
   if (!availableProviders.length) {
     lines.push("No app connections are enabled by the admin. Do not suggest or offer any app connection.");
@@ -83,7 +90,7 @@ export function renderConnectedAppsBlock(
   const available = availableProviders.filter((name) => !connectedNames.has(name));
   if (available.length) {
     lines.push(
-      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only suggest or offer app connections in this admin-configured list.`,
+      `Available to connect: ${available.map((name) => connectorLabel(name, providers)).join(", ")}. Only suggest or offer app connections in this admin-configured list.`,
     );
   } else {
     lines.push("Only suggest or offer app connections in the admin-configured list below.");
