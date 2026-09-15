@@ -1,5 +1,6 @@
 import type { PgPool } from "./pg-pool.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
@@ -54,6 +55,12 @@ export function createPostgresAdvisoryLock(
       const pool = await pg.sessionPool();
       for (;;) {
         const client = await pool.connect();
+        client.once("error", (error) =>
+          console.error(
+            `[advisory-lock] connection holding ${key} died; the lock is released while its holder runs:`,
+            errMessage(error),
+          ),
+        );
         try {
           const res = await client.query<{ locked: boolean }>(
             "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
@@ -78,6 +85,12 @@ export function createPostgresAdvisoryLock(
     async tryWithLock<T>(key: string, fn: () => Promise<T>): Promise<T | null> {
       const pool = await pg.sessionPool();
       const client = await pool.connect();
+      client.once("error", (error) =>
+        console.error(
+          `[advisory-lock] connection holding ${key} died; the lock is released while its holder runs:`,
+          errMessage(error),
+        ),
+      );
       try {
         const res = await client.query<{ locked: boolean }>(
           "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",

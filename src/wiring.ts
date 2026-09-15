@@ -379,6 +379,18 @@ export interface Runtime {
   releaseInFlightRuns(): Promise<void>;
 }
 
+export function shutdownOnUncaught(label: string, shutdown: (reason: string) => void): void {
+  const describe = (e: unknown): string => (e instanceof Error && e.stack ? e.stack : errMessage(e));
+  process.on("uncaughtException", (error) => {
+    console.error(`[${label}] uncaught exception; draining and exiting:`, describe(error));
+    shutdown("uncaughtException");
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error(`[${label}] unhandled rejection; draining and exiting:`, describe(reason));
+    shutdown("unhandledRejection");
+  });
+}
+
 export function stopWithBackstop(
   runtime: Runtime,
   shutdownDrainMs: number,

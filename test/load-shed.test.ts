@@ -13,7 +13,7 @@ test("shedding starts at the high threshold and only clears below the low one", 
 
 test("the gate stops claims while the loop is lagging and reopens once it recovers", async () => {
   let lag = 0;
-  const gate = createLoadShedGate({ sampleLagP99Ms: () => lag, sampleMs: 5 });
+  const gate = createLoadShedGate({ sampler: { start() {}, stop() {}, p99Ms: () => lag }, sampleMs: 5 });
   gate.start();
   try {
     assert.equal(gate.canClaim(), true);

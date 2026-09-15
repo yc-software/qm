@@ -2,7 +2,7 @@ import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { loadConfig } from "./config.ts";
-import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
+import { buildApp, serverDeps, shutdownOnUncaught, stopWithBackstop } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage } from "./util/errors.ts";
@@ -138,9 +138,4 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("uncaughtException", (error) =>
-  console.error("[qm] uncaught exception (process kept alive):", errMessage(error)),
-);
-process.on("unhandledRejection", (reason) =>
-  console.error("[qm] unhandled rejection (process kept alive):", errMessage(reason)),
-);
+shutdownOnUncaught("qm", shutdown);

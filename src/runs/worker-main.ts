@@ -1,5 +1,5 @@
 import { loadConfig } from "../config.ts";
-import { buildApp, stopWithBackstop } from "../wiring.ts";
+import { buildApp, shutdownOnUncaught, stopWithBackstop } from "../wiring.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();
@@ -21,3 +21,4 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+shutdownOnUncaught("qm:worker", shutdown);
