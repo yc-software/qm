@@ -5,7 +5,11 @@ import { findRoute, type RouteAuth } from "../src/api/routes/route.ts";
 import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 import { OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 
-const PUBLIC_ROUTES = new Set<string>([]);
+const PUBLIC_ROUTES = new Set<string>([
+  "POST /v1/slack/managed/installation",
+  "DELETE /v1/slack/managed/installation",
+  "POST /v1/slack/managed/events",
+]);
 const AUD_ROUTES = new Map<string, string>([
   ["POST /v1/connectors/oauth/consent/mint", OAUTH_CONSENT_AUD],
   ["POST /v1/credentials/broker", CREDENTIAL_BROKER_AUD],

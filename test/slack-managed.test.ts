@@ -47,7 +47,12 @@ async function fixture(t: test.TestContext) {
     map,
     store,
     bridge,
-    request: (path: "installation" | "events", body: unknown, method = "POST", token = "company-token") =>
+    request: (
+      path: "installation" | "events",
+      body: unknown,
+      method: "POST" | "DELETE" = "POST",
+      token = "company-token",
+    ) =>
       fetch(`http://127.0.0.1:${address.port}/v1/slack/managed/${path}`, {
         method,
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -152,7 +157,7 @@ test("installation launch restricts redirect origin and hides service credential
     appId: "A123",
     store,
     fetchImpl: (async (_url: unknown, init?: RequestInit) => {
-      assert.equal((init?.headers as Record<string, string>).authorization, "Bearer company-token");
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer company-token");
       return Response.json({ url: "https://slack.example.com/install/launch?id=opaque" });
     }) as typeof fetch,
   });
