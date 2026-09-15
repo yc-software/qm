@@ -108,9 +108,11 @@ test(
     for (let attempt = 0; attempt < 200 && !lockSocket; attempt++) {
       await observer.query("SELECT pg_stat_clear_snapshot()");
       const { rows } = await observer.query<{ client_port: number }>(
-        `SELECT a.client_port FROM pg_stat_activity a JOIN pg_locks l ON l.pid = a.pid
-       WHERE l.locktype = 'advisory' AND l.granted AND a.datname = current_database()
-         AND a.query = 'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked'`,
+        `WITH k AS (SELECT hashtextextended($1, 0) AS v)
+         SELECT a.client_port FROM pg_stat_activity a JOIN pg_locks l ON l.pid = a.pid, k
+         WHERE l.locktype = 'advisory' AND l.granted AND a.datname = current_database()
+           AND l.classid::bigint = ((k.v >> 32) & 4294967295) AND l.objid::bigint = (k.v & 4294967295)`,
+        [`project:${project.id}`],
       );
       for (const row of rows) lockSocket = connections.get(row.client_port) ?? lockSocket;
       if (!lockSocket) await sleep(10);
