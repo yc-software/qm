@@ -22,7 +22,7 @@ const USER_FILES_MAX = 200;
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
   "granting or removing org admin for an external user is portal-only — the agent cannot manage who governs the org";
 const ALREADY_A_MEMBER =
-  "that address already belongs to a member of the org — manage them under Users and Admins, not as an external user";
+  "that address already belongs to a member of the org and does not need an external invite. To make them an admin, use Grant org admin in the admin dashboard and enter their email as the principal ID.";
 const HOLDS_OWN_GRANT =
   "that address holds an org admin grant of its own — revoke it under Admins first, or re-invite with role org_admin";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
