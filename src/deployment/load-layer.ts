@@ -1,3 +1,4 @@
+import { parseOAuthConnector, oauthProvidersFor, type CustomOAuthConnector } from "../connectors/custom-oauth.ts";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -15,6 +16,7 @@ import type { CommandRule } from "../types.ts";
 export interface DeploymentLayerRuntime {
   dir: string;
   tools: ToolDescriptor[];
+  oauthConnectors?: CustomOAuthConnector[];
   connectors: ResidentAuthConnector[];
   advertisedTools: string[];
   hints: string[];
@@ -127,7 +129,9 @@ export function resolvedDeploymentLayer(
   dir: string,
   tools: ToolDescriptor[],
   installFiles: LayerInstallFile[] = [],
+  oauthConnectors: CustomOAuthConnector[] = [],
 ): DeploymentLayerRuntime {
+  oauthProvidersFor(oauthConnectors);
   assertDisjointCredentialLinks(tools);
   assertDistinctInstallTargets(tools);
   const withAuth = tools.filter((t) => t.auth);
@@ -140,6 +144,7 @@ export function resolvedDeploymentLayer(
   return {
     dir,
     tools,
+    ...(oauthConnectors.length ? { oauthConnectors } : {}),
     connectors: withAuth
       .filter((t) => !t.auth!.broker)
       .map((t) => ({
@@ -185,6 +190,7 @@ export function resolvedDeploymentLayer(
 
 export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: DeploymentLayerRuntime): void {
   target.dir = source.dir;
+  target.oauthConnectors = source.oauthConnectors;
   for (const key of [
     "tools",
     "connectors",
@@ -239,7 +245,19 @@ export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
   const installFiles = declaredInstallFiles(tools, (tool, file) =>
     readLayerTextFile(join(toolDirs.get(tool.id)!, file.from)),
   );
-  return resolvedDeploymentLayer(dir, tools, installFiles);
+  const connectorsDir = join(dir, "connectors");
+  const oauthConnectors = existsSync(connectorsDir)
+    ? readdirSync(connectorsDir)
+        .filter((name) => !JUNK_FILE.test(name))
+        .sort()
+        .map((name) => {
+          if (!/^[a-z][a-z0-9-]*\.json$/.test(name)) throw new Error("connector files must be connectors/<id>.json");
+          const connector = parseOAuthConnector(readLayerTextFile(join(connectorsDir, name)));
+          if (name !== `${connector.id}.json`) throw new Error("connector filename must match its id");
+          return connector;
+        })
+    : [];
+  return resolvedDeploymentLayer(dir, tools, installFiles, oauthConnectors);
 }
 
 function readLayerTextFile(path: string): string {

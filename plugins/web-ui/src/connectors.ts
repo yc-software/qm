@@ -10,6 +10,11 @@ import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keycha
 import { listPageTpl } from "./list-page";
 
 interface ConnectorProvider {
+  label?: string;
+  description?: string;
+  tenantSelection?: boolean;
+  needsTenantSelection?: boolean;
+  accountId?: string;
   connected?: boolean;
   needsReconnect?: boolean;
   refreshError?: string;
@@ -114,6 +119,7 @@ interface KeychainAsk {
   expiresAt: number;
 }
 
+let tenantChoices: Record<string, Array<{ id: string; label: string }>> = {};
 let connectorProviders: Record<string, ConnectorProvider> = {};
 let keychainCredentials: KeychainCredential[] = [];
 let keychainConnectorCredentials: KeychainConnectorCredential[] = [];
@@ -136,6 +142,7 @@ let keysEverLoaded = false;
 export function resetKeychainState(): void {
   keychainOperations.reset();
   connectorProviders = {};
+  tenantChoices = {};
   keychainCredentials = [];
   keychainConnectorCredentials = [];
   keychainGrants = [];
@@ -408,7 +415,7 @@ export function clearConnectorNotice(): void {
 }
 
 export function noteConnectorResult(provider: string, status: string): void {
-  const name = CONNECTOR_LABELS[provider]?.name ?? provider;
+  const name = connectorProviders[provider]?.label ?? CONNECTOR_LABELS[provider]?.name ?? provider;
   connectorNotice = status === "connected" ? `${name}: connected.` : `${name}: connection failed.`;
 }
 
@@ -423,7 +430,10 @@ function drawConnectors(): void {
   const loading = accountsLoading || keysLoadingFresh;
   const entries = Object.entries(connectorProviders);
   const connectorCards = entries.map(([id, p]) => {
-    const meta = CONNECTOR_LABELS[id] ?? { name: id, hosts: "" };
+    const meta = {
+      name: p.label ?? CONNECTOR_LABELS[id]?.name ?? id,
+      hosts: p.description ?? CONNECTOR_LABELS[id]?.hosts ?? "",
+    };
     const connected = Boolean(p.connected);
     const needsReconnect = Boolean(p.needsReconnect);
     const available = Boolean(p.available);
@@ -439,6 +449,7 @@ function drawConnectors(): void {
     const grants = keychainGrants.filter((grant) => isActiveGrant(grant, credentialsById.get(grant.credentialId)));
     let connectionState: TemplateResult | string = html`<span class="kc-state neutral">Not connected</span>`;
     if (needsReconnect) connectionState = html`<span class="kc-state warning">Reconnect needed</span>`;
+    else if (p.needsTenantSelection) connectionState = html`<span class="kc-state warning">Choose organization</span>`;
     else if (connected) connectionState = "";
     return html`
       <article class="kc-resource kc-account">
@@ -456,6 +467,22 @@ function drawConnectors(): void {
             ${connected || needsReconnect ? html`<button class="kc-text-action danger" type="button" data-confirm-key=${`disconnect:${id}`} ?disabled=${keychainOperations.mutationInFlight} @click=${() => void revokeConnector(id)}>Disconnect</button>` : ""}
           </div>
         </div>
+        ${
+          connected && p.tenantSelection
+            ? html`<div class="kc-access-block">
+                ${p.accountId ? html`<div class="kc-resource-meta">Organization: ${p.accountId}</div>` : ""}
+                <button
+                  class="kc-text-action"
+                  type="button"
+                  ?disabled=${keychainOperations.mutationInFlight}
+                  @click=${() => void loadTenants(id)}
+                >
+                  Choose organization
+                </button>
+                ${(tenantChoices[id] ?? []).map((tenant) => html`<div class="kc-access-row"><span>${tenant.label}</span><button class="btn" type="button" ?disabled=${keychainOperations.mutationInFlight || p.accountId === tenant.id} @click=${() => void selectTenant(id, tenant.id)}>${p.accountId === tenant.id ? "Selected" : "Select"}</button></div>`)}
+              </div>`
+            : ""
+        }
         ${needsReconnect && p.refreshError ? html`<div class="kc-inline-warning" role="status">Refresh failed: ${p.refreshError}</div>` : ""}
         ${
           grants.length
@@ -749,6 +776,43 @@ async function createDrop(): Promise<void> {
   }
 }
 
+async function loadTenants(provider: string): Promise<void> {
+  const epoch = keychainOperations.captureEpoch();
+  try {
+    const result = await api<{ tenants: Array<{ id: string; label: string }> }>(
+      `/api/connectors/${encodeURIComponent(provider)}/tenants`,
+    );
+    if (!keychainOperations.isCurrentEpoch(epoch)) return;
+    tenantChoices[provider] = result.tenants;
+    connectorNotice = result.tenants.length ? "" : "No organizations available for this account.";
+  } catch (error) {
+    if (!keychainOperations.isCurrentEpoch(epoch)) return;
+    connectorNotice = errMessage(error, "Could not load organizations.");
+  }
+  drawConnectors();
+}
+
+async function selectTenant(provider: string, tenantId: string): Promise<void> {
+  const operation = beginKeychainMutation();
+  if (!operation) return;
+  drawConnectors();
+  try {
+    await api(`/api/connectors/${encodeURIComponent(provider)}/tenants`, {
+      method: "POST",
+      body: JSON.stringify({ tenantId }),
+    });
+    if (!keychainOperations.isCurrentEpoch(operation.epoch)) return;
+    delete tenantChoices[provider];
+    connectorNotice = "Organization selected.";
+    await renderConnectors();
+  } catch (error) {
+    if (keychainOperations.isCurrentEpoch(operation.epoch))
+      connectorNotice = errMessage(error, "Could not select organization.");
+  } finally {
+    if (keychainOperations.finishMutation(operation)) drawConnectors();
+  }
+}
+
 async function startConnector(provider: string): Promise<void> {
   const stateEpoch = keychainOperations.captureEpoch();
   connectorNotice = "";
@@ -791,7 +855,7 @@ async function revokeConnector(provider: string): Promise<void> {
     : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Disconnect ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
+    title: `Disconnect ${connectorProviders[provider]?.label ?? CONNECTOR_LABELS[provider]?.name ?? provider}?`,
     body: `${impact} Automations using this account may stop working.`.trim(),
     action: "Disconnect account",
     run: async () => {

@@ -1,3 +1,4 @@
+import type { OAuthProviderSource } from "./custom-oauth.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
@@ -125,10 +126,11 @@ export function createConnectorClientResolver(opts: {
   reader: ConnectorClientReader;
   orgScopeId: (orgId: string) => string;
   secrets?: SecretSource;
+  providers?: OAuthProviderSource;
 }): OAuthClientResolver {
-  const envResolver = createSecretClientResolver(opts.secrets);
+  const envResolver = createSecretClientResolver(opts.secrets, opts.providers);
   return async (providerName, ctx): Promise<ResolvedClient> => {
-    if (!PROVIDERS[providerName]) throw new Error(`unknown OAuth provider: ${providerName}`);
+    if (!(opts.providers?.() ?? PROVIDERS)[providerName]) throw new Error(`unknown OAuth provider: ${providerName}`);
     const orgId = configOrgId();
     const rec = await opts.reader.getConnectorClientSecret(opts.orgScopeId(orgId), providerName);
     if (rec) {

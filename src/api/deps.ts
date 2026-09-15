@@ -1,3 +1,4 @@
+import type { OAuthProviderSource } from "../connectors/custom-oauth.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
@@ -91,6 +92,8 @@ export interface ServerDeps {
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;
+  oauthProviders?: OAuthProviderSource;
+  oauthTenantFetch?: typeof fetch;
   oauthEnv?: NodeJS.ProcessEnv;
   resolveClient?: OAuthClientResolver;
   consentLinks?: ConsentLinkStore;

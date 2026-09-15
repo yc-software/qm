@@ -13,7 +13,7 @@ import {
   type OAuthState,
 } from "../../connectors/oauth.ts";
 import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../credentials/connector-status.ts";
-import type { OAuthTokenStatus } from "../../credentials/keychain.ts";
+import { KeychainError, type OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
@@ -43,9 +43,16 @@ async function resumeOAuthFlow(deps: ServerDeps, secret: string | undefined, par
   return openOAuthState(param, { secret: oauthStateSecret(deps, secret), maxAgeMs: OAUTH_STATE_MAX_AGE_MS });
 }
 
+export function providersFor(deps: ServerDeps) {
+  return deps.oauthProviders?.() ?? PROVIDERS;
+}
+
 export function resolverFor(deps: ServerDeps): OAuthClientResolver {
   return (
-    deps.resolveClient ?? createSecretClientResolver(deps.oauthEnv ? createEnvSecretSource(deps.oauthEnv) : undefined)
+    deps.resolveClient ??
+    createSecretClientResolver(deps.oauthEnv ? createEnvSecretSource(deps.oauthEnv) : undefined, () =>
+      providersFor(deps),
+    )
   );
 }
 
@@ -99,7 +106,7 @@ function latestRefreshFailure(
 
 async function connectorProviderStatus(deps: ServerDeps, principalId: string): Promise<Record<string, unknown>> {
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([name, provider]) => {
+    Object.entries(providersFor(deps)).map(async ([name, provider]) => {
       const [hosts, configured] = await Promise.all([
         Promise.all(
           provider.hosts.map(async (host) => {
@@ -127,6 +134,11 @@ async function connectorProviderStatus(deps: ServerDeps, principalId: string): P
           configured,
           available: configured,
           consentMode: provider.consentMode,
+          label: provider.label,
+          description: provider.description,
+          tenantSelection: Boolean(provider.tenants),
+          needsTenantSelection: hosts.some((host) => host.needsTenantSelection),
+          accountId: hosts.find((host) => host.accountId)?.accountId,
         },
       ] as const;
     }),
@@ -161,12 +173,19 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
     const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
       client,
+      providers: providersFor(deps),
       fetchImpl: deps.oauthFetch,
       accountType,
       ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
-    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
+    const stamped = {
+      ...token,
+      ...(providersFor(deps)[oauthRoute.provider]?.tenants ? { tenantRequired: true } : {}),
+      clientRef: client.clientRef,
+      accountType,
+      orgId: configOrgId(),
+    };
     for (const host of hosts)
       await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
     audit(deps, {
@@ -191,7 +210,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
 }
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
-  const p = PROVIDERS[provider];
+  const p = providersFor(deps)[provider];
   if (!p || !deps.connectorTokens) return false;
   for (const host of p.hosts) {
     for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES) {
@@ -216,7 +235,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
   }
   const rec = peeked.rec;
   if (rec.orgId !== undefined && rec.orgId !== configOrgId()) return sendJson(res, 200, { status: "invalid" });
-  if (!PROVIDERS[rec.provider]) return sendJson(res, 200, { status: "invalid" });
+  if (!providersFor(deps)[rec.provider]) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
     audit(deps, {
@@ -241,7 +260,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       });
     }
     const returnTo = safeReturnTo(url.searchParams.get("returnTo")) ?? rec.returnTo;
-    const codeVerifier = PROVIDERS[rec.provider]?.pkce ? generateCodeVerifier() : undefined;
+    const codeVerifier = providersFor(deps)[rec.provider]?.pkce ? generateCodeVerifier() : undefined;
     const state = await beginOAuthFlow(deps, secret, {
       provider: rec.provider,
       principalId: rec.principalId,
@@ -257,6 +276,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       redirectUri: rec.redirectUri,
       state,
       client,
+      providers: providersFor(deps),
       accountType: rec.accountType,
       ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
     });
@@ -285,7 +305,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     intendedPrincipalId?: unknown;
   };
   const provider = typeof b.provider === "string" ? b.provider : "";
-  if (!PROVIDERS[provider])
+  if (!providersFor(deps)[provider])
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${provider}` });
   const accountType = parseAccountType(typeof b.accountType === "string" ? b.accountType : null);
   const base = deps.publicUrl ? deps.publicUrl.replace(/\/$/, "") : "";
@@ -356,7 +376,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
   const oauthRoute = parseOAuthRoute(pathname)!;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const provider = PROVIDERS[oauthRoute.provider];
+  const provider = providersFor(deps)[oauthRoute.provider];
   if (!provider)
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
   const principalId = url.searchParams.get("principalId") ?? "";
@@ -389,6 +409,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       redirectUri,
       state,
       client,
+      providers: providersFor(deps),
       accountType,
       ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
     });
@@ -444,7 +465,7 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and provider or host required" });
   }
   if (providerName) {
-    const provider = PROVIDERS[providerName];
+    const provider = providersFor(deps)[providerName];
     if (!provider)
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
     for (const h of provider.hosts)
@@ -481,11 +502,71 @@ async function setToken(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
+async function tenants(ctx: ApiCtx): Promise<void> {
+  const { deps, res, url } = ctx;
+  const name = ctx.params.provider ?? "";
+  const provider = providersFor(deps)[name];
+  if (!provider?.tenants || !deps.connectorTokens) return sendJson(res, 404, { error: "not_found" });
+  const body = (ctx.body ?? {}) as Record<string, unknown>;
+  let principalId = url.searchParams.get("principalId") ?? "";
+  if (ctx.req.method === "POST") principalId = typeof body.principalId === "string" ? body.principalId : "";
+  const accountType = parseAccountType(
+    url.searchParams.get("accountType") ?? (typeof body.accountType === "string" ? body.accountType : undefined),
+  );
+  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  try {
+    await resolverFor(deps)(name, { accountType });
+    const host = provider.hosts[0]!;
+    const auth = await deps.connectorTokens.connectorDerivedAuth(host, principalId, accountType, true);
+    if (!auth) return sendJson(res, 409, { error: "not_connected" });
+    const response = await (deps.oauthTenantFetch ?? fetch)(provider.tenants.url, {
+      headers: { authorization: `Bearer ${auth.accessToken}`, accept: "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error(`tenant discovery failed (${response.status})`);
+    const raw: unknown = await response.json();
+    const items =
+      provider.tenants.itemsField && raw && typeof raw === "object"
+        ? (raw as Record<string, unknown>)[provider.tenants.itemsField]
+        : raw;
+    if (!Array.isArray(items) || items.length > 1000) throw new Error("invalid tenant response");
+    const choices = items.map((item: unknown) => {
+      if (!item || typeof item !== "object") throw new Error("invalid tenant");
+      const value = item as Record<string, unknown>;
+      const id = value[provider.tenants!.idField];
+      const label = value[provider.tenants!.labelField];
+      if (typeof id !== "string" || !id || id.length > 300 || typeof label !== "string" || !label || label.length > 300)
+        throw new Error("invalid tenant");
+      return { id, label };
+    });
+    if (ctx.req.method === "POST") {
+      if (typeof body.tenantId !== "string" || !choices.some((choice) => choice.id === body.tenantId))
+        return sendJson(res, 400, { error: "invalid_tenant" });
+      if (!deps.connectorTokens.selectConnectorTenant) return sendJson(res, 501, { error: "not_configured" });
+      await deps.connectorTokens.selectConnectorTenant(host, principalId, body.tenantId, auth.accessToken, accountType);
+      audit(deps, { principalId, action: "connector.oauth.tenant.selected", resource: name, scopeLabel: principalId });
+      return sendJson(res, 200, { ok: true });
+    }
+    return sendJson(res, 200, { tenants: choices, selected: auth.accountId });
+  } catch (error) {
+    if (error instanceof KeychainError)
+      return sendJson(res, error.status, { error: "tenant_selection_failed", message: error.message });
+    return sendJson(res, 502, {
+      error: "tenant_selection_failed",
+      message: "Could not load organizations. Reconnect or try again.",
+    });
+  }
+}
+
 async function catalog(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([name, p]) => ({
+    Object.entries(providersFor(deps)).map(async ([name, p]) => ({
       provider: name,
+      label: p.label,
+      description: p.description,
+      tenantSelection: Boolean(p.tenants),
       hosts: p.hosts,
       scopes: p.scopes,
       consentMode: p.consentMode,
@@ -502,6 +583,8 @@ export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/connectors/oauth/:provider/tenants", auth: "source", handle: tenants },
+  { method: "POST", path: "/v1/connectors/oauth/:provider/tenants", auth: "source", handle: tenants },
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
   { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start", auth: "source", handle: oauthStart },

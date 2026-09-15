@@ -1848,6 +1848,31 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/connectors/:provider/tenants",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/connectors/oauth/${encodeURIComponent(c.params.provider!)}/tenants?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/connectors/:provider/tenants",
+    handle: async (c) => {
+      const body = await readJson<{ tenantId?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      if (typeof body.tenantId !== "string") return json(c.res, 400, { error: "tenantId required" });
+      return relayCore(
+        c.res,
+        "POST",
+        `/v1/connectors/oauth/${encodeURIComponent(c.params.provider!)}/tenants`,
+        JSON.stringify({ principalId: c.user, tenantId: body.tenantId }),
+      );
+    },
+  },
+  {
     method: "POST",
     path: "/api/connectors/:provider/start",
     handle: async (c) => {

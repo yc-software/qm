@@ -66,7 +66,7 @@ import {
   refreshConnectorStatus,
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderResidentLoginsBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
-import { PROVIDERS } from "../connectors/oauth.ts";
+import { oauthProvidersFor } from "../connectors/custom-oauth.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -232,7 +232,6 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
-const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
@@ -1033,9 +1032,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       await deps.skillsReady;
       const configuredProviders = deps.resolveConnectorClient
-        ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
-            swallowAs("orchestrator: configured connector providers", []),
-          )
+        ? await configuredConnectorProviders(
+            deps.resolveConnectorClient,
+            oauthProvidersFor(deps.deploymentLayer?.oauthConnectors),
+          ).catch(swallowAs("orchestrator: configured connector providers", []))
         : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (): Promise<SkillResolution[]> => {
@@ -1328,12 +1328,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       if (!strictReadOnly && deps.connectorTokens && conversation.kind === "dm") {
-        for (const host of CONNECTOR_HOSTS) {
-          const token =
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
-            (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
-          if (token) connectorEnv[envKey(host)] = token;
+        for (const provider of Object.values(oauthProvidersFor(deps.deploymentLayer?.oauthConnectors))) {
+          for (const host of provider.hosts) {
+            for (const accountType of ["personal", undefined, "company"]) {
+              let token: string | null;
+              let tenant: string | undefined;
+              if (provider.tenants) {
+                const auth = await deps.connectorTokens.connectorDerivedAuth(host, actor.id, accountType);
+                token = auth?.accessToken ?? null;
+                tenant = auth?.accountId;
+              } else {
+                token = await deps.connectorTokens.connectorAccessToken(host, actor.id, accountType);
+              }
+              if (!token) continue;
+              connectorEnv[envKey(host)] = token;
+              if (tenant) connectorEnv[envKey(host).replace("VAULT_TOKEN_", "VAULT_TENANT_")] = tenant;
+              break;
+            }
+          }
         }
       }
       perf.credsMs += Date.now() - credsStart;
@@ -1937,14 +1949,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           try {
             status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
             if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-              status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
+              status = await refreshConnectorStatus(
+                deps.connectorTokens,
+                actor.id,
+                Date.now(),
+                oauthProvidersFor(deps.deploymentLayer?.oauthConnectors),
+              );
               await deps.connectorStatusCache.put(status);
             }
           } catch (e) {
             swallow("orchestrator: connected-app status", e);
           }
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
+          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl, oauthProvidersFor(deps.deploymentLayer?.oauthConnectors))}`;
         }
         const stableSystemBytes = systemPrompt.length;
         if (swarmBinding)
