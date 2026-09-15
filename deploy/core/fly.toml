@@ -20,6 +20,7 @@ primary_region = "sjc"
   FLY_ORG = "personal"
   FLY_DEPLOY_APP_PREFIX = "qm-d"
   SANDBOX_BACKEND = "sprites"
+  SECURITY_SCREEN_BACKEND = "off"
 [deploy]
   strategy = "bluegreen"
 
