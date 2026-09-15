@@ -8,6 +8,7 @@ import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sin
 import { signedRequestHeaders } from "./auth/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
 import { errMessage } from "./util/errors.ts";
+import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./config.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
 import { isPrivateNetworkIp } from "./util/network.ts";
@@ -245,11 +246,14 @@ function main(): void {
   const tokenless = process.env.EGRESS_TOKENLESS === "open" ? ("open" as const) : ("deny" as const);
   const server = buildEgressAuthzServer({ ...(capabilitySecret ? { capabilitySecret } : {}), audit, tokenless });
   server.listen(port, "127.0.0.1", () => console.log(`[egress-authz] listening on 127.0.0.1:${port}`));
-  for (const sig of ["SIGTERM", "SIGINT"] as const) {
-    process.on(sig, () =>
-      server.close(() => void (relay ? relay.flush() : Promise.resolve()).finally(() => process.exit(0))),
-    );
-  }
+  let shuttingDown = false;
+  const shutdown = (): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    server.close(() => void (relay ? relay.flush() : Promise.resolve()).finally(() => process.exit()));
+  };
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, shutdown);
+  shutdownOnUncaught("egress-authz", shutdown);
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main();

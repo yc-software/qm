@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { loadConfig } from "./config.ts";
 import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
+import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage } from "./util/errors.ts";
@@ -138,3 +139,4 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+shutdownOnUncaught("qm", shutdown);

@@ -292,6 +292,7 @@ import {
 } from "./runs/instance-registry.ts";
 import { createEcsTaskProtection, type TaskProtection } from "./runs/task-protection.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
+import { createLoadShedGate } from "./runs/load-shed.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper, type Sweeper } from "./util/sweeper.ts";
 import {
@@ -386,14 +387,14 @@ export function stopWithBackstop(
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(() => process.exit(0));
+    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(() => process.exit());
   }, shutdownDrainMs + 5_000);
   hardExit.unref();
   void runtime.stop().then(
     () => {
       clearTimeout(hardExit);
       beforeExit?.();
-      process.exit(0);
+      process.exit();
     },
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
@@ -2098,6 +2099,7 @@ export function buildApp(
     protection: taskProtection,
     busy: () => workers.some((w) => w.busy()),
   });
+  const loadShed = createLoadShedGate();
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
       runs,
@@ -2107,7 +2109,7 @@ export function buildApp(
       heartbeatIntervalMs: config.heartbeatIntervalMs,
       errors,
       pollMs: 250,
-      canClaim: () => drain.canClaim(),
+      canClaim: () => drain.canClaim() && loadShed.canClaim(),
       onClaimed: () => drain.noteBusy(),
     }),
   );
@@ -2174,6 +2176,7 @@ export function buildApp(
       swarms?.start();
       orphanedSignalSweeper.start();
       drain.start();
+      loadShed.start();
     },
     async releaseInFlightRuns() {
       await Promise.all(workers.map((w) => w.releaseInFlight()));
@@ -2197,6 +2200,7 @@ export function buildApp(
       );
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       drain.stop();
+      loadShed.stop();
       runs.close?.();
       void runSignals.close?.();
       void sessionStateBus.close?.();

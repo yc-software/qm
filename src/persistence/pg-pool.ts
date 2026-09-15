@@ -55,10 +55,21 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     url = parsed.toString();
     ssl = { ssl: { ca: poolingConfig.caCert } };
   }
-  const pool = new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 });
-  pool.on("error", (error) => console.error("[pg] idle client error:", errMessage(error)));
+  const pool = guardedPool(new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 }));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
+}
+
+function guardedPool(pool: Pool): Pool {
+  pool.on("error", () => {});
+  pool.on("connect", (client) => client.on("error", (error) => console.error("[pg] client error:", errMessage(error))));
+  return pool;
+}
+
+export function pooledClientsWaiting(): number {
+  let waiting = 0;
+  for (const { pool } of sharedPools.values()) waiting += pool.waitingCount;
+  return waiting;
 }
 
 async function releasePool(
@@ -339,8 +350,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
       const pg = (await import("pg")).default;
-      const pool = new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() });
-      pool.on("error", (error) => console.error("[pg] migration pool error:", errMessage(error)));
+      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() }));
       try {
         await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
         await applyPgMigrations(
