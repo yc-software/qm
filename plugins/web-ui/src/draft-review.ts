@@ -6,7 +6,7 @@ import type { DensityTier } from "./density";
 import {
   attachInboxSurface,
   contextTpl,
-  draftEditorTpl,
+  chatTpl,
   handledNoteTpl,
   inboxOpenCount,
   inboxState,
@@ -250,7 +250,7 @@ function detailTpl(surface: ReviewSurface, item: InboxItem | null): TemplateResu
       <span class="rv-detail-title">${gmail ? item.title : (item.slack?.channelLabel ?? item.title)}</span>
       <span class="rv-detail-from">${item.from}${item.fromDetail ? ` · ${item.fromDetail}` : ""}</span>
     </div>
-    ${contextTpl(item)} ${item.status === "open" ? draftEditorTpl(item) : handledNoteTpl(item)}
+    ${contextTpl(item)} ${item.status === "open" ? chatTpl(item) : handledNoteTpl(item)}
     ${item.status === "open" ? steerTpl(surface, item) : nothing}
   `;
 }

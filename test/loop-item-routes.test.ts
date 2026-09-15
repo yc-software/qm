@@ -792,3 +792,23 @@ test("a capability caller's edit is stored as the agent's draft, so its mentions
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Everyone @\u200bhere please look");
 });
+
+test("a conversational send refuses a stale draft before starting an agent turn", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const out = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
+    body: { message: "Send it", expectedProposalAt: item.proposal!.at - 1 },
+  });
+  assert.equal(out.status, 409);
+  assert.deepEqual(w.followUps, []);
+  assert.deepEqual(w.sent, []);
+  const accepted = await call(w, {
+    method: "POST",
+    path: `/v1/loops/${loop.id}/items/${item.id}/followup`,
+    body: { message: "Send it", expectedProposalAt: item.proposal!.at },
+  });
+  assert.equal(accepted.status, 200);
+  assert.equal(w.followUps.length, 1);
+});

@@ -1,4 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import {
   ArrowUp,
   ArrowUpRight,
@@ -135,7 +136,6 @@ const ASIDE_MIN_HEIGHT = 320;
 const ASIDE_MAX_HEIGHT = 1100;
 const CHAT_INPUT_MAX_HEIGHT = 200;
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
-const sending = new Set<string>();
 const acting = new Set<string>();
 const chatting = new Set<string>();
 const chatDrafts = new Map<string, string>();
@@ -179,7 +179,6 @@ export function resetInboxState(): void {
   inboxState.notice = null;
   inboxState.syncBusy = false;
   draftEdits.clear();
-  sending.clear();
   acting.clear();
   chatting.clear();
   chatDrafts.clear();
@@ -416,6 +415,16 @@ function effectiveDraft(item: InboxItem): InboxDraft {
   );
 }
 
+function sameDraft(a: InboxDraft | undefined, b: InboxDraft): boolean {
+  return Boolean(
+    a &&
+    a.body === b.body &&
+    (a.subject ?? "") === (b.subject ?? "") &&
+    (a.to ?? []).join(",") === (b.to ?? []).join(",") &&
+    (a.cc ?? []).join(",") === (b.cc ?? []).join(","),
+  );
+}
+
 function editDraft(item: InboxItem, patch: Partial<InboxDraft>): void {
   const basedOnAt = draftEdits.get(item.id)?.basedOnAt ?? item.draftAt;
   draftEdits.set(item.id, { ...effectiveDraft(item), ...patch, ...(basedOnAt !== undefined ? { basedOnAt } : {}) });
@@ -475,9 +484,10 @@ const persistWaiting = new Set<string>();
 function enqueueForItem(itemId: string, task: () => Promise<void>): Promise<void> {
   const queued = (persistQueue.get(itemId) ?? Promise.resolve()).then(task);
   persistQueue.set(itemId, queued);
-  void queued.finally(() => {
+  const clear = (): void => {
     if (persistQueue.get(itemId) === queued) persistQueue.delete(itemId);
-  });
+  };
+  void queued.then(clear, clear);
   return queued;
 }
 
@@ -496,13 +506,7 @@ async function persistDraftNow(itemId: string): Promise<void> {
   const edited = draftEdits.get(item.id);
   if (!edited) return;
   const saved = item.draft;
-  if (
-    saved &&
-    saved.body === edited.body &&
-    (saved.subject ?? "") === (edited.subject ?? "") &&
-    (saved.to ?? []).join(",") === (edited.to ?? []).join(",") &&
-    (saved.cc ?? []).join(",") === (edited.cc ?? []).join(",")
-  ) {
+  if (sameDraft(saved, edited)) {
     draftEdits.delete(item.id);
     return;
   }
@@ -522,48 +526,6 @@ async function persistDraftNow(itemId: string): Promise<void> {
   }
 }
 
-async function sendItem(item: InboxItem): Promise<void> {
-  if (sending.has(item.id)) return;
-  if (!effectiveDraft(item).body.trim()) {
-    notify("Nothing to send. The draft is empty.");
-    return;
-  }
-  sending.add(item.id);
-  drawAll();
-  try {
-    await enqueueForItem(item.id, () => sendItemNow(item.id));
-  } finally {
-    sending.delete(item.id);
-    drawAll();
-  }
-}
-
-async function sendItemNow(itemId: string): Promise<void> {
-  const item = inboxState.items.find((i) => i.id === itemId);
-  if (!item) return;
-  const edited = draftEdits.get(item.id);
-  const draft = effectiveDraft(item);
-  if (!draft.body.trim()) {
-    notify("Nothing to send. The draft is empty.");
-    return;
-  }
-  try {
-    const basedOnAt = edited?.basedOnAt ?? item.draftAt;
-    const next = await postAction(item, "send", {
-      proposal: draft,
-      ...(basedOnAt !== undefined ? { expectedProposalAt: basedOnAt } : {}),
-    });
-    if (draftEdits.get(item.id) === edited) draftEdits.delete(item.id);
-    replaceItem(next);
-    notify(item.source === "gmail" ? "Reply sent by email." : "Reply posted to Slack.");
-  } catch (e) {
-    if (isDraftConflict(e)) return explainDraftConflict(item, Boolean(edited));
-    const hint =
-      e instanceof ApiError && e.status === 409 && /connect/i.test(e.message) ? ". Reconnect it under Keychain" : "";
-    notify(`Send failed: ${e instanceof Error ? e.message : e}${hint}`);
-  }
-}
-
 export async function setItemStatus(item: InboxItem, status: "open" | "dismissed"): Promise<void> {
   if (acting.has(item.id)) return;
   acting.add(item.id);
@@ -580,18 +542,29 @@ export async function setItemStatus(item: InboxItem, status: "open" | "dismissed
 export async function askAgent(item: InboxItem, message: string): Promise<void> {
   const text = message.trim();
   if (!text || chatting.has(item.id)) return;
+  const draft = effectiveDraft(item);
   chatting.add(item.id);
   chatDrafts.delete(item.id);
   drawAll();
   try {
-    const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "followup"), {
-      method: "POST",
-      body: JSON.stringify({ message: text }),
+    await enqueueForItem(item.id, async () => {
+      await persistDraftNow(item.id);
+      if (draftEdits.has(item.id)) throw new Error("Save the draft before continuing. Your edits have been kept.");
+      const current = inboxState.items.find((i) => i.id === item.id) ?? item;
+      if (!sameDraft(effectiveDraft(current), draft)) {
+        throw new Error("The draft changed. Review it before continuing.");
+      }
+      const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "followup"), {
+        method: "POST",
+        body: JSON.stringify({
+          message: text,
+          ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
+        }),
+      });
+      replaceItem(toInboxItem(next));
     });
-    const mapped = toInboxItem(next);
-    draftEdits.delete(item.id);
-    replaceItem(mapped);
   } catch (e) {
+    if (isDraftConflict(e)) await refetchItem(item);
     notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
     if (!chatDrafts.has(item.id)) chatDrafts.set(item.id, text);
   } finally {
@@ -772,9 +745,10 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
 export function chatTpl(item: InboxItem): TemplateResult {
   const busy = chatting.has(item.id);
   const pending = chatDrafts.get(item.id) ?? "";
-  const submit = (el: HTMLTextAreaElement): void => {
-    if (busy) return;
-    const text = el.value;
+  const submit = (el: HTMLTextAreaElement, instruction = ""): void => {
+    if (chatting.has(item.id)) return;
+    const text = [el.value.trim(), instruction].filter(Boolean).join("\n\n");
+    if (!text) return;
     el.value = "";
     autosizeChatInput(el);
     void askAgent(item, text);
@@ -782,40 +756,36 @@ export function chatTpl(item: InboxItem): TemplateResult {
   const empty = item.thread.length === 0;
   return html`
     <div class="inbox-chat">
-      ${
-        empty
-          ? html`<div class="inbox-chat-empty">
-              <h2 class="inbox-chat-cta">What should I change?</h2>
-              <div class="inbox-chat-suggestions">
+      <div class="inbox-chat-log">
+        ${item.status === "open" ? html`<div class="inbox-chat-msg agent">${draftMessageTpl(item)}</div>` : nothing}
+        ${item.thread.map(
+          (m) => html`<div class="inbox-chat-msg ${m.role}"><span class="inbox-chat-text">${m.text}</span></div>`,
+        )}
+        ${
+          empty && item.status === "open"
+            ? html`<div class="inbox-chat-suggestions">
                 ${DRAFT_SUGGESTIONS.map(
                   (prompt) =>
                     html`<button
                       class="inbox-chat-suggestion"
                       type="button"
                       ?disabled=${busy}
-                      @click=${() => void askAgent(item, prompt)}
+                      @click=${() => void askAgent(item, [chatDrafts.get(item.id)?.trim(), prompt].filter(Boolean).join("\n\n"))}
                     >
                       ${prompt}
                     </button>`,
                 )}
-              </div>
-            </div>`
-          : html`<div class="inbox-chat-log">
-              ${item.thread.map(
-                (m) =>
-                  html`<div class="inbox-chat-msg ${m.role}">
-                    <span class="inbox-chat-text">${m.text}</span>
-                  </div>`,
-              )}
-            </div>`
-      }
+              </div>`
+            : nothing
+        }
+      </div>
       ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
-      <div class="inbox-chat-composer ${pending.trim() ? "has-text" : ""}">
+      <div class="inbox-chat-composer">
         <textarea
           class="inbox-chat-input"
           rows="1"
           placeholder=${`Ask ${brandName()} for something`}
-          .value=${pending}
+          .value=${live(pending)}
           @input=${(e: Event) => {
             const box = e.currentTarget as HTMLTextAreaElement;
             const had = Boolean((chatDrafts.get(item.id) ?? "").trim());
@@ -838,15 +808,21 @@ export function chatTpl(item: InboxItem): TemplateResult {
                     <button
                       class="inbox-suggest-chip primary"
                       type="button"
-                      ?disabled=${sending.has(item.id)}
-                      ${tip(item.source === "gmail" ? "Send the drafted reply in Gmail" : "Send the drafted reply to Slack")}
-                      @click=${() => void sendItem(item)}
+                      ?disabled=${busy}
+                      ${tip('Add "Send it" to your instructions and ask the agent')}
+                      @click=${(e: MouseEvent) => {
+                        const box = (e.currentTarget as HTMLElement)
+                          .closest(".inbox-chat-composer")
+                          ?.querySelector<HTMLTextAreaElement>(".inbox-chat-input");
+                        if (box) submit(box, "Send it");
+                      }}
                     >
-                      ${icon(Send, 12)}<span>${sending.has(item.id) ? "Sending…" : "Send it"}</span>
+                      ${icon(Send, 12)}<span>Send it</span>
                     </button>
                     <button
                       class="inbox-suggest-chip"
                       type="button"
+                      ?disabled=${busy || acting.has(item.id)}
                       @click=${() => void setItemStatus(item, "dismissed")}
                     >
                       ${icon(X, 12)}<span>Dismiss</span>
@@ -876,7 +852,8 @@ export function chatTpl(item: InboxItem): TemplateResult {
   `;
 }
 
-export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): TemplateResult {
+function draftMessageTpl(item: InboxItem): TemplateResult {
+  const busy = chatting.has(item.id);
   const draft = effectiveDraft(item);
   const gmail = item.source === "gmail";
   const showCc = gmail && ((draft.cc?.length ?? 0) > 0 || (item.gmail?.cc?.length ?? 0) > 0);
@@ -914,7 +891,8 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                     <span>To</span>
                     <input
                       type="text"
-                      .value=${(draft.to ?? []).join(", ")}
+                      ?disabled=${busy}
+                      .value=${live((draft.to ?? []).join(", "))}
                       placeholder="who@example.com"
                       @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
                       @blur=${() => void persistDraft(item)}
@@ -926,7 +904,8 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                           <span>Cc</span>
                           <input
                             type="text"
-                            .value=${(draft.cc ?? []).join(", ")}
+                            ?disabled=${busy}
+                            .value=${live((draft.cc ?? []).join(", "))}
                             @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
                             @blur=${() => void persistDraft(item)}
                           />
@@ -937,7 +916,8 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                     <span>Subject</span>
                     <input
                       type="text"
-                      .value=${draftSubject(item, draft)}
+                      ?disabled=${busy}
+                      .value=${live(draftSubject(item, draft))}
                       @input=${(e: Event) => editDraft(item, { subject: (e.currentTarget as HTMLInputElement).value })}
                       @blur=${() => void persistDraft(item)}
                     />
@@ -950,9 +930,11 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
       <div class="inbox-draft-body-wrap">
         <textarea
           class="inbox-draft-body"
+          aria-label="Draft reply"
+          ?disabled=${busy}
           rows=${gmail ? 7 : 3}
           placeholder=${item.draft ? "" : "No draft yet. The next sync writes one, or write your own."}
-          .value=${draft.body}
+          .value=${live(draft.body)}
           @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
           @blur=${() => void persistDraft(item)}
         ></textarea>
@@ -962,7 +944,6 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
           ? html`<div class="inbox-reactions">${item.reactions.map((name) => reactionChipTpl(name))}</div>`
           : nothing
       }
-      ${opts.chat === false ? nothing : chatTpl(item)}
     </div>
   `;
 }
@@ -1057,7 +1038,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
-              ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item)}
+              ${contextTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item)}
             </div>`
           : nothing
       }
@@ -1221,7 +1202,8 @@ function itemPageTpl(item: InboxItem): TemplateResult {
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
-        ${contextTpl(item)} ${handled ? handledNoteTpl(item) : draftEditorTpl(item, { chat: false })}
+        ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
+        ${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing}
       </div>
     </div>
     <aside class="inbox-item-aside">${chatTpl(item)}</aside>
