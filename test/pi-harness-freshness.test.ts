@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
 import { createPiHarness, stableCwd } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
@@ -50,6 +51,11 @@ test("every turn composes the freshly resolved system prompt", async () => {
 
   assert.equal(recorded[0]!.inputTokens, countTokens(first) + countTokens("hi"));
   assert.equal(recorded[1]!.inputTokens, countTokens(second) + countTokens("hi"));
+});
+
+test("the cwd pi appends to the system prompt is one constant path per harness", () => {
+  assert.equal(stableCwd("pi"), join(tmpdir(), "pi-cwd"));
+  assert.equal(stableCwd("pi"), stableCwd("pi"));
 });
 
 test("each turn removes its agent directory and reuses one constant cwd", async () => {
