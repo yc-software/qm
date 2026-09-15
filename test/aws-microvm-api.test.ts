@@ -181,8 +181,5 @@ test("readiness reuses only the supplied observation and checks again on the nex
   assert.equal(reads, 0);
   await assert.rejects(client.ensureRunning("one", "endpoint"), /TERMINATED/);
   assert.equal(reads, 1);
-  await assert.rejects(
-    client.ensureRunning("one", "endpoint", { microvmId: "two", state: "RUNNING" }),
-    /another body/,
-  );
+  await assert.rejects(client.ensureRunning("one", "endpoint", { microvmId: "two", state: "RUNNING" }), /another body/);
 });
