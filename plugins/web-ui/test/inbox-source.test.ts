@@ -53,9 +53,9 @@ test("an inbox drag paints drop zones on every existing pane", () => {
 test("email items edit like an email; slack items like slack", () => {
   assert.match(inbox, /<span>To<\/span>/);
   assert.match(inbox, /<span>Subject<\/span>/);
-  assert.match(inbox, /Send it/, "send lives in the composer as a suggested action");
-  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render inside the ask composer");
-  assert.match(inbox, /submit\(box, "Send it"\)/);
+  assert.match(inbox, /Send it/, "send is a suggested action");
+  assert.match(inbox, /inbox-chat-suggest/, "suggested actions render beside edit prompts");
+  assert.match(inbox, /submit\(e, "Send it"\)/);
   assert.match(inbox, /rows=\$\{gmail \? 7 : 3\}/, "email drafts get a taller editor than slack replies");
 });
 
@@ -129,7 +129,7 @@ test("localhost can overlay private inbox seed data without checking it into sou
 });
 
 test("each item carries a follow-up chat with the agent", () => {
-  assert.match(inbox, /export function chatTpl\(item: InboxItem\): TemplateResult/);
+  assert.match(inbox, /export function chatTpl\(item: InboxItem, compact = false\): TemplateResult/);
   assert.match(inbox, /actionPath\(item, "followup"\)/);
   assert.match(inbox, /message: text,/);
   assert.match(inbox, /\$\{draftMessageTpl\(item\)\}/, "the draft is a message in the conversation");
@@ -264,9 +264,9 @@ test("draft header links share one text size", () => {
 });
 
 test("send stays available alongside typed instructions", () => {
-  assert.match(inbox, /if \(had !== Boolean\(box\.value\.trim\(\)\)\) drawAll\(\);/);
+  assert.match(inbox, /embeddedComposer\(/);
   assert.doesNotMatch(css, /\.inbox-chat-composer\.has-text \.inbox-chat-suggest/);
-  assert.match(inbox, /\[el.value.trim\(\), instruction\].filter\(Boolean\).join\("\\n\\n"\)/);
+  assert.match(inbox, /new CustomEvent\("composer-submit", \{ detail: instruction \}\)/);
 });
 
 test("conversation messages use the containing view's scroll instead of clipping the latest message", () => {

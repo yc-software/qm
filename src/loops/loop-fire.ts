@@ -4,7 +4,7 @@ import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
-import type { Loop, LoopItem, LoopOutput, TurnResult } from "../types.ts";
+import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../types.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -57,9 +57,11 @@ interface ItemTurnResult {
   sessionId?: string;
 }
 
+export type LoopFollowUpOptions = Pick<TurnRequest, "model" | "harness" | "thinkingLevel" | "fastMode" | "attachments">;
+
 export interface LoopFireService {
   fire(loopId: string, fireKey: string, cronId?: string, options?: { enumerate?: boolean }): Promise<LoopFireResult>;
-  followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null>;
+  followUp(loop: Loop, item: LoopItem, message: string, actorId: string, options?: LoopFollowUpOptions): Promise<LoopItem | null>;
   itemAction(
     loop: Loop,
     item: LoopItem,
@@ -388,6 +390,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     threadRef: string,
     input: string,
     actorId?: string,
+    options?: LoopFollowUpOptions,
   ): Promise<TriggerOutcome> {
     let cron;
     try {
@@ -412,6 +415,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       fireKey,
       threadRef,
       surface: "loop",
+      ...(options?.model ? { model: options.model } : {}),
+      ...(options?.harness ? { harness: options.harness } : {}),
+      ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+      ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
+      ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
     });
   }
 
@@ -738,8 +746,9 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     input: string,
     fireKey: string,
     actorId: string,
+    options?: LoopFollowUpOptions,
   ): Promise<ItemTurnResult> {
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId);
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId, options);
     const failure = stageFailure("item turn", outcome);
     if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
     return {
@@ -749,11 +758,17 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     };
   }
 
-  async function followUp(loop: Loop, item: LoopItem, message: string, actorId: string): Promise<LoopItem | null> {
+  async function followUp(
+    loop: Loop,
+    item: LoopItem,
+    message: string,
+    actorId: string,
+    options?: LoopFollowUpOptions,
+  ): Promise<LoopItem | null> {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
-    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId);
+    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId, options);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },

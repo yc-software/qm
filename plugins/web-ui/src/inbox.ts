@@ -18,7 +18,6 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import {
   Archive,
-  ArrowUp,
   ArrowUpRight,
   CheckCheck,
   ChevronDown,
@@ -31,6 +30,8 @@ import {
   Undo2,
   X,
 } from "lucide";
+import { embeddedComposer } from "./embedded-composer";
+import type { ComposerSubmission } from "./composer";
 import { api, ApiError } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
 import { createInboxEventCoalescer, type InboxItemRef } from "./inbox-coalesce";
@@ -205,13 +206,9 @@ export const inboxState = {
 };
 
 const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove the salutations"];
-const ASIDE_MIN_HEIGHT = 320;
-const ASIDE_MAX_HEIGHT = 1100;
-const CHAT_INPUT_MAX_HEIGHT = 200;
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const acting = new Set<string>();
 const chatting = new Set<string>();
-const chatDrafts = new Map<string, string>();
 
 let archiveToastHost: HTMLDivElement | null = null;
 let archiveToastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -318,7 +315,6 @@ export function resetInboxState(): void {
   draftEdits.clear();
   acting.clear();
   chatting.clear();
-  chatDrafts.clear();
 }
 
 export function inboxViews(): InboxView[] {
@@ -884,6 +880,7 @@ async function persistDraftNow(itemId: string): Promise<void> {
     if (newer === edited) draftEdits.delete(item.id);
     else if (newer && next.draftAt !== undefined) draftEdits.set(item.id, { ...newer, basedOnAt: next.draftAt });
     replaceItem(next);
+    drawAll();
   } catch (e) {
     if (isDraftConflict(e)) return explainDraftConflict(item, true);
     notify(`Couldn't save the draft: ${e instanceof Error ? e.message : e}`);
@@ -907,12 +904,11 @@ export async function setItemStatus(item: InboxItem, status: "open" | "dismissed
   }
 }
 
-export async function askAgent(item: InboxItem, message: string): Promise<void> {
+export async function askAgent(item: InboxItem, message: string, options?: ComposerSubmission): Promise<boolean> {
   const text = message.trim();
-  if (!text || chatting.has(item.id)) return;
+  if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
   const draft = effectiveDraft(item);
   chatting.add(item.id);
-  chatDrafts.delete(item.id);
   drawAll();
   try {
     await enqueueForItem(item.id, async () => {
@@ -926,16 +922,18 @@ export async function askAgent(item: InboxItem, message: string): Promise<void> 
         method: "POST",
         body: JSON.stringify({
           message: text,
+          ...options,
           ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
         }),
       });
       updateSentChat(next);
       replaceItem({ ...toInboxItem(next), outputs: item.outputs, detailLoaded: true });
     });
+    return true;
   } catch (e) {
     if (isDraftConflict(e)) await refetchItem(item);
     notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
-    if (!chatDrafts.has(item.id)) chatDrafts.set(item.id, text);
+    return false;
   } finally {
     chatting.delete(item.id);
     drawAll();
@@ -1127,19 +1125,14 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   </div>`;
 }
 
-export function chatTpl(item: InboxItem): TemplateResult {
+export function chatTpl(item: InboxItem, compact = false): TemplateResult {
   const busy = chatting.has(item.id);
   let suggestions = DRAFT_SUGGESTIONS;
   if (item.sentChat) suggestions = ["Summarize this email", "What should I follow up on?"];
   else if (item.source === "generic") suggestions = ["Explain the proposal", "What needs my input?"];
-  const pending = chatDrafts.get(item.id) ?? "";
-  const submit = (el: HTMLTextAreaElement, instruction = ""): void => {
-    if (chatting.has(item.id)) return;
-    const text = [el.value.trim(), instruction].filter(Boolean).join("\n\n");
-    if (!text) return;
-    el.value = "";
-    autosizeChatInput(el);
-    void askAgent(item, text);
+  const submit = (event: MouseEvent, instruction: string): void => {
+    const composer = (event.currentTarget as HTMLElement).closest(".inbox-chat")?.querySelector(".embedded-composer");
+    composer?.dispatchEvent(new CustomEvent("composer-submit", { detail: instruction }));
   };
   const empty = item.thread.length === 0;
   return html`
@@ -1150,91 +1143,47 @@ export function chatTpl(item: InboxItem): TemplateResult {
           (m) => html`<div class="inbox-chat-msg ${m.role}"><span class="inbox-chat-text">${m.text}</span></div>`,
         )}
         ${
-          empty && item.status === "open"
+          item.status === "open"
             ? html`<div class="inbox-chat-suggestions">
-                ${suggestions.map(
-                  (prompt) =>
-                    html`<button
-                      class="inbox-chat-suggestion"
-                      type="button"
-                      ?disabled=${busy}
-                      @click=${() => void askAgent(item, [chatDrafts.get(item.id)?.trim(), prompt].filter(Boolean).join("\n\n"))}
-                    >
-                      ${prompt}
-                    </button>`,
-                )}
+                <button
+                  class="inbox-suggest-chip primary"
+                  type="button"
+                  ?disabled=${busy || acting.has(item.id)}
+                  ${tip("Send the draft with your instructions")}
+                  @click=${(e: MouseEvent) => submit(e, "Send it")}
+                >
+                  ${icon(Send, 12)}<span>Send it</span>
+                </button>
+                <div class="inbox-edit-suggestions">
+                  ${(empty ? suggestions : []).map(
+                    (prompt) =>
+                      html`<button
+                        class="inbox-chat-suggestion"
+                        type="button"
+                        ?disabled=${busy}
+                        @click=${(e: MouseEvent) => submit(e, prompt)}
+                      >
+                        ${prompt}
+                      </button>`,
+                  )}
+                </div>
               </div>`
             : nothing
         }
       </div>
       ${busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing}
       <div class="inbox-chat-composer">
-        <textarea
-          class="inbox-chat-input"
-          rows="1"
-          placeholder=${`Ask ${brandName()} for something`}
-          .value=${live(pending)}
-          @input=${(e: Event) => {
-            const box = e.currentTarget as HTMLTextAreaElement;
-            const had = Boolean((chatDrafts.get(item.id) ?? "").trim());
-            chatDrafts.set(item.id, box.value);
-            autosizeChatInput(box);
-            if (had !== Boolean(box.value.trim())) drawAll();
-          }}
-          @keydown=${(e: KeyboardEvent) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit(e.currentTarget as HTMLTextAreaElement);
-            }
-          }}
-        ></textarea>
-        <div class="inbox-chat-actions">
-          <div class="inbox-chat-suggest">
-            ${
-              item.status === "open" && !item.sentChat && !usesOutputReview(item)
-                ? html`
-                    <button
-                      class="inbox-suggest-chip primary"
-                      type="button"
-                      ?disabled=${busy}
-                      ${tip('Add "Send it" to your instructions and ask the agent')}
-                      @click=${(e: MouseEvent) => {
-                        const box = (e.currentTarget as HTMLElement)
-                          .closest(".inbox-chat-composer")
-                          ?.querySelector<HTMLTextAreaElement>(".inbox-chat-input");
-                        if (box) submit(box, "Send it");
-                      }}
-                    >
-                      ${icon(Send, 12)}<span>Send it</span>
-                    </button>
-                    <button
-                      class="inbox-suggest-chip"
-                      type="button"
-                      ?disabled=${busy || acting.has(item.id)}
-                      @click=${() => void setItemStatus(item, "dismissed")}
-                    >
-                      ${icon(X, 12)}<span>Dismiss</span>
-                    </button>
-                  `
-                : nothing
-            }
-          </div>
-          <button
-            class="btn inbox-chat-send"
-            type="button"
-            aria-label="Ask"
-            ${tip("Ask. Enter to send, Shift+Enter for a new line")}
-            ?disabled=${busy || !pending.trim()}
-            @click=${(e: MouseEvent) => {
-              const box = (e.currentTarget as HTMLElement)
-                .closest(".inbox-chat-composer")
-                ?.querySelector<HTMLTextAreaElement>(".inbox-chat-input");
-              if (box) submit(box);
-            }}
-          >
-            ${icon(ArrowUp, 14)}
-          </button>
-        </div>
+        ${embeddedComposer(
+          `inbox:${appState.me?.user ?? "anon"}:${item.loopId}:${item.id}`,
+          {
+            placeholder: `Ask ${brandName()} for something`,
+            submit: async (text, options) => {
+              if (!(await askAgent(item, text, options)))
+                throw new Error("Could not complete the request. Your message has been kept.");
+            },
+          },
+          compact,
+        )}
       </div>
     </div>
   `;
@@ -1383,6 +1332,18 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
   </div>`;
 }
 
+function dismissItemTpl(item: InboxItem): TemplateResult | typeof nothing {
+  if (item.status !== "open") return nothing;
+  return html`<button
+    class="inbox-dismiss"
+    type="button"
+    ?disabled=${chatting.has(item.id) || acting.has(item.id)}
+    @click=${() => void setItemStatus(item, "dismissed")}
+  >
+    Dismiss
+  </button>`;
+}
+
 function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
   const inlineDetail = surface.pane;
   const open = surface.selectedId === item.id;
@@ -1443,7 +1404,8 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
       ${
         expanded
           ? html`<div class="inbox-item-detail">
-              ${usesOutputReview(item) ? reviewTpl(item) : html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item)}`}
+              ${usesOutputReview(item) ? reviewTpl(item) : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${dismissItemTpl(item)}</div>`}
+              ${contextTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`}
             </div>`
           : nothing
       }
@@ -1756,14 +1718,14 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         </h1>
         ${sub ? html`<div class="pane-subtitle">${sub}</div>` : nothing}
       </div>
+      ${dismissItemTpl(item)}
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
         ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
-        ${usesOutputReview(item) ? itemDetailTpl(item, handled) : html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing}`}
+        ${usesOutputReview(item) ? itemDetailTpl(item, handled) : html`${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing} ${chatTpl(item)}`}
       </div>
     </div>
-    ${!usesOutputReview(item) ? html`<aside class="inbox-item-aside">${chatTpl(item)}</aside>` : nothing}
   `;
 }
 
@@ -1797,13 +1759,11 @@ function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
 function drawSurface(surface: InboxSurface): void {
   if (!surface.host.isConnected && surface.pane) return;
   keepingChatLogsPinned(surface.host, () => render(surfaceTpl(surface), surface.host));
-  sizeChatInputs(surface.host);
   const selected = inboxState.items.find((item) => item.id === surface.selectedId);
   if (selected) ensureItemSource(selected);
 }
 
 let fullSurface: InboxSurface | null = null;
-let asideObserver: ResizeObserver | null = null;
 let fullViewId = "all";
 let pendingItemId: string | null = null;
 let loadingDeepLink = false;
@@ -1837,7 +1797,6 @@ function drawFull(): void {
       showHandled: fullSurface?.showHandled ?? false,
     };
     appState.mainEl.replaceChildren(host);
-    observeAsideSize(host);
   }
   fullSurface.viewId = fullViewId;
   if (pendingItemId) {
@@ -1871,47 +1830,7 @@ function drawFull(): void {
       ${surfaceTpl(surface)}
     `;
   keepingChatLogsPinned(host, () => render(page, host));
-  sizeAside(host);
-  sizeChatInputs(host);
   if (openItem) ensureItemSource(openItem);
-}
-
-/**
- * The assistant sticks to the top of a page that now scrolls, so its height is
- * the viewport below wherever it starts rather than a share of a fixed frame.
- */
-function sizeAside(host: HTMLElement): void {
-  if (!host.querySelector(".inbox-item-aside")) return;
-  const pad = getComputedStyle(host);
-  const padTop = Number.parseFloat(pad.paddingTop) || 0;
-  const padBottom = Number.parseFloat(pad.paddingBottom) || 0;
-  const available = host.clientHeight - padTop - padBottom;
-  const height = Math.min(ASIDE_MAX_HEIGHT, Math.max(ASIDE_MIN_HEIGHT, available));
-  const next = `${height}px`;
-  if (host.style.getPropertyValue("--inbox-aside-height") === next) return;
-  host.style.setProperty("--inbox-aside-height", next);
-}
-
-function observeAsideSize(host: HTMLElement): void {
-  if (typeof ResizeObserver === "undefined") return;
-  asideObserver?.disconnect();
-  asideObserver = new ResizeObserver(() => {
-    sizeAside(host);
-    sizeChatInputs(host);
-  });
-  asideObserver.observe(host);
-}
-
-function autosizeChatInput(box: HTMLTextAreaElement): void {
-  box.style.height = "auto";
-  const cap = Number.parseFloat(getComputedStyle(box).maxHeight) || CHAT_INPUT_MAX_HEIGHT;
-  const content = box.scrollHeight;
-  box.style.height = `${Math.min(cap, content)}px`;
-  box.style.overflowY = content > cap ? "auto" : "hidden";
-}
-
-function sizeChatInputs(host: HTMLElement): void {
-  for (const box of host.querySelectorAll<HTMLTextAreaElement>(".inbox-chat-input")) autosizeChatInput(box);
 }
 
 function syncInboxUrl(itemId: string | null, push = false): void {

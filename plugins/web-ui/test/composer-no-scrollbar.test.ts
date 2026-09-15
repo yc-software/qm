@@ -11,7 +11,7 @@ test("composer input rests overflow-hidden below the height cap", () => {
 });
 
 test("no chat composer leaves the horizontal axis on the textarea UA default of auto", () => {
-  for (const selector of [".composer-input", ".inbox-chat-input"]) {
+  for (const selector of [".composer-input"]) {
     const block = css.match(new RegExp(`\\${selector} \\{[^}]*\\}`))?.[0] ?? "";
     assert.notEqual(block, "", `${selector} is styled`);
     assert.match(
