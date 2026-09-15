@@ -85,3 +85,11 @@ status) · `POST /api/logout` ·
 `POST /api/external-users` (invite) · `DELETE /api/external-users/:email` (revoke) — all
 proxied to the core's `/v1/admin/…` with the admin actor injected. Grant and external-user
 mutation is **org_admin-only** (enforced in the core, not the surface).
+
+## Slack setup
+
+Hosted Add to Slack is shown only when core reports `installAvailable`, enabled by
+`QM_SLACK_SERVICE_URL` and its matching `QM_SLACK_SERVICE_TOKEN`. Public deployments
+without that service lead with the preconfigured Slack app manifest and token form.
+Connected hosted apps offer Re-add to Slack; custom apps must be disconnected before
+switching to the hosted app. Both paths retain the custom app setup instructions.

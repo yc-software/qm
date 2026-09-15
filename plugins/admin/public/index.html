@@ -4850,6 +4850,122 @@
           gap: 9px;
         }
       }
+
+      #card-slack-installation > .head {
+        border: 0;
+        padding-bottom: 6px;
+      }
+      #card-slack-installation > .head h2 {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--muted);
+      }
+      #card-slack-installation > .body {
+        padding-top: 0;
+      }
+      #card-slack-installation .slack-connection {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 8px;
+        border-radius: 8px;
+      }
+      #card-slack-installation h3 {
+        font-size: 14px;
+        font-weight: 500;
+        margin: 0;
+        line-height: 20px;
+      }
+      #card-slack-installation .hint {
+        margin: 2px 0 0;
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .slack-connection-actions {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      #card-slack-installation .slack-connection-actions button {
+        min-height: 32px;
+        padding: 6px 10px;
+        border: 0;
+        border-radius: 8px;
+        box-shadow: none;
+        background: transparent;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 400;
+      }
+      #card-slack-installation .slack-connection-actions button:hover {
+        background: var(--subtle);
+        color: var(--text);
+      }
+      #card-slack-installation #slack-installation-start {
+        color: var(--text);
+      }
+      #slack-own-app-guide {
+        margin-top: 4px;
+      }
+      #slack-own-app-guide summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        list-style: none;
+        padding: 9px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 400;
+        color: var(--muted);
+      }
+      #slack-own-app-guide summary::-webkit-details-marker {
+        display: none;
+      }
+      #slack-own-app-guide summary:hover {
+        background: var(--subtle);
+        color: var(--text);
+      }
+      .slack-guide-arrow {
+        font-size: 18px;
+        line-height: 16px;
+      }
+      #slack-own-app-guide[open] .slack-guide-arrow {
+        transform: rotate(90deg);
+      }
+      #slack-own-app-guide > p,
+      #slack-own-app-guide > ol,
+      #slack-own-app-guide > button {
+        margin-left: 8px;
+      }
+      #slack-own-app-guide p,
+      #slack-own-app-guide ol {
+        color: var(--muted);
+        max-width: 760px;
+        line-height: 1.65;
+      }
+      #slack-own-app-guide li {
+        padding: 4px 0 8px 4px;
+      }
+      #slack-token-editor {
+        max-width: 560px;
+        margin-top: 20px;
+      }
+      #st-slack-installation:empty {
+        display: none;
+      }
+      #st-slack-installation {
+        display: block;
+        margin-top: 16px;
+      }
+      @media (max-width: 640px) {
+        #card-slack-installation .slack-connection {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 16px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -6131,20 +6247,27 @@
             </section>
             <section class="card" id="card-slack-installation">
               <div class="head">
-                <h2>Slack installation</h2>
-                <p>
-                  Add Slack after the web deployment is working. Tokens are validated with Slack, encrypted in durable
-                  storage, and never displayed again.
-                </p>
+                <h2>Slack</h2>
               </div>
               <div class="body">
-                <button class="primary hidden" id="slack-installation-start">Add to Slack</button>
-                <p class="hint" id="slack-installation-state">Not configured.</p>
+                <div class="slack-connection">
+                  <div class="slack-connection-info">
+                    <h3 id="slack-installation-state">Connect your workspace</h3>
+                    <p class="hint" id="slack-installation-description">Add the QM app to get started.</p>
+                  </div>
+                  <div class="slack-connection-actions">
+                    <button class="primary hidden" id="slack-installation-start">Add to Slack</button>
+                    <button class="danger hidden" id="slack-installation-delete">Disconnect</button>
+                  </div>
+                </div>
                 <details id="slack-own-app-guide">
-                  <summary>Set up your own Slack app</summary>
+                  <summary>
+                    <span id="slack-own-app-label">Use your own Slack app</span>
+                    <span class="slack-guide-arrow" aria-hidden="true">›</span>
+                  </summary>
                   <p>
-                    Use a workspace-owned app with your bot's name. You'll need permission to install apps in Slack.
-                    Slack still applies rate limits; this does not provide unlimited history.
+                    Give your bot its own name and identity. Start with our preconfigured manifest, then connect your
+                    app below.
                   </p>
                   <ol>
                     <li>
@@ -6176,42 +6299,40 @@
                     </li>
                   </ol>
                   <p class="hint">
-                    Replacing a connected app changes the Slack bot identity. Invite the new bot to your channels and
-                    start a new DM with it. The old app stays installed in Slack until a workspace admin removes it. To
-                    switch back to the hosted app, remove this connection first, then choose Add to Slack.
+                    Replacing a connected app changes the bot identity. Invite the new bot to your channels and start a
+                    new DM with it. The old app stays installed until a workspace admin removes it.
+                    <span id="slack-hosted-switch" class="hidden"
+                      >To switch back to the QM app, disconnect here first, then choose Add to Slack.</span
+                    >
                   </p>
                   <button type="button" id="slack-enter-tokens">I have both tokens</button>
+                  <div class="hidden" id="slack-token-editor">
+                    <label style="display: block; margin-bottom: 8px"
+                      >Bot User OAuth Token
+                      <input
+                        type="password"
+                        id="slack-bot-token"
+                        autocomplete="off"
+                        placeholder="xoxb-…"
+                        style="width: 100%"
+                    /></label>
+                    <label style="display: block; margin-bottom: 8px"
+                      >App-Level Token
+                      <input
+                        type="password"
+                        id="slack-app-token"
+                        autocomplete="off"
+                        placeholder="xapp-…"
+                        style="width: 100%"
+                    /></label>
+                    <p class="field-hint">
+                      Use an app-level token with <code>connections:write</code>. Saving activates or reloads the Slack
+                      surface within a few seconds.
+                    </p>
+                    <button class="primary hidden" id="slack-installation-save">Validate and connect</button>
+                  </div>
                 </details>
-                <div class="hidden" id="slack-token-editor">
-                  <label style="display: block; margin-bottom: 8px"
-                    >Bot User OAuth Token
-                    <input
-                      type="password"
-                      id="slack-bot-token"
-                      autocomplete="off"
-                      placeholder="xoxb-…"
-                      style="width: 100%"
-                  /></label>
-                  <label style="display: block; margin-bottom: 8px"
-                    >App-Level Token
-                    <input
-                      type="password"
-                      id="slack-app-token"
-                      autocomplete="off"
-                      placeholder="xapp-…"
-                      style="width: 100%"
-                  /></label>
-                  <p class="field-hint">
-                    Use an app-level token with <code>connections:write</code>. Saving activates or reloads the Slack
-                    surface within a few seconds.
-                  </p>
-                </div>
-              </div>
-              <div class="foot">
-                <button type="button" id="slack-rotate">Rotate tokens…</button
-                ><button class="primary hidden" id="slack-installation-save">Validate and connect</button
-                ><button class="danger" id="slack-installation-delete">Remove</button
-                ><span class="status" id="st-slack-installation"></span>
+                <span class="status" role="status" id="st-slack-installation"></span>
               </div>
             </section>
           </div>
@@ -10274,24 +10395,28 @@
           r.data.configured && r.data.source === "admin"
             ? "Remove your current connection before switching to the hosted app."
             : "";
-        $("slack-rotate").textContent = r.data.configured ? "Replace connection…" : "Set up your own app…";
+        $("slack-installation-start").textContent = r.data.configured ? "Re-add to Slack" : "Add to Slack";
+        $("slack-installation-description").textContent = r.data.configured
+          ? r.data.source === "service"
+            ? "QM app"
+            : "Custom app"
+          : r.data.installAvailable
+            ? "Add the QM app or connect your own below."
+            : "Create a Slack app from our manifest, then connect it here.";
+        $("slack-own-app-label").textContent = r.data.installAvailable ? "Use your own Slack app" : "Set up Slack";
+        $("slack-hosted-switch").classList.toggle("hidden", !r.data.installAvailable);
+        if (!r.data.installAvailable && !r.data.configured) $("slack-own-app-guide").open = true;
         if (new URLSearchParams(location.search).get("setup") === "slack") {
           $("slack-own-app-guide").open = true;
           $("card-slack-installation").scrollIntoView({ block: "start" });
         }
         if (r.data.createUrl) $("slack-installation-create").href = r.data.createUrl;
-        $("slack-installation-state").textContent =
-          r.data.source === "environment"
-            ? "Connected using deployment environment secrets. Saving here replaces them with admin-managed encrypted tokens."
-            : r.data.source === "invalid_environment"
-              ? "The deployment contains only one Slack token. Save a matching pair here to repair it."
-              : r.data.configured
-                ? "Connected to " +
-                  (r.data.teamName || r.data.teamId || "a Slack workspace") +
-                  (r.data.updatedBy ? " · saved by " + r.data.updatedBy : "")
-                : r.data.managed
-                  ? "Disabled by an administrator."
-                  : "Not configured.";
+        $("slack-installation-state").textContent = r.data.configured
+          ? r.data.teamName || r.data.teamId || "Slack workspace"
+          : r.data.source === "invalid_environment"
+            ? "Finish connecting your app"
+            : "Connect your workspace";
+        $("slack-installation-delete").classList.toggle("hidden", !r.data.configured);
         $("slack-installation-delete").disabled = !r.data.configured;
       }
       $("slack-installation-start").onclick = async () => {
@@ -10332,10 +10457,6 @@
           "ok",
         );
       };
-      $("slack-rotate").onclick = () => {
-        $("slack-own-app-guide").open = true;
-        $("slack-own-app-guide").scrollIntoView({ behavior: "smooth", block: "start" });
-      };
       $("slack-enter-tokens").onclick = () => {
         $("slack-token-editor").classList.remove("hidden");
         $("slack-installation-save").classList.remove("hidden");
@@ -10343,14 +10464,19 @@
         $("card-slack-installation").scrollIntoView({ behavior: "smooth", block: "start" });
       };
       $("slack-installation-delete").onclick = async () => {
-        if (!confirm("Remove the Slack bot connection? Slack chat will stop until new tokens are saved.")) return;
+        if (
+          !confirm(
+            "Disconnect this Slack app? QM will stop replying in Slack until you reconnect. The app will remain installed in your workspace.",
+          )
+        )
+          return;
         const r = await api("DELETE", "/api/slack-installation");
         if (!r.ok) {
           setStatus("st-slack-installation", r.data?.message || "Remove failed.", "err");
           return;
         }
         await loadSlackInstallation();
-        setStatus("st-slack-installation", "Removed", "ok");
+        setStatus("st-slack-installation", "Slack disconnected.", "ok");
       };
       $("conn-reset").onclick = resetConnForm;
       async function deleteConn(provider) {

@@ -82,7 +82,7 @@ test("connector setup uses the live catalog and shows exact provider and callbac
   assert.doesNotMatch(html, /const CONNECTOR_CATALOG = \[/);
   assert.match(html, /id="slack-bot-token"/);
   assert.match(html, /api\("PUT", "\/api\/slack-installation"/);
-  assert.match(html, /encrypted in durable storage/);
+  assert.match(html, /Use your own Slack app/);
 });
 
 test("temporary onboarding covers model credentials, Slack, and OAuth setup", () => {
@@ -470,7 +470,7 @@ test("admin parity views expose the requested card groups and real navigation ac
     "+ Add flag",
     "View usage ›",
     "View users ›",
-    "Rotate tokens…",
+    "Use your own Slack app",
     "+ Add OAuth app",
   ]) {
     assert.ok(html.includes(action), `missing ${action}`);
