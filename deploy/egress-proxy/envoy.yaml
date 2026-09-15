@@ -101,7 +101,20 @@ static_resources:
                               local h, _ = handle:httpCall("egress_authz", check, nil, 10000)
                               return h[":status"], h["x-egress-upstream-address"]
                             end)
-                            if not ok or status ~= "200" then
+                            if not ok then
+                              handle:respond({ [":status"] = "403" }, "egress denied by policy\n")
+                              return
+                            end
+                            if status == "407" then
+                              -- Challenge, don't refuse: git's default proxy auth ("anyauth")
+                              -- only sends its credential after a 407 + Proxy-Authenticate.
+                              handle:respond({
+                                [":status"] = "407",
+                                ["proxy-authenticate"] = 'Basic realm="egress"',
+                              }, "proxy authentication required\n")
+                              return
+                            end
+                            if status ~= "200" then
                               handle:respond({ [":status"] = "403" }, "egress denied by policy\n")
                               return
                             end
