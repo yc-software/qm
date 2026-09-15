@@ -267,6 +267,13 @@ test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
   );
 });
 
+test("containerized local sandboxes receive the core container name", () => {
+  const config = loadConfig({ SANDBOX_BACKEND: "local", QM_CORE_CONTAINER: "qm-test-core" });
+  assert.equal(config.localSandbox.coreContainer, "qm-test-core");
+  assert.equal("coreContainer" in config.awsSandbox, false);
+  assert.equal(loadConfig({}).localSandbox.coreContainer, undefined);
+});
+
 test("sandbox backend is parsed once before production backend guards", () => {
   assert.equal(loadConfig({ SANDBOX_BACKEND: " aws " }).sandboxBackend, "aws");
   assert.throws(
