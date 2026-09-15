@@ -1,3 +1,4 @@
+import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { performance } from "node:perf_hooks";
 import { slackFailureText } from "./turn-flow.ts";
@@ -125,6 +126,7 @@ function channelLocation(
 }
 
 export function createTurnHandler(deps: {
+  rateLimitNotice?: SlackRateLimitNotice;
   core: SlackCoreClient;
   flow: TurnFlow;
   directory: Directory;
@@ -425,13 +427,23 @@ export function createTurnHandler(deps: {
     let detectOpener: string | undefined;
     let earlierFiles: SlackFile[] = [];
     if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
-      const serialized = await serializer.serializeSlackConversation(client, inc, {
-        audience,
-        ...(channelName ? { channelName } : {}),
-        ...(isPrivate !== undefined ? { isPrivate } : {}),
-        kind: conversationKind,
-        ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-      });
+      const serialize = () =>
+        serializer.serializeSlackConversation(client, inc, {
+          audience,
+          ...(channelName ? { channelName } : {}),
+          ...(isPrivate !== undefined ? { isPrivate } : {}),
+          kind: conversationKind,
+          ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
+        });
+      const serialized = deps.rateLimitNotice
+        ? await deps.rateLimitNotice.run(
+            client,
+            !inc.unprompted && !inc.synthetic && !actor.isBot && inc.userId
+              ? { target: encodeDeliveryTarget(inc.channel, replyThreadTs), user: inc.userId }
+              : undefined,
+            serialize,
+          )
+        : await serialize();
       earlierFiles = serialized.earlierFiles;
       const rendered = renderConversationView(serialized.view);
       if (rendered.header) conversationHeader = rendered.header;

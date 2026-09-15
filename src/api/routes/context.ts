@@ -62,6 +62,13 @@ async function resolveSurfaceTarget(
   return { source: dest.type, target: { conversationTarget: dest.target } };
 }
 
+async function rateLimitRecipient(ctx: ApiCtx): Promise<Pick<SurfaceContextQuery, "rateLimitRecipient">> {
+  const cap = ctx.capability;
+  if (!cap?.liveActor || cap.destination?.type !== "slack" || !cap.destination.target) return {};
+  const member = await ctx.app.directoryMember(cap.actorId);
+  return { rateLimitRecipient: { target: cap.destination.target, user: member?.slackId ?? cap.actorId } };
+}
+
 async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
   if (!capability) {
@@ -84,6 +91,7 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
     ...resolved.target,
     viewer: capability.actorId,
     count,
+    ...(await rateLimitRecipient(ctx)),
     ...(before ? { before } : {}),
     ...(match ? { match } : {}),
   };
@@ -112,6 +120,7 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
   const query: SurfaceContextQuery = {
     ...resolved.target,
     count: 1,
+    ...(await rateLimitRecipient(ctx)),
     file: { ts, ...(threadTs ? { threadTs } : {}), ...(name ? { name } : {}) },
   };
   const request = await app.createContextRequest(resolved.source, query);

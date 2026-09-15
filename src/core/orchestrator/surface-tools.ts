@@ -94,6 +94,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
+  const rateLimitRecipient =
+    input.origin?.kind === "human" && currentDestination.type === "slack" && currentDestination.target
+      ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
+      : {};
   let editRefConsumed = false;
   const resolveDestination = async (
     target?: {
@@ -295,6 +299,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
         conversationTarget: currentDestination.target,
         viewer: actor.id,
+        ...rateLimitRecipient,
         count,
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
@@ -308,6 +313,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
         conversationTarget: dest.target,
         viewer: actor.id,
+        ...rateLimitRecipient,
         count: SURFACE_READ_MAX,
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
@@ -365,6 +371,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         const result = await deps.surfaceContext.searchLive(input.surface ?? "unknown", {
           conversationTarget: dest.target,
           viewer: actor.id,
+          ...rateLimitRecipient,
           count: SURFACE_READ_MAX,
           searchAll: q,
         });
@@ -430,6 +437,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
         conversationTarget: dest.target,
         viewer: actor.id,
+        ...rateLimitRecipient,
         count: SURFACE_READ_MAX,
         match: q,
       });

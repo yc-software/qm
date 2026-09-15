@@ -123,6 +123,25 @@ describe("surface-context pulls", async () => {
     assert.deepEqual((pending as any).requests, []);
   });
 
+  it("only live capabilities supply the original requester target, ignoring body overrides", async () => {
+    for (const path of ["/v1/surface-context", "/v1/surface-file"]) {
+      for (const liveActor of [true, false]) {
+        const asking = post(
+          path,
+          {
+            channel: "#eng",
+            ts: "1700.1",
+            rateLimitRecipient: { target: "SECRET", user: "OTHER" },
+          },
+          { "x-agent-capability": await cap({ liveActor }) },
+        );
+        const query = await fulfillNext(() => ({ messages: [] }));
+        assert.deepEqual(query.rateLimitRecipient, liveActor ? { target: "C9:1700.0001", user: "U1" } : undefined);
+        await asking;
+      }
+    }
+  });
+
   it("resolves a public channel by name through the directory", async () => {
     const asking = post("/v1/surface-context", { channel: "#eng" }, { "x-agent-capability": await cap() });
     const query = await fulfillNext(() => ({ messages: [] }));

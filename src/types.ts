@@ -457,6 +457,7 @@ export interface Delivery {
 }
 
 export interface SurfaceContextQuery {
+  rateLimitRecipient?: { target: string; user: string };
   conversationTarget?: string;
   channelId?: string;
   channelName?: string;

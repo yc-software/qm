@@ -11,16 +11,16 @@ test("managed history throttling gives retry timing and workspace app setup with
     { code: "slack_webapi_rate_limited_error", retryAfter: 30, message: "private-token" },
     { managed: true, setupUrl: "https://qm.example/admin/?setup=slack" },
   );
-  assert.match(message!, /Retry after 30 seconds/);
-  assert.match(message!, /Earlier context may be incomplete/);
-  assert.match(message!, /workspace admin/);
+  assert.match(message!, /Try again in 30 seconds/);
+  assert.match(message!, /I may be missing earlier context/);
+  assert.doesNotMatch(message!, /workspace admin|ask an admin/);
   assert.match(message!, /https:\/\/qm.example\/admin\/\?setup=slack/);
   assert.doesNotMatch(message!, /private-token/);
 });
 
 test("workspace-owned apps receive retry guidance without instructions to replace their app", () => {
   const message = slackHistoryRateLimitMessage({ code: "slack_webapi_rate_limited_error", retryAfter: 2.2 });
-  assert.match(message!, /Retry after 3 seconds/);
+  assert.match(message!, /Try again in 3 seconds/);
   assert.doesNotMatch(message!, /set up|workspace-owned/);
 });
 
@@ -37,7 +37,7 @@ test("malformed delay and unsafe setup URLs use plain guidance", () => {
       { managed: true, setupUrl },
     );
     assert.match(message!, /Try again shortly/);
-    assert.match(message!, /QM's Slack settings/);
+    assert.doesNotMatch(message!, /set up/);
     assert.doesNotMatch(message!, /javascript|secret|NaN/);
   }
 });
@@ -60,7 +60,7 @@ test("Slack history 429 returns immediately instead of sleeping inside the SDK",
   });
   try {
     await assert.rejects(client.conversations.history({ channel: "C1" }), (error: unknown) => {
-      assert.match(slackHistoryRateLimitMessage(error)!, /Retry after 60 seconds/);
+      assert.match(slackHistoryRateLimitMessage(error)!, /Try again in 60 seconds/);
       return true;
     });
     assert.equal(calls, 1);

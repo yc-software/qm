@@ -1,3 +1,4 @@
+import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
@@ -24,6 +25,7 @@ import {
 } from "./conversation-view.ts";
 
 export function createSurfaceContextFulfiller(deps: {
+  rateLimitNotice?: SlackRateLimitNotice;
   core: SlackCoreClient;
   directory: Directory;
   serializer: ConversationSerializer;
@@ -279,5 +281,12 @@ export function createSurfaceContextFulfiller(deps: {
     }
   }
 
-  return { fulfillSurfaceContext };
+  return {
+    fulfillSurfaceContext: (client, request) =>
+      deps.rateLimitNotice
+        ? deps.rateLimitNotice.run(client, request.query.rateLimitRecipient, () =>
+            fulfillSurfaceContext(client, request),
+          )
+        : fulfillSurfaceContext(client, request),
+  };
 }

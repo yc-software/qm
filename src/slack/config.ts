@@ -18,6 +18,7 @@ export function parseSlackContextSource(value: string | undefined): SlackContext
 export interface SlackPluginConfig {
   contextSource?: SlackContextSource;
   installationId?: string;
+  sharedServiceUrl?: string;
   receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
   botToken: string;
   accountId?: string;
@@ -85,6 +86,7 @@ export function slackPluginConfigFromEnv(
     ...opt("userToken", env.SLACK_USER_TOKEN),
     ...opt("copilotBotToken", env.SLACK_COPILOT_BOT_TOKEN),
     ...opt("webUiPublicUrl", env.WEB_UI_PUBLIC_URL),
+    ...opt("sharedServiceUrl", env.QM_SLACK_SERVICE_URL),
     ...opt("identityEmail", env.SLACK_IDENTITY_EMAIL),
     ...(() => {
       const allowFrom = parseAllowFrom(env.SLACK_ALLOW_FROM);
@@ -143,6 +145,7 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
       SLACK_LOG_LEVEL: env.SLACK_LOG_LEVEL,
       SLACK_CONTEXT_SOURCE: env.SLACK_CONTEXT_SOURCE,
       WEB_UI_PUBLIC_URL: env.WEB_UI_PUBLIC_URL,
+      QM_SLACK_SERVICE_URL: env.QM_SLACK_SERVICE_URL,
     };
     const config = slackPluginConfigFromEnv(accountEnv);
     if (!config) throw new Error(`SLACK_ACCOUNTS[${i}] ("${id}") is missing required tokens for its events mode`);

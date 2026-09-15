@@ -1,3 +1,4 @@
+import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { createEnvelopeStaging } from "./envelope-staging.ts";
@@ -210,10 +211,29 @@ export async function startSlackPlugin(
   });
   const mirror = createMirror({ core, ids, directory, externalParticipantsEnabled });
   const historyRateLimitOptions = {
-    managed: Boolean(cfg.installationId),
+    managed: Boolean(cfg.sharedServiceUrl?.trim()),
     ...(cfg.webUiPublicUrl ? { setupUrl: `${cfg.webUiPublicUrl.replace(/\/$/, "")}/admin/?setup=slack` } : {}),
   };
-  const historyClient = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY });
+  const rateLimitNotice = createSlackRateLimitNotice({
+    ...historyRateLimitOptions,
+    client: new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY, timeout: 5000 }),
+  });
+  const historyApi = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY });
+  const historyClient = {
+    conversations: Object.fromEntries(
+      (["history", "replies"] as const).map((method) => [
+        method,
+        async (args: any) => {
+          try {
+            return await historyApi.conversations[method](args);
+          } catch (error) {
+            await rateLimitNotice.observe(error);
+            throw error;
+          }
+        },
+      ]),
+    ) as Pick<typeof historyApi.conversations, "history" | "replies">,
+  };
   const readHistory = createSlackHistoryReader({
     core,
     ids,
@@ -273,6 +293,7 @@ export async function startSlackPlugin(
       })();
     });
   const handler = createTurnHandler({
+    rateLimitNotice,
     readHistory,
     core,
     flow,
@@ -329,6 +350,7 @@ export async function startSlackPlugin(
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({
+    rateLimitNotice,
     historyClient,
     readHistory,
     historyRateLimitOptions,
