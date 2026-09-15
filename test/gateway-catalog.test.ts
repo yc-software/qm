@@ -229,3 +229,35 @@ test("removed gateway selections never fall back to a different org or direct mo
   store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
   assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
 });
+
+test("gateway aliases hide duplicate picker options while preserving saved routes", async () => {
+  const target = "anthropic/claude-opus-5";
+  const f = fixture([group(target)], { "claude-opus-5": target });
+  await f.catalog.refresh();
+  const ids = builtInModelCatalog().map((m) => m.id);
+  assert.ok(ids.includes("claude-opus-5"));
+  assert.ok(!ids.includes(`gateway/${target}`));
+  for (const id of ["claude-opus-5", `gateway/${target}`]) {
+    assert.equal(modelGatewayRequest(f.catalog.transport, resolveModel(id)!)?.target, target);
+    assert.equal(
+      validateWebTurnModelOptions({ model: id }, null, {
+        anthropic: false,
+        openai: false,
+        openrouter: false,
+        modelIds: new Set([id]),
+      }),
+      null,
+    );
+  }
+  f.listing([]);
+  f.tick();
+  await f.catalog.refresh();
+  assert.equal(f.catalog.transport.models["claude-opus-5"], undefined);
+  assert.equal(resolveModel(`gateway/${target}`), undefined);
+});
+
+test("unknown aliases do not hide the usable discovered model", async () => {
+  const f = fixture([group()], { "unknown-alias": "vendor/new-model" });
+  await f.catalog.refresh();
+  assert.ok(builtInModelCatalog().some((m) => m.id === "gateway/vendor/new-model"));
+});

@@ -289,7 +289,7 @@ export function overlayModelCatalog(): Array<{ id: string; name: string; provide
 export function defaultWebuiModelIds(): readonly string[] {
   return [
     ...DEFAULT_WEBUI_MODEL_IDS,
-    ...gatewayModelCatalog().map((m) => m.id),
+    ...gatewayModelCatalog(true).map((m) => m.id),
     ...[...overlays.values()].filter((m) => m.webui).map((m) => m.id),
   ];
 }

@@ -33,7 +33,7 @@ export type RuntimeDeps = Pick<
 
 export function runtimeFallback(ctx: { deps: RuntimeDeps }): { harnessId: HarnessId; modelId: string } {
   const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
-  const gatewayIds = gatewayModelCatalog().map((model) => model.id);
+  const gatewayIds = gatewayModelCatalog(true).map((model) => model.id);
   const providers =
     gatewayIds.length && ctx.deps.providerKeys
       ? { ...ctx.deps.providerKeys, modelIds: new Set(gatewayIds) }
