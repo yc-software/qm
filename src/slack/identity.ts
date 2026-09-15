@@ -91,6 +91,7 @@ export function probeIdentityMode(members: SlackUser[], ownTeamId: string): Slac
 }
 
 export interface ChannelMeta {
+  is_im?: boolean;
   name?: string;
   is_ext_shared?: boolean;
   is_pending_ext_shared?: boolean;

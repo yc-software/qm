@@ -681,3 +681,80 @@ test("dispatch retains known ordinary and file-share subtypes for direct message
     assert.equal(f.dispatches[0]?.[1].subtype, subtype ?? "");
   }
 });
+
+test("untyped attachment-only updates and deletions resolve room kind without dispatch", async () => {
+  for (const info of [{ is_im: true }, { is_mpim: true }, { is_private: true }, {}]) {
+    const cache = createMemorySurfaceCache();
+    const f = fixture({
+      directory: {
+        getChannelInfo: async () => info,
+        allInternalRosters: async () => new Map([["C1", []]]),
+        classifyUserCached: async () => ({ ok: true, actor: { externalId: "UBOT", displayName: "QM" } }),
+        forceDirectorySync: async () => {},
+      },
+      ingest: async (events) => {
+        await cache.ingest(events.map((e) => toEvent(e)!));
+      },
+    });
+    await cache.ingest([{ container: "C1", ts: "1", text: "link", self: true, editedAt: 1000 }]);
+    await f.fire({
+      type: "message",
+      subtype: "message_changed",
+      hidden: true,
+      channel: "C1",
+      ts: "3",
+      message: {
+        user: "UBOT",
+        ts: "1",
+        text: "link",
+        edited: { ts: "1" },
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            text: "forwarded body",
+            files: [{ id: "F1", name: "image.png", mimetype: "image/png" }],
+          },
+        ],
+      },
+      previous_message: { user: "UBOT", text: "link" },
+    });
+    const rows = await cache.readMessages("C1");
+    assert.match(rows[0]!.text, /forwarded body/);
+    assert.equal(rows[0]!.editedAt, 1000);
+    assert.deepEqual(rows[0]!.files, [{ fileId: "F1", name: "image.png", mimetype: "image/png" }]);
+    assert.equal(f.dispatches.length, 0);
+    await f.fire({
+      type: "message",
+      subtype: "message_deleted",
+      hidden: true,
+      channel: "C1",
+      ts: "4",
+      deleted_ts: "1",
+      previous_message: { user: "UBOT" },
+    });
+    assert.equal((await cache.readMessages("C1")).length, 0);
+  }
+});
+
+test("untyped edit channel lookup failure withholds acknowledgement for retry", async () => {
+  const f = fixture({ directory: { getChannelInfo: async () => undefined } });
+  let acks = 0;
+  const gate = createDeferredEnvelopeAck(
+    async () => {
+      acks++;
+    },
+    { gated: true },
+  );
+  await f.fire(
+    {
+      type: "message",
+      subtype: "message_changed",
+      channel: "C1",
+      ts: "2",
+      message: { ts: "1", text: "edit", user: "UBOT" },
+    },
+    gate,
+  );
+  assert.equal(acks, 0);
+  assert.equal(f.events.length, 0);
+});

@@ -166,6 +166,15 @@ export function registerSlackEvents(
   app.message(async ({ message, body, client, context }: MessageArgs) => {
     try {
       const m = parseMessageEvent(message);
+      if (
+        m.channel &&
+        !m.channel_type &&
+        (shouldMirrorMessage(m) || m.subtype === "message_changed" || m.subtype === "message_deleted")
+      ) {
+        const info = await directory.getChannelInfo(client, m.channel);
+        if (!info) throw new Error("Slack message channel lookup unavailable");
+        m.channel_type = info.is_im ? "im" : info.is_mpim ? "mpim" : info.is_private ? "group" : "channel";
+      }
       const eventId = parseEventId(body);
       const privacyChange = channelPrivacyChange(m);
       if (privacyChange) {
