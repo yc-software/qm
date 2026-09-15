@@ -1,9 +1,11 @@
 import { test } from "node:test";
+import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { parseSlackContextSource, slackAccountConfigsFromEnv } from "../src/slack/config.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import type { ReadMessagesOpts } from "../src/surface-cache/types.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
@@ -299,4 +301,85 @@ test("shadow never certifies failed or truncated live thread expansion as comple
     assert.equal(result.liveExpansionFailures, fail ? 1 : 0);
     assert.equal(result.liveTruncatedExpansions, fail ? 0 : 1);
   }
+});
+
+test("shadow measures the same recent long-thread selection as mirror without fallback", async (t) => {
+  const logs: string[] = [];
+  t.mock.method(console, "info", (line: string) => logs.push(line));
+  const cache = createMemorySurfaceCache();
+  const messages = Array.from({ length: 220 }, (_, index) => ({
+    ts: `1000.${String(index).padStart(6, "0")}`,
+    text: `message-${index}`,
+    ...(index ? { thread_ts: "1000.000000" } : {}),
+  }));
+  await cache.ingest(
+    messages.map((message) => ({
+      container: "C1",
+      ts: message.ts,
+      text: message.text,
+      ...(message.thread_ts ? { sub: message.thread_ts } : {}),
+    })),
+  );
+  const core = {
+    readSurfaceMessages: async (container: string, opts?: ReadMessagesOpts) => {
+      assert.equal(opts?.noFallback, true);
+      return cache.readMessages(container, opts);
+    },
+    rememberSurfaceHistory: async () => {
+      throw new Error("must not backfill");
+    },
+  } as unknown as SlackCoreClient;
+  const client = { conversations: { replies: async () => ({ messages: messages.slice(0, 200), has_more: true }) } };
+  const mirrored = await createSlackHistoryReader({ core, ids, source: "mirror" })(client, "C1", "1000.000000");
+  assert.deepEqual(
+    mirrored.raw.map((message) => message.ts),
+    [messages[0]!, ...messages.slice(-199)].map((message) => message.ts),
+  );
+  const live = await createSlackHistoryReader({ core, ids, source: "shadow" })(client, "C1", "1000.000000");
+  assert.deepEqual(live.raw, messages.slice(0, 200));
+  await new Promise((resolve) => setImmediate(resolve));
+  const comparison = JSON.parse(logs[0]!);
+  assert.equal(comparison.liveMessages, 200);
+  assert.equal(comparison.mirroredMessages, 200);
+  assert.equal(comparison.liveMessagesMissingFromMirror, 20);
+  assert.equal(comparison.mirrorMessagesOutsideLiveWindow, 20);
+  assert.equal(comparison.matchingMessages, 180);
+  assert.equal(comparison.liveComplete, false);
+  await cache.close();
+});
+
+test("shadow freezes live messages and attachments before callers modify their context", async (t) => {
+  const logs: string[] = [];
+  t.mock.method(console, "info", (line: string) => logs.push(line));
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const stored = [{ container: "C1", ts: "1", text: "original", files: [{ fileId: "F1", name: "original.txt" }] }];
+  const core = {
+    readSurfaceMessages: async () => {
+      await pending;
+      return stored;
+    },
+    rememberSurfaceHistory: async () => {
+      throw new Error("must not backfill");
+    },
+  } as unknown as SlackCoreClient;
+  const client = {
+    conversations: {
+      history: async () => ({ messages: [{ ts: "1", text: "original", files: [{ id: "F1", name: "original.txt" }] }] }),
+    },
+  };
+  const live = await createSlackHistoryReader({ core, ids, source: "shadow" })(client, "C1");
+  live.raw.push({ ts: "2", text: "trigger appended by caller" });
+  live.raw[0]!.text = "changed by caller";
+  live.raw[0]!.files![0]!.name = "changed.txt";
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  const comparison = JSON.parse(logs[0]!);
+  assert.equal(comparison.liveMessages, 1);
+  assert.equal(comparison.matchingMessages, 1);
+  assert.equal(comparison.textMismatches, 0);
+  assert.equal(comparison.fileMismatches, 0);
+  assert.equal(comparison.liveMessagesMissingFromStorage, 0);
 });

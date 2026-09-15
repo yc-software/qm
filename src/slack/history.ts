@@ -89,11 +89,9 @@ export function createSlackHistoryReader(deps: {
     if (threadTs) {
       const [parents, replies] = await Promise.all([
         read(channel, { at: threadTs, noFallback: true, ...(before ? { before } : {}) }),
-        read(channel, { ...options, sub: threadTs, oldestFirst: deps.source === "shadow" }),
+        read(channel, { ...options, sub: threadTs }),
       ]);
-      return deps.source === "shadow"
-        ? [...parents, ...replies].slice(0, 200)
-        : [...parents, ...replies.slice(-(200 - parents.length))];
+      return [...parents, ...replies.slice(-(200 - parents.length))];
     }
     const roots = await read(channel, { ...options, channelHistory: true });
     if (!expandThreads) return roots;
@@ -195,7 +193,7 @@ export function createSlackHistoryReader(deps: {
       const live = await liveHistory(client, channel, threadTs, before, expandThreads);
       if (deps.source === "shadow" && !shadowPending) {
         shadowPending = true;
-        void compareShadow(live, channel, threadTs, before, expandThreads).finally(() => {
+        void compareShadow(structuredClone(live), channel, threadTs, before, expandThreads).finally(() => {
           shadowPending = false;
         });
       }
