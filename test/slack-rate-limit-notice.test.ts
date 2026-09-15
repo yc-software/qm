@@ -29,7 +29,7 @@ function fixture() {
   return { client, ephemeral, messages };
 }
 
-test("channel history failures notify only requester once even with parallel partial failures", async () => {
+test("channel history failures notify requester in channel before a thread exists, once for partial failures", async () => {
   const { client, ephemeral, messages } = fixture();
   const notice = createSlackRateLimitNotice(options);
   await notice.run(client, { target: "C1:1700.1", user: "U1" }, async () => {
@@ -40,7 +40,6 @@ test("channel history failures notify only requester once even with parallel par
   assert.deepEqual(ephemeral[0], {
     channel: "C1",
     user: "U1",
-    thread_ts: "1700.1",
     text: "Slack is temporarily limiting history reads, so I may be missing earlier context. Try again in 60 seconds, or <https://qm.example/admin/?setup=slack|set up your own Slack app>.",
   });
   assert.equal(messages.length, 0);
@@ -57,6 +56,7 @@ test("DM notice is a normal reply and concurrent channel requester stays isolate
   assert.equal(messages[0].thread_ts, "1700.2");
   assert.equal(ephemeral[0].channel, "G1");
   assert.equal(ephemeral[0].user, "U2");
+  assert.equal(ephemeral[0].thread_ts, undefined);
 });
 
 test("no shared URL, unsafe setup URL, non429 and background requests stay quiet", async () => {

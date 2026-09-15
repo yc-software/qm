@@ -37,12 +37,7 @@ export function createSlackRateLimitNotice(opts: { managed?: boolean; setupUrl?:
             unfurl_media: false,
           });
         } else {
-          await client.chat.postEphemeral({
-            channel,
-            user,
-            text,
-            ...(threadTs ? { thread_ts: threadTs } : {}),
-          });
+          await client.chat.postEphemeral({ channel, user, text });
         }
       } catch (error) {
         swallow("slack: rate-limit notice", error);
