@@ -187,3 +187,17 @@ test("own-app switch blocks stale managed callbacks until explicit restart", asy
   assert.equal(await store.enableManaged(), true);
   assert.equal((await request("installation", replacement)).status, 202);
 });
+
+test("own-app replacement preserves the managed generation watermark across restart", async (t) => {
+  const { request, store } = await fixture(t);
+  const old = { ...installation, teamId: "TOLD", installedAt: 1000 };
+  assert.equal((await request("installation", old)).status, 202);
+  await store.set({ botToken: "xoxb-own", appToken: "xapp-own", teamId: "TNEW", updatedBy: "admin" });
+  assert.equal((await store.get())?.installedAt, 1000);
+  await store.delete("admin");
+  assert.equal(await store.enableManaged(), true);
+  assert.equal((await request("installation", old)).status, 409);
+  const fresh = { ...installation, installId: "fresh", teamId: "TNEW", installedAt: 2000 };
+  assert.equal((await request("installation", fresh)).status, 202);
+  assert.equal((await store.get())?.teamId, "TNEW");
+});

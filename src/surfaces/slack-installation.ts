@@ -117,6 +117,7 @@ export function createSlackInstallationStore(
       return publicStatus(await map.get(orgId));
     },
     async set(input) {
+      if (!map.update) throw new Error("Atomic installation updates are required");
       const updatedAt = Date.now();
       const record: StoredSlackInstallation = {
         orgId,
@@ -132,8 +133,13 @@ export function createSlackInstallationStore(
         updatedBy: input.updatedBy,
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
-      await map.put(orgId, record);
-      return publicStatus(record);
+      await map.putIfAbsent(orgId, record);
+      const stored = await map.update(orgId, (current) => ({
+        ...record,
+        ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
+      }));
+      if (!stored) throw new Error("Slack installation disappeared during update");
+      return publicStatus(stored);
     },
     async setManaged(input) {
       if (!map.update) throw new Error("Atomic installation updates are required");
