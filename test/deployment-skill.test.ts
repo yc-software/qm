@@ -167,9 +167,9 @@ test("onboarding composes existing access skills without a provider-setup prereq
   assert.match(admin, /App Configuration Tokens/);
   assert.match(admin, /not the refresh token/);
   assert.match(admin, /manage other apps they own/);
-  assert.match(admin, /then discards it/);
-  assert.match(admin, /never in chat, memory, files, or the keychain/);
-  assert.match(admin, /require a real reply/);
+  assert.match(admin, /then discards (?:it|the token)/);
+  assert.match(admin, /Never paste it in chat, memory, files, or the keychain/);
+  assert.match(admin, /Require a real reply before claiming the bot works/);
   assert.doesNotMatch(admin, /## Guide org OAuth app setup/);
 });
 
@@ -177,7 +177,8 @@ test("onboarding includes the Slack configuration-token walkthrough", () => {
   const asset = "docs/images/slack-app-config-token-setup.gif";
   const skill = read("plugins/onboarding/skills/onboarding/SKILL.md");
   assert.ok(skill.includes(`https://raw.githubusercontent.com/yc-software/qm/main/${asset}`));
-  assert.match(skill, /workspace selection/);
-  assert.match(skill, /secure setup form, never into chat/);
+  assert.match(skill, /shows generation and copying/);
+  assert.match(skill, /select their own workspace/);
+  assert.match(skill, /secure setup\s+form, never into chat/);
   assert.equal(readFileSync(asset).subarray(0, 6).toString("ascii"), "GIF89a");
 });

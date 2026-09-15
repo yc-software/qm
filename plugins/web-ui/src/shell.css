@@ -11501,7 +11501,7 @@ h3.ambient-field-label {
   margin-top: 8px;
 }
 .slack-setup-checklist small {
-  color: var(--text-muted);
+  color: var(--muted-foreground);
 }
 .slack-setup-checklist .connector-widget {
   margin: 8px 0;

@@ -7,6 +7,19 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 
+type SlackSetupStatus = {
+  configured: boolean;
+  source: string;
+  setupUnavailable?: boolean;
+  installAvailable?: boolean;
+  setup?: {
+    tokenUrl: string;
+    submitUrl: string;
+    installUrl: string;
+    connected: boolean;
+  };
+};
+
 async function fixture(t: test.TestContext) {
   const map = createMemoryMap();
   const store = createSlackInstallationStore(
@@ -65,8 +78,10 @@ async function fixture(t: test.TestContext) {
 
 test("admin status supplies stable links before creation without enabling installation", async (t) => {
   const f = await fixture(t);
-  const first = await (await f.request()).json();
-  const second = await (await f.request()).json();
+  const first = (await (await f.request()).json()) as SlackSetupStatus;
+  const second = (await (await f.request()).json()) as SlackSetupStatus;
+  assert.ok(first.setup);
+  assert.ok(second.setup);
   assert.deepEqual(first.setup, second.setup);
   assert.equal(first.setup.submitUrl, "https://agent.example/admin?slack=setup");
   assert.equal(first.setup.installUrl, "https://agent.example/admin?slack=install");
@@ -81,18 +96,18 @@ test("admin status supplies stable links before creation without enabling instal
 test("environment-backed bot skips service lookup and missing service status remains unknown", async (t) => {
   const f = await fixture(t);
   f.deps.slackEnvironmentState = "configured";
-  const installed = await (await f.request()).json();
+  const installed = (await (await f.request()).json()) as SlackSetupStatus;
   assert.equal(installed.configured, true);
   assert.equal(installed.source, "environment");
   assert.equal(installed.setup, undefined);
   assert.equal(f.calls.length, 0);
   f.deps.slackEnvironmentState = "none";
   f.remote(new Response("", { status: 503 }));
-  const failed = await (await f.request()).json();
+  const failed = (await (await f.request()).json()) as SlackSetupStatus;
   assert.equal(failed.setupUnavailable, true);
   assert.equal(failed.setup, undefined);
   f.remote(new Response("", { status: 404 }));
-  const legacy = await (await f.request()).json();
+  const legacy = (await (await f.request()).json()) as SlackSetupStatus;
   assert.equal(legacy.setup, undefined);
   assert.equal(legacy.installAvailable, true);
 });

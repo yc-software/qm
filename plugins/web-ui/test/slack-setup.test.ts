@@ -70,3 +70,10 @@ test("non-admins receive no setup controls and unverified configuration is not C
   assert.match(card.textContent!, /Only a QM administrator/);
   assert.equal(card.querySelectorAll("a").length, 0);
 });
+
+test("re-evaluating the setup module preserves its existing custom element registration", async () => {
+  const registered = customElements.get("qm-slack-setup");
+  assert.ok(registered);
+  await import(new URL("../src/slack-setup.ts?registration-reload", import.meta.url).href);
+  assert.equal(customElements.get("qm-slack-setup"), registered);
+});

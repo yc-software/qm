@@ -136,9 +136,9 @@ class SlackSetup extends LitElement {
       <button
         type="button"
         @click=${() => {
-        this.startedAt = Date.now();
-        void this.refresh();
-      }}
+          this.startedAt = Date.now();
+          void this.refresh();
+        }}
       >
         Check progress
       </button>
@@ -147,4 +147,4 @@ class SlackSetup extends LitElement {
   }
 }
 
-customElements.define("qm-slack-setup", SlackSetup);
+if (!customElements.get("qm-slack-setup")) customElements.define("qm-slack-setup", SlackSetup);
