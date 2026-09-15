@@ -1481,7 +1481,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               const lines = usable.map((r) => {
                 const methods = r.allowedMethods?.length ? r.allowedMethods.join("/") : "GET";
                 const paths = r.allowedPathPrefixes?.length ? `paths ${r.allowedPathPrefixes.join(", ")}` : "any path";
-                return `- \`${r.slug}\` → ${r.host} (${methods}; ${paths})`;
+                return `- \`${r.slug}\` (${r.name}; shared org credential) → ${r.host} (${methods}; ${paths})`;
               });
               sharedCredsBlock =
                 "\n\n## Shared org credentials available to you\n" +
@@ -1498,6 +1498,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 "For Git smart HTTP clone/fetch/push, use core as the Git remote so the token stays server-side: " +
                 "`$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git`, with " +
                 '`git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" ...`. ' +
+                "Git through this route uses the configured org account, not automatically the requesting user's account; " +
+                "a live personal OAuth connector does not switch this route's identity. The credential name is an admin label " +
+                "and does not identify the upstream username. Choose among credentials authorized for this conversation " +
+                "based on the task and the user's intent; a shared account is a valid choice, not an automatic fallback. " +
+                "For personal Git access, use an authorized personal login that supports Git transport. " +
+                "If the intended account is unclear before a write, clarify it rather than silently switching accounts. " +
                 "A non-2xx `status` is the UPSTREAM service's own answer (e.g. a bad query or its auth), not a broker " +
                 "error. Use ONLY these (slug → host; allowed methods; allowed paths):\n" +
                 lines.join("\n");

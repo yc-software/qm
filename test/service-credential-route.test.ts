@@ -1160,7 +1160,11 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
   assert.match(reply, /Shared org credentials available to you/);
   assert.match(reply, /\/v1\/credentials\/broker/);
   assert.match(reply, /x-agent-capability: \$AGENT_CREDENTIAL_TOKEN/);
-  assert.match(reply, /x-firehose.*api\.x\.com.*GET.*\/2\/tweets\/search\//s);
+  assert.match(reply, /x-firehose.*X firehose.*api\.x\.com.*GET.*\/2\/tweets\/search\//s);
+  assert.match(reply, /configured org account, not automatically the requesting user's account/);
+  assert.match(reply, /live personal OAuth connector does not switch this route's identity/);
+  assert.match(reply, /Choose among credentials authorized for this conversation/);
+  assert.match(reply, /does not identify the upstream username/);
 });
 
 test("the system prompt does NOT advertise a credential the session isn't entitled to", async () => {

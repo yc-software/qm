@@ -12,15 +12,28 @@ requiredCapabilities:
 Use this skill when the user asks to inspect repos, issues, pull requests, merge
 requests, code history, branches, or to make a small code change in a hosted repo.
 
-This is a resident-machine-auth connector. Prefer the native CLIs (`gh`, `glab`) and
-`git`, using the agent computer's logged-in state. Do not ask the user to paste tokens,
-and do not rely on proxy bearer-token injection.
+## Choose the account deliberately
 
-One exception: if the system prompt lists a shared org credential for a Git remote, the
-token is broker-only and never appears on the computer. For clone/fetch/push, use the
-core-hosted smart HTTP remote documented in `skills/use-shared-credential/SKILL.md`.
-That keeps normal `git` workflows working while core injects the upstream credential
-server-side.
+Use the current credential manifest to choose an account authorized for this conversation
+that fits the user's intent. Personal and shared accounts are both valid choices; neither
+is an automatic fallback when the other fails. If the intended account is unclear before
+a write, ask. Do not infer permission from a login merely being present on the computer.
+
+- **Personal login:** use the authorized `gh`, `glab`, or Git login. Check the active
+  provider account (for example, `gh api user --jq .login`) and the Git transport's auth
+  configuration; a CLI API identity alone does not prove which account Git will use.
+- **Shared org credential:** if listed in the prompt, select its slug and use the
+  core-hosted smart HTTP remote in `skills/use-shared-credential/SKILL.md`. This uses
+  the configured shared account, even when a personal OAuth connector is live.
+  Its name is an admin label, not a verified upstream username.
+- **Connected app:** use only advertised capabilities. API access does not by itself
+  establish native Git transport access or configure the CLI's active login.
+
+For an existing checkout, inspect the remote and applicable credential-helper, SSH,
+proxy, and HTTP-header configuration without printing secret values. A reused checkout
+may still select a previous account. Commit author metadata is separate from transport
+identity. Resolve an unknown identity before a write; do not probe access by pushing.
+Never copy tokens into remotes or expose them while checking authentication.
 
 ## Logging in
 
