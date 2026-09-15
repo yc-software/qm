@@ -150,3 +150,14 @@ test("empty labels retain the generic fallback and native names cannot be relabe
   assert.deepEqual(connectorLinksIn(`[  ](${COMPOSIO_URL})`), [{ provider: "composio", url: COMPOSIO_URL }]);
   assert.deepEqual(connectorLinksIn(`[Something else](${URL})`), [{ provider: "google", url: URL }]);
 });
+
+test("Slack bot setup uses one same-origin checklist, not a personal connection card", () => {
+  const url = "https://agent.example.com/admin?slack=setup";
+  const text = `[Set up Slack](${url})`;
+  const links = connectorLinksIn(text, "https://agent.example.com");
+  assert.deepEqual(links, [{ provider: "slack-bot", url }]);
+  assert.equal(stripConnectorLinks(text, links), "");
+  assert.deepEqual(connectorLinksIn(text, "https://other.example.com"), []);
+  assert.deepEqual(connectorLinksIn(text), []);
+  assert.deepEqual(connectorLinksIn(url + "&company=other", "https://agent.example.com"), []);
+});

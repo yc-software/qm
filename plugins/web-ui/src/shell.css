@@ -11483,3 +11483,26 @@ h3.ambient-field-label {
     14px/1 Arial,
     sans-serif;
 }
+
+.slack-setup-checklist {
+  max-width: 520px;
+  padding: 12px 0;
+}
+.slack-setup-checklist ol {
+  padding-left: 24px;
+}
+.slack-setup-checklist li {
+  margin: 12px 0;
+}
+.slack-setup-checklist img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 8px;
+}
+.slack-setup-checklist small {
+  color: var(--text-muted);
+}
+.slack-setup-checklist .connector-widget {
+  margin: 8px 0;
+}

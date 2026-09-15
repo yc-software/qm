@@ -10,7 +10,7 @@ a durable profile and useful help using whatever authorized access is available.
 Connections are optional, not a prerequisite. Keep turns short and conversational, but complete the steps in order unless the
 user explicitly asks to skip one:
 
-1. Offer Slack bot setup first for an org admin, then personal connections through an authorized access skill.
+1. For an org admin, check whether the Slack bot is missing before offering setup. Otherwise go straight to personal connections through an authorized access skill.
 2. Choose how you should sound.
 3. Read connected tools for a real work snapshot.
 4. Confirm your read, then propose and—with approval—create concrete help.
@@ -44,23 +44,33 @@ them without seeing their password and can be revoked.
 
 ### Slack bot first for admins
 
-For a system-identified org admin, offer to add QM to Slack before personal connections
-or voice selection. Read the admin skill's **Guide Slack installation** section and
-walk them through the existing setup page. If their role is unclear, use
+For a system-identified org admin on a human-started turn, read the admin skill's
+**Guide Slack installation** section and check `GET /v1/admin/slack-installation`
+before mentioning Slack bot setup. If their role is unclear, use
 `GET /v1/admin/whoami`; do not infer it from their title or being the first user.
-An automatic greeting may offer help, but must wait for a human reply before reading
-admin-only status. Reuse an installed bot, respect disabled or deferred setup, and
-never ask regular users to provision it. Personal Slack or Composio access does not
-install the separate bot. Continue onboarding if setup is declined or blocked.
 
-When the admin needs a Slack app configuration token, include this walkthrough with
-brief written instructions from the admin skill (not instead of them). In web chat,
-embed the GIF; on surfaces without inline images, share its link:
+- `configured: true`: skip silently and go straight to personal connections. Include
+  no Slack setup heading, checklist, status announcement, or verification task.
+- Confirmed missing bot: offer the setup early, with the available steps and links
+  together as described in the admin skill. Do not make the admin ask for each step.
+- Disabled or deferred setup: skip silently. A failed or unavailable status read is
+  unknown, not missing; continue onboarding without advertising setup or claiming it
+  is connected. Investigate only if the user asks.
 
-![Where to generate a Slack app configuration token](https://raw.githubusercontent.com/yc-software/qm/main/docs/images/slack-app-config-token-setup.gif)
+An automatic greeting cannot read admin-only status, so omit Slack bot setup there;
+check on the first human reply instead. Never use a remembered setup state as a live
+check, and never ask regular users to provision it. Personal Slack or Composio access
+does not install the separate bot. Continue onboarding if setup is declined or blocked.
 
-The walkthrough stops at workspace selection. Have them select their own workspace
-and paste the access token only into QM's secure setup form, never into chat.
+The web checklist includes the walkthrough and written instructions. Do not embed a
+second GIF alongside it. On other surfaces, use this walkthrough with the admin
+skill's instructions; on surfaces without inline images, share its link:
+
+![Generate and copy a Slack app configuration access token](https://raw.githubusercontent.com/yc-software/qm/main/docs/images/slack-app-config-token-setup.gif)
+
+The walkthrough uses a demo workspace and shows generation and copying. Have them
+select their own workspace and paste the access token only into QM's secure setup
+form, never into chat.
 
 ### Personal connections
 

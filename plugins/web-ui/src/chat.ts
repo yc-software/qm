@@ -95,6 +95,7 @@ import {
   type ToolPayload,
   type ToolRowModel,
 } from "./timeline";
+import "./slack-setup";
 import { CONNECTOR_NAMES, connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
@@ -1694,6 +1695,7 @@ export function createChatSurface(
   }
 
   function connectorWidget(link: ConnectorLink): TemplateResult {
+    if (link.provider === "slack-bot") return html`<qm-slack-setup></qm-slack-setup>`;
     const composio = link.provider === "composio";
     const name =
       (composio ? "your account" : CONNECTOR_NAMES[link.provider]) ??

@@ -7322,6 +7322,7 @@
           return q ? path + "?" + q : path;
         }
         if (st.view === "connectors" && st.setup === "slack") p.set("setup", "slack");
+        if (st.view === "connectors" && ["setup", "install", "connected"].includes(st.slack)) p.set("slack", st.slack);
         if (st.scope && SCOPED.has(st.view)) p.set("scope", st.scope);
         if (st.view === "errors" && st.page > 1) p.set("page", st.page);
         if (st.principal) p.set("principal", st.principal);
@@ -7364,7 +7365,8 @@
           if (segs[1] === "s") pathSession = decodePathSegment(segs[2] ?? "");
           else if (segs[1] === "scopes") pathScope = decodePathSegment(segs[2] ?? "");
         }
-        const raw = p.get("setup") === "slack" ? "connectors" : p.get("view") || fromPath;
+        const slackStep = ["setup", "install", "connected"].includes(p.get("slack"));
+        const raw = p.get("setup") === "slack" || slackStep ? "connectors" : p.get("view") || fromPath;
 
         const v = raw === "skill-packs" ? "skills" : raw;
         const session = pathSession || p.get("session") || null;
@@ -7380,6 +7382,7 @@
         return {
           view: resolvedView,
           setup: p.get("setup"),
+          slack: p.get("slack"),
           scope:
             pathScope ||
             p.get("scope") ||
@@ -10192,6 +10195,7 @@
       }
 
       async function loadConnectors() {
+        void loadSlackInstallation();
         const [catalog, r] = await Promise.all([
           api("GET", "/api/connector-catalog"),
           api("GET", "/api/scopes/" + encodeURIComponent(orgScope()) + "?view=connectors"),
@@ -10217,7 +10221,6 @@
           $("conn-provider").value = connEditing;
           $("conn-provider").disabled = true;
         } else resetConnForm();
-        await loadSlackInstallation();
       }
       function renderBuiltInConnectors() {
         const root = $("built-in-connectors");
@@ -10419,6 +10422,7 @@
         $("conn-client-id").focus();
         $("card-connectors").scrollIntoView({ behavior: "smooth", block: "start" });
       };
+      let slackLinkStarted = false;
       async function loadSlackInstallation() {
         const r = await api("GET", "/api/slack-installation");
         if (!r.ok) {
@@ -10454,10 +10458,22 @@
             : "Connect your workspace";
         $("slack-installation-delete").classList.toggle("hidden", !r.data.configured);
         $("slack-installation-delete").disabled = !r.data.configured;
+        const step = new URLSearchParams(location.search).get("slack");
+        if (!slackLinkStarted && r.data.installAvailable && ["setup", "install"].includes(step)) {
+          slackLinkStarted = true;
+          if (r.data.configured && !(r.data.source === "service" && r.data.setup?.connected === false)) {
+            setStatus("st-slack-installation", "Slack is already configured. Return to your conversation.", "ok");
+          } else {
+            await startSlackInstallation(step);
+          }
+        }
+        if (step === "connected" && r.data.configured && r.data.setup?.connected) {
+          setStatus("st-slack-installation", "Connected. You can return to your QM conversation.", "ok");
+        }
       }
-      $("slack-installation-start").onclick = async () => {
+      async function startSlackInstallation(step = "install") {
         $("slack-installation-start").disabled = true;
-        const r = await api("POST", "/api/slack-installation/start", {});
+        const r = await api("POST", "/api/slack-installation/start", { step });
         $("slack-installation-start").disabled = false;
         if (r.ok && r.data.url) {
           const form = document.createElement("form");
@@ -10466,7 +10482,8 @@
           document.body.appendChild(form);
           form.submit();
         } else setStatus("st-slack-installation", "Could not start Slack installation. Please try again.", "err");
-      };
+      }
+      $("slack-installation-start").onclick = () => startSlackInstallation();
       $("slack-installation-save").onclick = async () => {
         const botToken = $("slack-bot-token").value.trim();
         const appToken = $("slack-app-token").value.trim();

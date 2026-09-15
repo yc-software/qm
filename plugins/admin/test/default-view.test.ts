@@ -101,7 +101,10 @@ test("temporary onboarding covers model credentials, Slack, and OAuth setup", ()
 test("admin shell addresses views by path, not a ?view= query param", () => {
   assert.match(html, /const path = API_BASE \+ "\/" \+ encodeURIComponent\(st\.view \|\| DEFAULT_VIEW\);/);
   assert.doesNotMatch(html, /p\.set\("view", st\.view\)/);
-  assert.match(html, /const raw = p\.get\("setup"\) === "slack" \? "connectors" : p\.get\("view"\) \|\| fromPath;/);
+  assert.match(
+    html,
+    /const raw = p\.get\("setup"\) === "slack" \|\| slackStep \? "connectors" : p\.get\("view"\) \|\| fromPath;/,
+  );
   assert.doesNotMatch(html, /st\.view !== "governance"/);
 });
 

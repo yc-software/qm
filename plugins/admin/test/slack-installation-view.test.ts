@@ -24,6 +24,7 @@ async function render(data: Record<string, unknown>) {
       return elements.get(id);
     },
     api: async () => ({ ok: true, data }),
+    slackLinkStarted: false,
     URLSearchParams,
     location: { search: "" },
   });
@@ -57,4 +58,11 @@ test("custom connection cannot be replaced by hosted OAuth without disconnecting
   const el = await render({ configured: true, source: "admin", installAvailable: true });
   assert.equal(el("slack-installation-start").disabled, true);
   assert.equal(el("slack-installation-description").textContent, "Custom app");
+});
+
+test("managed credentials alone do not block retry of an unfinished route activation", () => {
+  assert.match(
+    html,
+    /r\.data\.configured && !\(r\.data\.source === "service" && r\.data\.setup\?\.connected === false\)/,
+  );
 });

@@ -37,6 +37,15 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
       if (!out.some((l) => l.url === url)) out.push({ provider: "composio", url, ...(label ? { label } : {}) });
       continue;
     }
+    if (
+      trustedOrigin &&
+      parsed.origin === trustedOrigin &&
+      parsed.pathname === "/admin" &&
+      parsed.search === "?slack=setup"
+    ) {
+      if (!out.some((l) => l.provider === "slack-bot")) out.push({ provider: "slack-bot", url });
+      continue;
+    }
     if (trustedOrigin && parsed.origin !== trustedOrigin) continue;
     if (!/^\/(?:connect\/redeem|v1\/connectors\/oauth\/consent\/redeem)\/[^/]+$/.test(parsed.pathname)) continue;
     const provider = parsed.searchParams.get("p") ?? "";

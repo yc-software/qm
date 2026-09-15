@@ -38,9 +38,31 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
   if (ctx.deps.managedSlack) {
     const status = await ctx.deps.slackInstallation.status();
+    if (!status.managed && ctx.deps.slackEnvironmentState === "configured") {
+      return sendJson(ctx.res, 200, { configured: true, managed: false, source: "environment", createUrl });
+    }
     const installation = await ctx.deps.slackInstallation.get();
+    let setup;
+    let setupUnavailable = false;
+    try {
+      const progress = await ctx.deps.managedSlack.setupStatus();
+      const origin = ctx.deps.portalUrl ?? ctx.deps.publicUrl;
+      if (progress?.companyOwned && origin) {
+        setup = {
+          ...progress,
+          tokenUrl: "https://api.slack.com/apps",
+          submitUrl: new URL("/admin?slack=setup", origin).href,
+          installUrl: new URL("/admin?slack=install", origin).href,
+          statusUrl: new URL("/admin/api/slack-installation", origin).href,
+        };
+      }
+    } catch {
+      setupUnavailable = true;
+    }
     return sendJson(ctx.res, 200, {
       ...status,
+      setup,
+      setupUnavailable,
       source: installation?.appToken ? "admin" : "service",
       installAvailable: true,
       createUrl,
@@ -139,7 +161,9 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
   try {
-    const result = await ctx.deps.managedSlack.start();
+    const step = (ctx.body as { step?: unknown } | undefined)?.step ?? "install";
+    if (step !== "setup" && step !== "install") return sendJson(ctx.res, 400, { error: "invalid_step" });
+    const result = await ctx.deps.managedSlack.start(step);
     return sendJson(ctx.res, 200, result);
   } catch {
     return sendJson(ctx.res, 502, { error: "slack_installation_unavailable" });

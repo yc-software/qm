@@ -21,7 +21,7 @@ const event = {
   event: { type: "message", channel: "C123", user: "U123", ts: "1.0", text: "hello" },
 };
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, appId = "A123") {
   const map = createMemoryMap();
   const store = createSlackInstallationStore(
     "company",
@@ -31,7 +31,7 @@ async function fixture(t: test.TestContext) {
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",
-    appId: "A123",
+    appId: appId || undefined,
     store,
   });
   const server = createServer(async (req, res) => {
@@ -200,4 +200,31 @@ test("own-app replacement preserves the managed generation watermark across rest
   const fresh = { ...installation, installId: "fresh", teamId: "TNEW", installedAt: 2000 };
   assert.equal((await request("installation", fresh)).status, 202);
   assert.equal((await store.get())?.teamId, "TNEW");
+});
+
+test("service-assigned app identity is persisted and enforced on every delivery", async (t) => {
+  const { request, store, bridge } = await fixture(t, "");
+  assert.equal((await request("installation", { ...installation, appId: "bad" })).status, 400);
+  assert.equal((await request("installation", installation, "POST", "other-company")).status, 401);
+  assert.equal(await store.get(), null);
+  assert.equal((await request("installation", installation)).status, 202);
+  assert.equal((await store.get())?.appId, installation.appId);
+  const receiver = bridge.receiver(installation.installId);
+  receiver.init?.({
+    processEvent: async (incoming: ReceiverEvent) => {
+      await incoming.ack();
+    },
+  } as unknown as BoltApp);
+  await receiver.start(0 as never);
+  assert.equal((await request("events", { installId: installation.installId, body: event })).status, 200);
+  assert.equal(
+    (await request("events", { installId: installation.installId, body: { ...event, api_app_id: "AOTHER" } })).status,
+    400,
+  );
+});
+
+test("explicit app pin still rejects another app at installation", async (t) => {
+  const { request, store } = await fixture(t);
+  assert.equal((await request("installation", { ...installation, appId: "AOTHER" })).status, 400);
+  assert.equal(await store.get(), null);
 });

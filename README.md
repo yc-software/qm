@@ -250,7 +250,9 @@ Except where otherwise noted, QM is available under the [MIT License](./LICENSE)
 ### Managed Slack installation
 
 A hosting provider can set `QM_SLACK_SERVICE_URL` (HTTPS),
-`QM_SLACK_SERVICE_TOKEN` (unique per deployment), and `QM_SLACK_APP_ID` on core.
+`QM_SLACK_SERVICE_TOKEN` (unique per deployment) on core. Optionally set
+`QM_SLACK_APP_ID` to pin a pre-existing app; otherwise the authenticated service
+assigns its app ID during installation. Events must match the stored app identity.
 Set `QM_SLACK_SERVICE_URL` on the admin/web service as well so its browser policy allows the installation form.
 The admin Slack card then offers **Add to Slack** through that service. Core calls
 `POST /install/start` with the deployment bearer credential and expects `{ "url":
