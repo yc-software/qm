@@ -1,13 +1,7 @@
 ---
 name: email-draft-in-voice
 description: Draft Gmail in the user's own voice from the voice profile built by email-voice-profile. Drafts only; the user reviews and sends.
-requiredCapabilities:
-  - egress:gmail.googleapis.com
 ---
-
-## Composio when available
-
-If an authorized Composio credential is available, read `skills/composio/SKILL.md` and use its SDK workflow. Keep this skill's task/content rules, but skip its direct-token and script instructions. Otherwise use the direct connector below. Never switch credentials to evade a permission denial.
 
 # Draft email in the user's voice
 
@@ -23,29 +17,21 @@ memory or from this conversation's tone. The profile's **Hard rules** and
 
 ## Draft
 
-1. Read the full thread you're replying to with `gmail.py thread THREAD_ID --full` —
+1. Read the full thread you're replying to through the selected email access skill —
    never draft from a snippet or excerpt; a question below the fold would go silently
    unanswered. Match the register the profile prescribes for this audience.
 2. Write the body to a file — plain text, one line per paragraph, blank line between.
-   Plain text only — never styled HTML (fonts, colors, buttons); the gmail helper
-   adds the correct unstyled HTML mirror itself.
+   Plain text only — never styled HTML (fonts, colors, buttons).
 3. Self-check against the profile before showing anything: opener and sign-off drawn
    from their real ones, sentence rhythm right, no anti-pattern present. If a sentence
    could appear in anyone's email, rewrite it or cut it.
 4. Show the user the exact text and ask for approval before creating any draft.
 
-## Gmail
+## Save the draft
 
-Use the google-workspace skill's helper (the user's OAuth token is already on your
-computer):
-
-```bash
-python3 skills/google-workspace/scripts/gmail.py draft --to a@b.com --subject '...' --body-file body.txt
-python3 skills/google-workspace/scripts/gmail.py reply MESSAGE_ID --body-file body.txt [--all]
-```
-
-Sending (`send-draft`) only ever fires on a draft the user explicitly approved for
-sending, per that skill's rules.
+Use the selected email access skill to create or update the Gmail draft, preserving
+reply threading and recipients. Sending is a separate action and requires explicit
+approval of the draft for sending.
 
 ## Afterward
 

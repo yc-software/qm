@@ -6,10 +6,6 @@ requiredCapabilities:
   - egress:www.googleapis.com
 ---
 
-## Composio when available
-
-If an authorized Composio credential is available, read `skills/composio/SKILL.md` and use its SDK workflow. Keep this skill's task/content rules, but skip its direct-token and script instructions. Otherwise use the direct connector below. Never switch credentials to evade a permission denial.
-
 # Google Workspace
 
 Use this skill when the user asks about Gmail, Google Calendar, or Google Tasks:
@@ -28,6 +24,9 @@ before this permission existed — tell them to (re)connect it through the produ
 flow.
 
 ## Gmail
+
+For the `email-voice-profile` task, the direct OAuth corpus helper is
+`python3 skills/email-voice-profile/scripts/fetch_sent.py --limit 300`.
 
 Use the bundled helper for every Gmail operation — it owns MIME construction, encoding,
 and reply threading so you only ever handle plain text:

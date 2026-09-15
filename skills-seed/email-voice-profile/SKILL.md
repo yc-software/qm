@@ -1,13 +1,7 @@
 ---
 name: email-voice-profile
 description: Build (or refresh) a voice profile of how the user writes email, from their own sent Gmail. The profile is what email-draft-in-voice consumes to ghostwrite email that sounds like them.
-requiredCapabilities:
-  - egress:gmail.googleapis.com
 ---
-
-## Composio when available
-
-If an authorized Composio credential is available, read `skills/composio/SKILL.md` and use its SDK workflow. Keep this skill's task/content rules, but skip its direct-token and script instructions. Otherwise use the direct connector below. Never switch credentials to evade a permission denial.
 
 # Email voice profile
 
@@ -21,16 +15,11 @@ workspace, so only their own conversations can read it.
 
 ## 1. Pull the corpus
 
-```bash
-python3 skills/email-voice-profile/scripts/fetch_sent.py --limit 300
-```
-
-This fetches the user's sent messages (their Google OAuth token is already on your
-computer; if it's missing, point them at the app-connect flow), strips quoted replies
-and signatures, drops automated and trivial messages, and writes one JSON line per
-email to `voice/corpus/corpus.jsonl` — each tagged `internal` or `external` by
-recipient domain. It prints corpus stats; if fewer than ~50 usable emails survive,
-tell the user the profile will be rough and ask whether to continue.
+Use the selected email access skill to retrieve up to 300 of the user's sent messages.
+Strip quoted replies and `--`-delimited signatures, drop automated and trivial messages,
+and write one JSON line per email to `voice/corpus/corpus.jsonl`, tagged `internal` or
+`external` by recipient domain. Record corpus stats; if fewer than ~50 usable emails
+survive, tell the user the profile will be rough and ask whether to continue.
 
 ## 2. Study it
 

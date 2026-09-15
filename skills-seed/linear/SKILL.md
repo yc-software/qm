@@ -5,10 +5,6 @@ requiredCapabilities:
   - egress:api.linear.app
 ---
 
-## Composio when available
-
-If an authorized Composio credential is available, read `skills/composio/SKILL.md` and use its SDK workflow. Keep this skill's task/content rules, but skip its direct-token and script instructions. Otherwise use the direct connector below. Never switch credentials to evade a permission denial.
-
 # Linear
 
 Use this skill when the user asks about Linear issues, tickets, projects, cycles, or

@@ -3,10 +3,6 @@ name: connect-apps
 description: Connect an administrator-enabled SaaS app for a user with a one-time OAuth consent link.
 ---
 
-## Composio when available
-
-If an authorized Composio credential is available, read `skills/composio/SKILL.md` and use its SDK workflow. Keep this skill's task/content rules, but skip its direct-token and script instructions. Otherwise use the direct connector below. Never switch credentials to evade a permission denial.
-
 ## Connecting SaaS apps
 
 When `$AGENT_OAUTH_CONSENT_TOKEN` is set you can help the user connect a SaaS app via a browser

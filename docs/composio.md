@@ -1,6 +1,6 @@
 # Composio through an ordinary credential
 
-QM uses Composio from its computer, through a skill and the official SDK. There is no Composio-specific harness tool, SDK adapter, callback route, connection record type or approval engine.
+QM uses Composio from its computer, through a skill and the official SDK.
 
 ## Setup
 

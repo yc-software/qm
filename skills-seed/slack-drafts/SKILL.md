@@ -5,10 +5,6 @@ requiredCapabilities:
   - egress:slack.com
 ---
 
-## Composio when available
-
-If an authorized Composio credential is available, read `skills/composio/SKILL.md` and use its SDK workflow. Keep this skill's task/content rules, but skip its direct-token and script instructions. Otherwise use the direct connector below. Never switch credentials to evade a permission denial.
-
 # Slack drafts
 
 Use this skill when the user wants a Slack message prepared for them to review and

@@ -36,7 +36,7 @@ Memory is not a file; never edit it with shell commands.
 
 ## 1. Connect accounts
 
-Check for an authorized Composio credential in the existing credential inventory. If available, follow `skills/composio/SKILL.md` to discover apps and offer consent links for the apps the user wants. This replaces the dedicated OAuth-provider setup below, not the remaining onboarding steps. Do not request a new project key from regular users or change credential grants as part of onboarding. Otherwise use the existing configured-connection flow below.
+Use the selected access skill to connect the apps the user chooses. The direct OAuth flow below is for the direct connector. Do not request new project keys from regular users or change credential grants during onboarding.
 
 The surface already authenticated the user. Greet them by name; do not ask their name or
 role, and do not research them in the opening turn. Explain that connecting lets you act as
