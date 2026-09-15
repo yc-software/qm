@@ -458,25 +458,63 @@ test("init preflights package.json and completes an install-first package manife
   }
 });
 
-test("init preserves an installed local package artifact", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-init-local-package-"));
+test("init preserves intentional CLI source and alias overrides", () => {
+  const specs = [
+    "file:../packages/yc-software-qm-0.1.0.tgz",
+    "link:../qm/cli",
+    "../packages/yc-software-qm-0.1.0.tgz",
+    "/tmp/yc-software-qm-0.1.0.tgz",
+    "qm-local.tgz",
+    "qm-local.tar.gz",
+    ".",
+    "..",
+    "  ./qm-local.tgz  ",
+    "git+https://github.com/yc-software/qm.git#main",
+    "git@github.com:yc-software/qm.git#main",
+    "yc-software/qm#main",
+    "https://registry.npmjs.org/@yc-software/qm/-/qm-0.1.0.tgz",
+    "npm:@example/qm@0.1.0",
+    "workspace:*",
+  ];
+  const dirs = specs.map((spec) => ({ spec, dir: mkdtempSync(join(tmpdir(), "qm-init-source-package-")) }));
   try {
-    writeFileSync(
-      join(dir, "package.json"),
-      JSON.stringify({
-        private: true,
-        dependencies: { "@yc-software/qm": "file:../packages/yc-software-qm-0.1.0.tgz" },
-      }),
-    );
+    for (const { spec, dir } of dirs) {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ private: true, dependencies: { "@yc-software/qm": spec } }),
+      );
 
-    quiet(() => runInit({ dir, org: "acme", target: "fly" }));
+      quiet(() => runInit({ dir, org: "acme", target: "fly" }));
 
-    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>;
-    };
-    assert.equal(manifest.dependencies?.["@yc-software/qm"], "file:../packages/yc-software-qm-0.1.0.tgz");
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      assert.equal(manifest.dependencies?.["@yc-software/qm"], spec, `source "${spec}" is preserved`);
+    }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    for (const { dir } of dirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("init replaces registry CLI specs with the executing version", () => {
+  const specs = ["0.1.0", "^0.1.0", "latest"];
+  const dirs = specs.map((spec) => ({ spec, dir: mkdtempSync(join(tmpdir(), "qm-init-registry-package-")) }));
+  try {
+    for (const { spec, dir } of dirs) {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ private: true, dependencies: { "@yc-software/qm": spec } }),
+      );
+
+      quiet(() => runInit({ dir, org: "acme", target: "fly" }));
+
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      assert.equal(manifest.dependencies?.["@yc-software/qm"], cliVersion(), `registry spec "${spec}" is replaced`);
+    }
+  } finally {
+    for (const { dir } of dirs) rmSync(dir, { recursive: true, force: true });
   }
 });
 
