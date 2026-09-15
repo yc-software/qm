@@ -1,6 +1,6 @@
 # Fly published application acceptance
 
-Status: prototype; not approved as an AWS MicroVM replacement.
+Status: final-image HTTP/runtime and private-network qualification passed. Company Bookface/browser qualification remains outstanding; existing deployments are not approved for migration yet. Automatic suspension is verified with variable timing, not a fixed deadline. See the final entries below for the immutable image and measured results.
 
 The Fly adapter must retain QM's application access controls and durable application data while delegating idle suspension and request-driven wake-up to Fly Proxy. Existing deployments remain on their current provider until the following checks pass against the candidate source and a real QM instance.
 
@@ -18,6 +18,8 @@ The Fly adapter must retain QM's application access controls and durable applica
 | Capacity       | Bounded concurrent publishes and wake-ups; retry partial failures without orphaning resources                                      |
 
 Record candidate commit, image digest, timestamps, HTTP assertions, machine states, data checks and cleanup in private receipts. Unit tests and direct provider calls are supporting evidence, not end-to-end acceptance.
+
+The following entries record the implementation and QA chronologically; later entries resolve earlier blockers.
 
 The prototype adds Fly service autostop/suspend, autostart and a zero minimum. The application reaper must not delete provider-managed sleeping apps. AWS-to-Fly company-isolated private connectivity remains unresolved.
 
