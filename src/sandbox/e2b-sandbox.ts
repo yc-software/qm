@@ -251,7 +251,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     processSessions: true,
     egressEnforcement: "none",
     spec: {
-      os: "Ubuntu — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
+      os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);

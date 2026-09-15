@@ -43,12 +43,15 @@ export interface ModalClient {
   terminate(sandboxId: string): Promise<void>;
 }
 
+const MODAL_DEFAULT_IMAGE = "node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d";
+const MODAL_DEFAULT_IMAGE_SETUP =
+  "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tar xz-utils unzip python3 python3-venv openssh-client && rm -rf /var/lib/apt/lists/*";
+
 export interface SdkModalClientOptions {
   tokenId: string;
   tokenSecret: string;
   appName: string;
-  image: string;
-  imageSetupCommands?: string[];
+  image?: string;
   environment?: string;
   cpus?: number;
   memoryMb?: number;
@@ -125,8 +128,9 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       ...(opts.environment ? { environment: opts.environment } : {}),
     });
     const app = await client.apps.fromName(opts.appName, { createIfMissing: true });
-    let image = client.images.fromRegistry(opts.image);
-    if (opts.imageSetupCommands?.length) image = image.dockerfileCommands(opts.imageSetupCommands);
+    const image = opts.image
+      ? client.images.fromRegistry(opts.image)
+      : client.images.fromRegistry(MODAL_DEFAULT_IMAGE).dockerfileCommands([MODAL_DEFAULT_IMAGE_SETUP]);
     return { client, app, image };
   };
   const loadCtx = (): Promise<{ client: SdkClient; app: SdkApp; image: SdkImage }> =>

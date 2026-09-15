@@ -836,15 +836,7 @@ export function buildApp(
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,
         appName: modal.appName ?? "qm",
-        image: modal.image ?? "ubuntu:24.04",
-        ...(modal.image
-          ? {}
-          : {
-              imageSetupCommands: [
-                "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tar xz-utils unzip python3 python3-venv openssh-client && rm -rf /var/lib/apt/lists/*",
-                "RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* && node --version",
-              ],
-            }),
+        ...(modal.image ? { image: modal.image } : {}),
         ...(modal.environment ? { environment: modal.environment } : {}),
         ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
         ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),

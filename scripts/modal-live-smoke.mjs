@@ -8,7 +8,10 @@ const errShape = (e) => `${e?.constructor?.name ?? "?"}/${e?.name ?? "?"}: ${Str
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 const APP = process.env.MODAL_APP_NAME ?? "qm-smoke";
-const IMAGE = process.env.MODAL_IMAGE ?? "ubuntu:24.04";
+const IMAGE = process.env.MODAL_IMAGE;
+const DEFAULT_IMAGE = "node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d";
+const DEFAULT_IMAGE_SETUP =
+  "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tar xz-utils unzip python3 python3-venv openssh-client && rm -rf /var/lib/apt/lists/*";
 const NAME = `qm-smoke-${Date.now().toString(36)}`;
 
 info(
@@ -23,7 +26,9 @@ let idler;
 try {
   const app = await modal.apps.fromName(APP, { createIfMissing: true });
   log("auth + app lookup (through any configured proxy)", true, `app=${APP} (${el()})`);
-  const image = modal.images.fromRegistry(IMAGE);
+  const image = IMAGE
+    ? modal.images.fromRegistry(IMAGE)
+    : modal.images.fromRegistry(DEFAULT_IMAGE).dockerfileCommands([DEFAULT_IMAGE_SETUP]);
 
   const ct = Date.now();
   sb = await modal.sandboxes.create(app, image, { name: NAME, timeoutMs: 30 * 60_000 });
