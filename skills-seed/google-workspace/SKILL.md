@@ -6,6 +6,10 @@ requiredCapabilities:
   - egress:www.googleapis.com
 ---
 
+## Universal integration provider first
+
+Call `integrations` with `action: "status"`. When available, read `skills/integrations/SKILL.md` and use that shared helper for discovery, consent and execution. Follow this skill's task/content rules, but skip its direct-token and script instructions. The direct OAuth procedures below are fallback only when no universal provider is available, never after a permission denial.
+
 # Google Workspace
 
 Use this skill when the user asks about Gmail, Google Calendar, or Google Tasks:

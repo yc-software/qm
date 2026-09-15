@@ -1626,7 +1626,7 @@ export function buildApp(
               {
                 serviceCredential: async (slug) => {
                   const record = await keychain.getServiceCredentialSecret(scopeId("org", config.orgId), slug);
-                  return record && record.delivery !== "env" ? record : undefined;
+                  return record && record.delivery !== "env" && !record.provider ? record : undefined;
                 },
                 connectorToken: async (host, principalId) =>
                   (await keychain.connectorAccessToken(host, principalId)) ?? undefined,

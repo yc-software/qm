@@ -3,6 +3,10 @@ name: connect-apps
 description: Connect an administrator-enabled SaaS app for a user with a one-time OAuth consent link.
 ---
 
+## Universal integration provider first
+
+Call `integrations` with `action: "status"`. When available, read `skills/integrations/SKILL.md` and use that shared helper for discovery, consent and execution. Follow this skill's task/content rules, but skip its direct-token and script instructions. The direct OAuth procedures below are fallback only when no universal provider is available, never after a permission denial.
+
 ## Connecting SaaS apps
 
 When `$AGENT_OAUTH_CONSENT_TOKEN` is set you can help the user connect a SaaS app via a browser

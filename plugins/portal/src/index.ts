@@ -635,6 +635,19 @@ async function handleConsentRedeem(
     );
   }
   switch (data.status) {
+    case "connected":
+      return sendHtml(
+        res,
+        200,
+        cardPage({
+          title: "Connected",
+          heading: "Your app is connected",
+          actions: '<a class="btn primary" href="/">Return to QM</a>',
+          help: "Access can be revoked from your conversation.",
+          msg: "Return to your conversation to continue.",
+          icon: LOCK_ICON,
+        }),
+      );
     case "authorize":
       if (!data.authorizeUrl)
         return sendHtml(res, 502, connectErrorHtml("The connection service returned an unexpected response."));
@@ -1044,6 +1057,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     res.writeHead(302, { location: `/auth/login?returnTo=${encodeURIComponent(`${pathname}${url.search}`)}` });
     return void res.end();
   };
+  if (method === "GET" && /^\/connect\/composio\/complete(?:\/[a-z0-9][a-z0-9-]{0,62})?$/.test(pathname)) {
+    if (!session) return consentBounce();
+    if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml());
+    return handleConsentRedeem(res, {
+      corePath: `/v1/connectors/composio/complete${pathname.slice("/connect/composio/complete".length)}${url.search}`,
+      session,
+    });
+  }
   const redeem = /^\/connect\/redeem\/([^/]+)$/.exec(pathname);
   if (method === "GET" && redeem) {
     if (!session) return consentBounce();

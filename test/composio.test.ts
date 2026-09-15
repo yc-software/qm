@@ -253,7 +253,9 @@ test("identities are namespaced by company", async () => {
   try {
     await f.adapter.complete(actor, "opaque-a");
     await f.adapter.complete({ ...actor, tenantId: "company-b" }, "opaque-b");
-    assert.notEqual(f.calls[0]?.body?.user_id, f.calls[1]?.body?.user_id);
+    const completions = f.calls.filter((call) => call.method === "POST");
+    assert.equal(completions.length, 2);
+    assert.notEqual(completions[0]?.body?.user_id, completions[1]?.body?.user_id);
   } finally {
     f.close();
   }

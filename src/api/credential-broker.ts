@@ -127,7 +127,7 @@ export async function brokerCredentialCall(opts: {
     return deny(403, "not_entitled", "this session is not entitled to that credential", "");
   }
   const rec: DecryptedServiceCredential | null = await reader.getServiceCredentialSecret(orgScopeId, slug);
-  if (!rec || !rec.enabled || rec.delivery === "env") {
+  if (!rec || !rec.enabled || rec.delivery === "env" || rec.provider !== undefined) {
     return deny(404, "credential_unavailable", "credential not found or disabled", rec?.host ?? "");
   }
   if (claims.deployment && !rec.deployments) {

@@ -98,7 +98,23 @@ export function createComposioAdapter(options: {
           body: { session_uri: sessionUri, user_id: userId(actor) },
         },
       );
-      if (!result.connected_account_id || !result.toolkit_slug) throw new Error("Invalid Composio completion");
+      if (
+        typeof result.connected_account_id !== "string" ||
+        !result.connected_account_id ||
+        typeof result.toolkit_slug !== "string" ||
+        !result.toolkit_slug
+      )
+        throw new Error("Invalid Composio completion");
+      const connected = await sdk.connectedAccounts.get(result.connected_account_id);
+      if (
+        connected.id !== result.connected_account_id ||
+        connected.toolkit.slug !== result.toolkit_slug ||
+        connected.status !== "ACTIVE" ||
+        connected.isDisabled ||
+        connected.authConfig.isDisabled ||
+        connected.experimental?.accountType !== "PRIVATE"
+      )
+        throw new Error("Connection is not active and private");
       return { accountId: result.connected_account_id, toolkit: result.toolkit_slug };
     },
     async status(actor: Actor, connection: string) {

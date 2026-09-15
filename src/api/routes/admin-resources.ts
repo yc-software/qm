@@ -942,6 +942,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         name?: unknown;
         secret?: unknown;
         delivery?: unknown;
+        provider?: unknown;
         envKey?: unknown;
         host?: unknown;
         injection?: unknown;
@@ -997,6 +998,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         slug: credential.slug,
         name: credential.name,
         delivery: credential.delivery,
+        ...(credential.provider ? { provider: credential.provider } : {}),
         ...(credential.envKey ? { envKey: credential.envKey } : {}),
         host: credential.host,
         ...(secret?.secret ? { secret: secret.secret } : {}),
@@ -1013,6 +1015,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           slug: credential.slug,
           name: credential.name,
           delivery: credential.delivery,
+          provider: credential.provider,
           envKey: credential.envKey ?? null,
           host: credential.host,
           injection: credential.injection ?? null,
@@ -1116,6 +1119,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         }
       }
       const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : "";
+      const provider = b.provider === undefined ? existing?.provider : b.provider;
+      if (provider !== undefined && provider !== null && provider !== "composio")
+        return { error: "Unknown integration provider" };
       const deliveryRaw = b.delivery === undefined ? (existing?.delivery ?? "broker") : b.delivery;
       if (deliveryRaw !== "broker" && deliveryRaw !== "env") return { error: 'delivery must be "broker" or "env"' };
       const delivery: "broker" | "env" = deliveryRaw;
@@ -1136,6 +1142,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (delivery === "broker" && (!host || /[/:\s]/.test(host))) {
         return { error: "broker delivery requires { host } (a bare hostname)" };
       }
+      if (provider === "composio" && (delivery !== "broker" || host !== "backend.composio.dev"))
+        return { error: "Composio requires server-only delivery to backend.composio.dev" };
       if (delivery === "env" && host) return { error: "a pinned host only applies to broker delivery" };
       if (!existing && (typeof b.secret !== "string" || !b.secret)) {
         return { error: "a new credential requires a secret" };
@@ -1184,6 +1192,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         slug,
         name,
         delivery,
+        ...(provider === "composio" ? { provider: "composio" as const } : {}),
         ...(delivery === "env" ? { envKey } : {}),
         host: delivery === "env" ? "" : host,
         ...(typeof b.secret === "string" && b.secret ? { secret: b.secret } : {}),

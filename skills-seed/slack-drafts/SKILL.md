@@ -5,6 +5,10 @@ requiredCapabilities:
   - egress:slack.com
 ---
 
+## Universal integration provider first
+
+Call `integrations` with `action: "status"`. When available, read `skills/integrations/SKILL.md` and use that shared helper for discovery, consent and execution. Follow this skill's task/content rules, but skip its direct-token and script instructions. The direct OAuth procedures below are fallback only when no universal provider is available, never after a permission denial.
+
 # Slack drafts
 
 Use this skill when the user wants a Slack message prepared for them to review and

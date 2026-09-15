@@ -129,7 +129,12 @@ test("sliding renewal preserves the anon flag", async () => {
 test("anonymous sessions are refused the connect and secret-drop flows", async () => {
   const visit = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
   const cookie = sessionCookieOf(visit);
-  for (const path of ["/connect/redeem/tok123", "/connect/google/self-connect", "/drop/tok123/form"]) {
+  for (const path of [
+    "/connect/redeem/tok123",
+    "/connect/google/self-connect",
+    "/connect/composio/complete?session_uri=opaque",
+    "/drop/tok123/form",
+  ]) {
     const r = await fetch(`${base}${path}`, { headers: { ...HTML, cookie } });
     assert.equal(r.status, 403, `${path} must refuse anon sessions`);
   }

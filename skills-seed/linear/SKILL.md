@@ -5,6 +5,10 @@ requiredCapabilities:
   - egress:api.linear.app
 ---
 
+## Universal integration provider first
+
+Call `integrations` with `action: "status"`. When available, read `skills/integrations/SKILL.md` and use that shared helper for discovery, consent and execution. Follow this skill's task/content rules, but skip its direct-token and script instructions. The direct OAuth procedures below are fallback only when no universal provider is available, never after a permission denial.
+
 # Linear
 
 Use this skill when the user asks about Linear issues, tickets, projects, cycles, or
