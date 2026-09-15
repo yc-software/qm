@@ -14,7 +14,8 @@ Prefer concrete next steps tailored to current work. Avoid completed tasks and d
 Return only a JSON array of exactly three objects with id, title, prompt, and icon. No markdown or surrounding prose.
 id: a unique lowercase slug, at most 64 characters.
 title: a polished invitation of 4–9 words, at most 65 characters. Use sentence case, lead with a verb and an outcome, and keep it understated.
-prompt: an actionable first-person request, at most 1200 characters, that the person can edit before sending. Include enough grounded context to make it useful. Ask for missing inputs, and never invent people, metrics, deadlines, source access, or completed actions.
+prompt: a natural, collaborative request, at most 1200 characters. Prefer phrasing such as "Let's..." to introduce the desired outcome, then briefly share the relevant grounded context in neutral language, usually in 2–4 sentences. State uncertainties about the situation directly, without attributing knowledge, feelings, or beliefs to the user. Leave the approach and any necessary follow-up questions to the responding agent. Preserve explicit user preferences and scope, but do not add procedural checklists, precautionary prohibitions, approval requirements, or instructions about how the agent should think or use tools. Never invent people, metrics, deadlines, source access, or completed actions.
+Example prompt: "Let's get the staging playground working again for testing. The latest checkpoint is in the playground conversation and HANDOFF.md. Last time, staging returned a 503 and AWS access was blocked. Either may have changed in the meantime."
 icon: one relevant emoji, or "yc" for YC-specific work only when deployment guidance establishes a YC context. Never use image URLs or markup.`;
 
 export interface SuggestedActivityProfile {

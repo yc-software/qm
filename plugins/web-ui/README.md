@@ -56,13 +56,13 @@ is bundled into the public application.
   {
     "id": "weekly-brief",
     "title": "Wake up to a fresh briefing",
-    "prompt": "Set up a recurring briefing. Ask me which topics, cadence, timezone, and delivery destination to use.",
+    "prompt": "Let's set up a recurring briefing on the topics I follow.",
     "icon": "schedule"
   },
   {
     "id": "project-app",
     "title": "Build a home for my projects",
-    "prompt": "Build a private project tracker app. Start by understanding my workflow and existing data.",
+    "prompt": "Let's build a private app to keep track of my projects.",
     "icon": "app"
   }
 ]
@@ -93,7 +93,11 @@ staggered by user. The cron runner uses the normal owner-scoped session, runtime
 selection, memory, history, tools, and authorized data access. It has no delivery
 destination. The standing task in `src/suggestions/activities.ts` asks it to research
 relevant context, avoid mutations or notifications, and return three validated
-activity objects. It does not create a separate reduced-context model call.
+activity objects. Draft prompts use a natural, collaborative voice, such as "Let's...",
+with relevant facts and uncertainties as neutral context, without attributing knowledge,
+feelings, or beliefs to the user. They preserve explicit user
+preferences and scope while leaving the approach to the responding agent. It does not
+create a separate reduced-context model call.
 
 The UI reads the latest valid result from the cron's completed personal session,
 including responses larger than the truncated fire-log preview. It displays the

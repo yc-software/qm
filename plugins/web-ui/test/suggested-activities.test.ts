@@ -5,7 +5,7 @@ import { parseSuggestedActivities } from "../../chassis/src/suggested-activities
 const activity = {
   id: "weekly-brief",
   title: "Wake up to a fresh briefing",
-  prompt: "Set up a weekly briefing. Ask me which topics and schedule to use.",
+  prompt: "Let's set up a weekly briefing on the topics I follow.",
   icon: "schedule",
 };
 
