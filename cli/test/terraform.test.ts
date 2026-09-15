@@ -765,3 +765,84 @@ test("the deploy role lists tasks only within its cluster", () => {
   assert.match(listing, /ecs:ListTasks/);
   assert.match(listing, /"ecs:cluster" = aws_ecs_cluster\.this\.arn/);
 });
+
+test("terraform routes the app wildcard through portal when both services use the same app domain", () => {
+  for (const key of ["AWS_DEPLOY_APPS_DOMAIN", "DEPLOY_APPS_DOMAIN"]) {
+    const rendered = terraformVars(
+      {
+        ...config,
+        apiUrl: "https://api.agent.acme.example",
+        services: ["core", "portal"],
+        aws: {
+          ...config.aws!,
+          sharedAlb: true,
+          services: {
+            ...config.aws!.services,
+            portal: { ecrRepository: "qm-portal", ecsService: "acme-portal", cpu: 256, memory: 512 },
+          },
+        },
+        env: {
+          core: { [key]: "apps.agent.acme.example" },
+          portal: { PORTAL_APPS_DOMAIN: "APPS.AGENT.ACME.EXAMPLE." },
+        },
+      },
+      "",
+      declared,
+    );
+    assert.match(rendered, /core_public_hosts\s+= \[\s+"api\.agent\.acme\.example"\s+\]/);
+    assert.doesNotMatch(rendered, /\*\.apps/);
+  }
+});
+
+test("terraform rejects an app domain that differs between portal and core", () => {
+  assert.throws(
+    () =>
+      terraformVars(
+        {
+          ...config,
+          services: ["core", "portal"],
+          aws: {
+            ...config.aws!,
+            services: {
+              ...config.aws!.services,
+              portal: { ecrRepository: "qm-portal", ecsService: "acme-portal", cpu: 256, memory: 512 },
+            },
+          },
+          env: {
+            core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" },
+            portal: { PORTAL_APPS_DOMAIN: "other.agent.acme.example" },
+          },
+        },
+        "",
+        declared,
+      ),
+    /portal apps domain must match core/,
+  );
+});
+
+test("dedicated ALBs retain direct core app routing when portal declares the same domain", () => {
+  const rendered = terraformVars(
+    {
+      ...config,
+      apiUrl: "https://api.agent.acme.example",
+      services: ["core", "portal"],
+      aws: {
+        ...config.aws!,
+        services: {
+          ...config.aws!.services,
+          portal: { ecrRepository: "qm-portal", ecsService: "acme-portal", cpu: 256, memory: 512 },
+        },
+      },
+      env: {
+        core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" },
+        portal: { PORTAL_APPS_DOMAIN: "apps.agent.acme.example" },
+      },
+    },
+    "",
+    declared,
+  );
+  assert.match(
+    rendered,
+    /core_public_hosts\s+= \[\s+"\*\.apps\.agent\.acme\.example",\s+"api\.agent\.acme\.example"\s+\]/,
+  );
+});

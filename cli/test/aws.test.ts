@@ -1188,6 +1188,9 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
   };
   try {
     await run(hostSplitConfig(bothHosts));
+    const portalApps = hostSplitConfig(bothHosts);
+    portalApps.env.portal = { ...portalApps.env.portal, PORTAL_APPS_DOMAIN: bothHosts.appsDomain };
+    await run(portalApps);
     await run(hostSplitConfig({ apiUrl: bothHosts.apiUrl }));
     await run(hostSplitConfig({ appsDomain: bothHosts.appsDomain }));
     await run(hostSplitConfig({ apiUrl: "https://API.agent.acme.example", appsDomain: "APPS.agent.acme.example." }));

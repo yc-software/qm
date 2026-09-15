@@ -1,3 +1,4 @@
+import { awsCoreHostnames } from "./aws-routing.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -155,21 +156,7 @@ function derivedValues(
       "the vendored AWS scaffold predates aws.deployEnvironment; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
     );
   }
-  const corePublicHosts: string[] = [];
-  if (config.services.includes("portal")) {
-    const publicHost = new URL(config.publicUrl).hostname.toLowerCase();
-    if (config.apiUrl) {
-      const apiHost = new URL(config.apiUrl).hostname.toLowerCase();
-      if (apiHost !== publicHost) corePublicHosts.push(apiHost);
-    }
-    const appsDomain = config.env.core?.AWS_DEPLOY_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
-    if (appsDomain) {
-      if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(appsDomain)) {
-        throw new CliError(`env.core.AWS_DEPLOY_APPS_DOMAIN ${JSON.stringify(appsDomain)} is not a valid DNS domain`);
-      }
-      corePublicHosts.push(`*.${appsDomain}`);
-    }
-  }
+  const corePublicHosts = config.services.includes("portal") ? awsCoreHostnames(config) : [];
   if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
     throw new CliError(
       "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
