@@ -325,3 +325,29 @@ test("set_standing_order writes the channel policy the ambient judge reads (reco
     await built.runtime.stop();
   }
 });
+
+test("successful Slack reads preserve partial-context and rate-limit guidance in model tool results", async () => {
+  const guidance =
+    "Some context is missing. Slack history is rate-limited; retry in 60 seconds or set up your own Slack app at https://qm.test/admin/?setup=slack";
+  const tool = surfaceTool({
+    async readThread() {
+      return { ok: true, messages: [{ text: "available thread context" }], message: guidance };
+    },
+    async whatsNew() {
+      return { ok: true, hereNew: 2, activeSubConversations: 1, message: guidance };
+    },
+    async search() {
+      return { ok: true, hits: [{ snippet: "available search hit" }], source: "cache", message: guidance };
+    },
+  });
+  for (const [action, expected] of [
+    ["read_thread", "available thread context"],
+    ["whats_new", "2 new in this thread"],
+    ["search", "available search hit"],
+  ]) {
+    const result = await tool.execute(`partial-${action}`, { action, query: "available" });
+    const output = result.content.map((item: { text?: string }) => item.text ?? "").join("\n");
+    assert.ok(output.includes(expected!), action);
+    assert.ok(output.includes(guidance), action);
+  }
+});
