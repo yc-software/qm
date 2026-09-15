@@ -167,3 +167,22 @@ test("waitDaemon: a transient 429 blip still proves readiness on the next probe"
   await client.waitDaemon("mvm-1", "mvm-1.example.on.aws");
   assert.equal(calls.length, 2, "the blip is ridden out and the 200 proves the daemon");
 });
+
+test("readiness reuses only the supplied observation and checks again on the next call", async () => {
+  let reads = 0;
+  const api = {
+    getMicrovm: async (id: string) => {
+      reads++;
+      return { microvmId: id, state: "TERMINATED" };
+    },
+  } as AwsMicrovmApi;
+  const client = createMicrovmClient(api, { agentPort: 8080, tokenTtlMinutes: 30 });
+  await client.ensureRunning("one", "endpoint", { microvmId: "one", state: "RUNNING" });
+  assert.equal(reads, 0);
+  await assert.rejects(client.ensureRunning("one", "endpoint"), /TERMINATED/);
+  assert.equal(reads, 1);
+  await assert.rejects(
+    client.ensureRunning("one", "endpoint", { microvmId: "two", state: "RUNNING" }),
+    /another body/,
+  );
+});

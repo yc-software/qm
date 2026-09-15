@@ -170,8 +170,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     return Buffer.from((JSON.parse(res.text) as { b64: string }).b64, "base64");
   }
 
-  async function ensureRunning(id: string): Promise<void> {
-    await client.ensureRunning(id, await resolveEndpoint(id));
+  async function ensureRunning(id: string, observed?: Awaited<ReturnType<AwsMicrovmApi["getMicrovm"]>>): Promise<void> {
+    await client.ensureRunning(id, await resolveEndpoint(id), observed);
   }
 
   const homeSnapshots = createHomeSnapshotOps<string>({
@@ -260,7 +260,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         if (alive && !stale) {
           endpointById.set(stored.microvmId, stored.endpoint);
           scopeByMicrovm.set(stored.microvmId, scope);
-          await ensureRunning(stored.microvmId);
+          await ensureRunning(stored.microvmId, desc);
           return { id: stored.microvmId, endpoint: stored.endpoint, coldStart: false };
         }
         if (alive && stale) {
@@ -306,7 +306,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         const desc = await api.tryGetMicrovm(existing.microvmId);
         if (desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING") {
           endpointById.set(existing.microvmId, existing.endpoint);
-          await ensureRunning(existing.microvmId);
+          await ensureRunning(existing.microvmId, desc);
           return { id: existing.microvmId, endpoint: existing.endpoint, coldStart: false };
         }
       }

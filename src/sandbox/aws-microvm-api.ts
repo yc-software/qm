@@ -281,7 +281,7 @@ export interface MicrovmClient {
   execRaw(id: string, endpoint: string, cmd: string, timeoutSec: number): Promise<MicrovmExecResult>;
   writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void>;
   waitDaemon(id: string, endpoint: string): Promise<void>;
-  ensureRunning(id: string, endpoint: string): Promise<void>;
+  ensureRunning(id: string, endpoint: string, observed?: MicrovmDescription): Promise<void>;
   evict(id: string): void;
 }
 
@@ -362,8 +362,9 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     throw new Error(`microVM ${id} exec daemon never became reachable: ${lastErr}`);
   }
 
-  async function ensureRunning(id: string, endpoint: string): Promise<void> {
-    const desc = await api.getMicrovm(id);
+  async function ensureRunning(id: string, endpoint: string, observed?: MicrovmDescription): Promise<void> {
+    const desc = observed ?? (await api.getMicrovm(id));
+    if (desc.microvmId !== id) throw new Error("microVM state belongs to another body");
     if (desc.state === "RUNNING") return;
     if (desc.state === "TERMINATED" || desc.state === "TERMINATING")
       throw new Error(`microVM ${id} is ${desc.state}, cannot run`);

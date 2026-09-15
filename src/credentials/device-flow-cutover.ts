@@ -107,10 +107,12 @@ export function createDeviceFlowCutoverStore(
     resolvePolicy,
     resolve,
     async residentResetGeneration(scope, service, computerId) {
-      if ((await resolve(scope, service)) !== "legacy") return null;
       const policy = await resolvePolicy(scope, service);
-      const requested = await getReset(resetKey("request", scope, service));
-      const orgRequested = scope === orgScope ? null : await getReset(resetKey("request", orgScope, service));
+      if ((policy?.mode ?? "legacy") !== "legacy") return null;
+      const [requested, orgRequested] = await Promise.all([
+        getReset(resetKey("request", scope, service)),
+        scope === orgScope ? null : getReset(resetKey("request", orgScope, service)),
+      ]);
       const generation = [
         policy?.resetResident ? policy.resetGeneration : undefined,
         orgRequested?.generation,
