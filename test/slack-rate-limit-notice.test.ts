@@ -132,3 +132,20 @@ test("explicit read tools notify only for human Slack turns, using their origina
       );
   }
 });
+
+test("automatic and tool reads share a cooldown after normalizing the requester, without suppressing other people", async (t) => {
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const { client, ephemeral } = fixture();
+  const notice = createSlackRateLimitNotice(options);
+  await notice.run(client, { target: "C1:1700.1", user: "U2" }, () => notice.observe(rateLimit));
+  await notice.run(client, { target: "C1:1700.1", user: "reader@example.com" }, () => notice.observe(rateLimit));
+  await notice.run(client, { target: "C1:1700.2", user: "U2" }, () => notice.observe(rateLimit));
+  assert.equal(ephemeral.length, 1);
+  await notice.run(client, { target: "C1:1700.1", user: "U1" }, () => notice.observe(rateLimit));
+  await notice.run(client, { target: "C2:1700.1", user: "U2" }, () => notice.observe(rateLimit));
+  assert.equal(ephemeral.length, 3);
+  now += 60_001;
+  await notice.run(client, { target: "C1:1700.1", user: "reader@example.com" }, () => notice.observe(rateLimit));
+  assert.equal(ephemeral.length, 4);
+});

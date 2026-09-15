@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { LRUCache } from "lru-cache";
 import { swallow } from "../util/errors.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import { parseDeliveryTarget } from "./lib.ts";
@@ -9,6 +10,7 @@ interface Recipient {
 }
 
 export function createSlackRateLimitNotice(opts: { managed?: boolean; setupUrl?: string; client?: any }) {
+  const recentlyNotified = new LRUCache<string, true>({ max: 1000, ttl: 60_000, ttlResolution: 0 });
   const active = new AsyncLocalStorage<{ client: any; recipient: Recipient; sent: boolean } | undefined>();
   return {
     run<T>(client: any, recipient: Recipient | undefined, fn: () => Promise<T>): Promise<T> {
@@ -28,6 +30,9 @@ export function createSlackRateLimitNotice(opts: { managed?: boolean; setupUrl?:
           ? request.recipient.user
           : (await client.users.lookupByEmail({ email: request.recipient.user })).user?.id;
         if (!user) return;
+        const key = `${channel}:${user}`;
+        if (recentlyNotified.has(key)) return;
+        recentlyNotified.set(key, true);
         if (channel.startsWith("D")) {
           await client.chat.postMessage({
             channel,
