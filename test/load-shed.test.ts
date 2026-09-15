@@ -4,6 +4,7 @@ import {
   createLoadShedGate,
   nextShedState,
   RESUME_BELOW_UTILIZATION,
+  RESUME_BELOW_DB_WAITERS,
   SHED_AT_DB_WAITERS,
   SHED_AT_UTILIZATION,
   type LoadSample,
@@ -23,16 +24,16 @@ test("shedding starts at the high threshold and only clears below the low one", 
   assert.equal(nextShedState(true, idle(RESUME_BELOW_UTILIZATION - 0.01)), false);
 });
 
-test("a queue of connection waiters sheds on its own, and any waiter keeps a shut gate shut", () => {
+test("a queue of connection waiters sheds on its own and clears only once the queue is nearly drained", () => {
   assert.equal(nextShedState(false, { utilization: 0.1, waitingForDb: SHED_AT_DB_WAITERS - 1 }), false);
   assert.equal(nextShedState(false, { utilization: 0.1, waitingForDb: SHED_AT_DB_WAITERS }), true);
-  assert.equal(nextShedState(true, { utilization: 0.1, waitingForDb: 1 }), true);
-  assert.equal(nextShedState(true, { utilization: 0.1, waitingForDb: 0 }), false);
+  assert.equal(nextShedState(true, { utilization: 0.1, waitingForDb: RESUME_BELOW_DB_WAITERS }), true);
+  assert.equal(nextShedState(true, { utilization: 0.1, waitingForDb: RESUME_BELOW_DB_WAITERS - 1 }), false);
 });
 
 test("the gate stops claims while saturated and reopens once the process idles", async () => {
   let s: LoadSample = idle(0);
-  const gate = createLoadShedGate({ sampler: { start() {}, sample: () => s }, sampleMs: 5 });
+  const gate = createLoadShedGate({ sampler: { sample: () => s }, sampleMs: 5 });
   gate.start();
   try {
     assert.equal(gate.canClaim(), true);

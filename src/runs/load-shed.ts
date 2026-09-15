@@ -14,7 +14,6 @@ export interface LoadSample {
 }
 
 export interface LoadSampler {
-  start(): void;
   sample(): LoadSample;
 }
 
@@ -22,18 +21,16 @@ const SAMPLE_MS = 2_000;
 export const SHED_AT_UTILIZATION = 0.85;
 export const RESUME_BELOW_UTILIZATION = 0.6;
 export const SHED_AT_DB_WAITERS = 8;
+export const RESUME_BELOW_DB_WAITERS = 2;
 
 export function nextShedState(shedding: boolean, s: LoadSample): boolean {
-  if (shedding) return s.utilization >= RESUME_BELOW_UTILIZATION || s.waitingForDb > 0;
+  if (shedding) return s.utilization >= RESUME_BELOW_UTILIZATION || s.waitingForDb >= RESUME_BELOW_DB_WAITERS;
   return s.utilization >= SHED_AT_UTILIZATION || s.waitingForDb >= SHED_AT_DB_WAITERS;
 }
 
 function processLoadSampler(): LoadSampler {
   let last = performance.eventLoopUtilization();
   return {
-    start: () => {
-      last = performance.eventLoopUtilization();
-    },
     sample: () => {
       const now = performance.eventLoopUtilization();
       const utilization = performance.eventLoopUtilization(now, last).utilization;
@@ -61,10 +58,7 @@ export function createLoadShedGate(opts: { sampler?: LoadSampler; sampleMs?: num
     { label: "load-shed" },
   );
   return {
-    start: () => {
-      sampler.start();
-      sweeper.start();
-    },
+    start: () => sweeper.start(),
     stop: () => sweeper.stop(),
     canClaim: () => !shedding,
   };
