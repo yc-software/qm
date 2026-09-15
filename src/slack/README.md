@@ -245,3 +245,13 @@ your per-dev name + tokens live only in your local app and your gitignored `.env
 - Channel audience is enumerated per-member: `computeChannelAudience` (lib.ts) resolves
   the full member list (with a Slack-Connect / guest external marker, and an actor-only
   fallback when membership is unreadable) so the core's audience-floor is fine-grained.
+
+## Mirror qualification
+
+`SLACK_CONTEXT_SOURCE` controls conversation context and default Slack tool reads:
+
+- `live` (default) keeps Slack history as the source, including automatic channel thread expansion.
+- `shadow` returns the same live context while comparing stored events in the background. It logs `slack_mirror_shadow` counts for missing messages, text differences, and missing thread parents. It does not log message text or channel identifiers, backfill history, or wait for comparison before returning context. At most one comparison runs per Slack client; concurrent reads are not all sampled.
+- `mirror` explicitly enables stored context and mirror search, with the documented partial coverage and bounded live fallback. Keep this opt-in until shadow evidence and development qualification are satisfactory.
+
+Ingestion continues in every mode. Shadow mismatch counts describe the sampled live window, not complete channel coverage. Compare channel and thread samples, edits/deletes, and normal agent turns before enabling mirror reads. No automatic mode promotion occurs.

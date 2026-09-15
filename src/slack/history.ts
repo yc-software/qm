@@ -1,4 +1,6 @@
-import { decodeSlackEntities, mentionsBot } from "./lib.ts";
+import { messageWithForwardedContent } from "./forwards.ts";
+import type { SlackContextSource } from "./config.ts";
+import { decodeSlackEntities, mentionsBot, resolveMentionsInText } from "./lib.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { BotIdentity } from "./directory.ts";
@@ -17,6 +19,7 @@ export type SlackHistoryReader = (
   channel: string,
   threadTs?: string,
   before?: string,
+  expandThreads?: boolean,
 ) => Promise<SlackHistoryPage>;
 
 const MIRROR_CONTEXT_NOTE =
@@ -24,12 +27,110 @@ const MIRROR_CONTEXT_NOTE =
 
 export function createSlackHistoryReader(deps: {
   core: SlackCoreClient;
+  source?: SlackContextSource;
   ids: BotIdentity;
   managed?: boolean;
   setupUrl?: string;
   historyClient?: { conversations: { history(args: any): Promise<unknown>; replies(args: any): Promise<unknown> } };
 }): SlackHistoryReader {
-  return async (client, channel, threadTs, before) => {
+  async function liveHistory(
+    client: any,
+    channel: string,
+    threadTs?: string,
+    before?: string,
+    expandThreads = false,
+  ): Promise<SlackHistoryPage> {
+    const historyClient = deps.historyClient ?? client;
+    const paging = { channel, limit: 200, ...(before ? { latest: before, inclusive: false } : {}) };
+    const page = parseMessageList(
+      threadTs
+        ? await historyClient.conversations.replies({ ...paging, ts: threadTs })
+        : await historyClient.conversations.history(paging),
+    );
+    const raw = threadTs ? page.messages : page.messages.slice().reverse();
+    if (!threadTs && expandThreads) {
+      const parents = raw.filter((m) => m.ts && Number(m.reply_count) > 0).slice(-5);
+      const expanded = await Promise.all(
+        parents.map(async (m) => {
+          try {
+            return parseMessageList(await historyClient.conversations.replies({ channel, ts: m.ts, limit: 200 }))
+              .messages;
+          } catch {
+            return [];
+          }
+        }),
+      );
+      const byTs = new Map<string, SlackHistoryMessage>();
+      for (const m of [...raw, ...expanded.flat()]) if (m.ts) byTs.set(m.ts, m);
+      return { raw: [...byTs.values()], hasMore: page.hasMore };
+    }
+    return { raw, hasMore: page.hasMore };
+  }
+
+  async function compareShadow(
+    live: SlackHistoryPage,
+    channel: string,
+    threadTs?: string,
+    before?: string,
+  ): Promise<void> {
+    if (!deps.core.readSurfaceMessages) return;
+    try {
+      const options = { limit: 200, noFallback: true, ...(before ? { before } : {}) };
+      const rows = threadTs
+        ? (
+            await Promise.all([
+              deps.core.readSurfaceMessages(channel, { ...options, sub: threadTs }),
+              deps.core.readSurfaceMessages(channel, { at: threadTs, noFallback: true }),
+            ])
+          ).flat()
+        : await deps.core.readSurfaceMessages(channel, options);
+      const timestamps = new Set(rows.filter((m) => !m.deleted && (!before || m.ts < before)).map((m) => m.ts));
+      const liveTimestamps = new Set(live.raw.flatMap((m) => (m.ts ? [m.ts] : [])));
+      const byTs = new Map(rows.map((m) => [m.ts, m]));
+      let textMismatches = 0;
+      let staleEditedMessages = 0;
+      for (const message of live.raw) {
+        const stored = message.ts ? byTs.get(message.ts) : undefined;
+        if (!stored || stored.deleted) continue;
+        const liveText = resolveMentionsInText(
+          decodeSlackEntities(messageWithForwardedContent(message).text),
+          (id) => stored.mentions?.[id],
+        );
+        if (stored.text !== liveText) textMismatches++;
+        if (Number(message.edited?.ts) * 1000 > (stored.editedAt ?? 0)) staleEditedMessages++;
+      }
+      console.info(
+        JSON.stringify({
+          event: "slack_mirror_shadow",
+          thread: Boolean(threadTs),
+          conversationKind: channel.startsWith("D") ? "dm" : "channel_or_group",
+          staleEditedMessages,
+          liveMessages: liveTimestamps.size,
+          mirroredMessages: timestamps.size,
+          textMismatches,
+          liveMessagesMissingFromMirror: [...liveTimestamps].filter((ts) => !timestamps.has(ts)).length,
+          mirrorMessagesOutsideLiveWindow: [...timestamps].filter((ts) => !liveTimestamps.has(ts)).length,
+          missingThreadParent: Boolean(threadTs && !timestamps.has(threadTs)),
+          liveHasMore: live.hasMore,
+        }),
+      );
+    } catch {
+      console.info(JSON.stringify({ event: "slack_mirror_shadow", outcome: "read_failed", thread: Boolean(threadTs) }));
+    }
+  }
+
+  let shadowPending = false;
+  return async (client, channel, threadTs, before, expandThreads) => {
+    if (deps.source !== "mirror") {
+      const live = await liveHistory(client, channel, threadTs, before, expandThreads);
+      if (deps.source === "shadow" && !shadowPending) {
+        shadowPending = true;
+        void compareShadow(live, channel, threadTs, before).finally(() => {
+          shadowPending = false;
+        });
+      }
+      return live;
+    }
     const historyClient = deps.historyClient ?? client;
     let mirrored: SlackHistoryMessage[] = [];
     const deleted = new Set<string>();

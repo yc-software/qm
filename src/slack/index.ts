@@ -213,7 +213,13 @@ export async function startSlackPlugin(
     ...(cfg.webUiPublicUrl ? { setupUrl: `${cfg.webUiPublicUrl.replace(/\/$/, "")}/admin/?setup=slack` } : {}),
   };
   const historyClient = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY });
-  const readHistory = createSlackHistoryReader({ core, ids, historyClient, ...historyRateLimitOptions });
+  const readHistory = createSlackHistoryReader({
+    core,
+    ids,
+    historyClient,
+    source: cfg.contextSource ?? "live",
+    ...historyRateLimitOptions,
+  });
   const serializer = createConversationSerializer({
     readHistory,
     historyRateLimitOptions,

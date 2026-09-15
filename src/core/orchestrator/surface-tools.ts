@@ -178,6 +178,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   let coverageChecked = false;
   let coverageSince: string | undefined;
   const coverageForTurn = async (): Promise<string | undefined> => {
+    if (deps.slackContextSource !== "mirror") return undefined;
     if (coverageChecked) return coverageSince;
     coverageChecked = true;
     const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
@@ -343,7 +344,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const coverage = await coverageForTurn();
       const withCoverage = (r: SurfaceSearchResult): SurfaceSearchResult =>
         coverage ? { ...r, coverageSince: coverage } : r;
-      if (!q) return withCoverage({ ok: true, hits: [], source: deps.surfaceSearch ? "cache" : "live" });
+      if (!q)
+        return withCoverage({ ok: true, hits: [], source: deps.slackContextSource === "mirror" ? "cache" : "live" });
       const limit = Math.max(1, Math.min(SURFACE_SEARCH_MAX, opts?.limit ?? SURFACE_SEARCH_DEFAULT));
       const dest = currentDestination;
       const shapeHits = (messages: unknown[], prefiltered = false) =>
@@ -385,7 +387,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         return withCoverage({ ok: true, hits: shapeHits(result.messages ?? [], true), source: "slack" });
       }
       const container = dest.target ?? conversation.channelRef ?? conversation.threadRef;
-      if (deps.surfaceCache && dest.type === "slack" && container) {
+      if (deps.slackContextSource === "mirror" && deps.surfaceCache && dest.type === "slack" && container) {
         const channel = container.split(":")[0]!;
         const hits = await deps.surfaceCache.search(q, { container: channel, limit });
         return withCoverage({
@@ -400,10 +402,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           message: "Search covers stored Slack events only; older or missed messages may be absent.",
         });
       }
+      if (opts?.source === "mirror" && deps.slackContextSource !== "mirror") {
+        return {
+          ok: false,
+          message: "Mirror reads are disabled until verification is complete. Use the default live source.",
+        };
+      }
       if (opts?.source === "mirror" && !deps.surfaceSearch) {
         return { ok: false, message: "Stored Slack message search is unavailable; no live search was performed." };
       }
-      if (deps.surfaceSearch) {
+      if (deps.surfaceSearch && (dest.type !== "slack" || deps.slackContextSource === "mirror")) {
         const hits = await deps.surfaceSearch.search({
           surface: input.surface ?? "unknown",
           container,

@@ -192,7 +192,7 @@ export function createConversationSerializer(deps: {
       const slackId = ctx.slackIdsByPrincipal?.get(a.externalId);
       if (slackId) nameById.set(slackId, a.displayName);
     }
-    const page = await deps.readHistory(client, inc.channel, inc.threadTs).catch((error) => {
+    const page = await deps.readHistory(client, inc.channel, inc.threadTs, undefined, true).catch((error) => {
       swallow("slack: conversation context", error);
       return {
         raw: [] as SlackHistoryMessage[],

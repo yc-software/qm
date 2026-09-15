@@ -12,9 +12,9 @@ import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tool
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function freshApp() {
+function freshApp(slackContextSource?: "live" | "shadow" | "mirror") {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-readtools-"));
-  return buildApp(testConfig({ dataDir }));
+  return buildApp(testConfig({ dataDir, ...(slackContextSource ? { slackContextSource } : {}) }));
 }
 
 const actor = { externalId: "U1", displayName: "Ada" };
@@ -83,8 +83,8 @@ test("whats_new returns POINTERS (counts of new-here + other active threads), ne
   }
 });
 
-test("search defaults to the current channel mirror and returns author/snippet pointers without a live pull", async () => {
-  const built = freshApp();
+test("enabled mirror search uses the current channel and returns author/snippet pointers without a live pull", async () => {
+  const built = freshApp("mirror");
   built.runtime.start();
   const root = "C11:1100.1";
   await built.surfaceCache.ingest([
@@ -221,7 +221,7 @@ test("whats_new action appends the mirror-coverage window when known", async () 
 });
 
 test("search/whats_new surface the mirror coverage window end-to-end once the mirror has ingested history (§4.1/§4.2)", async () => {
-  const built = freshApp();
+  const built = freshApp("mirror");
   built.runtime.start();
   const root = "C30:3000.1";
   await built.app.ingestSurfaceEvents(

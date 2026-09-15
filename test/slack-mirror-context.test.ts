@@ -23,6 +23,7 @@ function fixture() {
   const readHistory = createSlackHistoryReader({
     core,
     ids,
+    source: "mirror",
     managed: true,
     setupUrl: "https://qm.test/admin/?setup=slack",
   });
@@ -168,6 +169,7 @@ test("read_thread, whats_new and mirror search retain coverage notes and contain
     deps: {
       deliveries: {},
       surfaceCache: cache,
+      slackContextSource: "mirror",
       surfaceContext: {
         pull: async () => ({
           messages: [{ ts: "2.000000", threadTs: "1.000000", text: "reply" }],
