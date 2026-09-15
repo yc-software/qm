@@ -6,7 +6,7 @@ import type { SlackHistoryMessage } from "./payloads.ts";
 import { parseMessageList } from "./payloads.ts";
 import { swallow } from "../util/errors.ts";
 
-export interface SlackHistoryPage {
+interface SlackHistoryPage {
   raw: SlackHistoryMessage[];
   hasMore: boolean;
   note?: string;
@@ -19,7 +19,7 @@ export type SlackHistoryReader = (
   before?: string,
 ) => Promise<SlackHistoryPage>;
 
-export const MIRROR_CONTEXT_NOTE =
+const MIRROR_CONTEXT_NOTE =
   "Context comes from stored Slack events. Earlier messages, missed events, reactions, and attachment details may be absent; this is not a complete Slack history.";
 
 export function createSlackHistoryReader(deps: {
