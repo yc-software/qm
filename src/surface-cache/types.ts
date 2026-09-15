@@ -3,6 +3,7 @@ export interface CachedMessage {
   ts: string;
   sub?: string;
   broadcast?: boolean;
+  subtype?: string;
   authorId?: string;
   authorName?: string;
   text: string;
@@ -50,6 +51,7 @@ export interface IngestEvent {
   ts: string;
   sub?: string | null;
   broadcast?: boolean;
+  subtype?: string;
   authorId?: string;
   authorName?: string;
   text?: string;

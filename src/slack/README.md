@@ -255,3 +255,5 @@ your per-dev name + tokens live only in your local app and your gitignored `.env
 - `mirror` explicitly enables stored context and mirror search, with the documented partial coverage and bounded live fallback. Keep this opt-in until shadow evidence and development qualification are satisfactory.
 
 Ingestion continues in every mode. Shadow mismatch counts describe the sampled live window, not complete channel coverage. Compare channel and thread samples, edits/deletes, and normal agent turns before enabling mirror reads. No automatic mode promotion occurs.
+
+Slack mirror records preserve provider subtypes so stored context uses the same system-message filtering as live context. A missing stored subtype means legacy or unobserved metadata; an empty subtype means a verified ordinary message. Partial event updates preserve omitted subtype and thread metadata. Mirror-mode history fallback shares event content normalization and prefers fresh Slack duplicates; live and shadow reads never backfill their comparison source.

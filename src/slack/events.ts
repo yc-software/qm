@@ -148,6 +148,7 @@ export function registerSlackEvents(
           userId: identity.userId,
           ...(identity.actor ? { actor: identity.actor } : {}),
           rawText: content.text,
+          subtype: e.subtype ?? "",
           files: content.files,
           threadTs: e.thread_ts,
           ts: e.ts,
@@ -165,6 +166,17 @@ export function registerSlackEvents(
   app.message(async ({ message, body, client, context }: MessageArgs) => {
     try {
       const m = parseMessageEvent(message);
+      if (
+        m.channel &&
+        !m.channel_type &&
+        (shouldMirrorMessage(m) || m.subtype === "message_changed" || m.subtype === "message_deleted")
+      ) {
+        const info = await directory.getChannelInfo(client, m.channel);
+        if (!info) throw new Error("Slack message channel lookup unavailable");
+        if (info.is_im) m.channel_type = "im";
+        else if (info.is_mpim) m.channel_type = "mpim";
+        else m.channel_type = info.is_private ? "group" : "channel";
+      }
       const eventId = parseEventId(body);
       const privacyChange = channelPrivacyChange(m);
       if (privacyChange) {
@@ -213,6 +225,7 @@ export function registerSlackEvents(
         const editedAt = Number(m.message.edited?.ts) || (textChanged ? Number(m.ts) : 0);
         if (shouldMirrorMessage(m.message))
           await mirrorMessageEvent({ ...m.message, channel: m.channel, channel_type: m.channel_type }, client, {
+            partial: true,
             ...(!shouldProcessMessage(m.message, "", "") ? { handled: true } : {}),
             ...(editedAt > 0 ? { editedAt: Math.round(editedAt * 1000) } : {}),
             ...(m.channel_type === "im" ? { kind: "dm" as const } : {}),
@@ -264,6 +277,7 @@ export function registerSlackEvents(
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
             rawText: content.text,
+            subtype: m.subtype ?? "",
             files: content.files,
             threadTs: m.thread_ts,
             ts: m.ts,
@@ -309,6 +323,7 @@ export function registerSlackEvents(
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
             rawText: content.text,
+            subtype: m.subtype ?? "",
             files: content.files,
             threadTs: m.thread_ts,
             ts: m.ts,
