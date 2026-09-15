@@ -1,5 +1,6 @@
 import type { PgPool } from "./pg-pool.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
+import { asError } from "../util/errors.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
@@ -48,50 +49,67 @@ export function createPostgresAdvisoryLock(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_ADVISORY_LOCK_TIMEOUT_MS;
   const pollMs = opts.pollMs ?? DEFAULT_ADVISORY_LOCK_POLL_MS;
 
+  async function attempt<T>(key: string, fn: () => Promise<T>): Promise<{ value: T } | null> {
+    const client = await (await pg.sessionPool()).connect();
+    let connectionError: Error | undefined;
+    let destroy = false;
+    let acquired = false;
+    const onError = (error: Error) => {
+      connectionError ??= error;
+      destroy = true;
+    };
+    client.on("error", onError);
+    try {
+      const res = await client.query<{ locked: boolean }>(
+        "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+        [key],
+      );
+      if (connectionError) throw connectionError;
+      if (res.rows[0]?.locked !== true) return null;
+      acquired = true;
+      let value: T;
+      try {
+        value = await fn();
+      } finally {
+        if (!connectionError) {
+          try {
+            const unlocked = await client.query<{ released: boolean }>(
+              "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS released",
+              [key],
+            );
+            if (unlocked.rows[0]?.released !== true) {
+              onError(new Error(`Postgres advisory lock was lost: ${key}`));
+            }
+          } catch (error) {
+            onError(asError(error));
+          }
+        }
+      }
+      if (connectionError) throw connectionError;
+      return { value };
+    } catch (error) {
+      if (!acquired) destroy = true;
+      throw error;
+    } finally {
+      client.release(destroy);
+      client.removeListener("error", onError);
+    }
+  }
+
   return {
     async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
       const deadline = Date.now() + timeoutMs;
-      const pool = await pg.sessionPool();
       for (;;) {
-        const client = await pool.connect();
-        try {
-          const res = await client.query<{ locked: boolean }>(
-            "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
-            [key],
-          );
-          const held = res.rows[0]?.locked === true;
-          if (held) {
-            try {
-              return await fn();
-            } finally {
-              await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key]);
-            }
-          }
-        } finally {
-          client.release();
-        }
+        const result = await attempt(key, fn);
+        if (result) return result.value;
         if (Date.now() >= deadline) throw new Error(`timeout acquiring advisory lock for ${key}`);
         await sleep(pollMs);
       }
     },
 
     async tryWithLock<T>(key: string, fn: () => Promise<T>): Promise<T | null> {
-      const pool = await pg.sessionPool();
-      const client = await pool.connect();
-      try {
-        const res = await client.query<{ locked: boolean }>(
-          "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
-          [key],
-        );
-        if (res.rows[0]?.locked !== true) return null;
-        try {
-          return await fn();
-        } finally {
-          await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key]);
-        }
-      } finally {
-        client.release();
-      }
+      const result = await attempt(key, fn);
+      return result ? result.value : null;
     },
   };
 }
