@@ -5,6 +5,7 @@ export interface CachedMessage {
   authorId?: string;
   authorName?: string;
   text: string;
+  files?: Array<{ fileId: string; name?: string; mimetype?: string }>;
   mentions?: Record<string, string>;
   self?: boolean;
   bot?: boolean;
@@ -69,6 +70,7 @@ export interface ContainerSummary extends ContainerState {
 }
 
 export interface ReadMessagesOpts {
+  at?: string;
   sub?: string;
   limit?: number;
   after?: string;

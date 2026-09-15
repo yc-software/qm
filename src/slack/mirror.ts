@@ -106,7 +106,8 @@ export function createMirror(deps: {
       }
       if (!gate.allowed) return;
     }
-    const raw = messageWithForwardedContent(m).text;
+    const content = messageWithForwardedContent(m);
+    const raw = content.text;
     const { text, mentions } = await resolveTextMentions(client, decodeSlackEntities(raw));
     await pushSurfaceEvents([
       {
@@ -116,6 +117,13 @@ export function createMirror(deps: {
         ...(m.user ? { authorId: String(m.user) } : {}),
         ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
         text,
+        ...(content.files.length
+          ? {
+              files: content.files
+                .filter((f) => f.id)
+                .map((f) => ({ fileId: f.id!, name: f.name, mimetype: f.mimetype })),
+            }
+          : {}),
         ...(Object.keys(mentions).length ? { mentions } : {}),
         ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
         ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),

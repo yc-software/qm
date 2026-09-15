@@ -5,7 +5,7 @@ export function mentionsBot(text: string, botUserId: string): boolean {
 }
 
 export function threadHasBotStake(
-  messages: readonly { user?: string; bot_id?: string; text?: string }[],
+  messages: readonly { user?: string; bot_id?: string; text?: string; mentionsSelf?: boolean }[],
   botUserId: string,
   ownBotId = "",
 ): boolean {
@@ -15,6 +15,7 @@ export function threadHasBotStake(
     const bot = m.bot_id ? String(m.bot_id) : "";
     const text = m.text ? String(m.text) : "";
     return Boolean(
+      m.mentionsSelf ||
       (botUserId && user === botUserId) ||
       (ownBotId && bot === ownBotId) ||
       (botUserId && mentionsBot(text, botUserId)),

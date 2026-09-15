@@ -16,7 +16,7 @@ import type {
   TurnResult,
 } from "../types.ts";
 import { scopeId } from "../types.ts";
-import type { IngestEvent } from "../surface-cache/surface-cache.ts";
+import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
@@ -98,6 +98,8 @@ export interface SlackCoreClient {
   stageBlob(bytes: Uint8Array): Promise<{ blobId: string; sizeBytes: number }>;
   readBlob(blobId: string): Promise<Buffer>;
   readFileArtifact(artifactId: string, viewerId: string): Promise<Buffer>;
+  rememberSurfaceHistory?(events: IngestEvent[]): Promise<void>;
+  readSurfaceMessages?(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
   waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
@@ -167,6 +169,7 @@ export interface SlackCoreClientDeps {
   brandingDefault?: OrgBranding;
   leaderLease?: LeaderLease;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
+  surfaceCache?: SurfaceCache;
   inboxEvent?(event: ConversationEvent): Promise<void>;
 }
 
@@ -280,6 +283,14 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       const opened = await deps.app.openFileForViewer(artifactId, viewerId);
       if (!opened) throw new Error(`file artifact ${artifactId} not found (or not visible to ${viewerId})`);
       return buffer(opened.stream);
+    },
+
+    async rememberSurfaceHistory(events) {
+      await deps.surfaceCache?.ingest(events);
+    },
+
+    async readSurfaceMessages(container, opts) {
+      return deps.app.readSurfaceMessages(container, { ...opts, noFallback: true });
     },
 
     async ingestSurfaceEvents(events, self) {

@@ -213,7 +213,15 @@ class FakeApp {
 
 mock.module("@slack/bolt", { defaultExport: { App: FakeApp, LogLevel: { INFO: "info" } } });
 mock.module("@slack/socket-mode", { namedExports: { SocketModeClient: FakeSocketModeClient } });
-mock.module("@slack/web-api", { namedExports: { WebClient: class {} } });
+mock.module("@slack/web-api", {
+  namedExports: {
+    WebClient: class {
+      get conversations() {
+        return FakeApp.instances.at(-1)!.client.conversations;
+      }
+    },
+  },
+});
 
 const { slackPluginConfigFromEnv, startSlackPlugin } = await import("../src/slack/index.ts");
 

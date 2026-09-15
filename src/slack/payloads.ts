@@ -29,6 +29,7 @@ export interface SlackMessageEvent {
   client_msg_id?: string;
   text?: string;
   ts: string;
+  edited?: { ts?: string };
   thread_ts?: string;
   deleted_ts?: string;
   files: SlackFile[];
@@ -141,6 +142,7 @@ export function parseBlockAction<T extends string>(
 }
 
 export interface SlackHistoryMessage {
+  mentionsSelf?: boolean;
   ts?: string;
   user?: string;
   bot_id?: string;

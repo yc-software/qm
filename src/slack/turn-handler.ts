@@ -1,3 +1,4 @@
+import type { SlackHistoryReader } from "./history.ts";
 import { performance } from "node:perf_hooks";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
@@ -128,6 +129,7 @@ export function createTurnHandler(deps: {
   flow: TurnFlow;
   directory: Directory;
   mirror: Mirror;
+  readHistory?: SlackHistoryReader;
   serializer: ConversationSerializer;
   approvals: Approvals;
   ackEmoji: AckEmojiPicker;
@@ -171,8 +173,10 @@ export function createTurnHandler(deps: {
     const cached = threads.get(channel, threadTs);
     if (cached !== undefined) return cached;
     try {
-      const res = await client.conversations.replies({ channel, ts: threadTs, limit: 200 });
-      const present = threadHasBotStake(res.messages ?? [], ids.botUserId, ids.ownBotId);
+      const messages = deps.readHistory
+        ? (await deps.readHistory(client, channel, threadTs)).raw
+        : ((await client.conversations.replies({ channel, ts: threadTs, limit: 200 })).messages ?? []);
+      const present = threadHasBotStake(messages, ids.botUserId, ids.ownBotId);
       threads.mark(channel, threadTs, present);
       return present;
     } catch {
@@ -393,7 +397,7 @@ export function createTurnHandler(deps: {
 
     {
       const containerName = inc.kind === "dm" ? actor.displayName?.trim() || undefined : channelName;
-      void mirrorMessageEvent(
+      await mirrorMessageEvent(
         {
           channel: inc.channel,
           ts: inc.ts,

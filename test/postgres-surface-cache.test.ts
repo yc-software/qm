@@ -280,3 +280,26 @@ test("pg surface-cache: revisedSince skips self edits and scopes to a thread", {
     await cache.close();
   }
 });
+
+test("pg mirror reads sanitize NUL, retain files and preserve newer text on a handled replay", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  try {
+    await cache.ingest([
+      {
+        container: "CMIRROR",
+        ts: "1.0",
+        text: "a\0b \\u0000",
+        editedAt: 50,
+        files: [{ fileId: "F1", name: "notes\0.txt" }],
+      },
+    ]);
+    await cache.ingest([{ container: "CMIRROR", ts: "1.0", text: "stale", handled: true }]);
+    const [message] = await cache.readMessages("CMIRROR", { at: "1.0", noFallback: true });
+    assert.equal(message?.text, "ab \\u0000");
+    assert.equal(message?.handled, true);
+    assert.equal(message?.files?.[0]?.name, "notes.txt");
+    assert.deepEqual(await cache.readMessages("CMIRROR", { at: "2.0", noFallback: true }), []);
+  } finally {
+    await cache.close();
+  }
+});

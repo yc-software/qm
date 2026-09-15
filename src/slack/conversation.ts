@@ -135,6 +135,7 @@ interface ConversationMember {
 }
 
 export interface ConversationView {
+  contextNote?: string;
   channel: { name?: string; kind: "dm" | "channel" | "group"; isPrivate?: boolean };
   members: readonly ConversationMember[];
   messages: readonly RecentMessage[];
@@ -246,7 +247,7 @@ export function renderConversationView(view: ConversationView): RenderedConversa
     ? "Files too big to view this turn: " + view.omittedFiles.map((f) => f.name).join(", ") + "."
     : "";
 
-  const header = [fileLine, omittedLine, where, who, here].filter(Boolean).join(" ");
+  const header = [fileLine, omittedLine, where, who, here, view.contextNote].filter(Boolean).join(" ");
 
   const detectContext = msgs
     .filter((m) => !m.isBot && !m.isSelf && !m.isTrigger)

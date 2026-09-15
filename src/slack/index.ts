@@ -1,3 +1,4 @@
+import { createSlackHistoryReader } from "./history.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { createEnvelopeStaging } from "./envelope-staging.ts";
 import { createSweeper } from "../util/sweeper.ts";
@@ -8,6 +9,7 @@ import { installDevIntrospection } from "./dev-introspection.ts";
 import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
 import {
   NO_RETRY,
+  HISTORY_NO_RETRY,
   type SlackPluginConfig,
   normalizeSlackApiUrl,
   slackAccountConfigsFromEnv,
@@ -206,7 +208,15 @@ export async function startSlackPlugin(
     ...(cfg.userCacheTtlMs ? { userCacheTtlMs: cfg.userCacheTtlMs } : {}),
   });
   const mirror = createMirror({ core, ids, directory, externalParticipantsEnabled });
+  const historyRateLimitOptions = {
+    managed: Boolean(cfg.installationId),
+    ...(cfg.webUiPublicUrl ? { setupUrl: `${cfg.webUiPublicUrl.replace(/\/$/, "")}/admin/?setup=slack` } : {}),
+  };
+  const historyClient = new WebClient(BOT_TOKEN, { ...CLIENT_OPTIONS, ...HISTORY_NO_RETRY });
+  const readHistory = createSlackHistoryReader({ core, ids, historyClient, ...historyRateLimitOptions });
   const serializer = createConversationSerializer({
+    readHistory,
+    historyRateLimitOptions,
     ids,
     directory,
     externalParticipantsEnabled,
@@ -256,6 +266,7 @@ export async function startSlackPlugin(
       })();
     });
   const handler = createTurnHandler({
+    readHistory,
     core,
     flow,
     directory,
@@ -311,6 +322,9 @@ export async function startSlackPlugin(
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({
+    historyClient,
+    readHistory,
+    historyRateLimitOptions,
     core,
     directory,
     serializer,

@@ -196,7 +196,12 @@ export function registerSlackEvents(
       const textChanged = m.previous_message?.text === undefined || m.previous_message.text !== m.message.text;
       if (shouldProcessMessage(m.message, ids.botUserId, ids.ownBotId))
         await mirrorMessageEvent({ ...m.message, channel: m.channel, channel_type: m.channel_type }, client, {
-          ...(textChanged ? { editedAt: Date.now() } : {}),
+          ...(textChanged
+            ? {
+                editedAt:
+                  Number(m.message.edited?.ts) > 0 ? Math.round(Number(m.message.edited!.ts) * 1000) : Date.now(),
+              }
+            : {}),
           ...(m.channel_type === "im" ? { kind: "dm" as const } : {}),
         });
       return;

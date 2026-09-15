@@ -7,6 +7,7 @@ import type {
   ContainerState,
   ContainerSummary,
   LiveFallback,
+  IngestEvent,
   SurfaceCache,
 } from "./types.ts";
 
@@ -25,6 +26,12 @@ const DEFAULT_READ_LIMIT = 100;
 const MAX_READ_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_THREADS_LIMIT = 50;
+
+function normalizeEvent(event: IngestEvent): IngestEvent {
+  return JSON.parse(
+    JSON.stringify(event, (_key, value) => (typeof value === "string" ? value.replace(/\u0000/g, "") : value)),
+  ) as IngestEvent;
+}
 
 function clampLimit(limit: number | undefined, fallback: number): number {
   return Math.max(1, Math.min(MAX_READ_LIMIT, Math.floor(limit ?? fallback)));
@@ -128,6 +135,7 @@ export function createPostgresSurfaceCache(
       ...(r.deleted ? { deleted: true } : {}),
       ...(r.deleted_at != null ? { deletedAt: Number(r.deleted_at) } : {}),
       ...(r.handled ? { handled: true } : {}),
+      ...(Array.isArray(r.files) && r.files.length ? { files: r.files as CachedMessage["files"] } : {}),
       createdAt: Number(r.created_at),
     };
   }
@@ -140,7 +148,8 @@ export function createPostgresSurfaceCache(
       let upserted = 0;
       try {
         await client.query("BEGIN");
-        for (const e of events) {
+        for (const event of events) {
+          const e = normalizeEvent(event);
           if (!e.container || !e.ts) continue;
           const res = await client.query(
             `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at)
@@ -149,8 +158,8 @@ export function createPostgresSurfaceCache(
                sub = COALESCE(EXCLUDED.sub, channel_messages.sub),
                author_id = COALESCE(EXCLUDED.author_id, channel_messages.author_id),
                author_name = COALESCE(EXCLUDED.author_name, channel_messages.author_name),
-               text = CASE WHEN EXCLUDED.deleted THEN channel_messages.text ELSE EXCLUDED.text END,
-               mentions = CASE WHEN EXCLUDED.deleted THEN channel_messages.mentions ELSE COALESCE(EXCLUDED.mentions, channel_messages.mentions) END,
+               text = CASE WHEN EXCLUDED.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.text ELSE EXCLUDED.text END,
+               mentions = CASE WHEN EXCLUDED.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.mentions ELSE COALESCE(EXCLUDED.mentions, channel_messages.mentions) END,
                self = channel_messages.self OR EXCLUDED.self,
                bot = channel_messages.bot OR EXCLUDED.bot,
                mentions_self = channel_messages.mentions_self OR EXCLUDED.mentions_self,
@@ -228,6 +237,10 @@ export function createPostgresSurfaceCache(
       const limit = clampLimit(opts.limit, DEFAULT_READ_LIMIT);
       const conds = ["org_id = $1", "container = $2"];
       const args: unknown[] = [orgId, container];
+      if (opts.at) {
+        args.push(opts.at);
+        conds.push(`ts = $${args.length}`);
+      }
       if (opts.sub) {
         args.push(opts.sub);
         conds.push(`sub = $${args.length}`);
@@ -243,7 +256,7 @@ export function createPostgresSurfaceCache(
       if (!opts.includeDeleted) conds.push("deleted = FALSE");
       args.push(limit);
       const rows = await q(
-        `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts DESC LIMIT $${args.length}`,
+        `SELECT channel_messages.*, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts DESC LIMIT $${args.length}`,
         args,
       );
       const hit = rows.map(rowToMessage).reverse();
@@ -404,7 +417,8 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
     async ingest(events) {
       const now = Date.now();
       let upserted = 0;
-      for (const e of events) {
+      for (const event of events) {
+        const e = normalizeEvent(event);
         if (!e.container || !e.ts) continue;
         const m = containerMsgs(e.container);
         const existing = m.get(e.ts);
@@ -435,6 +449,7 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
           });
           upserted++;
         }
+        if (existing && e.handled && !existing.handled) m.set(e.ts, { ...m.get(e.ts)!, handled: true });
         if (e.files?.length) {
           const k = key(e.container);
           const arr = files.get(k) ?? [];
@@ -476,12 +491,18 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
     async readMessages(container, o = {}) {
       const limit = clampLimit(o.limit, DEFAULT_READ_LIMIT);
       let all = [...containerMsgs(container).values()];
+      if (o.at) all = all.filter((x) => x.ts === o.at);
       if (o.sub) all = all.filter((x) => x.sub === o.sub);
       if (o.after) all = all.filter((x) => x.ts > o.after!);
       if (o.before) all = all.filter((x) => x.ts < o.before!);
       if (!o.includeDeleted) all = all.filter((x) => !x.deleted);
       all.sort(compareTs);
-      const hit = all.slice(-limit);
+      const hit = all.slice(-limit).map((m) => {
+        const attached = (files.get(key(container)) ?? []).filter((f) => f.ts === m.ts);
+        return attached.length
+          ? { ...m, files: attached.map(({ fileId, name, mimetype }) => ({ fileId, name, mimetype })) }
+          : m;
+      });
       if (hit.length === 0 && liveFallback && !o.noFallback && !o.before) {
         const live = await liveFallback(container, o);
         if (live) return live;
