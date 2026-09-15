@@ -137,8 +137,6 @@ export const inboxState = {
 };
 
 const DRAFT_SUGGESTIONS = ["Make it shorter", "Make it more friendly", "Remove the salutations"];
-const ASIDE_MIN_HEIGHT = 320;
-const ASIDE_MAX_HEIGHT = 1100;
 const CHAT_INPUT_MAX_HEIGHT = 200;
 const draftEdits = new Map<string, InboxDraft & { basedOnAt?: number }>();
 const acting = new Set<string>();
@@ -1231,10 +1229,9 @@ function itemPageTpl(item: InboxItem): TemplateResult {
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
         ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
-        ${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing}
+        ${contextTpl(item)} ${handled ? handledNoteTpl(item) : nothing} ${chatTpl(item)}
       </div>
     </div>
-    <aside class="inbox-item-aside">${chatTpl(item)}</aside>
   `;
 }
 
@@ -1256,7 +1253,7 @@ function drawSurface(surface: InboxSurface): void {
 }
 
 let fullSurface: InboxSurface | null = null;
-let asideObserver: ResizeObserver | null = null;
+let chatInputObserver: ResizeObserver | null = null;
 let fullViewId = "all";
 let pendingItemId: string | null = null;
 
@@ -1274,7 +1271,7 @@ function drawFull(): void {
       showHandled: fullSurface?.showHandled ?? false,
     };
     appState.mainEl.replaceChildren(host);
-    observeAsideSize(host);
+    observeChatInputSize(host);
   }
   fullSurface.viewId = fullViewId;
   if (pendingItemId) {
@@ -1300,35 +1297,17 @@ function drawFull(): void {
       host,
     ),
   );
-  sizeAside(host);
   sizeChatInputs(host);
   if (openItem) ensureItemSource(openItem);
 }
 
-/**
- * The assistant sticks to the top of a page that now scrolls, so its height is
- * the viewport below wherever it starts rather than a share of a fixed frame.
- */
-function sizeAside(host: HTMLElement): void {
-  if (!host.querySelector(".inbox-item-aside")) return;
-  const pad = getComputedStyle(host);
-  const padTop = Number.parseFloat(pad.paddingTop) || 0;
-  const padBottom = Number.parseFloat(pad.paddingBottom) || 0;
-  const available = host.clientHeight - padTop - padBottom;
-  const height = Math.min(ASIDE_MAX_HEIGHT, Math.max(ASIDE_MIN_HEIGHT, available));
-  const next = `${height}px`;
-  if (host.style.getPropertyValue("--inbox-aside-height") === next) return;
-  host.style.setProperty("--inbox-aside-height", next);
-}
-
-function observeAsideSize(host: HTMLElement): void {
+function observeChatInputSize(host: HTMLElement): void {
   if (typeof ResizeObserver === "undefined") return;
-  asideObserver?.disconnect();
-  asideObserver = new ResizeObserver(() => {
-    sizeAside(host);
+  chatInputObserver?.disconnect();
+  chatInputObserver = new ResizeObserver(() => {
     sizeChatInputs(host);
   });
-  asideObserver.observe(host);
+  chatInputObserver.observe(host);
 }
 
 function autosizeChatInput(box: HTMLTextAreaElement): void {
