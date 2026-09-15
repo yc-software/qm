@@ -9,6 +9,7 @@ import {
   acquireAwsLease as acquireLease,
   awsText,
   deployLocksTable,
+  deploymentStateKey,
   releaseAwsLease as releaseLease,
   withAwsLease,
 } from "../aws-lease.ts";
@@ -1431,7 +1432,7 @@ function deploymentManifest(aws: AwsConfig, id: string): DeploymentManifest {
     "--table-name",
     deployLocksTable(aws),
     "--key",
-    JSON.stringify({ lockKey: { S: `${DEPLOYMENT_MANIFEST_PREFIX}${id}` } }),
+    JSON.stringify({ lockKey: { S: deploymentStateKey(aws, `${DEPLOYMENT_MANIFEST_PREFIX}${id}`) } }),
     "--consistent-read",
   ]);
   const raw = dynamoString(response.Item, "manifest");
@@ -1454,7 +1455,7 @@ function deploymentManifestAtPointer(aws: AwsConfig, key: string): DeploymentMan
     "--table-name",
     deployLocksTable(aws),
     "--key",
-    JSON.stringify({ lockKey: { S: key } }),
+    JSON.stringify({ lockKey: { S: deploymentStateKey(aws, key) } }),
     "--consistent-read",
   ]);
   const id = dynamoString(response.Item, "manifestId");
@@ -1469,7 +1470,7 @@ function manifestTransaction(aws: AwsConfig, manifest: DeploymentManifest | unde
       Put: {
         TableName: table,
         Item: {
-          lockKey: { S: `${DEPLOYMENT_MANIFEST_PREFIX}${manifest.id}` },
+          lockKey: { S: deploymentStateKey(aws, `${DEPLOYMENT_MANIFEST_PREFIX}${manifest.id}`) },
           manifest: { S: JSON.stringify(manifest) },
         },
       },
@@ -1479,7 +1480,7 @@ function manifestTransaction(aws: AwsConfig, manifest: DeploymentManifest | unde
         Put: {
           TableName: table,
           Item: {
-            lockKey: { S: `deployment/label/${manifest.imageLabel}` },
+            lockKey: { S: deploymentStateKey(aws, `deployment/label/${manifest.imageLabel}`) },
             manifestId: { S: manifest.id },
           },
         },
@@ -1489,7 +1490,7 @@ function manifestTransaction(aws: AwsConfig, manifest: DeploymentManifest | unde
     Put: {
       TableName: table,
       Item: {
-        lockKey: { S: DEPLOYMENT_POINTER_KEY },
+        lockKey: { S: deploymentStateKey(aws, DEPLOYMENT_POINTER_KEY) },
         manifestId: { S: pointerId },
       },
     },
@@ -2295,7 +2296,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       });
     }
     if (recorded && dbRestorePoint) confirmDbRestorePointCovered(config, dbRestorePoint);
-    for (const service of services) {
+    for (const service of candidate ? [] : services) {
       try {
         promoteStagedImage(config, service, images[service]!, label);
         promotedServices.add(service);
@@ -3338,13 +3339,17 @@ export function assertAwsPublicRouting(
     }
   }
   if (
-    targetGroups.length !== expectedTargetArns.size ||
-    targetGroups.some((group) => !group.TargetGroupArn || !expectedTargetArns.has(group.TargetGroupArn))
+    !aws.sharedAlb &&
+    (targetGroups.length !== expectedTargetArns.size ||
+      targetGroups.some((group) => !group.TargetGroupArn || !expectedTargetArns.has(group.TargetGroupArn)))
   ) {
     throw new Error("ALB has target groups for private or unknown services");
   }
   if (alternateTargets.size && alternateTargets.size !== ingress.length) {
     throw new Error("ALB cannot mix rolling and blue/green ingress services");
+  }
+  if (aws.sharedAlb && (!hasPortal || coreHosts.length || publicPaths.size || alternateTargets.size !== 1)) {
+    throw new Error("shared ALB requires one blue/green portal ingress without additional public routes");
   }
   const defaults = listener.DefaultActions ?? [];
   if (alternateTargets.size) {
@@ -3392,6 +3397,35 @@ export function assertAwsPublicRouting(
       }>;
     }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
   let nonDefault = rules.filter((rule) => !rule.IsDefault);
+  if (aws.sharedAlb) {
+    const hostname = new URL(config.publicUrl).hostname.toLowerCase();
+    const ownRule = productionRules.get("portal");
+    for (const rule of nonDefault) {
+      const hosts = rule.Conditions?.filter((condition) => condition.Field === "host-header");
+      const values = hosts?.[0]?.HostHeaderConfig?.Values ?? hosts?.[0]?.Values ?? [];
+      if (hosts?.length !== 1 || !values.length || values.some((value) => !validAlbHostname(value))) {
+        throw new Error("shared ALB rules require explicit non-wildcard hostnames");
+      }
+      const matchesHost = values.some((value) => value.toLowerCase() === hostname);
+      if (rule.RuleArn === ownRule) {
+        if (!matchesHost || values.length !== 1)
+          throw new Error("shared ALB portal rule must match only this company hostname");
+      } else {
+        const referencesOwnTarget = rule.Actions?.some(
+          (action) =>
+            expectedTargetArns.has(action.TargetGroupArn ?? "") ||
+            action.ForwardConfig?.TargetGroups?.some((target) => expectedTargetArns.has(target.TargetGroupArn ?? "")),
+        );
+        if (matchesHost || referencesOwnTarget) throw new Error("shared ALB has an overlapping company route");
+      }
+    }
+    nonDefault = nonDefault
+      .filter((rule) => rule.RuleArn === ownRule)
+      .map((rule) => ({
+        ...rule,
+        Conditions: rule.Conditions?.filter((condition) => condition.Field !== "host-header"),
+      }));
+  }
   const pluginRules = new Set<(typeof nonDefault)[number]>();
   for (const [name, paths] of publicPaths) {
     const matches = nonDefault.filter((rule) =>

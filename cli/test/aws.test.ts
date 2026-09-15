@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import {
   assertAwsDeploymentStorage,
   assertAwsPublicListener,
+  assertAwsPublicRouting,
   assertGithubDeployTrust,
   awsCheckLive,
   awsDeploymentLayerTransport,
@@ -57,6 +58,9 @@ function fakeAws(
   frontService: "core" | "portal" = "portal",
   ingress: {
     blueGreen?: boolean;
+    sharedHost?: string;
+    siblingHost?: string;
+    siblingOwnTarget?: boolean;
     coreHosts?: string[];
     targetGroups?: Partial<Record<"core" | "portal", string>>;
   } = {},
@@ -118,6 +122,19 @@ function fakeAws(
         Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/v1/*"] } }],
       },
     ];
+  }
+  if (ingress.sharedHost) {
+    (baseRules[0]!.Conditions as unknown[]).push({
+      Field: "host-header",
+      HostHeaderConfig: { Values: [ingress.sharedHost] },
+    });
+    groups.push({ TargetGroupArn: "other-target", TargetGroupName: "other-target" });
+    baseRules.push({
+      RuleArn: "other-rule",
+      IsDefault: false,
+      Actions: [{ Type: "forward", TargetGroupArn: ingress.siblingOwnTarget ? targetArn : "other-target" }],
+      Conditions: [{ Field: "host-header", HostHeaderConfig: { Values: [ingress.siblingHost ?? "other.example"] } }],
+    });
   }
   writeFileSync(log, "");
   writeFileSync(
@@ -2665,7 +2682,7 @@ test("AWS builds one immutable candidate manifest and deploys its exact digest w
     writeFileSync(fake.log, "");
     await awsUp(single, dir, { yes: true, candidate: candidatePath });
     const deployCalls = readFileSync(fake.log, "utf8");
-    assert.match(deployCalls, new RegExp(`ecr batch-get-image .*imageDigest=sha256:${"a".repeat(64)}`));
+    assert.doesNotMatch(deployCalls, /ecr put-image|ecr batch-delete-image|ecr initiate-layer-upload/);
     assert.match(deployCalls, /ecs run-task .*src\/migrate-main\.ts/);
     assert.ok(deployCalls.indexOf("rds describe-db-instances") < deployCalls.indexOf("ecs run-task"));
     assert.ok(deployCalls.indexOf("ecs run-task") < deployCalls.indexOf("ecs update-service"));
@@ -4979,5 +4996,98 @@ test("AWS secrets push defers activation against pre-consolidation images", asyn
   } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shared deployment state isolates company manifests and leases without mutating candidate images", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-inactive-candidate-"));
+  const candidatePath = join(dir, "candidate.json");
+  writeFileSync(
+    candidatePath,
+    JSON.stringify({
+      contract: 1,
+      accountId: "123456789012",
+      region: "us-west-2",
+      label: "candidate-deadbeef",
+      images: {
+        core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`,
+      },
+      imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+    }),
+  );
+  const single = oneServiceConfig();
+  single.aws!.deploymentState = { table: "fleet-deploy-locks", namespace: "acme" };
+  const fake = statefulAws(dir, single);
+  const prior = process.env.AWS_FAKE_ALB_DNS;
+  process.env.AWS_FAKE_ALB_DNS = "192.0.2.1";
+  try {
+    await awsUp(single, dir, { yes: true, candidate: candidatePath, inactive: true });
+    assert.match(readFileSync(fake.log, "utf8"), /ecs update-service/);
+    const first = JSON.parse(readFileSync(fake.state, "utf8"));
+    const pointer = first.dynamo["acme/deployment/current"].manifestId.S;
+    assert.ok(first.dynamo[`acme/deployment/manifest/${pointer}`]);
+    assert.ok(first.dynamo["acme/deployment/label/" + single.aws!.imageLabel]);
+    assert.equal(first.dynamo["deployment/current"], undefined);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecr put-image|ecr batch-delete-image/);
+    single.aws!.deploymentState.namespace = "second";
+    await awsUp(single, dir, { yes: true, candidate: candidatePath, inactive: true });
+    const second = JSON.parse(readFileSync(fake.state, "utf8"));
+    assert.equal(second.dynamo["acme/deployment/current"].manifestId.S, pointer);
+    assert.notEqual(second.dynamo["second/deployment/current"].manifestId.S, pointer);
+    const calls = readFileSync(fake.log, "utf8");
+    assert.match(calls, /"S":"acme\/deploy"/);
+    assert.match(calls, /"S":"second\/deploy"/);
+  } finally {
+    if (prior === undefined) delete process.env.AWS_FAKE_ALB_DNS;
+    else process.env.AWS_FAKE_ALB_DNS = prior;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shared ALB validates company routes while rejecting sibling overlap", () => {
+  const company = { ...config, aws: { ...config.aws!, sharedAlb: true, alb: "shared" } };
+  const name = `acme-qm-port-${createHash("sha1").update("acme-qm:portal").digest("hex").slice(0, 6)}`;
+  const primary = `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${name}/1`;
+  const alternateName = `acme-qm-port-g-${createHash("sha1").update("acme-qm:portal:alternate").digest("hex").slice(0, 6)}`;
+  const alternate = `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${alternateName}/2`;
+  const services = new Map([
+    [
+      "portal",
+      {
+        loadBalancers: [
+          {
+            targetGroupArn: primary,
+            advancedConfiguration: {
+              alternateTargetGroupArn: alternate,
+              productionListenerRule:
+                "arn:aws:elasticloadbalancing:us-west-2:123456789012:listener-rule/app/test/1/2/production",
+            },
+          },
+        ],
+      },
+    ],
+  ]);
+  const hostname = new URL(company.publicUrl).hostname;
+  for (const variant of ["valid", "same-host", "wildcard", "own-target", "wrong-host"]) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-shared-alb-"));
+    const fake = fakeAws(dir, "", "portal", {
+      blueGreen: true,
+      sharedHost: variant === "wrong-host" ? "wrong.example" : hostname,
+      siblingHost:
+        ({ "same-host": hostname, wildcard: "*.example" } as Record<string, string>)[variant] ?? "other.example",
+      siblingOwnTarget: variant === "own-target",
+    });
+    try {
+      if (variant === "valid") assert.equal(assertAwsPublicRouting(company, services).get("portal"), primary);
+      else assert.throws(() => assertAwsPublicRouting(company, services), /shared ALB/);
+      assert.throws(
+        () => assertAwsPublicRouting({ ...company, aws: { ...company.aws, sharedAlb: false } }, services),
+        /unknown services/,
+      );
+    } finally {
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

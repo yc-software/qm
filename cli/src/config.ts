@@ -80,6 +80,7 @@ export interface AwsServiceConfig {
 }
 
 export interface AwsConfig {
+  deploymentState?: { table: string; namespace: string };
   accountId: string;
   region: string;
   cluster: string;
@@ -87,6 +88,7 @@ export interface AwsConfig {
   secretsPrefix: string;
   imageLabel: string;
   alb?: string;
+  sharedAlb?: boolean;
   rdsInstance?: string;
   predeployDbSnapshot?: boolean;
   dbRetentionMinDays?: number;
@@ -1076,6 +1078,22 @@ function validateAws(
       `${path}: "aws.imageLabel" must be a valid OCI/ECR tag (1-128 letters, digits, underscores, periods, or hyphens; the first character cannot be a period or hyphen)`,
     );
   }
+  let deploymentState: AwsConfig["deploymentState"];
+  if (raw["deploymentState"] !== undefined) {
+    const state = raw["deploymentState"];
+    if (
+      !isPlainObject(state) ||
+      typeof state.table !== "string" ||
+      !/^[A-Za-z0-9_.-]{3,255}$/.test(state.table) ||
+      typeof state.namespace !== "string" ||
+      !/^[a-z0-9][a-z0-9-]{0,62}$/.test(state.namespace)
+    ) {
+      throw new CliError(
+        `${path}: "aws.deploymentState" requires a valid DynamoDB table name and a lowercase company namespace`,
+      );
+    }
+    deploymentState = { table: state.table, namespace: state.namespace };
+  }
   let alb: string | undefined;
   if (raw["alb"] !== undefined) {
     alb = requiredString(raw["alb"], "alb");
@@ -1084,6 +1102,12 @@ function validateAws(
         `${path}: "aws.alb" must be a valid load balancer name (at most 32 letters, digits, and interior hyphens, not starting with "internal-")`,
       );
     }
+  }
+  if (raw["sharedAlb"] !== undefined && typeof raw["sharedAlb"] !== "boolean") {
+    throw new CliError(`${path}: "aws.sharedAlb" must be a boolean`);
+  }
+  if (raw["sharedAlb"] === true && !alb) {
+    throw new CliError(`${path}: "aws.sharedAlb" requires "aws.alb"`);
   }
   let rdsInstance: string | undefined;
   if (raw["rdsInstance"] !== undefined) {
@@ -1377,7 +1401,9 @@ function validateAws(
     networking: netOut,
     services,
   };
+  if (deploymentState) out.deploymentState = deploymentState;
   if (alb) out.alb = alb;
+  if (raw["sharedAlb"] !== undefined) out.sharedAlb = raw["sharedAlb"] as boolean;
   if (rdsInstance) out.rdsInstance = rdsInstance;
   if (predeployDbSnapshot !== undefined) out.predeployDbSnapshot = predeployDbSnapshot;
   if (dbRetentionMinDays !== undefined) out.dbRetentionMinDays = dbRetentionMinDays;

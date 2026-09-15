@@ -182,3 +182,11 @@ rules. Deployment preflight verifies the exact paths, target-group attachments
 and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
+
+### Shared AWS foundations
+
+Existing AWS deployments retain their company-owned resources by default. For a shared DynamoDB deployment table, set `aws.deploymentState` to `{ "table": "fleet-deploy-locks", "namespace": "acme" }`. Every lease, current pointer, label pointer and immutable manifest uses that namespace. Use a unique namespace for each company and scope its item IAM permissions with `dynamodb:LeadingKeys` to `acme/*`; grant `DescribeTable` separately. Changing an existing deployment's state location requires explicitly migrating its history while deployment operations are stopped.
+
+To use a shared ALB, set `aws.alb` and `aws.sharedAlb: true`. The supported shared topology has one blue/green portal ingress per company, with an exact host-header condition plus `/*` path, a fixed-404 listener default, separate primary/alternate target groups and a company-owned production rule. Additional public plugin/core routes are not supported in this topology. Other companies' rules must use explicit non-wildcard hostnames and must not reference this company's target groups. Set each service's `targetGroup`, `taskRoleArn`, and `executionRoleArn` explicitly when sharing an ECS cluster. Retain company-specific service permissions and allow ECS to modify only that company's listener rule.
+
+An exact `--candidate` deployment consumes its digest-pinned images without changing ECR tags. Its publisher owns image retention; retain every active and rollback digest. Builds performed by the deployment CLI still stage and promote their images as before.
