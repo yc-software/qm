@@ -46,9 +46,9 @@ function appRequest(path: string, host: string): Promise<Response> {
         res.on("data", (chunk) => chunks.push(chunk));
         res.on("end", () => {
           const headers = new Headers();
-        for (const [name, values] of Object.entries(res.headers)) {
-          if (values === undefined) continue;
-          for (const value of Array.isArray(values) ? values : [values]) headers.append(name, value);
+          for (const [name, values] of Object.entries(res.headers)) {
+            if (values === undefined) continue;
+            for (const value of Array.isArray(values) ? values : [values]) headers.append(name, value);
           }
           resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers }));
         });
