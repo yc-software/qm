@@ -567,3 +567,69 @@ test("reaction turns preserve the reacted message in the mirror", async () => {
   assert.match(turns[1].text, /\[Slack reaction\].*removed/);
   assert.deepEqual(await cache.readMessages("D1", { limit: 10 }), before);
 });
+
+test("synthetic reaction turns preserve the canonical message snapshot", async () => {
+  const cache = createMemorySurfaceCache();
+  const directory = {
+    getChannelInfo: async () => ({ id: "D1" }),
+    allInternalRosters: async () => new Map([["D1", []]]),
+    classifyUserCached: async (_client: unknown, id: string) => ({
+      ok: true,
+      actor: { externalId: id, displayName: id },
+    }),
+  };
+  const mirror = createMirror({
+    core: { ingestSurfaceEvents: cache.ingest } as any,
+    ids,
+    directory: directory as any,
+    externalParticipantsEnabled: async () => false,
+  });
+  await mirror.mirrorMessageEvent(
+    {
+      channel: "D1",
+      channel_type: "im",
+      ts: "2",
+      thread_ts: "1",
+      user: "UAUTHOR",
+      text: "original message",
+      files: [{ id: "F1", name: "report.txt" }],
+    },
+    {},
+    { kind: "dm" },
+  );
+  const before = await cache.readMessages("D1", { at: "2" });
+  assert.equal(before[0]?.files?.length, 1);
+  const stop = new Error("serialization boundary reached");
+  const handler = createTurnHandler({
+    core: {},
+    flow: {},
+    directory,
+    mirror,
+    ids,
+    threads: createThreadTracker(),
+    serializer: {
+      serializeSlackConversation: async () => {
+        throw stop;
+      },
+    },
+    externalParticipantsEnabled: async () => false,
+  } as any);
+  await assert.rejects(
+    handler.handleIncoming(
+      {
+        kind: "dm",
+        channel: "D1",
+        userId: "UREACTOR",
+        ts: "2",
+        threadTs: "1",
+        rawText: "Reactor reacted with thumbs up",
+        files: [],
+        unprompted: true,
+        synthetic: true,
+      },
+      {},
+    ),
+    (error: unknown) => error === stop,
+  );
+  assert.deepEqual(await cache.readMessages("D1", { at: "2" }), before);
+});

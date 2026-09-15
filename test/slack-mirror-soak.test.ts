@@ -239,7 +239,7 @@ test("shadow normalizes mentions without erasing literal entity or attachment di
   assert.equal(result.liveMessagesMissingFromStorage, 0);
 });
 
-test("mirror selects channel roots and expands five recent threads with Slack page ordering", async () => {
+test("mirror selects channel roots and retains newest thread replies", async () => {
   const { createMemorySurfaceCache } = await import("../src/surface-cache/surface-cache.ts");
   const cache = createMemorySurfaceCache();
   const ts = (n: number) => String(n).padStart(6, "0");
@@ -259,10 +259,10 @@ test("mirror selects channel roots and expands five recent threads with Slack pa
   const thread = await read({}, "C1", ts(204));
   assert.equal(thread.raw.length, 200);
   assert.equal(thread.raw[0]?.ts, ts(204));
-  assert.equal(thread.raw.at(-1)?.ts, ts(498));
+  assert.equal(thread.raw.at(-1)?.ts, ts(549));
   const expanded = await read({}, "C1", undefined, undefined, true);
   assert.equal(expanded.raw.length, 399);
-  assert.equal(expanded.raw.at(-1)?.ts, ts(498));
+  assert.equal(expanded.raw.at(-1)?.ts, ts(549));
 });
 
 test("shadow never certifies failed or truncated live thread expansion as complete", async (t) => {

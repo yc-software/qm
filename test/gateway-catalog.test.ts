@@ -1,3 +1,4 @@
+import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
@@ -267,4 +268,23 @@ test("resolvable aliases outside the picker do not hide discovered models", asyn
   const f = fixture([group("openai/gpt-4o")], { "gpt-4o": "openai/gpt-4o" });
   await f.catalog.refresh();
   assert.ok(builtInModelCatalog().some((m) => m.id === "gateway/openai/gpt-4o"));
+});
+
+test("gateway-only fallback retains models hidden by picker aliases", async () => {
+  const target = "openai/gpt-5.6-sol";
+  const f = fixture([group(target)], { "gpt-5.6-sol": target });
+  await f.catalog.refresh();
+  assert.ok(!builtInModelCatalog().some((model) => model.id === `gateway/${target}`));
+  const fallback = runtimeFallback({
+    deps: { harnessId: "pi", providerKeys: { anthropic: false, openai: false, openrouter: false } },
+  });
+  assert.equal(fallback.modelId, `gateway/${target}`);
+  assert.ok(
+    modelServiceable(fallback.modelId, {
+      anthropic: false,
+      openai: false,
+      openrouter: false,
+      modelIds: new Set([`gateway/${target}`]),
+    }),
+  );
 });

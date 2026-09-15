@@ -272,9 +272,9 @@ export function setModelOverlays(
   overlayVersion += 1;
 }
 
-export function selectableBaseModels(): ReadonlyArray<{ id: string; name: string }> {
+export function selectableBaseModels(includeAliased = false): ReadonlyArray<{ id: string; name: string }> {
   return [
-    ...gatewayModelCatalog(),
+    ...gatewayModelCatalog(includeAliased),
     ...SELECTABLE_BASE_MODELS.filter(({ id }) => resolveModel(id)),
     ...[...overlays.values()].filter((m) => m.base).map(({ id, name }) => ({ id, name })),
   ];
@@ -472,7 +472,7 @@ export function defaultModelForHarness(
     return configured;
   const preferred = harness === "codex" ? DEFAULT_CODEX_MODEL_ID : DEFAULT_AGENT_MODEL_ID;
   if (!providers || modelServiceable(preferred, providers)) return preferred;
-  const servable = selectableBaseModels().find(
+  const servable = selectableBaseModels(true).find(
     (model) => modelSupportedByHarness(model.id, harness) && modelServiceable(model.id, providers),
   );
   return servable?.id ?? preferred;
