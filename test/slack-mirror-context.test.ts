@@ -272,3 +272,26 @@ test("surface context keeps a successful channel page when an empty thread is th
   assert.match(outcome.result.note, /60/);
   assert.match(outcome.result.note, /setup=slack/);
 });
+
+test("deleted messages do not consume context page slots or reappear through fallback", async () => {
+  const { cache, readHistory, client } = fixture();
+  const ts = (n: number) => String(n).padStart(6, "0");
+  await cache.ingest(Array.from({ length: 205 }, (_, i) => ({ container: "C1", ts: ts(i), text: "message" })));
+  await cache.ingest([{ container: "C1", ts: ts(204), deleted: true }]);
+  const page = await readHistory(client, "C1");
+  assert.equal(page.raw.length, 200);
+  assert.equal(page.raw[0]?.ts, ts(4));
+  assert.equal(page.raw.at(-1)?.ts, ts(203));
+  await cache.ingest([{ container: "C2", ts: "2.0", sub: "1.0", deleted: true }]);
+  client.conversations.replies = async () =>
+    ({
+      messages: [
+        { ts: "1.0", text: "parent" },
+        { ts: "2.0", thread_ts: "1.0", text: "deleted reply" },
+      ],
+    }) as never;
+  assert.deepEqual(
+    (await readHistory(client, "C2", "1.0")).raw.map((m) => m.ts),
+    ["1.0"],
+  );
+});

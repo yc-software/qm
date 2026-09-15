@@ -82,13 +82,12 @@ export function createSlackHistoryReader(deps: {
     threadTs?: string,
     before?: string,
     expandThreads = false,
-    includeDeleted = false,
   ): Promise<CachedMessage[]> {
     const read = deps.core.readSurfaceMessages!;
-    const options = { limit: 200, noFallback: true, includeDeleted, ...(before ? { before } : {}) };
+    const options = { limit: 200, noFallback: true, ...(before ? { before } : {}) };
     if (threadTs) {
       const [parents, replies] = await Promise.all([
-        read(channel, { at: threadTs, noFallback: true, includeDeleted, ...(before ? { before } : {}) }),
+        read(channel, { at: threadTs, noFallback: true, ...(before ? { before } : {}) }),
         read(channel, { ...options, sub: threadTs, oldestFirst: true }),
       ]);
       return [...parents, ...replies].slice(0, 200);
@@ -96,9 +95,7 @@ export function createSlackHistoryReader(deps: {
     const roots = await read(channel, { ...options, channelHistory: true });
     if (!expandThreads) return roots;
     const parents = roots.filter((m) => (m.replyCount ?? 0) > 0).slice(-5);
-    const expanded = await Promise.all(
-      parents.map((m) => mirrorHistory(channel, m.ts, undefined, false, includeDeleted)),
-    );
+    const expanded = await Promise.all(parents.map((m) => mirrorHistory(channel, m.ts)));
     return [...new Map([...roots, ...expanded.flat()].map((m) => [m.ts, m])).values()];
   }
 
@@ -206,8 +203,7 @@ export function createSlackHistoryReader(deps: {
     const deleted = new Set<string>();
     if (deps.core.readSurfaceMessages) {
       try {
-        const rows = await mirrorHistory(channel, threadTs, before, expandThreads, true);
-        for (const row of rows) if (row.deleted) deleted.add(row.ts);
+        const rows = await mirrorHistory(channel, threadTs, before, expandThreads);
         mirrored = rows
           .filter((m) => !m.deleted && (!before || m.ts < before))
           .map((m) => ({
@@ -263,6 +259,15 @@ export function createSlackHistoryReader(deps: {
               })),
           )
           .catch((error) => swallow("slack: history mirror ingest", error));
+      }
+      if (deps.core.readSurfaceMessages && page.messages.length) {
+        const stored = await deps.core.readSurfaceMessages(channel, {
+          timestamps: page.messages.flatMap((m) => (m.ts ? [m.ts] : [])),
+          limit: 500,
+          includeDeleted: true,
+          noFallback: true,
+        });
+        for (const row of stored) if (row.deleted) deleted.add(row.ts);
       }
       const byTs = new Map<string, SlackHistoryMessage>();
       for (const message of [...page.messages, ...mirrored])
