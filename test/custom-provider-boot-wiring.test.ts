@@ -37,6 +37,25 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     const list = await fetch(`${base}/v1/admin/custom-providers`, { headers: ADMIN });
     assert.equal(list.status, 200);
 
+    const readiness = async () => {
+      const response = await fetch(`${base}/v1/surface-config`, { headers: ADMIN });
+      assert.equal(response.status, 200);
+      return ((await response.json()) as { modelProviderConfigured: boolean }).modelProviderConfigured;
+    };
+    assert.equal(await readiness(), false);
+    await built.customProviders.upsert(
+      {
+        id: "keyless",
+        name: "Keyless",
+        protocol: "openai",
+        baseUrl: "https://llm.example.test/v1",
+        models: [{ id: "keyless-model", name: "Keyless Model" }],
+      },
+      undefined,
+      "admin-alice@default-org",
+    );
+    assert.equal(await readiness(), false);
+
     const put = await fetch(`${base}/v1/admin/custom-providers/acme-gateway`, {
       method: "PUT",
       headers: ADMIN,
@@ -50,6 +69,31 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
       }),
     });
     assert.equal(put.status, 200);
+    assert.equal(await readiness(), true);
+    const otherHarness = createInsecureTestServer(built.app, { ...deps, harnessId: "codex" });
+    otherHarness.listen(0);
+    try {
+      const response = await fetch(
+        `http://localhost:${(otherHarness.address() as AddressInfo).port}/v1/surface-config`,
+        { headers: ADMIN },
+      );
+      assert.equal(response.status, 200);
+      assert.equal(((await response.json()) as { modelProviderConfigured: boolean }).modelProviderConfigured, false);
+    } finally {
+      await new Promise<void>((resolve) => otherHarness.close(() => resolve()));
+    }
+    const openCodeHarness = createInsecureTestServer(built.app, { ...deps, harnessId: "opencode" });
+    openCodeHarness.listen(0);
+    try {
+      const response = await fetch(
+        `http://localhost:${(openCodeHarness.address() as AddressInfo).port}/v1/surface-config`,
+        { headers: ADMIN },
+      );
+      assert.equal(response.status, 200);
+      assert.equal(((await response.json()) as { modelProviderConfigured: boolean }).modelProviderConfigured, true);
+    } finally {
+      await new Promise<void>((resolve) => openCodeHarness.close(() => resolve()));
+    }
 
     assert.equal(defaultModelForHarness("pi", deps.baseModelDefault), "acme-large");
 
@@ -66,6 +110,67 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     assert.equal(body.effective.modelId, "acme-large");
     assert.ok(body.modelsByHarness.pi?.includes("acme-large"));
     assert.equal(body.modelCatalog["acme-large"]?.provider, "acme-gateway");
+    await built.customProviders.delete("acme-gateway", "admin-alice@default-org");
+    assert.equal(await readiness(), false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("admin model-providers list reports enabled, keyed custom providers as configured", async () => {
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "custom-provider-admin-list-")), harness: "pi" });
+  const built = buildApp(config, { modelCredentialFetch: async () => new Response(null, { status: 200 }) });
+  const deps = serverDeps(config, built);
+  const server = createInsecureTestServer(built.app, deps);
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const providerEntries = async () => {
+    const response = await fetch(`${base}/v1/admin/model-providers`, { headers: ADMIN });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { providers: { provider: string; configured: boolean }[] };
+    return body.providers;
+  };
+  try {
+    await built.customProviders.upsert(
+      {
+        id: "keyless",
+        name: "Keyless",
+        protocol: "openai",
+        baseUrl: "https://llm.example.test/v1",
+        models: [{ id: "keyless-model", name: "Keyless Model" }],
+      },
+      undefined,
+      "admin-alice@default-org",
+    );
+    let entries = await providerEntries();
+    assert.equal(
+      entries.some((entry) => entry.provider === "keyless"),
+      true,
+    );
+    assert.equal(entries.find((entry) => entry.provider === "keyless")?.configured, false);
+
+    await built.customProviders.upsert(
+      {
+        id: "acme-gateway",
+        name: "Acme Gateway",
+        protocol: "openai",
+        baseUrl: "https://llm.acme.internal/v1",
+        models: [{ id: "acme-large", name: "Acme Large" }],
+      },
+      "sk-acme-secret",
+      "admin-alice@default-org",
+    );
+    entries = await providerEntries();
+    const acme = entries.find((entry) => entry.provider === "acme-gateway");
+    assert.equal(acme?.configured, true);
+    assert.ok(!("apiKey" in (acme as object)));
+
+    await built.customProviders.delete("acme-gateway", "admin-alice@default-org");
+    entries = await providerEntries();
+    assert.equal(
+      entries.some((entry) => entry.provider === "acme-gateway"),
+      false,
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

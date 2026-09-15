@@ -5158,6 +5158,7 @@
               <div class="foot">
                 <button class="primary" id="onboarding-model-save">Validate and connect</button
                 ><button class="danger" id="onboarding-model-delete">Disable this provider</button
+                ><button type="button" id="onboarding-model-manage-custom" hidden>Manage this custom provider →</button
                 ><span class="status" id="st-onboarding-model"></span>
               </div>
             </section>
@@ -9371,7 +9372,9 @@
         known.forEach((status) => {
           const option = document.createElement("option");
           option.value = status.provider;
-          const label = MODEL_PROVIDER_LABELS[status.provider] || connectorName(status.provider);
+          const label =
+            (MODEL_PROVIDER_LABELS[status.provider] || connectorName(status.provider)) +
+            (status.custom ? " (custom)" : "");
           option.textContent = status.configured ? label + " (key configured)" : label;
           select.appendChild(option);
         });
@@ -9389,15 +9392,23 @@
         });
         if (preferred && [...select.options].some((option) => option.value === preferred)) select.value = preferred;
         const status = onboardingModelStatuses.find((item) => item.provider === provider);
+        const isCustom = Boolean(status?.custom);
+        $("onboarding-model-save").hidden = isCustom;
+        $("onboarding-model-delete").hidden = isCustom;
+        $("onboarding-model-key").disabled = isCustom;
+        $("onboarding-model-manage-custom").hidden = !isCustom;
         $("onboarding-model-delete").disabled = !status || status.source === "absent";
-        $("onboarding-model-key").placeholder = status?.configured
-          ? "•••• set, enter a replacement"
-          : "Write-only API key";
+        $("onboarding-model-key").placeholder = isCustom
+          ? "Managed in the Custom providers section below"
+          : status?.configured
+            ? "•••• set, enter a replacement"
+            : "Write-only API key";
       }
       async function loadOnboarding() {
         const requestId = ++onboardingRequest;
         const requestedView = view;
         void loadModelRegistry().catch(() => {});
+        void loadCustomProviders().catch(() => {});
         const [models, slack, catalog, config] = await Promise.all([
           api("GET", "/api/model-providers?catalog=cached"),
           api("GET", "/api/slack-installation"),
@@ -9478,8 +9489,28 @@
         }
       }
       $("onboarding-model-provider").onchange = () => renderOnboardingModelOptions();
+      $("onboarding-model-manage-custom").onclick = async () => {
+        const provider = $("onboarding-model-provider").value;
+        let match = customProvidersLoaded.find((item) => item.id === provider);
+        if (!match) {
+          const res = await api("GET", "/api/custom-providers");
+          if (res.ok) customProvidersLoaded = (res.data?.providers || []).filter((item) => !item.disabled);
+          match = customProvidersLoaded.find((item) => item.id === provider);
+        }
+        if (match) openCustomProviderEditor(match);
+        else setStatus("st-onboarding-model", "Could not find this custom provider. Reload and try again.", "err");
+      };
       $("onboarding-model-save").onclick = async () => {
         const provider = $("onboarding-model-provider").value;
+        const status = onboardingModelStatuses.find((item) => item.provider === provider);
+        if (status?.custom) {
+          setStatus(
+            "st-onboarding-model",
+            "Custom providers manage their key in the Custom providers section below.",
+            "err",
+          );
+          return;
+        }
         const apiKey = $("onboarding-model-key").value.trim();
         const modelId = $("onboarding-model-id").value;
         if (!apiKey) {
@@ -9508,6 +9539,15 @@
       };
       $("onboarding-model-delete").onclick = async () => {
         const provider = $("onboarding-model-provider").value;
+        const status = onboardingModelStatuses.find((item) => item.provider === provider);
+        if (status?.custom) {
+          setStatus(
+            "st-onboarding-model",
+            "Custom providers manage their key in the Custom providers section below.",
+            "err",
+          );
+          return;
+        }
         if (
           !confirm(
             "Disable the " + connectorName(provider) + " model key? Models from this provider will stop working.",

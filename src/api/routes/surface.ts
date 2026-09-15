@@ -14,6 +14,7 @@ import {
   fastModeModelIds,
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
+import { customProviderConfiguredForHarness } from "../../model/custom-provider-readiness.ts";
 import { errMessage } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -1087,6 +1088,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
   const configuredKeys = deps.providerKeys ?? managedKeys;
   const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
+  const customProviderConfigured = await customProviderConfiguredForHarness(deps.customProviders, harnessId);
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
@@ -1107,12 +1109,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     webuiModels: webuiModels != null ? configuredPicker : allowed,
     baseModel: resolvedBase,
     harnessId,
-    ...(providerStatus && {
+    ...((providerStatus || customProviderConfigured) && {
       modelProviderConfigured: Boolean(
-        providerStatus.anthropic ||
-        providerStatus.openai ||
-        providerStatus.openrouter ||
-        providerStatus.modelIds?.size ||
+        providerStatus?.anthropic ||
+        providerStatus?.openai ||
+        providerStatus?.openrouter ||
+        providerStatus?.modelIds?.size ||
+        customProviderConfigured ||
         deps.harnessCarriedModelAuth,
       ),
     }),
