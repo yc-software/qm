@@ -8,12 +8,12 @@
     <style>
       :root {
         color-scheme: light;
-        --bg: #fbfbfa;
+        --bg: #ffffff;
         --surface: #ffffff;
         --subtle: #f4f5f4;
         --text: #18181b;
         --muted: #667085;
-        --border: #e4e7ec;
+        --border: #e5e5e5;
         --ink: #101828;
         --danger: #b42318;
         --ok: #16723a;
@@ -101,7 +101,7 @@
         margin: 0;
         padding: var(--header-safe-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
         border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-        background: color-mix(in srgb, var(--bg) 94%, var(--subtle));
+        background: var(--bg);
       }
       body:has(#app-view:not(.hidden)) header {
         margin-left: var(--sidebar-w);
@@ -365,8 +365,8 @@
         padding: 28px 28px 40px;
       }
       .admin-inner {
-        width: min(var(--maxw), 100%);
-        margin: 0 auto;
+        width: 100%;
+        margin: 0;
       }
       .history-view .admin-main {
         padding-top: 20px;
@@ -501,8 +501,8 @@
         width: 100%;
         border: none;
         background: none;
-        padding: 6px 11px 6px 38px;
-        color: var(--muted);
+        padding: 5px 5px 5px 6px;
+        color: var(--text);
         border-radius: var(--radius);
         cursor: pointer;
         font: inherit;
@@ -520,9 +520,9 @@
       }
       .tab.active {
         color: var(--text);
-        background: color-mix(in srgb, var(--text) 4%, transparent);
+        background: color-mix(in srgb, var(--text) 2.5%, transparent);
         box-shadow: none;
-        font-weight: 500;
+        font-weight: 400;
       }
       .tab:disabled {
         color: color-mix(in srgb, var(--muted) 45%, transparent);
@@ -537,24 +537,24 @@
       }
       .tab-section {
         flex: 0 0 auto;
-        padding: 12px 11px 6px 9px;
+        padding: 12px 6px 6px 19px;
         color: var(--muted);
-        font-size: 11px;
+        font-size: 12.5px;
         font-weight: 400;
       }
       nav.tabs .tab-section {
         margin-top: 8px;
-        border-top: 1px solid var(--border);
+        border-top: 0;
       }
       nav.tabs .tab-section:first-child {
         margin-top: 0;
         border-top: 0;
       }
       nav.tabs .tab:last-child {
-        margin-top: auto;
-        padding-top: 12px;
-        border-top: 1px solid var(--border);
-        border-radius: 0;
+        margin-top: 0;
+        padding-top: 5px;
+        border-top: 0;
+        border-radius: var(--radius);
       }
 
       section.card {
@@ -799,9 +799,6 @@
       .primary:hover {
         background: var(--cta-hover);
         border-color: var(--cta-hover);
-      }
-      button.dirty::after {
-        content: " *";
       }
       .link {
         border: none;
@@ -3137,11 +3134,8 @@
         background: var(--subtle);
       }
       .admin-app .dd-item.sel {
-        font-weight: 600;
-      }
-      .admin-app .dd-item.sel::after {
-        content: " ✓";
-        color: var(--accent, #4a7dff);
+        background: var(--subtle);
+        font-weight: 400;
       }
       .admin-app .dd-item.dis {
         color: var(--muted);
@@ -3643,7 +3637,7 @@
         font-size: 12px;
       }
       .governance-view .shellbar {
-        display: none;
+        display: flex;
       }
       .governance-capability {
         display: flex;
@@ -4166,15 +4160,15 @@
       }
 
       :root {
-        --subtle: #eeeeea;
-        --text: #1c1c1a;
-        --muted: #6f6f68;
+        --subtle: #f5f5f5;
+        --text: #171717;
+        --muted: #737373;
         --ink: #1c1c1a;
         --danger: #b91c1c;
         --ok: #1a7f37;
         --warn: #b45309;
-        --bg: #fbfbfa;
-        --border: #e4e7ec;
+        --bg: #ffffff;
+        --border: #e5e5e5;
         --radius: 8px;
         --header-h: 56px;
         --sidebar-w: 280px;
@@ -4198,7 +4192,7 @@
         margin-left: var(--sidebar-w);
         padding: var(--header-safe-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
         border-bottom-color: color-mix(in srgb, var(--border) 68%, transparent);
-        background: color-mix(in srgb, var(--bg) 94%, var(--subtle));
+        background: var(--bg);
       }
       body:has(#app-view.hidden) header.top {
         display: none;
@@ -4219,6 +4213,28 @@
         height: 100dvh;
         padding: calc(10px + var(--header-safe-top)) 4px 10px 8px;
         background: color-mix(in srgb, var(--subtle) 42%, var(--bg));
+      }
+      @media (min-width: 901px) {
+        .admin-sidebar .tab {
+          width: calc(100% - 13px);
+          margin-left: 13px;
+          line-height: 21px;
+          transition: background 0.12s ease;
+        }
+        .admin-sidebar nav.tabs {
+          padding-right: 6px;
+          scrollbar-width: thin;
+          scrollbar-color: color-mix(in srgb, var(--text) 12%, transparent) transparent;
+          scrollbar-gutter: stable;
+        }
+        .admin-sidebar nav.tabs::-webkit-scrollbar {
+          display: block;
+          width: 6px;
+        }
+        .admin-sidebar nav.tabs::-webkit-scrollbar-thumb {
+          border-radius: 8px;
+          background: color-mix(in srgb, var(--text) 12%, transparent);
+        }
       }
       .brand {
         gap: 7.5px;
@@ -4274,9 +4290,9 @@
       }
       .tab {
         min-height: 0;
-        padding: 6px 11px 6px 38px;
+        padding: 5px 5px 5px 6px;
         border-radius: var(--radius);
-        color: var(--muted);
+        color: var(--text);
         font-size: 14px;
         font-weight: 400;
       }
@@ -4286,18 +4302,18 @@
       }
       .tab.active {
         color: var(--text);
-        background: color-mix(in srgb, var(--text) 4%, transparent);
+        background: color-mix(in srgb, var(--text) 2.5%, transparent);
         box-shadow: none;
-        font-weight: 500;
+        font-weight: 400;
       }
       .tab-top {
-        color: var(--muted);
+        color: var(--text);
         font-weight: 400;
       }
       .tab-section {
-        padding: 12px 11px 6px 9px;
+        padding: 12px 6px 6px 19px;
         color: var(--muted);
-        font-size: 11px;
+        font-size: 12.5px;
         font-weight: 400;
         letter-spacing: 0;
       }
@@ -4311,17 +4327,17 @@
       }
       nav.tabs .tab-section {
         margin-top: 8px;
-        border-top: 1px solid var(--border);
+        border-top: 0;
       }
       nav.tabs .tab-section:first-child {
         margin-top: 0;
         border-top: 0;
       }
       nav.tabs .tab:last-child {
-        margin-top: auto;
-        padding-top: 12px;
-        border-top: 1px solid var(--border);
-        border-radius: 0;
+        margin-top: 0;
+        padding-top: 5px;
+        border-top: 0;
+        border-radius: var(--radius);
       }
       .admin-main {
         grid-column: 2;
@@ -4329,9 +4345,49 @@
         max-width: none;
         padding: 28px 28px 40px;
       }
+      .admin-main .shellbar {
+        position: static;
+        min-height: 32px;
+        margin-bottom: 8px;
+        padding: 0;
+      }
+      .admin-main .shell-title {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.025em;
+      }
+      .admin-main input[type="text"],
+      .admin-main textarea,
+      .admin-main select,
+      .admin-main .dd > button {
+        background: transparent;
+        border-color: var(--border);
+        border-radius: 10px;
+        box-shadow: none;
+      }
+      .admin-main label,
+      .admin-main .hint,
+      .admin-main .viewlink,
+      .admin-main input,
+      .admin-main textarea,
+      .admin-main .dd > button {
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .admin-main label,
+      .admin-main .hint,
+      .admin-main .viewlink {
+        color: var(--muted);
+      }
+      .admin-main label {
+        margin-bottom: 4px;
+      }
+      .admin-main section.card:not(.setting-row) {
+        box-shadow: none;
+      }
       .admin-inner {
-        width: min(var(--maxw), 100%);
-        margin: 0 auto;
+        width: 100%;
+        margin: 0;
       }
       #view-governance > .governance-overview,
       #view-governance .governance-sections,
@@ -4354,7 +4410,7 @@
         display: block;
         min-height: 0;
         margin: 0;
-        padding: 16px 12px;
+        padding: 20px 0;
         border: 0;
         border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
         border-radius: 0;
@@ -4394,14 +4450,14 @@
       #view-governance .setting-row > .head h2 {
         margin: 0;
         font-size: 14px;
-        font-weight: 600;
+        font-weight: 500;
       }
       #view-governance .card > .head p,
       #view-governance .setting-row > .head p {
-        margin: 2px 0 8px;
+        margin: 4px 0 8px;
         color: var(--muted);
-        font-size: 12.5px;
-        line-height: 1.5;
+        font-size: 13px;
+        line-height: 1.4;
       }
       #view-governance .card > .body,
       #view-governance .setting-row > .body {
@@ -4435,9 +4491,6 @@
         font-size: 12.5px;
         font-weight: 500;
       }
-      #view-governance [data-save]:disabled {
-        display: none;
-      }
       #view-governance .parity-subsection {
         padding: 4px 0;
         border: 0;
@@ -4457,26 +4510,38 @@
         display: none;
       }
       .choice-stack {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        max-width: 640px;
-        margin-top: 8px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        max-width: none;
+        margin-top: 6px;
       }
       .posture-choice {
         display: flex;
         align-items: flex-start;
         gap: 8px;
         margin: 0;
-        padding: 8px 10px;
-        border: 1px solid var(--border);
+        padding: 7px 10px;
+        border: 1px solid transparent;
         border-radius: 8px;
         color: var(--text);
         cursor: pointer;
+        line-height: 1.4;
+        transition: background 120ms ease;
+      }
+      .posture-choice:hover {
+        background: color-mix(in srgb, var(--text) 6%, transparent);
+      }
+      .posture-choice:focus-within {
+        outline: 2px solid var(--muted);
+        outline-offset: 1px;
       }
       .posture-choice:has(input:checked) {
-        border-color: var(--border);
-        background: var(--subtle);
+        border-color: transparent;
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+      }
+      .posture-choice:has(input:checked):hover {
+        background: color-mix(in srgb, var(--text) 8%, transparent);
       }
       .posture-choice input {
         width: auto;
@@ -4487,15 +4552,404 @@
         display: block;
       }
       .posture-choice strong {
+        color: var(--text);
         font-size: 13px;
         font-weight: 600;
       }
       .posture-choice small {
-        margin-top: 2px;
+        margin-top: 0;
         color: var(--muted);
-        font-size: 11.5px;
+        font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
+      }
+      #card-security-posture .choice-stack {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        max-width: none;
+      }
+      #card-security-posture .posture-choice,
+      #card-sharing-posture .posture-choice,
+      #card-external-slack .posture-choice {
+        padding: 14px 16px;
+        border-color: var(--border);
+        background: transparent;
+      }
+      #card-security-posture .posture-choice:has(input:checked),
+      #card-sharing-posture .posture-choice:has(input:checked),
+      #card-external-slack .posture-choice:has(input:checked) {
+        border-color: var(--muted);
+        background: transparent;
+      }
+      #card-security-posture .posture-choice:hover,
+      #card-sharing-posture .posture-choice:hover,
+      #card-external-slack .posture-choice:hover {
+        background: color-mix(in srgb, var(--text) 2%, transparent);
+      }
+      @media (max-width: 1100px) {
+        #card-security-posture .choice-stack {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+        #card-security-posture .posture-choice > span {
+          display: flex;
+          flex-wrap: wrap;
+          column-gap: 8px;
+        }
+      }
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"]) .admin-inner {
+        max-width: 1040px;
+      }
+      #view-governance .governance-field-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+        max-width: 720px;
+      }
+      .governance-field-grid .dd,
+      .governance-field-grid select {
+        width: 100%;
+      }
+      .governance-prompt {
+        margin-top: 12px;
+        border-top: 1px solid var(--border);
+      }
+      #auto-flagger-rubric {
+        width: 100%;
+        min-height: 140px;
+        max-height: 360px;
+        resize: vertical;
+      }
+      .governance-secondary-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      #view-governance .card > .foot:has([data-save]),
+      #view-governance .card > .foot:has(#governance-org-ambient-save) {
+        min-height: 32px;
+        margin-top: 12px;
+        gap: 10px;
+      }
+      #view-governance .card > .foot [data-save],
+      #view-governance .card > .foot #governance-org-ambient-save,
+      #view-governance .card > .foot #sc-save {
+        flex: 0 0 auto;
+        min-width: 76px;
+        min-height: 32px;
+        margin: 0;
+      }
+      @media (max-width: 600px) {
+        .choice-stack {
+          grid-template-columns: 1fr;
+        }
+        #view-governance .governance-field-grid {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+      }
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"]) .shell-title {
+        font-weight: 500;
+      }
+      #view-governance {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 1.4;
+      }
+      #view-governance label,
+      #view-governance input,
+      #view-governance textarea,
+      #view-governance select,
+      #view-governance .dd > button,
+      #view-governance .posture-choice {
+        color: var(--text);
+        font-weight: 400;
+      }
+      #view-governance .card > .head h2,
+      #view-governance .posture-choice strong,
+      #view-governance summary,
+      #view-governance button {
+        font-weight: 500;
+      }
+      #view-governance .card > .head p,
+      #view-governance .body p,
+      #view-governance .hint,
+      #view-governance .posture-choice small,
+      #view-governance .viewlink,
+      #view-governance summary span {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 1.4;
+      }
+      #view-governance p strong,
+      #view-governance p b {
+        color: inherit;
+        font-weight: 400;
+      }
+      #view-governance .card > .foot [data-save]:disabled,
+      #view-governance .card > .foot #governance-org-ambient-save:disabled,
+      #view-governance .card > .foot #sc-save:disabled {
+        color: color-mix(in srgb, var(--text) 32%, var(--bg));
+        background: color-mix(in srgb, var(--text) 3%, var(--bg));
+        border: 1px solid color-mix(in srgb, var(--text) 8%, var(--bg));
+        box-shadow: none;
+        opacity: 1;
+        cursor: not-allowed;
+        transform: none;
+      }
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"]) .admin-inner {
+        max-width: 960px;
+        margin-inline: auto;
+      }
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"]) .shellbar {
+        margin-bottom: 16px;
+      }
+      #view-governance section.card,
+      #view-governance section.card.setting-row {
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr);
+        column-gap: 40px;
+        row-gap: 0;
+        padding: 20px 0;
+        align-items: start;
+      }
+      #view-governance section.card.hidden,
+      #view-governance section.card.reference-omitted {
+        display: none;
+      }
+      #view-governance .card > .head {
+        grid-column: 1;
+        margin: 0;
+      }
+      #view-governance .card > .head h2 {
+        font-size: 14px;
+        font-weight: 400;
+        line-height: 1.5;
+      }
+      #view-governance .card > .head p {
+        display: block;
+        margin: 4px 0 0;
+        line-height: 1.5;
+      }
+      #view-governance .card > .body {
+        grid-column: 2;
+        min-width: 0;
+      }
+      #view-governance .card > .foot {
+        grid-column: 2;
+        justify-content: flex-end;
+      }
+      #view-governance .card > .foot[hidden] {
+        display: none;
+      }
+      .screening-test-options {
+        border-top: 1px solid var(--border);
+      }
+      .screening-test-fields {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 4px 0 12px;
+      }
+      .screening-test-fields input[type="number"] {
+        width: 100%;
+      }
+      #view-governance .screening-compare {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin: 0;
+      }
+      #view-governance .screening-compare input {
+        flex: 0 0 18px;
+        width: 18px;
+        height: 18px;
+        margin: 0;
+        accent-color: var(--cta);
+        cursor: pointer;
+      }
+      #view-governance #auto-flagger-window {
+        width: 76px;
+        min-width: 76px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+        appearance: textfield;
+        -moz-appearance: textfield;
+      }
+      #auto-flagger-window::-webkit-inner-spin-button,
+      #auto-flagger-window::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      #auto-flagger-window-range {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      #auto-flagger-test {
+        grid-column: 1 / -1;
+        justify-self: end;
+      }
+      #view-governance .card > .foot [data-save],
+      #view-governance .card > .foot #governance-org-ambient-save,
+      #view-governance .card > .foot #sc-save {
+        order: 1;
+        font-weight: 400;
+      }
+      #card-security-posture .body > .dd,
+      #card-sharing-posture .body > .dd {
+        width: 180px;
+        margin-left: auto;
+      }
+      #view-governance #sharing-posture-effective {
+        margin: 0 0 8px;
+        text-align: right;
+        font-size: 12px;
+      }
+      #view-governance .audience-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        min-height: 34px;
+      }
+      #view-governance .audience-toggle input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+      }
+      #view-governance #card-command-policy > .body,
+      #view-governance #card-egress > .body,
+      #view-governance #card-ambient-policy > .body {
+        grid-column: 1 / -1;
+        margin-top: 12px;
+      }
+      #view-governance .governance-secondary-actions {
+        font-size: 12px;
+      }
+      @media (max-width: 1100px) {
+        #view-governance section.card,
+        #view-governance section.card.setting-row {
+          column-gap: 24px;
+          grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr);
+        }
+      }
+      @media (max-width: 650px) {
+        #view-governance section.card,
+        #view-governance section.card.setting-row {
+          grid-template-columns: 1fr;
+        }
+        #view-governance .card > .body {
+          grid-column: 1;
+          margin-top: 12px;
+        }
+        #view-governance .card > .foot {
+          grid-column: 1;
+        }
+        #card-security-posture .body > .dd,
+        #card-sharing-posture .body > .dd {
+          width: 100%;
+          margin-left: 0;
+        }
+        #view-governance #sharing-posture-effective {
+          text-align: left;
+        }
+        #view-governance .audience-toggle {
+          justify-content: flex-start;
+        }
+      }
+      .posture-help {
+        margin-top: 8px;
+        font-size: 13px;
+      }
+      .posture-help dl {
+        margin: 12px 0 0;
+      }
+      .posture-help dt {
+        font-weight: 500;
+      }
+      .posture-help dd {
+        margin: 4px 0 12px;
+        color: var(--muted);
+      }
+      .screening-count {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .screening-count input {
+        min-width: 64px;
+      }
+      #view-governance .governance-prompt {
+        padding-top: 12px;
+        margin-top: 12px;
+      }
+      #view-governance .screening-test-options {
+        padding-top: 12px;
+        margin-top: 12px;
+      }
+      #view-governance .screening-test-options h3 {
+        margin: 0 0 4px;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      #view-governance .screening-test-help {
+        margin: 0 0 12px;
+      }
+      #view-governance .posture-help dl {
+        margin-top: 12px;
+      }
+      #view-governance .posture-help dd:last-child {
+        margin-bottom: 0;
+      }
+      #view-governance #card-security-posture .choice-stack,
+      #view-governance #card-sharing-posture .choice-stack,
+      #view-governance #card-external-slack .choice-stack,
+      #view-governance #card-governance-org-ambient .choice-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin: 0;
+      }
+      #view-governance #card-security-posture .posture-choice,
+      #view-governance #card-sharing-posture .posture-choice,
+      #view-governance #card-external-slack .posture-choice,
+      #view-governance #card-governance-org-ambient .posture-choice {
+        padding: 10px 12px;
+        border: 1px solid color-mix(in srgb, var(--text) 9%, var(--bg));
+      }
+      #view-governance #card-security-posture .posture-choice > span,
+      #view-governance #card-sharing-posture .posture-choice > span,
+      #view-governance #card-external-slack .posture-choice > span,
+      #view-governance #card-governance-org-ambient .posture-choice > span {
+        display: block;
+      }
+      #view-governance #card-security-posture .posture-choice:has(input:checked),
+      #view-governance #card-sharing-posture .posture-choice:has(input:checked),
+      #view-governance #card-external-slack .posture-choice:has(input:checked),
+      #view-governance #card-governance-org-ambient .posture-choice:has(input:checked) {
+        background: color-mix(in srgb, var(--text) 2%, transparent);
+      }
+      #view-governance #card-security-posture .posture-choice:hover,
+      #view-governance #card-sharing-posture .posture-choice:hover,
+      #view-governance #card-external-slack .posture-choice:hover,
+      #view-governance #card-governance-org-ambient .posture-choice:hover {
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+      }
+      #view-governance #card-governance-org-ambient > .head {
+        display: block;
+      }
+      #view-governance #card-governance-org-ambient .head .viewlink {
+        display: block;
+        margin: 8px 0 0;
+        padding: 0;
       }
       .policy-rules {
         display: grid;
@@ -4517,9 +4971,26 @@
       .policy-rule .policy-pattern {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
-      .policy-rule .rowbtn {
-        min-width: 34px;
-        padding: 6px 8px;
+      #view-governance .policy-rule .rowbtn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        justify-self: center;
+        width: 16px;
+        height: 16px;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        color: var(--muted);
+      }
+      #view-governance .policy-rule .rowbtn:hover {
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        color: var(--danger);
       }
       .policy-actions {
         display: flex;
@@ -4550,9 +5021,6 @@
       #governance-org-ambient + .dd .dd-btn {
         width: 100%;
       }
-      #governance-org-ambient-save:disabled {
-        display: none;
-      }
       #card-egress.egress-disabled .egress-editor,
       #card-egress.egress-disabled .egress-actions {
         opacity: 0.45;
@@ -4567,6 +5035,213 @@
         gap: 8px 10px;
       }
       .egress-empty-state > .hint {
+        margin: 0;
+      }
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"])
+        #view-governance
+        input:not([type="radio"]):not([type="checkbox"]),
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"])
+        #view-governance
+        select,
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"])
+        #view-governance
+        textarea,
+      body:is([data-subview="governance"], [data-subview="models"], [data-subview="credentials"])
+        #view-governance
+        .dd
+        > button {
+        border-radius: 6px;
+      }
+      #view-governance input[type="radio"] {
+        appearance: none;
+        -webkit-appearance: none;
+        display: inline-grid;
+        place-content: center;
+        flex: 0 0 16px;
+        width: 16px;
+        height: 16px;
+        padding: 0;
+        border: 1.5px solid color-mix(in srgb, var(--text) 38%, var(--bg));
+        border-radius: 50%;
+        background: transparent;
+        cursor: pointer;
+      }
+      #view-governance input[type="radio"]::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--cta);
+        transform: scale(0);
+      }
+      #view-governance input[type="radio"]:checked {
+        border-color: var(--cta);
+      }
+      #view-governance input[type="radio"]:checked::before {
+        transform: scale(1);
+      }
+      #view-governance input[type="radio"]:focus-visible {
+        outline: 2px solid var(--cta);
+        outline-offset: 3px;
+      }
+      #view-governance input[type="radio"]:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      #view-governance #internal-member-overrides {
+        overflow-x: hidden;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      body[data-subview="credentials"] #view-governance section.card.sv-credentials {
+        display: block;
+      }
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: baseline;
+        gap: 4px 16px;
+      }
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head h2 {
+        grid-column: 1;
+        grid-row: 1;
+      }
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head p {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        margin: 0;
+      }
+      body[data-subview="credentials"] #view-governance #card-service-credentials > .head p {
+        max-width: 70%;
+      }
+      @media (max-width: 650px) {
+        body[data-subview="credentials"] #view-governance #card-service-credentials > .head p {
+          max-width: 100%;
+        }
+      }
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head .viewlink {
+        grid-column: 2;
+        grid-row: 1;
+        margin: 0;
+        padding: 0;
+      }
+      body[data-subview="credentials"] #view-governance .sv-credentials > .body {
+        margin-top: 16px;
+      }
+      body[data-subview="credentials"] #view-governance .credential-main {
+        flex: 1;
+      }
+      body[data-subview="credentials"] #view-governance .credential-row {
+        padding: 12px 0;
+        align-items: center;
+        border-color: color-mix(in srgb, var(--text) 8%, var(--bg));
+      }
+      body[data-subview="credentials"] #view-governance .credential-title strong,
+      body[data-subview="credentials"] #view-governance .keychain-summary strong {
+        font-size: 13px;
+        font-weight: 500;
+      }
+      body[data-subview="credentials"] #view-governance .credential-main > .hint {
+        margin: 4px 0 0;
+      }
+      body[data-subview="credentials"] #view-governance .credential-badges {
+        margin-top: 6px;
+      }
+      body[data-subview="credentials"] #view-governance .badge {
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1.4;
+        padding: 2px 7px;
+      }
+      body[data-subview="credentials"] #view-governance .badge:is(.info, .ok, .muted) {
+        color: var(--muted);
+        border-color: color-mix(in srgb, var(--text) 9%, var(--bg));
+        background: color-mix(in srgb, var(--text) 2%, transparent);
+      }
+      body[data-subview="credentials"] #view-governance .credential-actions button {
+        min-height: 32px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        border-color: var(--border);
+        background: transparent;
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 400;
+      }
+      body[data-subview="credentials"] #view-governance .credential-actions button:hover {
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+      }
+      body[data-subview="credentials"] #view-governance .credential-actions button.danger:hover {
+        color: var(--danger);
+      }
+      body[data-subview="credentials"] #view-governance .keychain-summary {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      body[data-subview="credentials"] #view-governance .keychain-summary strong {
+        color: var(--text);
+      }
+      body[data-subview="credentials"] #view-governance .editor-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      body[data-subview="credentials"] #view-governance .editor-panel {
+        padding: 16px 0 0;
+        border: 0;
+        border-top: 1px solid var(--border);
+        border-radius: 0;
+        background: transparent;
+      }
+      body[data-subview="credentials"] #view-governance .sc-semantics strong,
+      body[data-subview="credentials"] #view-governance .sc-semantics span,
+      body[data-subview="credentials"] #view-governance .capability-summary dt,
+      body[data-subview="credentials"] #view-governance .capability-summary dd {
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 1.4;
+      }
+      body[data-subview="credentials"] #view-governance input[type="checkbox"] {
+        min-width: 18px;
+        height: 18px;
+        accent-color: var(--cta);
+      }
+      #view-governance .model-runtime-fields {
+        display: grid;
+        gap: 12px;
+      }
+      #view-governance .model-runtime-fields label {
+        margin: 0 0 4px;
+      }
+      #view-governance .model-runtime-fields .dd,
+      #view-governance .model-runtime-fields select {
+        width: 100%;
+        max-width: none;
+      }
+      #view-governance #base-fast-mode-control {
+        margin-top: 16px;
+      }
+      #base-fast-mode-control input:checked + .setting-switch {
+        border-color: var(--cta);
+        background: var(--cta);
+      }
+      #base-fast-mode-control input:focus-visible + .setting-switch {
+        outline-color: var(--cta);
+      }
+      #view-governance #base-fast-mode-control strong,
+      #view-governance #base-fast-mode-control small {
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 1.4;
+      }
+      #view-governance #base-fast-mode-control .setting-copy {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        column-gap: 8px;
+        row-gap: 0;
+      }
+      #view-governance #base-fast-mode-control small {
+        color: var(--muted);
         margin: 0;
       }
       .model-list {
@@ -4589,12 +5264,16 @@
         background: var(--subtle);
         font-size: 13px;
       }
-      .model-chip button {
+      #view-governance .model-chip button {
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        flex: 0 0 22px;
         width: 22px;
         height: 22px;
+        min-width: 22px;
+        min-height: 22px;
+        margin: 0;
         padding: 0;
         border: 0;
         border-radius: 999px;
@@ -4603,7 +5282,7 @@
         font-size: 16px;
         line-height: 1;
       }
-      .model-chip button:hover {
+      #view-governance .model-chip button:hover {
         background: color-mix(in srgb, var(--text) 8%, transparent);
         color: var(--text);
       }
@@ -4612,7 +5291,7 @@
         align-items: flex-end;
         gap: 8px;
         max-width: 520px;
-        margin-top: 14px;
+        margin: 0 0 14px;
       }
       .model-add-field {
         flex: 1 1 auto;
@@ -5370,6 +6049,7 @@
                 <section class="card sv-governance setting-row hidden" id="card-security-posture">
                   <div class="head">
                     <h2>Security posture</h2>
+                    <p>Choose how the agent screens external content and when it requires your approval.</p>
                   </div>
                   <div class="body">
                     <select id="security-posture" data-choice-state hidden>
@@ -5426,37 +6106,56 @@
                     </p>
                   </div>
                   <div class="body">
-                    <label for="auto-flagger-harness">Harness</label>
-                    <select id="auto-flagger-harness" style="max-width: 360px"></select>
-                    <label for="auto-flagger-model">Model</label>
-                    <select id="auto-flagger-model" style="max-width: 440px"></select>
-                    <label for="auto-flagger-rubric">Quarantine prompt (classification rubric)</label>
-                    <textarea id="auto-flagger-rubric" rows="10" maxlength="20000" style="width: 100%"></textarea>
+                    <div class="screening-details">
+                      <div class="governance-field-grid">
+                        <div>
+                          <label for="auto-flagger-harness">Harness</label>
+                          <select id="auto-flagger-harness"></select>
+                        </div>
+                        <div>
+                          <label for="auto-flagger-model">Model</label>
+                          <select id="auto-flagger-model"></select>
+                        </div>
+                      </div>
+                      <div class="governance-prompt">
+                        <label for="auto-flagger-rubric">Quarantine prompt (classification rubric)</label>
+                        <textarea id="auto-flagger-rubric" rows="6" maxlength="20000"></textarea>
+                      </div>
+                      <div class="screening-test-options">
+                        <h3>Test Auto flagger</h3>
+                        <p class="screening-test-help">
+                          Try the model and prompt above on recent screenings without applying changes.
+                        </p>
+                        <div class="screening-test-fields">
+                          <label for="auto-flagger-window">Recent screenings to test</label>
+                          <div class="screening-count">
+                            <input
+                              id="auto-flagger-window"
+                              type="number"
+                              inputmode="numeric"
+                              min="1"
+                              max="500"
+                              step="1"
+                              value="100"
+                              aria-describedby="auto-flagger-window-range"
+                            />
+                            <span id="auto-flagger-window-range">1–500</span>
+                          </div>
+                          <label
+                            class="screening-compare"
+                            title="Also replay the configuration in effect today, so the flag rates are comparable"
+                          >
+                            <input type="checkbox" id="auto-flagger-compare" />Compare with the currently applied
+                            configuration
+                          </label>
+                          <button id="auto-flagger-test" type="button">Run test</button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                   <div class="foot">
-                    <button class="primary" data-save="auto-flagger">Apply</button>
-                    <button id="auto-flagger-test" type="button">Test</button>
-                    <label
-                      for="auto-flagger-window"
-                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
-                      >on the last
-                      <input
-                        id="auto-flagger-window"
-                        type="number"
-                        min="1"
-                        max="500"
-                        step="1"
-                        value="100"
-                        style="width: 78px"
-                      />
-                      screenings</label
-                    >
-                    <label
-                      style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
-                      title="Also replay the configuration in effect today, so the flag rates are comparable"
-                      ><input type="checkbox" id="auto-flagger-compare" /> compare with current</label
-                    >
                     <button id="auto-flagger-reset" type="button">Restore default</button>
+                    <button class="primary" data-save="auto-flagger">Apply</button>
                     <span class="status" id="st-auto-flagger"></span>
                   </div>
                   <div class="foot" id="auto-flagger-test-result" hidden>
@@ -5806,18 +6505,26 @@
                   <h2>Models &amp; browsing</h2>
                   <p>The models, browser runtime, and organization context available on future turns.</p>
                 </div>
-                <section class="card sv-models setting-row hidden" id="card-base-model">
+                <section class="card sv-models hidden" id="card-base-model">
                   <div class="head">
                     <h2>Default runtime</h2>
                   </div>
                   <div class="body">
-                    <label for="base-harness">Harness</label>
-                    <select id="base-harness" style="max-width: 360px"></select>
-                    <label for="base-model">Model</label>
-                    <select id="base-model" style="max-width: 360px"></select>
-                    <label for="base-effort">Reasoning level</label>
-                    <select id="base-effort" style="max-width: 360px"></select>
-                    <label class="setting-toggle" id="base-fast-mode-control" style="display: none; margin-top: 10px">
+                    <div class="model-runtime-fields">
+                      <div>
+                        <label for="base-harness">Harness</label>
+                        <select id="base-harness"></select>
+                      </div>
+                      <div>
+                        <label for="base-model">Model</label>
+                        <select id="base-model"></select>
+                      </div>
+                      <div>
+                        <label for="base-effort">Reasoning level</label>
+                        <select id="base-effort"></select>
+                      </div>
+                    </div>
+                    <label class="setting-toggle" id="base-fast-mode-control" style="display: none">
                       <input type="checkbox" id="base-fast-mode" />
                       <span class="setting-switch" aria-hidden="true"></span>
                       <span class="setting-copy"
@@ -5835,9 +6542,6 @@
                     <h2>Enabled models</h2>
                   </div>
                   <div class="body">
-                    <div id="webui-models-list" class="model-list">
-                      <p id="webui-models-empty" class="hint">No additional models enabled.</p>
-                    </div>
                     <div class="model-add-row">
                       <div class="model-add-field">
                         <label for="webui-models-add">Add a model</label>
@@ -5846,6 +6550,9 @@
                         </select>
                       </div>
                       <button type="button" id="webui-models-add-button" disabled>+ Add model</button>
+                    </div>
+                    <div id="webui-models-list" class="model-list">
+                      <p id="webui-models-empty" class="hint">No additional models enabled.</p>
                     </div>
                   </div>
                   <div class="foot">
@@ -6539,7 +7246,7 @@
         governanceAmbient.className = "card sv-governance hidden";
         governanceAmbient.id = "card-governance-org-ambient";
         governanceAmbient.innerHTML =
-          '<div class="head"><h2>Ambient reply policy</h2><button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button><p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p></div><div class="body"><select id="governance-org-ambient"><option value="on">Agent judges all messages and replies when useful</option><option value="off">Agent does not read messages or reply unless @-mentioned</option></select></div><div class="foot"><button type="button" class="primary" id="governance-org-ambient-save" disabled>Apply</button><span class="status" id="st-governance-org-ambient"></span></div>';
+          '<div class="head"><h2>Ambient reply policy</h2><p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p><button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button></div><div class="body"><select id="governance-org-ambient" data-choice-state hidden><option value="on">Agent judges all messages and replies when useful</option><option value="off">Agent does not read messages or reply unless @-mentioned</option></select><div class="choice-stack"><label class="posture-choice"><input type="radio" name="ambient-reply-choice" value="on" data-choice-for="governance-org-ambient"><span><strong>Reply when useful</strong><small>Agent judges all messages and replies when useful</small></span></label><label class="posture-choice"><input type="radio" name="ambient-reply-choice" value="off" data-choice-for="governance-org-ambient"><span><strong>Only when mentioned</strong><small>Agent does not read messages or reply unless @-mentioned</small></span></label></div></div><div class="foot"><button type="button" class="primary" id="governance-org-ambient-save" disabled>Apply</button><span class="status" id="st-governance-org-ambient"></span></div>';
         $("card-command-policy").after(governanceAmbient);
 
         const keychains = document.createElement("section");
@@ -6595,6 +7302,7 @@
         });
       }
       prepareParityCards();
+      const scAddButton = $("sc-add");
       let governanceOrgAmbientSaved = "on";
       document.querySelectorAll("[data-choice-for]").forEach((input) => {
         input.onchange = () => {
@@ -7768,6 +8476,7 @@
       }
 
       function defaultShell(extras = {}) {
+        extras = { actions: view === "credentials" ? [scAddButton] : [], ...extras };
         const title = VIEW_TITLE[view] || titleCase(view);
         if (SCOPED.has(view) && !orgWideView()) {
           pageShell({
@@ -8262,6 +8971,9 @@
           $("org-ambient").checked = r.data.orgAmbient !== false;
           governanceOrgAmbientSaved = r.data.orgAmbient === false ? "off" : "on";
           $("governance-org-ambient").value = governanceOrgAmbientSaved;
+          document.querySelectorAll('[data-choice-for="governance-org-ambient"]').forEach((input) => {
+            input.checked = input.value === governanceOrgAmbientSaved;
+          });
           $("governance-org-ambient-save").disabled = true;
         }
         const showHeaderPinDefault = scope.startsWith("org:") && "channelHeaderPinDefault" in r.data;
@@ -8373,7 +9085,8 @@
               label.textContent = modelLabel(id);
               const x = document.createElement("button");
               x.type = "button";
-              x.textContent = "×";
+              x.innerHTML =
+                '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>';
               x.setAttribute("aria-label", "Remove " + id);
               x.onclick = () => {
                 webuiModelIds = webuiModelIds.filter((v) => v !== id);
@@ -8830,7 +9543,7 @@
       }
       function loadScForm(c) {
         $("sc-editor").classList.remove("hidden");
-        $("sc-add").classList.add("hidden");
+        scAddButton.classList.add("hidden");
         $("sc-save").classList.remove("hidden");
         $("sc-reset").classList.remove("hidden");
         scEditing = c.slug;
@@ -8875,7 +9588,7 @@
       }
       function resetScForm() {
         $("sc-editor").classList.add("hidden");
-        $("sc-add").classList.remove("hidden");
+        scAddButton.classList.remove("hidden");
         $("sc-save").classList.add("hidden");
         $("sc-reset").classList.add("hidden");
         scEditing = null;
@@ -9270,10 +9983,10 @@
           setStatus("st-service-credentials", message, "err");
         }
       }
-      $("sc-add").onclick = () => {
+      scAddButton.onclick = () => {
         resetScForm();
         $("sc-editor").classList.remove("hidden");
-        $("sc-add").classList.add("hidden");
+        scAddButton.classList.add("hidden");
         $("sc-save").classList.remove("hidden");
         $("sc-reset").classList.remove("hidden");
         $("sc-name").focus();
@@ -10659,7 +11372,8 @@
         const del = document.createElement("button");
         del.type = "button";
         del.className = "rowbtn danger";
-        del.textContent = "×";
+        del.innerHTML =
+          '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>';
         del.title = "Remove this command policy rule";
         del.setAttribute("aria-label", "Remove command policy rule");
         del.onclick = () => {

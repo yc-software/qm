@@ -235,7 +235,6 @@ test("governance renders simple settings as compact rows with contextual actions
     "card-security-posture",
     "card-sharing-posture",
     "card-external-slack",
-    "card-base-model",
     "card-people-directory",
     "card-turn-wall-clock",
   ]) {
@@ -544,7 +543,7 @@ test("governance follows the neutral web UI interaction palette", () => {
   assert.match(html, /\.viewlink \{[\s\S]*?color: var\(--muted\)/);
   assert.match(
     html,
-    /\.posture-choice:has\(input:checked\) \{\s*border-color: var\(--border\);\s*background: var\(--subtle\)/,
+    /\.posture-choice:has\(input:checked\) \{\s*border-color: transparent;\s*background: color-mix\(in srgb, var\(--text\) 4%, transparent\)/,
   );
 });
 
