@@ -211,6 +211,14 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         .sort((a, b) => a.createdAt - b.createdAt);
     },
 
+    async editPendingText(runId, text, expectedText) {
+      const run = runs.get(runId);
+      if (!run || run.status !== "pending" || run.attempts !== 0 || run.turnUserSeq !== null) return false;
+      if ((run.request.displayText ?? run.request.text) !== expectedText) return false;
+      run.request = { ...run.request, text, displayText: text };
+      return true;
+    },
+
     async withdraw(runId) {
       const run = runs.get(runId);
       if (!run || run.status !== "pending") return false;

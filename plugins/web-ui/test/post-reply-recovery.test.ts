@@ -194,10 +194,19 @@ test("post replies remain visible in new and continuing conversations", async (t
       if (wait) await settle();
       requests.length = 0;
     }
-    const shown = (text: string) =>
-      [...host.querySelectorAll(".assistant-body > .streaming-text, .work-said")].some((el) =>
+    const shownReplies = (text: string) => {
+      const matches = [...host.querySelectorAll(".assistant-body > .streaming-text, .work-message")].filter((el) =>
         el.textContent?.includes(text),
       );
+      for (const match of matches)
+        assert.equal(
+          match.closest("details:not([open])"),
+          null,
+          "delivered replies must remain visible outside closed work",
+        );
+      return matches;
+    };
+    const shown = (text: string) => shownReplies(text).length > 0;
     async function postTurn(index: number, fails = false) {
       const text = `Confirmed answer ${index}`;
       const seq = index * 3;
@@ -226,6 +235,9 @@ test("post replies remain visible in new and continuing conversations", async (t
         ...activity,
       ];
       transcriptFails = fails;
+      run.emit("run", { status: "running", result: null, activity });
+      await settle();
+      assert.equal(shownReplies(text).length, 1, "a confirmed post is visible while the turn continues");
       run.emit("done", { status: "done", result: { status: "silent", sessionId: row.id }, activity });
       await turn;
       await settle();
@@ -273,13 +285,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       delivery.emit("delivery", { threadRef: row.threadRef });
       await settle();
       for (let i = 0; i < 3; i++) {
-        assert.equal(
-          [...host.querySelectorAll(".assistant-body > .streaming-text, .work-said")].filter((el) =>
-            el.textContent?.includes(`Confirmed answer ${i}`),
-          ).length,
-          1,
-          "refresh must not duplicate a displayed post",
-        );
+        assert.equal(shownReplies(`Confirmed answer ${i}`).length, 1, "refresh must not duplicate a displayed post");
       }
     });
     function deferredTranscript(recorded: SessionEntry[]) {
@@ -385,13 +391,20 @@ test("post replies remain visible in new and continuing conversations", async (t
       const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
       run.onopen?.();
       transcriptFails = true;
+      run.emit("run", { status: "running", result: null, activity });
+      await settle();
+      assert.deepEqual(
+        shownReplies(answer).map((el) => el.textContent?.trim()),
+        [answer],
+      );
+      assert.deepEqual(
+        shownReplies("Second confirmed reply").map((el) => el.textContent?.trim()),
+        ["Second confirmed reply"],
+      );
       run.emit("done", { status: "done", result: { status: "silent", sessionId: row.id }, activity });
       await turn;
       await settle();
-      const count = (text: string) =>
-        [...host.querySelectorAll(".assistant-body > .streaming-text, .work-said")].filter((el) =>
-          el.textContent?.includes(text),
-        ).length;
+      const count = (text: string) => shownReplies(text).length;
       assert.equal(count(answer), 1);
       assert.equal(count("Second confirmed reply"), 1);
       entries = [

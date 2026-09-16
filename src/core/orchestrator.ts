@@ -78,7 +78,13 @@ import {
   isValidCapabilityTimezone,
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
-import type { GapWork, HarnessLlmRequestRecord, HarnessTurnResult, RuntimeChoice } from "../harness/harness.ts";
+import type {
+  GapWork,
+  HarnessLlmRequestRecord,
+  HarnessTurnInput,
+  HarnessTurnResult,
+  RuntimeChoice,
+} from "../harness/harness.ts";
 import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
 import {
   renderSecurityPolicyPrompt,
@@ -208,7 +214,14 @@ export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextP
 
 class ProjectRosterChanged extends Error {}
 
-const ACTIVITY_ENTRY_TYPES = new Set<EntryType>(["tool_call", "tool_result", "approval_request", "approval_resolved"]);
+const ACTIVITY_ENTRY_TYPES = new Set<EntryType>([
+  "text_start",
+  "text",
+  "tool_call",
+  "tool_result",
+  "approval_request",
+  "approval_resolved",
+]);
 
 function knownBrowseModel(id: string | null | undefined): { id: string; provider: string } | undefined {
   const provider = id ? resolveModel(id)?.provider : undefined;
@@ -585,6 +598,32 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const result = await deps.managedGroups!.withVersion(managedGroupRef, input.scopeVersion, fn);
         if (result === undefined) throw new ProjectRosterChanged();
         return result;
+      };
+      const mirrorRunActivity = async (appended: SessionEntry): Promise<void> => {
+        if (input.runId && deps.runActivity && ACTIVITY_ENTRY_TYPES.has(appended.type)) {
+          await deps.runActivity
+            .append(input.runId, {
+              seq: appended.seq,
+              parentSeq: appended.parentSeq,
+              type: appended.type,
+              payload: appended.payload,
+              createdAt: appended.createdAt,
+            })
+            .catch(swallowAs("orchestrator: run-activity append", undefined));
+        } else if (input.runId && deps.runActivity && appended.type === "thinking") {
+          const block = appended.payload as { thinking?: string; redacted?: boolean };
+          if (!block.redacted && block.thinking?.trim()) {
+            await deps.runActivity
+              .append(input.runId, {
+                seq: appended.seq,
+                parentSeq: appended.parentSeq,
+                type: appended.type,
+                payload: { thinking: block.thinking },
+                createdAt: appended.createdAt,
+              })
+              .catch(swallowAs("orchestrator: run-activity append", undefined));
+          }
+        }
       };
       if (!(await managedRosterIsCurrent())) {
         return { status: "refused", reason: "project membership changed; retry from the current project" };
@@ -1757,6 +1796,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const messagePrefix = "security-screen-release:session_message_";
             if (p.approvalKey?.startsWith(messagePrefix))
               await deps.sessionSyscalls?.rejectMessage?.(session.id, p.approvalKey.slice(messagePrefix.length));
+            const decisionEntry = await withManagedRosterVersion(() =>
+              deps.sessions.append(lease, {
+                type: "approval_resolved",
+                payload: { requestId: input.approval!.requestId, command: p.command, approved: false },
+                scopeLabel: scopeId as ScopeId,
+              }),
+            );
+            await mirrorRunActivity(decisionEntry);
             await pending.delete(input.approval.requestId);
             deps.auditLog.record({
               at: Date.now(),
@@ -1811,6 +1858,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ],
               };
             }
+            const decisionEntry = await withManagedRosterVersion(() =>
+              deps.sessions.append(lease, {
+                type: "approval_resolved",
+                payload: { requestId: input.approval!.requestId, command: p.command, approved: true, scope },
+                scopeLabel: scopeId as ScopeId,
+              }),
+            );
+            await mirrorRunActivity(decisionEntry);
             await pending.delete(input.approval.requestId);
             if (p.kind === "input") {
               await deps.sessions
@@ -2888,6 +2943,83 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ...(tapeRows.fold ? { fold: tapeRows.fold } : {}),
             };
           }
+          const emit: HarnessTurnInput["emit"] = async (entry) => {
+            turnProgress++;
+            const persistStart = Date.now();
+            try {
+              const stored = (() => {
+                const tainted = entry;
+                if (
+                  tainted.type === "assistant" ||
+                  tainted.type === "approval_request" ||
+                  ((tainted.type === "tool_result" || tainted.type === "tool_call") &&
+                    isObj(tainted.payload) &&
+                    tainted.payload.blocked === "needs_approval")
+                ) {
+                  const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
+                  if (typeof payload.workStartedAt !== "number")
+                    payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;
+                  if (typeof payload.workFinishedAt !== "number") payload.workFinishedAt = Date.now();
+                  return { ...tainted, payload };
+                }
+                if (tainted.type !== "user") return tainted;
+                const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
+                Object.assign(payload, swarmEntryProvenance);
+                if (input.runId) payload.runId = input.runId;
+                if (actor.displayName?.trim() && typeof payload.name !== "string")
+                  payload.name = actor.displayName.trim();
+                if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
+                  payload.display = input.displayText;
+                if (syntheticPrompt || continuation) payload.hidden = true;
+                return { ...tainted, payload };
+              })();
+              const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
+              emittedEntries.push(appended);
+              if (input.runId && deps.turnStream) {
+                const goalView = goalViewFromEntry(appended.type, appended.payload);
+                if (goalView) deps.turnStream.noteGoal(input.runId, goalView);
+              }
+              if (appended.type === "user" && spine.turnUserEntrySeq === undefined) {
+                spine.turnUserEntrySeq = appended.seq;
+                if (input.runId && deps.runs)
+                  await deps.runs
+                    .noteTurnUserSeq(input.runId, appended.seq)
+                    .catch(swallowAs("orchestrator: record turn boundary", false));
+              }
+              if (appended.type === "user") failureUserPayload = undefined;
+              if (appended.type === "tool_call") {
+                toolCalls += 1;
+                if (toolCalls === 1 && input.runId) {
+                  if (!input.surfaceTools) {
+                    deps.turnStream?.noteToolCall(input.runId);
+                  } else if (input.addressed && !isPollFire && spineFirstBlockOpen && !resume && !approvalReplay) {
+                    spineFirstBlockOpen = false;
+                    const payload = appended.payload as { tool?: unknown; action?: unknown };
+                    const deliberatePost = payload?.tool === surfaceName && payload?.action === "post";
+                    const ack = spineFirstBlock.trim();
+                    if (!deliberatePost && ack && defaultDestination && deps.deliveries) {
+                      spineAckText = ack;
+                      const runId = input.runId;
+                      const ackKey = `ack:${turnKey}`;
+                      void reachEnqueue({
+                        deliveries: deps.deliveries,
+                        destination: defaultDestination,
+                        text: ack,
+                        idempotencyKey: ackKey,
+                        provenance: postProvenance(ackKey),
+                      })
+                        .then(() => deps.turnStream?.markSurfacePosted(runId))
+                        .catch(swallowAs("orchestrator: first-block ack", undefined));
+                    }
+                  }
+                }
+              }
+              await mirrorRunActivity(appended);
+              return appended;
+            } finally {
+              emitGapWork("persist", persistStart, Date.now());
+            }
+          };
           return deps.harness.turns.runTurn({
             session,
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
@@ -3064,99 +3196,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               };
               return withManagedRosterVersion(() => deps.sessions.appendTape(lease, { ...rec, meta }));
             },
-            emit: async (entry) => {
-              turnProgress++;
-              const persistStart = Date.now();
-              try {
-                const stored = (() => {
-                  const tainted = entry;
-                  if (tainted.type === "assistant") {
-                    const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
-                    if (typeof payload.workStartedAt !== "number")
-                      payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;
-                    if (typeof payload.workFinishedAt !== "number") payload.workFinishedAt = Date.now();
-                    return { ...tainted, payload };
-                  }
-                  if (tainted.type !== "user") return tainted;
-                  const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
-                  Object.assign(payload, swarmEntryProvenance);
-                  if (actor.displayName?.trim() && typeof payload.name !== "string")
-                    payload.name = actor.displayName.trim();
-                  if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
-                    payload.display = input.displayText;
-                  if (syntheticPrompt || continuation) payload.hidden = true;
-                  return { ...tainted, payload };
-                })();
-                const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
-                emittedEntries.push(appended);
-                if (input.runId && deps.turnStream) {
-                  const goalView = goalViewFromEntry(appended.type, appended.payload);
-                  if (goalView) deps.turnStream.noteGoal(input.runId, goalView);
-                }
-                if (appended.type === "user" && spine.turnUserEntrySeq === undefined) {
-                  spine.turnUserEntrySeq = appended.seq;
-                  if (input.runId && deps.runs)
-                    await deps.runs
-                      .noteTurnUserSeq(input.runId, appended.seq)
-                      .catch(swallowAs("orchestrator: record turn boundary", false));
-                }
-                if (appended.type === "user") failureUserPayload = undefined;
-                if (appended.type === "tool_call") {
-                  toolCalls += 1;
-                  if (toolCalls === 1 && input.runId) {
-                    if (!input.surfaceTools) {
-                      deps.turnStream?.noteToolCall(input.runId);
-                    } else if (input.addressed && !isPollFire && spineFirstBlockOpen && !resume && !approvalReplay) {
-                      spineFirstBlockOpen = false;
-                      const payload = appended.payload as { tool?: unknown; action?: unknown };
-                      const deliberatePost = payload?.tool === surfaceName && payload?.action === "post";
-                      const ack = spineFirstBlock.trim();
-                      if (!deliberatePost && ack && defaultDestination && deps.deliveries) {
-                        spineAckText = ack;
-                        const runId = input.runId;
-                        const ackKey = `ack:${turnKey}`;
-                        void reachEnqueue({
-                          deliveries: deps.deliveries,
-                          destination: defaultDestination,
-                          text: ack,
-                          idempotencyKey: ackKey,
-                          provenance: postProvenance(ackKey),
-                        })
-                          .then(() => deps.turnStream?.markSurfacePosted(runId))
-                          .catch(swallowAs("orchestrator: first-block ack", undefined));
-                      }
-                    }
-                  }
-                }
-                if (input.runId && deps.runActivity && ACTIVITY_ENTRY_TYPES.has(appended.type)) {
-                  await deps.runActivity
-                    .append(input.runId, {
-                      seq: appended.seq,
-                      parentSeq: appended.parentSeq,
-                      type: appended.type,
-                      payload: appended.payload,
-                      createdAt: appended.createdAt,
-                    })
-                    .catch(swallowAs("orchestrator: run-activity append", undefined));
-                } else if (input.runId && deps.runActivity && appended.type === "thinking") {
-                  const block = appended.payload as { thinking?: string; redacted?: boolean };
-                  if (!block.redacted && block.thinking?.trim()) {
-                    await deps.runActivity
-                      .append(input.runId, {
-                        seq: appended.seq,
-                        parentSeq: appended.parentSeq,
-                        type: appended.type,
-                        payload: { thinking: block.thinking },
-                        createdAt: appended.createdAt,
-                      })
-                      .catch(swallowAs("orchestrator: run-activity append", undefined));
-                  }
-                }
-                return appended;
-              } finally {
-                emitGapWork("persist", persistStart, Date.now());
-              }
-            },
+            emit,
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
             onDelta: (chunk: string) => {
@@ -3167,9 +3207,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
             },
-            onTextBlockStart: () => {
+            onTextBlockStart: async (phase) => {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
+              if (phase && !input.surfaceTools) {
+                const streamOffset =
+                  input.runId && deps.turnStream ? (deps.turnStream.snapshot(input.runId) ?? "").length : undefined;
+                await emit({
+                  type: "text_start",
+                  payload: { phase, ...(streamOffset !== undefined ? { streamOffset } : {}) },
+                  scopeLabel: scopeId,
+                });
+              }
             },
             onGapWork: (cb) => {
               harnessOnGapWork = cb;

@@ -56,6 +56,26 @@ test("shared transcript allowlists visible message fields and published replies"
   );
 });
 
+test("work phases and approval decisions remain outside the shared message snapshot", () => {
+  assert.deepEqual(
+    sharedMessages([
+      entry("user", { text: "Run the check" }, 1),
+      entry("text_start", { phase: "commentary", streamOffset: 0 }, 2),
+      entry("text", { text: "PRIVATE_WORK_NARRATION" }, 3),
+      entry("approval_request", { requestId: "r", command: "PRIVATE_COMMAND" }, 4),
+      entry("approval_resolved", { requestId: "r", command: "PRIVATE_COMMAND", approved: false }, 5),
+      entry("approval_request", { requestId: "r", command: "PRIVATE_COMMAND" }, 6),
+      entry("approval_resolved", { requestId: "r", command: "PRIVATE_COMMAND", approved: true, scope: "once" }, 7),
+      entry("text_start", { phase: "final_answer", streamOffset: 22 }, 8),
+      entry("assistant", { text: "Check complete", stopped: true }, 9),
+    ]),
+    [
+      { role: "user", text: "Run the check" },
+      { role: "assistant", text: "Check complete" },
+    ],
+  );
+});
+
 test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
   const store = createMemoryMap<SessionShare>();
   const bytes = createMemoryDurableByteStore();

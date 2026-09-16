@@ -1,4 +1,5 @@
 import { marked } from "marked";
+import { escapeHtml } from "./html-escape.ts";
 import DOMPurify, { type Config } from "dompurify";
 
 export const MARKDOWN_SANITIZE_CONFIG: Config = {
@@ -40,6 +41,9 @@ export function installMarkdownSanitizer(options: { shared?: boolean } = {}): vo
   if (installed) return;
   installed = true;
   marked.use({
+    walkTokens(token) {
+      if (token.type === "html") token.text = escapeHtml(token.text);
+    },
     hooks: {
       postprocess: (html: string) =>
         String(

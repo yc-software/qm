@@ -222,7 +222,7 @@ test("settling a turn follows the next queued run instead of sending it", () => 
   assert.doesNotMatch(fn, /queueTurn/, "it never submits anything");
   assert.match(
     fn,
-    /await \(next && !recorded \? agent\.prompt\(next\.text\) : agent\.continue\(\)\)/,
+    /await \(!active\.run\.input && next && !recorded \? agent\.prompt\(next\.text\) : agent\.continue\(\)\)/,
     "an already-recorded turn is resumed, never prompted a second time onto the screen",
   );
   assert.match(fn, /await refreshTranscriptFromEntries\(agent\)/);

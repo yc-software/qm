@@ -1,3 +1,31 @@
+export function preserveTranscriptScroll(root: HTMLElement): () => void {
+  const snapshots = [...root.querySelectorAll<HTMLElement>(".chat-scroll")]
+    .filter((element) => element.clientHeight > 0)
+    .map((element) => {
+      const top = element.getBoundingClientRect().top;
+      const anchor = [
+        ...element.querySelectorAll<HTMLElement>(".message-stack :is(p, h1, h2, h3, h4, h5, h6, pre, li, table)"),
+      ].find((node) => !node.closest(".user-row") && node.getBoundingClientRect().bottom > top);
+      return {
+        element,
+        scrollTop: element.scrollTop,
+        bottom: element.scrollHeight - element.clientHeight - element.scrollTop <= 1,
+        anchor,
+        offset: anchor ? anchor.getBoundingClientRect().top - top : 0,
+      };
+    });
+  return () => {
+    for (const snapshot of snapshots) {
+      const { element, anchor } = snapshot;
+      if (!root.contains(element) || element.clientHeight === 0) continue;
+      if (snapshot.bottom) element.scrollTop = element.scrollHeight;
+      else if (anchor && element.contains(anchor))
+        element.scrollTop += anchor.getBoundingClientRect().top - element.getBoundingClientRect().top - snapshot.offset;
+      else element.scrollTop = snapshot.scrollTop;
+    }
+  };
+}
+
 export function createTranscriptViewport() {
   let scroller: HTMLElement | null = null;
   let pins: HTMLElement | null = null;
@@ -14,6 +42,7 @@ export function createTranscriptViewport() {
   let observer: ResizeObserver | null = null;
   let following = false;
   let frame: number | null = null;
+  const contentUpdates = new Set<Promise<void>>();
 
   function setFollowing(value: boolean): void {
     following = value;
@@ -33,8 +62,7 @@ export function createTranscriptViewport() {
 
   function clearPrompt(): void {
     if (content) content.scrollTop = 0;
-    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded", "pin-fits");
-    prompt?.style.removeProperty("--pin-clamp");
+    prompt?.classList.remove("stuck", "sticky-disabled", "pin-expanded");
     prompt?.style.removeProperty("--pin-expanded-max");
     const toggle = prompt?.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) toggle.hidden = true;
@@ -44,19 +72,13 @@ export function createTranscriptViewport() {
 
   function syncPrompt(): void {
     if (!scroller || !prompt || !content) return;
-    prompt.style.setProperty(
-      "--pin-clamp",
-      `${Math.round(Math.min(320, Math.max(96, scroller.clientHeight * 0.35)))}px`,
-    );
     prompt.classList.toggle("pin-expanded", expanded);
-    // Measure at the normal clamp before deciding whether collapsing saves a useful amount.
-    prompt.classList.remove("pin-fits");
-    const clipped = !expanded && content.scrollHeight > content.clientHeight + 24;
-    prompt.classList.toggle("pin-fits", !expanded && !clipped);
+    const clipped = !expanded && content.scrollHeight > content.clientHeight + 1;
     const toggle = prompt.querySelector<HTMLButtonElement>(".pin-toggle");
     if (toggle) {
       toggle.hidden = !clipped && !expanded;
-      toggle.textContent = expanded ? "Show less" : "Show more";
+      const label = expanded ? "Show less" : "Show more";
+      if (toggle.textContent !== label) toggle.textContent = label;
       toggle.setAttribute("aria-expanded", String(expanded));
     }
   }
@@ -100,7 +122,7 @@ export function createTranscriptViewport() {
   }
 
   function onScroll(): void {
-    if (!scroller) return;
+    if (!scroller || contentUpdates.size > 0) return;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
     const reachedPreviousBottom =
       scroller.scrollTop > lastTop &&
@@ -124,9 +146,28 @@ export function createTranscriptViewport() {
   }
 
   function beforeRender(): void {
-    if (!scroller) return;
+    if (!scroller || contentUpdates.size > 0) return;
     if (scroller.scrollTop !== lastTop) onScroll();
     measureBottom();
+  }
+
+  function onContentUpdating(event: Event): void {
+    beforeRender();
+    const completion = (event as CustomEvent<Promise<void>>).detail;
+    contentUpdates.add(completion);
+    const complete = (): void => {
+      if (contentUpdates.delete(completion) && contentUpdates.size === 0) afterRender();
+    };
+    void completion.then(complete, complete);
+  }
+
+  function afterRender(): void {
+    if (!scroller || !following || contentUpdates.size > 0) return;
+    lastTop = scroller.scrollTop;
+    measureBottom();
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+    follow();
   }
 
   function onWheel(event: WheelEvent): void {
@@ -145,23 +186,32 @@ export function createTranscriptViewport() {
       setFollowing(true);
   }
 
+  function onKeyDown(event: KeyboardEvent): void {
+    clearInput();
+    if (event.target !== scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    follow(true);
+  }
+
   function dispose(): void {
     clearInput();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     observer?.disconnect();
     observer = null;
+    scroller?.removeEventListener("qm-content-updating", onContentUpdating);
     scroller?.removeEventListener("scroll", onScroll);
     scroller?.removeEventListener("wheel", onWheel);
     scroller?.removeEventListener("click", onClick);
     scroller?.removeEventListener("pointerdown", clearInput);
-    scroller?.removeEventListener("keydown", clearInput);
+    scroller?.removeEventListener("keydown", onKeyDown);
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
     lastTop = lastBottom = previousBottom = bottomChangedAt = 0;
     following = false;
+    contentUpdates.clear();
   }
 
   function sync(element: HTMLElement | null): void {
@@ -173,11 +223,12 @@ export function createTranscriptViewport() {
       lastTop = scroller?.scrollTop ?? 0;
       lastBottom = previousBottom = scroller ? scroller.scrollHeight - scroller.clientHeight : 0;
       setFollowing(false);
+      scroller?.addEventListener("qm-content-updating", onContentUpdating);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
       scroller?.addEventListener("wheel", onWheel, { passive: true });
       scroller?.addEventListener("click", onClick);
       scroller?.addEventListener("pointerdown", clearInput);
-      scroller?.addEventListener("keydown", clearInput);
+      scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
         observer = new ResizeObserver(() => {
           beforeRender();
@@ -227,12 +278,12 @@ export function createTranscriptViewport() {
       if (frame !== null) cancelAnimationFrame(frame);
       frame = null;
     }
-    if (!scroller || !following || frame !== null) return;
+    if (!scroller || !following || contentUpdates.size > 0 || frame !== null) return;
     const element = scroller;
     const priorTop = element.scrollTop;
     frame = requestAnimationFrame(() => {
       frame = null;
-      if (element !== scroller || !element.isConnected || !following) return;
+      if (element !== scroller || !element.isConnected || !following || contentUpdates.size > 0) return;
       if (element.scrollTop < priorTop && element.scrollHeight - element.clientHeight - element.scrollTop > 1)
         return cancelFollow();
       element.scrollTop = element.scrollHeight;
@@ -241,5 +292,5 @@ export function createTranscriptViewport() {
     });
   }
 
-  return { sync, follow, beforeRender, dispose };
+  return { sync, follow, beforeRender, afterRender, dispose };
 }

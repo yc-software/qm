@@ -152,12 +152,7 @@ export class CodexAppServer {
     });
     let pendingOutput = "";
     const receiveLine = (line: string) => {
-      this.eventTail = this.eventTail
-        .then(() => this.receive(line))
-        .catch((error) => {
-          this.failAll(error instanceof Error ? error : new Error(String(error)));
-          this.process.kill("SIGTERM");
-        });
+      this.eventTail = this.eventTail.then(() => this.receive(line)).catch((error) => this.failTransport(error));
     };
     this.process.stdout!.setEncoding("utf8");
     this.process.stdout!.on("data", (chunk: string) => {
@@ -306,19 +301,24 @@ export class CodexAppServer {
       await this.options.onNotification(message.method, message.params);
       return;
     }
-    void this.respond(message.id, message.method, message.params).catch((error) => {
-      this.failAll(error instanceof Error ? error : new Error(String(error)));
-      this.process.kill("SIGTERM");
-    });
+    void this.respond(message.id, message.method, message.params).catch((error) => this.failTransport(error));
   }
 
   private async respond(id: JsonRpcId, method: string, params: unknown): Promise<void> {
+    let response: JsonRpcMessage;
     try {
       const result = await this.options.onRequest(method, params);
-      await this.send({ id, result });
+      response = { id, result };
     } catch (error) {
-      await this.send({ id, error: { code: -32000, message: errMessage(error) } });
+      response = { id, error: { code: -32000, message: errMessage(error) } };
     }
+    if (!this.closed) await this.send(response);
+  }
+
+  private failTransport(error: unknown): void {
+    if (this.closed) return;
+    this.failAll(error instanceof Error ? error : new Error(String(error)));
+    this.process.kill("SIGTERM");
   }
 
   private send(message: JsonRpcMessage): Promise<void> {

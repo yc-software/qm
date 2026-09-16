@@ -2074,6 +2074,23 @@ test("read/write round-trip through the workspace", async () => {
   assert.match(r.reply ?? "", /hello-workspace/);
 });
 
+test("an approval pause persists timing on its boundary entry", async () => {
+  const { app } = freshApp();
+  const before = Date.now();
+  const first = await app.turn(dm("!paused-approval git push --force origin main"));
+  assert.equal(first.status, "ok");
+  assert.ok(first.pendingApprovals?.length);
+  const paused = await app.getSession(first.sessionId!);
+  const boundary = paused!.entries.findLast(
+    (entry) => (entry.payload as { blocked?: string })?.blocked === "needs_approval",
+  );
+  assert.ok(boundary);
+  const timing = boundary.payload as { workStartedAt: number; workFinishedAt: number };
+  assert.ok(timing.workStartedAt >= before);
+  assert.ok(timing.workFinishedAt >= timing.workStartedAt);
+  assert.ok(timing.workFinishedAt <= boundary.createdAt);
+});
+
 test("dangerous command pauses for HiLO approval, then proceeds when approved", async () => {
   const { app } = freshApp();
   const first = await app.turn(dm("!run git push --force origin main"));
@@ -3265,6 +3282,27 @@ test("'allow for session' approves every same-command invocation in the same tur
   assert.equal(second.pendingApprovals?.length ?? 0, 0);
 });
 
+test("accepted approval decisions are durably recorded in the conversation", async () => {
+  for (const approved of [false, true]) {
+    const { app, sessions, runs } = freshApp();
+    const command = "git push --force origin main";
+    const first = await app.turn(dm(`!run ${command}`));
+    const requestId = first.pendingApprovals![0]!.requestId;
+    await app.turn(dm(`!run ${command}`, { approval: { requestId, approved } }));
+    const decisions = (await sessions.getEntries(first.sessionId!)).filter(
+      (entry) => entry.type === "approval_resolved",
+    );
+    assert.equal(decisions.length, 1);
+    assert.deepEqual(decisions[0]!.payload, { requestId, command, approved, ...(approved ? { scope: "once" } : {}) });
+    const replay = (await runs.list()).find((run) => run.request.approval?.requestId === requestId);
+    assert.ok(replay);
+    const live = await app.getRun(replay.id);
+    const liveDecisions = live?.activity?.filter((entry) => entry.type === "approval_resolved");
+    assert.equal(liveDecisions?.length, 1);
+    assert.deepEqual(liveDecisions![0]!.payload, decisions[0]!.payload);
+  }
+});
+
 test("'session busy' does not consume the one-shot approval (a retry click still works)", async () => {
   const { app, sessions } = freshApp();
   const command = "git push --force origin main";
@@ -4017,4 +4055,43 @@ test("private session approval replay preserves restrictions even when the click
   assert.equal(run?.request.sessionMessageDepth, 7);
   assert.equal(run?.request.readOnly, true);
   assert.equal(run?.request.origin.kind, "automation");
+});
+
+test("narration reaches the live activity feed before its tool call", async () => {
+  const { app, runs } = freshApp();
+  const text = "!preamble I'll check the first item.";
+  const result = await app.turn(dm(text));
+  assert.equal(result.status, "ok");
+  const run = (await runs.list()).find((entry) => entry.request.text === text);
+  assert.ok(run);
+  const view = await app.getRun(run.id);
+  assert.deepEqual(
+    view?.activity?.map((entry) => entry.type),
+    ["text", "tool_call", "tool_result"],
+  );
+  assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item." });
+});
+
+test("public text phases persist with exact stream offsets in session history and run activity", async () => {
+  const { app, runs } = freshApp();
+  const result = await app.turn(dm("!phased-reply"));
+  assert.equal(result.status, "ok");
+  assert.equal(result.reply, "All clear.");
+  const run = (await runs.list()).find((entry) => entry.request.text === "!phased-reply");
+  assert.ok(run);
+  const view = await app.getRun(run.id);
+  const history = await app.getSession(result.sessionId!);
+  const expected = [
+    { phase: "commentary", streamOffset: 0 },
+    { phase: "final_answer", streamOffset: "Checking.\n\n".length },
+  ];
+  assert.deepEqual(
+    view?.activity?.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
+    expected,
+  );
+  assert.deepEqual(
+    history?.entries.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
+    expected,
+  );
+  assert.equal(view?.partial, "Checking.\n\nAll clear.");
 });

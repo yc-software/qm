@@ -94,6 +94,8 @@ export interface RunStore {
 
   withdraw(runId: string): Promise<boolean>;
 
+  editPendingText(runId: string, text: string, expectedText: string): Promise<boolean>;
+
   activeSessionIds(): Promise<string[]>;
 
   list(opts?: { limit?: number }): Promise<Run[]>;

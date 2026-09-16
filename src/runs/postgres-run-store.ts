@@ -404,6 +404,16 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rows.map(rowToRun);
     },
 
+    async editPendingText(runId: string, text: string, expectedText: string): Promise<boolean> {
+      const { rowCount } = await q(
+        `UPDATE runs SET request = (request::jsonb || jsonb_build_object('text', $2::text, 'displayText', $2::text))::text
+         WHERE id = $1 AND status = 'pending' AND attempts = 0 AND turn_user_seq IS NULL
+         AND COALESCE(request::jsonb ->> 'displayText', request::jsonb ->> 'text') = $3`,
+        [runId, text, expectedText],
+      );
+      return (rowCount ?? 0) > 0;
+    },
+
     async withdraw(runId: string): Promise<boolean> {
       const { rowCount } = await q("DELETE FROM runs WHERE id = $1 AND status = 'pending'", [runId]);
       return (rowCount ?? 0) > 0;
