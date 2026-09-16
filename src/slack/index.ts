@@ -1,3 +1,4 @@
+import { SlackPluginStartCleanupError } from "../surfaces/slack-runtime.ts";
 import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
@@ -397,7 +398,13 @@ export async function startSlackPlugin(
   } catch (err) {
     stopped = true;
     await devIntrospection?.close().catch(swallowAs("slack: dev-introspection close on failed start", undefined));
-    await app.stop().catch(swallowAs("slack: app.stop on failed start", undefined));
+    try {
+      await app.stop();
+    } catch (cleanupError) {
+      throw new SlackPluginStartCleanupError(err, cleanupError, async () => {
+        await app.stop();
+      });
+    }
     throw err;
   }
   devIntrospection?.ready({ connectedAs: auth.user ?? "", botUserId: ids.botUserId, teamId: ids.ownTeamId });

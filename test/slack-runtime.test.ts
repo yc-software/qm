@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSlackRuntimeReconciler } from "../src/surfaces/slack-runtime.ts";
+import { createSlackRuntimeReconciler, SlackPluginStartCleanupError } from "../src/surfaces/slack-runtime.ts";
 
 test("Slack runtime activates, reloads, and removes durable admin configuration", async () => {
   let desired: { version: string; config: { botToken: string } } | null = null;
@@ -229,4 +229,66 @@ test("Slack cannot resume after failed socket closure until stop succeeds", asyn
   await runtime.stop();
   assert.equal(starts, 2);
   assert.equal(stops, 3);
+});
+
+test("uncertain failed startup cleanup blocks repeated stop acknowledgments and rollback until it closes", async () => {
+  let desired = { version: "1", config: "first" };
+  let cleanupAllowed = false;
+  const events: string[] = [];
+  const runtime = createSlackRuntimeReconciler({
+    load: async () => desired,
+    startPlugin: async (config) => {
+      events.push(`start:${config}`);
+      if (config === "second")
+        throw new SlackPluginStartCleanupError(new Error("start failed"), new Error("close failed"), async () => {
+          events.push("cleanup:second");
+          if (!cleanupAllowed) throw new Error("still open");
+        });
+      return {
+        stop: async () => {
+          events.push(`stop:${config}`);
+        },
+      };
+    },
+  });
+  await runtime.reconcile();
+  desired = { version: "2", config: "second" };
+  await assert.rejects(runtime.reconcile(), SlackPluginStartCleanupError);
+  assert.deepEqual(events, ["start:first", "stop:first", "start:second"]);
+  await assert.rejects(runtime.stop(), /still open/);
+  await assert.rejects(runtime.stop(), /still open/);
+  runtime.start();
+  await runtime.reconcile();
+  assert.equal(events.filter((event) => event.startsWith("start:")).length, 2);
+  cleanupAllowed = true;
+  await runtime.stop();
+  desired = { version: "3", config: "third" };
+  runtime.start();
+  await runtime.reconcile();
+  await runtime.stop();
+  assert.equal(events.at(-2), "start:third");
+  assert.equal(events.at(-1), "stop:third");
+});
+
+test("a rollback startup with incomplete cleanup also blocks relinquishment", async () => {
+  let desired = { version: "1", config: "first" };
+  let firstStarts = 0;
+  let cleanupAllowed = false;
+  const runtime = createSlackRuntimeReconciler({
+    load: async () => desired,
+    startPlugin: async (config) => {
+      if (config === "second") throw new Error("replacement failed");
+      if (++firstStarts > 1)
+        throw new SlackPluginStartCleanupError(new Error("rollback failed"), new Error("close failed"), async () => {
+          if (!cleanupAllowed) throw new Error("rollback still open");
+        });
+      return { stop: async () => {} };
+    },
+  });
+  await runtime.reconcile();
+  desired = { version: "2", config: "second" };
+  await assert.rejects(runtime.reconcile(), /reload and rollback both failed/);
+  await assert.rejects(runtime.stop(), /rollback still open/);
+  cleanupAllowed = true;
+  await runtime.stop();
 });
