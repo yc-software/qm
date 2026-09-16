@@ -1,3 +1,4 @@
+import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
 import { resolveBranding } from "../resolution/branding.ts";
@@ -87,6 +88,7 @@ interface DirectoryPush {
 }
 
 export interface SlackCoreClient {
+  taskAcknowledgements?: TaskAcknowledgements;
   externalSlackParticipants(): Promise<boolean>;
   internalMemberOverrides(): Promise<string[]>;
   ackEmojiOverride(): Promise<string[] | null>;
@@ -103,6 +105,7 @@ export interface SlackCoreClient {
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
   waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
+  runDeliveryTarget?(runId: string): Promise<string | undefined>;
   activeRunForThread(threadRef: string): Promise<string | undefined>;
   signalRunAbort(runId: string): Promise<void>;
   ackRunDelivery(runId: string): Promise<void>;
@@ -152,6 +155,7 @@ type AckPickInput = {
 export type { SurfaceContextRequest };
 
 export interface SlackCoreClientDeps {
+  taskAcknowledgements?: DurableMap<TaskAckState>;
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
@@ -225,6 +229,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
   });
 
   return {
+    ...(deps.taskAcknowledgements
+      ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
+      : {}),
     async externalSlackParticipants() {
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
     },
@@ -398,6 +405,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       }
     },
 
+    async runDeliveryTarget(runId) {
+      return (await deps.runs.get(runId))?.request.deliveryTarget;
+    },
     async activeRunForThread(threadRef) {
       return (await deps.app.activeRunForThread(threadRef))?.runId;
     },

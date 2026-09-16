@@ -1,7 +1,7 @@
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
@@ -52,7 +52,11 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
-  const { query: q, close: closePool } = createPgPool(
+  const {
+    query: q,
+    pool,
+    close: closePool,
+  } = createPgPool(
     connectionString,
     [
       {
@@ -277,20 +281,44 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
-    async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
+    async enqueue({
+      sessionId,
+      request,
+      dedupKey,
+      maxAttempts = 3,
+      idleDelivery,
+    }: EnqueueInput): Promise<EnqueueResult> {
       const id = randomUUID();
-      for (;;) {
-        const { rows } = await q(
-          `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at)
-           VALUES ($1,$2,'pending',$3,$4,0,$5,$6)
-           ON CONFLICT (idempotency_key) DO NOTHING
-           RETURNING *, pg_notify('qm_run_available', 'null')`,
-          [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
+      const insert = async (query: typeof q) => {
+        for (;;) {
+          const { rows } = await query(
+            `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at)
+             VALUES ($1,$2,'pending',$3,$4,0,$5,$6)
+             ON CONFLICT (idempotency_key) DO NOTHING
+             RETURNING *, pg_notify('qm_run_available', 'null')`,
+            [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
+          );
+          if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
+          const existing = await query("SELECT * FROM runs WHERE idempotency_key = $1", [dedupKey]);
+          if (existing.rows[0]) return { run: rowToRun(existing.rows[0]), deduped: true };
+        }
+      };
+      if (!idleDelivery) return insert(q);
+      return withPgTransaction(await pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          `run-delivery:${idleDelivery.threadRef}`,
+        ]);
+        const active = await client.query(
+          `SELECT 1 FROM runs WHERE status IN ('pending','running')
+           AND (session_id=$1 OR starts_with(session_id, $1 || ':')) LIMIT 1`,
+          [idleDelivery.threadRef],
         );
-        if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
-        const existing = await runs.getByDedupKey(dedupKey!);
-        if (existing) return { run: existing, deduped: true };
-      }
+        if (!active.rows.length) request = { ...request, deliveryTarget: idleDelivery.target };
+        return insert(async (text, params) => {
+          const result = await client.query(text, params);
+          return { rows: result.rows, rowCount: result.rowCount ?? 0 };
+        });
+      });
     },
 
     async getByDedupKey(dedupKey) {
@@ -424,8 +452,13 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rows.map((r) => r.session_id as string);
     },
 
-    async list({ limit = 200 }: { limit?: number } = {}): Promise<Run[]> {
-      const { rows } = await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
+    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
+      const { rows } = threadRef
+        ? await q(
+            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC LIMIT $2",
+            [threadRef, limit],
+          )
+        : await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
       return rows.map(rowToRun);
     },
 

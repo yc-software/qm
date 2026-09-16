@@ -42,6 +42,7 @@ export interface EnqueueInput {
   request: OrchestratorInput;
   dedupKey?: string;
   maxAttempts?: number;
+  idleDelivery?: { threadRef: string; target: string };
 }
 
 export interface EnqueueResult {
@@ -98,7 +99,7 @@ export interface RunStore {
 
   activeSessionIds(): Promise<string[]>;
 
-  list(opts?: { limit?: number }): Promise<Run[]>;
+  list(opts?: { limit?: number; threadRef?: string }): Promise<Run[]>;
 
   reapExpired(
     onRetired?: (sessionIds: string[]) => Promise<void>,

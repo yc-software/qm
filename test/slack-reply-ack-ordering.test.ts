@@ -34,12 +34,26 @@ function fakeCore(pending: Map<string, { text: string }>, events: string[]) {
   } as any;
 }
 
-test("deferOkAck: recovery delivery stays pending until the caller settles it", async () => {
+test("a status response is delivered without replacing the running task's stop target", async () => {
+  const core = fakeCore(new Map(), []);
+  core.submitTurn = async () => ({ status: "queued", runId: "status-run", conversationAside: true });
+  const flow = createTurnFlow(core);
+  flow.inFlightRunByThread.set("dm:D1", "work-run");
+  await flow.callCore({ text: "Any progress?" } as any, {
+    onQueued: (id, conversationAside) => {
+      assert.equal(conversationAside, true);
+      if (!conversationAside) flow.inFlightRunByThread.set("dm:D1", id);
+    },
+  });
+  assert.equal(flow.inFlightRunByThread.get("dm:D1"), "work-run");
+});
+
+test("deferDeliveryAck: recovery delivery stays pending until the caller settles it", async () => {
   const events: string[] = [];
   const pending = new Map<string, { text: string }>();
   const bridge = createTurnFlow(fakeCore(pending, events));
 
-  const result = await bridge.callCore({ text: "hi" } as any, { deferOkAck: true });
+  const result = await bridge.callCore({ text: "hi" } as any, { deferDeliveryAck: true });
   assert.equal(result.status, "ok");
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(events, [], "no ack before the reply is posted");
@@ -53,7 +67,7 @@ test("deferOkAck: recovery delivery stays pending until the caller settles it", 
   assert.equal(bridge.inFlightRuns.has("r1"), false, "pin released after settle");
 });
 
-test("without deferOkAck an ok run still acks its recovery delivery", async () => {
+test("without deferDeliveryAck an ok run still acks its recovery delivery", async () => {
   const events: string[] = [];
   const pending = new Map<string, { text: string }>();
   const bridge = createTurnFlow(fakeCore(pending, events));
@@ -95,4 +109,19 @@ test("delivery tracker retries a given-up delivery after the bench window", asyn
   await deliverWithRetry(healthy);
   assert.equal(posts, 6, "retried after the bench expired");
   assert.equal(acked, true, "delivery finally acked");
+});
+
+test("failed and refused turns keep recovery pending until their notice is delivered", async () => {
+  for (const status of ["failed", "refused"]) {
+    const events: string[] = [];
+    const pending = new Map<string, { text: string }>();
+    const core = fakeCore(pending, events);
+    core.waitRun = async () => ({ status, reason: "test failure" });
+    const flow = createTurnFlow(core);
+    await flow.callCore({ text: "hi" } as any, { deferDeliveryAck: true });
+    assert.deepEqual(events, []);
+    assert.ok(pending.has("run:r1"));
+    assert.ok(flow.inFlightRuns.has("r1"));
+    flow.ackRunDelivery("r1");
+  }
 });

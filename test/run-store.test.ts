@@ -23,6 +23,18 @@ const backends: Backend[] = [{ name: "memory", make: () => createMemoryRunStore(
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 for (const backend of backends) {
+  test(`[${backend.name}] conversation lookup includes independent tasks and status context but excludes neighboring DMs`, async () => {
+    const { runs } = backend.make();
+    for (const ref of ["dm:D1", "dm:D1:task:a", "dm:D1:status:b", "dm:D11:task:c", "dm:D2"]) {
+      await runs.enqueue({ sessionId: ref, request: turn(ref) });
+    }
+    assert.deepEqual((await runs.list({ threadRef: "dm:D1" })).map((run) => run.sessionId).sort(), [
+      "dm:D1",
+      "dm:D1:status:b",
+      "dm:D1:task:a",
+    ]);
+  });
+
   test(`[${backend.name}] enqueue dedups by dedup key`, async () => {
     const { runs } = backend.make();
     const a = await runs.enqueue({ sessionId: "s1", request: turn("hi"), dedupKey: "k1" });

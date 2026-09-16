@@ -339,7 +339,10 @@ export function createDeliveryPoller(deps: {
               slackApiMs = Math.round(performance.now() - tPost);
             }
           },
-          ack: (body) => ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs)),
+          ack: async (body) => {
+            if (runId) await core.taskAcknowledgements?.finish(client, runId);
+            return ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs));
+          },
           onError: logDeliveryError(d.id),
         });
       },
@@ -423,6 +426,10 @@ export function createDeliveryPoller(deps: {
         deliverToConversations(client, leaseLost),
         deliverToPrincipals(client, leaseLost),
       ]);
+      if (!lostFlag)
+        await core.taskAcknowledgements
+          ?.reconcile(client)
+          .catch(swallowAs("slack: task ack reconciliation", undefined));
       const cycleMs = Date.now() - cycleStart;
       if (cycleMs >= slowDrainMs) {
         void core

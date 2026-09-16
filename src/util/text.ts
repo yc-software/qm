@@ -29,3 +29,11 @@ export function pgTextSafe(s: string): string {
   if (hasLoneSurrogate(out)) out = out.replace(LONE_SURROGATE_ALL, "\uFFFD");
   return out;
 }
+
+export function absoluteAppLinks(text: string, baseUrl: string | undefined): string {
+  if (!baseUrl) return text;
+  return text.replace(
+    /(^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\2[ \t]*$|(`+)[^\n]*?\3)|\[([^\]\n]+)\]\((\/d\/[^\s)]+)\)/gm,
+    (match, code, _fence, _ticks, label, path) => (code ? match : `[${label}](${new URL(path, baseUrl).href})`),
+  );
+}

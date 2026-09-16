@@ -1252,7 +1252,7 @@ export async function oneShot(
   keys: ProviderKeys | string,
   systemPrompt: string,
   prompt: string,
-  opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig },
+  opts?: { signal?: AbortSignal; modelGateway?: ModelGatewayTransportConfig; thinkingLevel?: LegacyThinkingLevel },
 ): Promise<string | undefined> {
   const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
   const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
@@ -1268,6 +1268,7 @@ export async function oneShot(
       customTools: [],
       noTools: "builtin",
       sessionManager: SessionManager.inMemory(),
+      ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
       cwd,
       agentDir,
     });
@@ -1912,6 +1913,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               }
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
               turn.onTextBlockStart?.();
+            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
+              const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
+              if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
               if (curFirst === undefined) curFirst = Date.now();
               turn.onDelta?.(event.assistantMessageEvent.delta);
@@ -2469,11 +2473,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
       },
 
-      async judge(systemPrompt: string, prompt: string): Promise<string | undefined> {
+      async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
         const model = getRequiredModel(judgeModelId());
         const providerKeys = await resolveProviderKeys();
         if (!keyForModel(providerKeys, model)) return undefined;
-        return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, { modelGateway });
+        return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
+          modelGateway,
+          signal,
+          thinkingLevel: "off",
+        });
       },
 
       async screenSecurity({

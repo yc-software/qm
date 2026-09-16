@@ -638,7 +638,7 @@ export interface AppDeps {
   engaged?: EngagedRegistry;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
-  ambientJudge?: (systemPrompt: string, prompt: string) => Promise<string | undefined>;
+  ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;

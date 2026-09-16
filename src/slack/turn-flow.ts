@@ -21,9 +21,9 @@ export function slackFailureClause(err: unknown): string {
 export type CoreTurnBody = Omit<TurnRequest, "surface">;
 
 interface TurnHooks {
-  deferOkAck?: boolean;
-  onQueued?: (runId: string) => void;
-  onSteered?: (runId: string) => void;
+  deferDeliveryAck?: boolean;
+  onQueued?: (runId: string, conversationAside?: boolean) => void | Promise<void>;
+  onSteered?: (runId: string) => void | Promise<void>;
   onFirstBlock?: (text: string) => void;
   onSurfacePosted?: () => void;
   onTasks?: (tasks: RunTaskView[]) => void;
@@ -93,11 +93,16 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     }
     if (queued.status !== "queued" || !queued.runId) return queued;
     if (queued.steered) {
-      hooks.onSteered?.(queued.runId);
+      await hooks.onSteered?.(queued.runId);
       return { status: "silent", steered: true };
     }
-    hooks.onQueued?.(queued.runId);
-    return pollRun(queued.runId, hooks);
+    inFlightRuns.add(queued.runId);
+    try {
+      await hooks.onQueued?.(queued.runId, queued.conversationAside);
+      return await pollRun(queued.runId, hooks);
+    } finally {
+      inFlightRuns.delete(queued.runId);
+    }
   }
 
   async function pollRun(runId: string, hooks: TurnHooks): Promise<TurnResult> {
@@ -118,7 +123,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
       return result;
     }
     if (result && (result.status === "ok" || result.status === "refused" || result.status === "failed")) {
-      if (!(result.status === "ok" && hooks.deferOkAck)) ackRunDelivery(runId);
+      if (!hooks.deferDeliveryAck) ackRunDelivery(runId);
     } else {
       inFlightRuns.delete(runId);
     }

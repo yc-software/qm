@@ -79,6 +79,7 @@ export function createAckPresenter(deps: {
   emojiCandidates?: readonly string[];
   emojiPick?: Promise<string | undefined>;
   reactionDelayMs?: number;
+  taskManaged?: boolean;
   random?(): number;
 }): AckPresenter {
   const candidates = deps.emojiCandidates?.length ? deps.emojiCandidates : DEFAULT_ACK_REACTIONS;
@@ -98,7 +99,7 @@ export function createAckPresenter(deps: {
     chain = chain.then(op).catch(() => {});
   };
   const timer = setTimeout(() => {
-    if (settled || ackPosted || reactionCancelled) return;
+    if (deps.taskManaged || settled || ackPosted || reactionCancelled) return;
     emoji = pickResult || randomEmoji();
     reactionApplied = true;
     enqueue(() => deps.addReaction(emoji));

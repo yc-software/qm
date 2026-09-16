@@ -570,6 +570,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     "commands you expect to be quick so a hang frees the machine fast. For work that " +
     `legitimately exceeds the ${execCeilingSec}s ceiling (long builds, installs, test suites, servers), use ` +
     "the `background` tool to run it detached and poll for the result across turns. " +
+    "Always start servers with the background tool, not shell ampersand: inherited output streams can keep execute waiting even after its shell exits. " +
     "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
     "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it.";
 
@@ -1086,7 +1087,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Publish a directory from the workspace as a durable, scope-bound internal web app " +
       "(it keeps running after the turn ends and gets a stable link). The app must listen on " +
       "the PORT env var. By default only the owner's scope can reach it; `share` grants others " +
-      "access (read = reach, write = manage). Use `name` for a friendly, stable link /d/<name>/; " +
+      "access (read = reach, write = manage). Share the full absolute URL returned by publish so it works in Slack and other surfaces. Use `name` for a friendly, stable link /d/<name>/; " +
       "`renameFrom` to rename; `rollbackTo` to flip back to an earlier version. Egress is open, " +
       "so bake data in or have the app fetch it. When the runtime sets $DATA_DIR, state the app " +
       "writes there survives restarts and redeploys; keep durable state there. For a database use " +
