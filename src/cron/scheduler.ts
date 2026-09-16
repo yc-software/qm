@@ -528,7 +528,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await starting;
         await deps.jobQueue?.stop();
         await Promise.all(sweeps);
-        await Promise.allSettled([...pending]);
+        await Promise.allSettled(pending);
         stopFailed = false;
       })()
         .catch((error: unknown) => {

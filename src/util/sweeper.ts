@@ -33,7 +33,7 @@ export function createSweeper(
     stop() {
       if (timer) clearInterval(timer);
       timer = null;
-      stopping ??= Promise.all([...pending])
+      stopping ??= Promise.all(pending)
         .then(() => {})
         .finally(() => {
           stopping = null;
