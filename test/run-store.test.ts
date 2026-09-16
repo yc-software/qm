@@ -168,10 +168,12 @@ for (const backend of backends) {
 
   test(`[${backend.name}] inline claims cannot overtake an earlier pending run`, async () => {
     const { runs } = backend.make();
+    const unrelated = (await runs.enqueue({ sessionId: "unrelated", request: turn("other") })).run;
     const first = (await runs.enqueue({ sessionId: "inline-order", request: turn("first") })).run;
     const second = (await runs.enqueue({ sessionId: "inline-order", request: turn("second") })).run;
     assert.equal(await runs.claimById(second.id, "second-worker", 5_000), null);
-    const claimedFirst = await runs.claimById(first.id, "first-worker", 5_000);
+    const claimedFirst = await runs.claimForSession("inline-order", "first-worker", 5_000);
+    assert.equal((await runs.get(unrelated.id))?.status, "pending");
     assert.equal(claimedFirst?.id, first.id);
     await runs.complete(first.id, claimedFirst!.leaseToken!, { status: "ok" });
     assert.equal((await runs.claimById(second.id, "second-worker", 5_000))?.id, second.id);

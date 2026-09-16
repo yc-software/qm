@@ -61,6 +61,8 @@ export interface RunStore {
 
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
+  claimForSession(sessionId: string, workerId: string, ttlMs: number): Promise<Run | null>;
+
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
   releaseLease(runId: string, leaseToken: string): Promise<boolean>;

@@ -210,11 +210,15 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
-      const claimed = await deps.runs.claimById(runId, "inline", deps.leaseTtlMs);
+      const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
-        return withAdminLink(
-          await processRun({ runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs }, claimed),
+        const result = processRun(
+          { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
+          claimed,
         );
+        if (claimed.id === runId) return withAdminLink(await result);
+        await result.catch((error: unknown) => swallow("inline predecessor run failed", error));
+        continue;
       }
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);

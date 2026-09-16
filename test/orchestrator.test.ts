@@ -297,26 +297,40 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   assert.doesNotMatch(footer, /deploy digest ready/);
 });
 
-test("a setup-phase failure after the lease is acquired does NOT wedge the thread (lease released)", async () => {
-  const built = freshApp();
-  const { app, connectorTokens } = built;
+test(
+  "an inline turn retries its failed predecessor before executing without a background worker",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const built = freshApp();
+    const { app, connectorTokens } = built;
 
-  const realConnectorAccessToken = connectorTokens.connectorAccessToken.bind(connectorTokens);
-  let injectFailure = true;
-  connectorTokens.connectorAccessToken = async (...args: Parameters<typeof realConnectorAccessToken>) => {
-    if (injectFailure) {
-      injectFailure = false;
-      throw new Error("injected setup failure");
-    }
-    return realConnectorAccessToken(...args);
-  };
+    const realConnectorAccessToken = connectorTokens.connectorAccessToken.bind(connectorTokens);
+    const attempted: string[] = [];
+    const claimForSession = built.runs.claimForSession.bind(built.runs);
+    built.runs.claimForSession = async (...args) => {
+      const run = await claimForSession(...args);
+      if (run) attempted.push(run.request.text);
+      return run;
+    };
+    let injectFailure = true;
+    connectorTokens.connectorAccessToken = async (...args: Parameters<typeof realConnectorAccessToken>) => {
+      if (injectFailure) {
+        injectFailure = false;
+        throw new Error("injected setup failure");
+      }
+      return realConnectorAccessToken(...args);
+    };
 
-  await assert.rejects(app.turn(dm("hi")), /injected setup failure/);
+    await assert.rejects(app.turn(dm("hi")), /injected setup failure/);
+    t.mock.timers.tick(18_000);
 
-  const res = await app.turn(dm("hi again"));
-  assert.equal(res.status, "ok", res.reason);
-  assert.doesNotMatch(res.reason ?? "", /session busy/);
-});
+    const res = await app.turn(dm("hi again"));
+    assert.equal(res.status, "ok", res.reason);
+    assert.doesNotMatch(res.reason ?? "", /session busy/);
+    assert.deepEqual(attempted, ["hi", "hi", "hi again"]);
+  },
+);
 
 test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
   const { app } = freshApp();

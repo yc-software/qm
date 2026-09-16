@@ -224,7 +224,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     return { requeued: false, applied: rowCount > 0 };
   }
 
-  async function claim(workerId: string, ttlMs: number, runId?: string): Promise<Run | null> {
+  async function claim(workerId: string, ttlMs: number, runId?: string, sessionId?: string): Promise<Run | null> {
     const token = randomUUID();
     const now = Date.now();
     try {
@@ -235,6 +235,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            SELECT candidate.id FROM runs candidate WHERE candidate.status='pending'
              AND candidate.retry_after <= $4
              AND ($5::text IS NULL OR candidate.id=$5)
+             AND ($6::text IS NULL OR candidate.session_id=$6)
              AND NOT EXISTS (
                SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
                  AND (sibling.status='running' OR (sibling.status='pending'
@@ -242,7 +243,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
              )
            ORDER BY candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
          ) RETURNING *`,
-        [token, now + ttlMs, workerId, now, runId ?? null],
+        [token, now + ttlMs, workerId, now, runId ?? null, sessionId ?? null],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
     } catch (err) {
@@ -293,6 +294,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     claim,
 
     claimById: (runId, workerId, ttlMs) => claim(workerId, ttlMs, runId),
+    claimForSession: (sessionId, workerId, ttlMs) => claim(workerId, ttlMs, undefined, sessionId),
 
     async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
       const { rowCount } = await q(

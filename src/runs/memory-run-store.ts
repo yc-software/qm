@@ -93,6 +93,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return lease(run, workerId, ttlMs);
     },
 
+    async claimForSession(sessionId, workerId, ttlMs) {
+      const run = pendingRuns(Date.now()).find((pending) => pending.sessionId === sessionId);
+      return run ? lease(run, workerId, ttlMs) : null;
+    },
+
     async heartbeat(runId, leaseToken, ttlMs) {
       const run = runs.get(runId);
       if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
