@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
 import { supportsBlobStaging, type Sandbox, type SandboxHandle } from "./sandbox.ts";
+import { posixJoin } from "./exec-file-ops.ts";
 
 export function translateScript(toHome: string, fromHome: string): string {
   const H = shq(toHome);
@@ -48,12 +49,12 @@ export async function packHome(
   fromHome: string,
   timeoutMs: number,
 ): Promise<PackedHome> {
-  const uid = randomUUID();
-  const tarPath = `/tmp/.home-${uid}.tgz`;
+  const tarRel = `.home-${randomUUID()}.tgz`;
+  const tarPath = posixJoin(fromHandle.rootDir, tarRel);
   const H = shq(fromHome);
   const packed = await fromSandbox.run(
     fromHandle,
-    `cd ${H} && tar czf ${tarPath} . 2>/dev/null; rc=$?; [ "$rc" -le 1 ] || exit "$rc"; sha256sum ${tarPath} | cut -d' ' -f1 && wc -c < ${tarPath} && find . -type f | wc -l`,
+    `cd ${H} && files=$(find . -type f | wc -l) && tar czf ${tarPath} --exclude=${shq(`./${posix.relative(fromHome, tarPath)}`)} . 2>/dev/null; rc=$?; [ "$rc" -le 1 ] || exit "$rc"; sha256sum ${tarPath} | cut -d' ' -f1 && wc -c < ${tarPath} && echo "$files"`,
     { timeoutMs },
   );
   if (packed.code !== 0)
@@ -65,7 +66,7 @@ export async function packHome(
   if (!/^[0-9a-f]{64}$/.test(sha) || !Number.isFinite(bytes) || !Number.isFinite(sourceFiles)) {
     throw new Error(`packHome: unreadable source manifest: ${packed.stdout.slice(0, 200)}`);
   }
-  return { tarPath, tarRel: posix.relative(fromHandle.rootDir, tarPath), sha, bytes, sourceFiles };
+  return { tarPath, tarRel, sha, bytes, sourceFiles };
 }
 
 export interface CopyHomeArgs {
@@ -82,28 +83,22 @@ export async function copyHome(args: CopyHomeArgs): Promise<CopyHomeResult> {
   const { fromSandbox, fromHandle, fromHome, toSandbox, toHandle, toHome } = args;
   const timeoutMs = (args.timeoutSec ?? 900) * 1000;
   const T = shq(toHome);
-  const {
-    tarPath,
-    tarRel: fromRel,
-    sha,
-    bytes,
-    sourceFiles,
-  } = await packHome(fromSandbox, fromHandle, fromHome, timeoutMs);
-  const toRel = posix.relative(toHandle.rootDir, tarPath);
+  const { tarPath, tarRel, sha, bytes, sourceFiles } = await packHome(fromSandbox, fromHandle, fromHome, timeoutMs);
+  const toTarPath = posixJoin(toHandle.rootDir, tarRel);
 
   if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
     const stageOpts = { timeoutSec: timeoutMs / 1000 };
-    const blobId = await fromSandbox.stageOut(fromHandle, fromRel, stageOpts);
-    await toSandbox.stageIn(toHandle, toRel, blobId, stageOpts);
+    const blobId = await fromSandbox.stageOut(fromHandle, tarRel, stageOpts);
+    await toSandbox.stageIn(toHandle, tarRel, blobId, stageOpts);
   } else {
-    const tarBytes = await fromSandbox.readFileBytes(fromHandle, fromRel);
+    const tarBytes = await fromSandbox.readFileBytes(fromHandle, tarRel);
     if (!tarBytes) throw new Error("copyHome: source tar vanished before read");
-    await toSandbox.writeFileBytes(toHandle, toRel, tarBytes);
+    await toSandbox.writeFileBytes(toHandle, tarRel, tarBytes);
   }
 
   const extracted = await toSandbox.run(
     toHandle,
-    `dsha=$(sha256sum ${tarPath} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${tarPath} 2>/dev/null && find . -type f | wc -l`,
+    `dsha=$(sha256sum ${toTarPath} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${toTarPath} 2>/dev/null && find . -type f | wc -l`,
     { timeoutMs },
   );
   if (extracted.code !== 0) {
@@ -121,7 +116,7 @@ export async function copyHome(args: CopyHomeArgs): Promise<CopyHomeResult> {
 
   await Promise.all([
     fromSandbox.run(fromHandle, `rm -f ${tarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
-    toSandbox.run(toHandle, `rm -f ${tarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
+    toSandbox.run(toHandle, `rm -f ${toTarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
   ]);
 
   return { bytes, sha, sourceFiles, destFiles };

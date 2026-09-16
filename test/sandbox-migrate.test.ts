@@ -5,13 +5,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { copyHome } from "../src/sandbox/sandbox-migrate.ts";
+import { posixJoin } from "../src/sandbox/exec-file-ops.ts";
 import type { Sandbox, SandboxHandle, ExecResult } from "../src/sandbox/sandbox.ts";
 
 function hostSandbox(homeDir: string): { sandbox: Sandbox; handle: SandboxHandle } {
   mkdirSync(homeDir, { recursive: true });
   const rootDir = join(homeDir, "workspace");
   mkdirSync(rootDir, { recursive: true });
-  const resolve = (rel: string) => join(rootDir, rel);
+  const resolve = (rel: string) => posixJoin(rootDir, rel);
   const sandbox: Partial<Sandbox> = {
     async run(_h, command): Promise<ExecResult> {
       const r = spawnSync("sh", ["-c", command], {

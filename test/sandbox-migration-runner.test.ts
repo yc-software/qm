@@ -14,13 +14,14 @@ import { join, dirname } from "node:path";
 import { createSandboxMigrationRunner } from "../src/sandbox/sandbox-migration-runner.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { SandboxRoute } from "../src/sandbox/sandbox-routing.ts";
+import { posixJoin } from "../src/sandbox/exec-file-ops.ts";
 import type { Sandbox, SandboxHandle, ExecResult } from "../src/sandbox/sandbox.ts";
 
 function hostBackend(name: string, homeDir: string): Sandbox & { tornDown: number } {
   mkdirSync(homeDir, { recursive: true });
   const rootDir = join(homeDir, "workspace");
   mkdirSync(rootDir, { recursive: true });
-  const resolve = (rel: string) => join(rootDir, rel);
+  const resolve = (rel: string) => posixJoin(rootDir, rel);
   const s = {
     tornDown: 0,
     profile: { backend: name, writablePersistence: "resident_disk" as const, processSessions: false },
