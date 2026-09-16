@@ -92,3 +92,30 @@ test("controlled enrollment drains same-image legacy workers without self-supers
     await factory.pool.close();
   }
 });
+
+test(
+  "a core with background work disabled never heartbeats, so it cannot drain a peer that does",
+  { skip },
+  async () => {
+    await import("./support/auto-fake-sprites.ts");
+    const [{ buildApp }, { testConfig }] = await Promise.all([
+      import("../src/wiring.ts"),
+      import("./support/test-config.ts"),
+    ]);
+    const pool = createPostgresMapFactory(URL!).pool;
+    const boot = async (backgroundWorkEnabled: boolean, buildSha: string): Promise<number> => {
+      const built = buildApp(
+        testConfig({ databaseUrl: URL, buildSha, backgroundWorkEnabled, workers: 1, reaperIntervalMs: 60_000 }),
+      );
+      built.runtime.start();
+      await new Promise((r) => setTimeout(r, 300));
+      const { rows } = await pool.query("SELECT count(*)::int AS n FROM instance_heartbeats WHERE build_sha = $1", [
+        buildSha,
+      ]);
+      await built.runtime.stop();
+      return (rows[0] as { n: number }).n;
+    };
+    assert.equal(await boot(false, "sha-inactive"), 0, "an inactive stack must leave no heartbeat behind");
+    assert.equal(await boot(true, "sha-active"), 1, "a claiming instance still announces itself");
+  },
+);

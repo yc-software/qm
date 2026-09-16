@@ -2222,7 +2222,7 @@ export function buildApp(
       }
     : undefined;
   const legacyRegistry =
-    pgArtifactMap && (config.buildSha || backgroundOwnership)
+    pgArtifactMap && (config.buildSha || backgroundOwnership) && (config.backgroundWorkEnabled || backgroundOwnership)
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
           buildSha: backgroundOwnership ? `enrollment:${backgroundOwnership.deploymentId}` : config.buildSha!,
@@ -2392,6 +2392,7 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       flyTunnel?.monitor();
+      drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
