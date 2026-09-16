@@ -55,7 +55,7 @@ test("OpenCode plugin recognizes imported non-empty history", () => {
 test("OpenCode prompt disables bridged tools absent from this turn", () => {
   assert.match(
     harnessSource,
-    /\.\.\.bridgedTools\(definitionRef, \{ \.\.\.harnessToolOptions\(opts\), surfaceTools: false \}\)/,
+    /\.\.\.bridgedTools\(definitionRef, \{ \.\.\.harnessToolOptions\(opts\), surfaceTools: false, emailDrafts: true \}\)/,
   );
   assert.match(harnessSource, /Object\.fromEntries\(definitions\.map\(\(tool\) => \[tool\.name, false\]\)\)/);
   assert.match(harnessSource, /for \(const tool of tools\) enabled\[bridgeToolName\(tool\.name\)\] = true/);

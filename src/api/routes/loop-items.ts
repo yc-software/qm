@@ -311,11 +311,23 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   const adapter = adapterForItem(item);
   if (adapter?.actions.includes(kind)) {
+    if (ctx.capability && item.sourcePayload?.compose === true) {
+      return sendJson(ctx.res, 403, {
+        error: "human_required",
+        message: "this email is held for the person to send from their conversation",
+      });
+    }
     const tokens = ctx.deps.loopSourceTokens;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const slackClient = ctx.deps.loopSlackClient;
     const result = await adapter.act(
-      { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
+      {
+        owner: loop.owner,
+        actor: proposalAuthor,
+        tokens,
+        files: { open: (artifactId: string) => ctx.app.openFileForViewer(artifactId, loop.owner) },
+        ...(slackClient ? { slackClient } : {}),
+      },
       item,
       kind,
       args,

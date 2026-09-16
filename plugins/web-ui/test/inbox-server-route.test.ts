@@ -145,9 +145,12 @@ test("the ledger opens to inbox users; the rest of the loops surface still needs
   assert.equal(admin.status, 403);
 });
 
-test("a signed-in user who is not an inbox user cannot read the ledger", async () => {
+test("a signed-in user without the inbox permission still reaches the ledger as themselves; core decides", async () => {
   const r = await fetch(`${base}/api/loops/l-2/items`, { headers: headersFor("mallory") });
-  assert.equal(r.status, 403);
+  assert.equal(r.status, 200);
+  assert.equal(coreQuery(lastCallTo("/v1/loops/l-2/items")!.url, "principalId"), "mallory");
+  const admin = await fetch(`${base}/api/loops`, { headers: headersFor("mallory") });
+  assert.equal(admin.status, 403);
 });
 
 test("inbox routes refuse anonymous callers", async () => {
