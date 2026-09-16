@@ -7,3 +7,5 @@ data/
 test/live-slack/out/
 deploy/stacks/.generated/
 deploy/helm/templates/
+
+.generated/

@@ -1,3 +1,4 @@
+import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createMemoryEventBus } from "./util/event-bus.ts";
@@ -778,6 +779,7 @@ export function buildApp(
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
+      connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -856,6 +858,7 @@ export function buildApp(
       ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
+      connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
