@@ -16,6 +16,26 @@ test("the standalone CLI and core agree on runtime-enforced core secret names", 
   assert.deepEqual([...runtime].sort(), [...cli].filter((name) => name !== "PUBLIC_API_URL").sort());
 });
 
+test("background ownership requires strong control credentials only for configured deployments", () => {
+  assert.deepEqual(validateCoreSecretEnv({}), []);
+  for (const secret of [undefined, "", " ".repeat(32), "short"]) {
+    assert.deepEqual(
+      validateCoreSecretEnv({
+        BACKGROUND_DEPLOYMENT_ID: "core:release",
+        DEPLOYMENT_CONTROL_SECRET: secret,
+      }),
+      ["DEPLOYMENT_CONTROL_SECRET"],
+    );
+  }
+  assert.deepEqual(
+    validateCoreSecretEnv({
+      BACKGROUND_DEPLOYMENT_ID: "core:release",
+      DEPLOYMENT_CONTROL_SECRET: "separate-control-secret-value-0000000000",
+    }),
+    [],
+  );
+});
+
 test('deploy/core/Dockerfile pins NODE_ENV=production — the "production" secret gate is load-bearing on that line', () => {
   const dockerfile = readFileSync(new URL("../deploy/core/Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /^ENV NODE_ENV=production$/m);
