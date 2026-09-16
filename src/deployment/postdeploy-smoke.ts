@@ -285,6 +285,9 @@ async function checkDatabase(config: PostdeployConfig): Promise<void> {
   const pg = (await import("pg")).default;
   const client = new pg.Client({
     connectionString: databaseUrl,
+    connectionTimeoutMillis: 30_000,
+    query_timeout: 30_000,
+    statement_timeout: 30_000,
     ...resolvePgCaTrust({
       ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
       ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
@@ -323,11 +326,20 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
   console.log("deployed staging database, API, services, public route, and Slack smoke passed");
 }
 
+export async function runSessionSmoke(config: PostdeployConfig, baseUrl: string): Promise<void> {
+  await checkLiveSession(config, baseUrl, (input, init) => {
+    const timeout = AbortSignal.timeout(
+      init?.method === "POST" && new URL(String(input)).pathname === "/v1/turns" ? 300_000 : 30_000,
+    );
+    return fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([timeout, init.signal]) : timeout });
+  });
+  if (config.databaseUrl) await checkDatabase(config);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
   if (process.argv[2] === "session") {
-    await checkLiveSession(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
-    if (config.databaseUrl) await checkDatabase(config);
+    await runSessionSmoke(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
     console.log("database and live session smoke passed");
   } else {
     await runPostdeploySmoke(config);

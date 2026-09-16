@@ -1,3 +1,4 @@
+import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
 import { sendJson } from "../http.ts";
@@ -60,6 +61,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...searchRoutes,
   ...deploymentLayerRoutes,
   ...backgroundWorkRoutes,
+  ...deploymentLiveSmokeRoutes,
   ...turnRoutes,
   ...runEventRoutes,
   ...credentialRoutes,

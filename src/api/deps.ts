@@ -82,6 +82,7 @@ export interface ServerDeps {
   requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
+  deploymentLiveSmoke?: () => Promise<void>;
   brokerSessions?: BrokerSessionStore;
   connectorTokens?: ConnectorTokenStore;
   managedSlack?: ManagedSlack;

@@ -1,3 +1,4 @@
+import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
   createBackgroundOwnershipStore,
   type BackgroundOwnershipStore,
@@ -2503,7 +2504,11 @@ export function serverDeps(
   return {
     production: config.production,
     ...(built.backgroundOwnership
-      ? { backgroundOwnership: built.backgroundOwnership, deploymentControlSecret: config.deploymentControlSecret }
+      ? {
+          backgroundOwnership: built.backgroundOwnership,
+          deploymentControlSecret: config.deploymentControlSecret,
+          deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+        }
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),

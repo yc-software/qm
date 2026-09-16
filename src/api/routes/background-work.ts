@@ -31,18 +31,26 @@ function status(ctx: ApiCtx, state: BackgroundOwnership): void {
   });
 }
 
-async function backgroundWork(ctx: ApiCtx): Promise<void> {
+export function requireDeploymentControl(ctx: ApiCtx): boolean {
   const control = ctx.deps.backgroundOwnership;
   const secret = ctx.deps.deploymentControlSecret;
   if (!control || !ctx.secret || !ctx.auth || !isStrongSigningSecret(secret) || secret === ctx.secret) {
-    return sendJson(ctx.res, 503, { error: "background_control_unavailable" });
+    sendJson(ctx.res, 503, { error: "background_control_unavailable" });
+    return false;
   }
   const bearer = ctx.req.headers.authorization;
   const expected = Buffer.from(`Bearer ${secret}`);
   const supplied = Buffer.from(typeof bearer === "string" ? bearer : "");
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-    return sendJson(ctx.res, 401, { error: "unauthorized" });
+    sendJson(ctx.res, 401, { error: "unauthorized" });
+    return false;
   }
+  return true;
+}
+
+async function backgroundWork(ctx: ApiCtx): Promise<void> {
+  if (!requireDeploymentControl(ctx)) return;
+  const control = ctx.deps.backgroundOwnership!;
   if (ctx.method === "GET") return status(ctx, await control.store.get());
   const body = ctx.body;
   if (

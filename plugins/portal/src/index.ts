@@ -1132,7 +1132,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
-  if ((method === "GET" || method === "POST") && pathname === "/v1/background-work") {
+  if (
+    ((method === "GET" || method === "POST") && pathname === "/v1/background-work") ||
+    (method === "POST" && pathname === "/v1/deployment/live-session")
+  ) {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
       ...FORWARD_DEPLOYMENT_LAYER_HEADERS,
       "authorization",
