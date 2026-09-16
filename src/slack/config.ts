@@ -15,7 +15,7 @@ export function parseSlackContextSource(value: string | undefined): SlackContext
   return source;
 }
 
-export function parseSlackHistoryLimit(value: string | undefined): number | undefined {
+function parseSlackHistoryLimit(value: string | undefined): number | undefined {
   if (!value?.trim()) return undefined;
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1 || limit > 200)
