@@ -332,7 +332,8 @@ export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     sandboxResources: config.sandboxResourcesEnabled,
     scratchExec: config.scratchExecEnabled,
-    ownerAuthExec: config.sharedOwnerAuthIsolation,
+    // Availability is checked per turn; Open can be enabled without restarting the harness.
+    ownerAuthExec: true,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -734,7 +735,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens, and NOTHING persists past this turn. Prefer it for heavy self-contained work (crunching fetched material, throwaway experiments, parallel or disk-hungry runs needing no workspace files) — it keeps the sandbox responsive; if the run needs logins, workspace files, or its writes must survive, use scope:"scoped".\n'
       : "") +
     (ownerAuthExec
-      ? "- \"owner\": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
+      ? "- \"owner\": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner's credentials, no room workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use for commands that need the owner's login without putting it on the shared computer.\n"
       : "") +
     "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
     "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
@@ -747,7 +748,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
     '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, cached logins, and $AGENT_API_* tokens; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
     (ownerAuthExec
-      ? '- "owner": available only to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for owner-authenticated work in shared automation.\n'
+      ? '- "owner": available to the live speaker in Open shared conversations and to owner-authorized shared automation; this invocation-only auth box has org-global files plus the owner\'s credentials, no shared workspace or $AGENT_API_* tokens, and is destroyed after the turn. Use it for credential-using commands without putting personal logins on the shared computer.\n'
       : "") +
     (scratchExec
       ? '- "scratch": a blank, instant box. Same OS/runtimes/CLIs, shared org files & skills at ./global (read-only), firewalled network — but NO logins, NO credentials or capability tokens ($AGENT_API_TOKEN etc. are absent), and NOTHING persists past this turn. Prefer it for heavy self-contained work — crunching or analyzing material you can fetch onto it, throwaway experiments, checks against public code, anything parallel or disk-hungry whose only product is the answer — because it keeps this conversation\'s computer responsive for everything else. Work on THIS conversation\'s workspace (its checkouts, uncommitted changes) and anything needing logins stays scoped; if a scratch run turns out to need those, re-run it with scope:"scoped".\n'

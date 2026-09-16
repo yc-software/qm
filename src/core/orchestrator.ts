@@ -1301,11 +1301,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const cutoverModeOf = (service: string): DeviceFlowCutoverMode => cutoverModes.get(service) ?? "legacy";
       const quarantinedServices = credentialServices.filter((service) => cutoverModeOf(service) === "ephemeral_only");
       const credentialCutoverServices = credentialServices.filter((service) => cutoverModeOf(service) !== "legacy");
+      const openSpeakerKeychain =
+        liveTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const isolateOwnerKeychain =
-        deps.sharedOwnerAuthIsolation === true &&
-        conversation.kind !== "dm" &&
-        input.origin.kind === "automation" &&
-        input.origin.useOwnerKeychain === true;
+        openSpeakerKeychain ||
+        (deps.sharedOwnerAuthIsolation === true &&
+          conversation.kind !== "dm" &&
+          input.origin.kind === "automation" &&
+          input.origin.useOwnerKeychain === true);
       let ownerAuthAvailable = isolateOwnerKeychain;
       if (
         deps.sharedOwnerAuthIsolation === true &&
@@ -1362,13 +1365,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           keychainInjected.push(m);
         }
       }
-      if (!strictReadOnly && deps.connectorTokens && conversation.kind === "dm") {
+      if (!strictReadOnly && deps.connectorTokens && (conversation.kind === "dm" || openSpeakerKeychain)) {
         for (const host of CONNECTOR_HOSTS) {
           const token =
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
-          if (token) connectorEnv[envKey(host)] = token;
+          if (token) (openSpeakerKeychain ? ownerAuthEnv : connectorEnv)[envKey(host)] = token;
         }
       }
       perf.credsMs += Date.now() - credsStart;
@@ -1659,6 +1662,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         isolateOwnerKeychain,
+        openSpeakerKeychain,
         ownerAuthAvailable,
         ownerAuthEnv,
         ownerEnvCredentialIds,
@@ -1944,6 +1948,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const keychainBlock = renderKeychainManifest({
             scopeId,
             conversationKind: conversation.kind,
+            openSpeakerKeychain,
             actorId: actor.id,
             members,
             entriesByOwner,

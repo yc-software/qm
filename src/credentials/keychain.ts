@@ -1510,6 +1510,7 @@ export function renderAskNotice(
 export interface KeychainManifestInput {
   scopeId: ScopeId;
   conversationKind: "dm" | "channel" | "group";
+  openSpeakerKeychain?: boolean;
   actorId: string;
   members: Array<{ id: string; displayName?: string }>;
   entriesByOwner: Map<string, KeychainCredentialMeta[]>;
@@ -1588,11 +1589,15 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       : `one-time grant \`${g.id}\` available (purpose: "${g.purpose}")`;
   };
   const ownPersonal = input.scopeId === toScopeId("personal", input.actorId);
-  const OWN_NOTE = "their own — no grant needed in this personal conversation";
+  const openSpeaker =
+    input.openSpeakerKeychain === true && (input.conversationKind === "channel" || input.conversationKind === "group");
+  const OWN_NOTE = openSpeaker
+    ? 'their own — available with execute scope:"owner" for this live Open turn; no grant needed'
+    : "their own — no grant needed in this personal conversation";
   const memberLines: string[] = [];
   let hasOwn = false;
   for (const member of input.members) {
-    const own = ownPersonal && member.id === input.actorId;
+    const own = (ownPersonal || openSpeaker) && samePerson(member.id, input.actorId);
     for (const c of input.entriesByOwner.get(member.id) ?? []) {
       memberLines.push(credLine(member, c, own ? OWN_NOTE : grantNoteFor(c.id), now, own));
       hasOwn ||= own;
@@ -1614,12 +1619,17 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
 
   const inDm = input.conversationKind === "dm";
 
+  let ownershipGuidance =
+    "Using one here requires a grant from its OWNER — you never see another person's secret or token without one. ";
+  if (ownPersonal)
+    ownershipGuidance =
+      "You are in this person's own personal conversation: their credentials need no grant here — access is implied. Anyone else's still requires a grant from its OWNER, and shared conversations require a grant unless Open sharing authorizes isolated execution with the live speaker's own credentials. ";
+  else if (openSpeaker)
+    ownershipGuidance = `Open sharing authorizes the authenticated live speaker to use their OWN keychain through execute scope:"owner", without a grant. Other people's credentials still require their owner's grant. This does not give the room or background jobs continuing access. `;
   lines.push("## Teammate keychains");
   lines.push(
     "Teammates keep personal logins — and connected apps (Gmail, Calendar, Slack, …) — in a keychain. " +
-      (ownPersonal
-        ? "You are in this person's own personal conversation: their credentials need no grant here — access is implied. Anyone else's still requires a grant from its OWNER, and in a shared conversation EVERY credential needs one, including this person's own. "
-        : "Using one here requires a grant from its OWNER — you never see another person's secret or token without one. ") +
+      ownershipGuidance +
       "A connector grant works exactly like any other: ask the owner, they approve on their own turn, then `use` it.",
   );
   if (memberLines.length) {
@@ -1628,7 +1638,13 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     lines.push("", "No keychain credentials registered yet for the people here.");
   }
 
-  if (hasOwn) {
+  if (hasOwn && openSpeaker) {
+    lines.push(
+      "",
+      `Use execute with scope:"owner" for commands needing the speaker's logins or connected apps. Their env credentials, connector tokens and saved CLI logins are supplied there automatically. Do not load them through /v1/keychain/use on the shared computer.`,
+      "This is a separate, disposable computer: it cannot see the shared workspace, and is destroyed at the end of this turn. Keep credential-using commands there; return only the results needed for the task. Never copy secrets into the shared workspace or pass them to background jobs. Normal command approvals still apply.",
+    );
+  } else if (hasOwn) {
     lines.push(
       "",
       "Use the execute tool handle for env-style logins. Load file-style bundles on demand with:",

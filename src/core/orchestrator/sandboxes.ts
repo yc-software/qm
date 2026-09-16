@@ -1,4 +1,5 @@
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
+import { personalScope } from "../../types.ts";
 import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions } from "../../sandbox/sandbox.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -37,6 +38,7 @@ export interface TurnSandboxContext {
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
   isolateOwnerKeychain: boolean;
+  openSpeakerKeychain?: boolean;
   ownerAuthAvailable: boolean;
   ownerAuthEnv: Record<string, string>;
   ownerEnvCredentialIds: string[];
@@ -67,6 +69,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     connectorEnv,
     egressTokenForTurn,
     isolateOwnerKeychain,
+    openSpeakerKeychain,
     ownerAuthAvailable,
     ownerAuthEnv,
     ownerEnvCredentialIds,
@@ -99,6 +102,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     : undefined;
   if (ownerAuthAvailable) {
     ownerAuthCommand = (command) => {
+      if (openSpeakerKeychain)
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: actor.id,
+          action: "keychain.open_speaker_use",
+          resource: "isolated owner execution",
+          scopeLabel: scopeId,
+        });
       for (const credentialId of ownerEnvCredentialIds) {
         deps.auditLog.record({
           at: Date.now(),
@@ -416,8 +427,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return handle;
   };
   const provisionOwnerAuth = ownerAuthAvailable
-    ? (): Promise<SandboxHandle> => {
-        if (ownerAuthBox.handle) return Promise.resolve(ownerAuthBox.handle);
+    ? async (): Promise<SandboxHandle> => {
+        // Recheck each command, including commands reusing this turn's isolated computer.
+        if (
+          openSpeakerKeychain &&
+          (!(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)) ||
+            (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
+        )
+          throw new Error("Open speaker keychain access is no longer authorized");
+        if (ownerAuthBox.handle) return ownerAuthBox.handle;
         if (ownerAuthBox.pending && !ownerAuthProvisionInFlight) {
           return Promise.reject(new Error("owner-auth box initialization failed and cleanup is still pending"));
         }

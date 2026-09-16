@@ -1756,7 +1756,7 @@ export function buildApp(
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
     ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
-    ...(config.sharedOwnerAuthIsolation ? { ownerAuthExec: true, sharedOwnerAuthIsolation: true } : {}),
+    ...(config.sharedOwnerAuthIsolation ? { sharedOwnerAuthIsolation: true } : {}),
     directory,
     isCurrentSharedScopeMember,
     managedGroups: projects,

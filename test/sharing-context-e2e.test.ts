@@ -388,3 +388,51 @@ test("sharing e2e: screening off preserves carried skills without model calls", 
   assert.equal(await b.turn("!run python3 skills/unscreened-helper/scripts/value.py", true), "SHARED_SKILL_OK");
   assert.equal(b.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
 });
+
+test("Open speaker keychain uses a disposable computer, follows the speaker, and never grants the room", async (t) => {
+  const b = await fixture(t, { signingSecret: "open-keychain-test-signing-key", sharedOwnerAuthIsolation: false });
+  assert.ok(b.keychain);
+  for (const id of ["U1", "U2"]) {
+    await b.keychain.save({ ownerId: id, service: "npm", secret: `npm_${id}`, envKey: "NPM_TOKEN" });
+    await b.keychain.save({
+      ownerId: id,
+      service: "custom-cli",
+      files: [{ path: ".custom-cli/auth", contentBase64: Buffer.from(`file_${id}`).toString("base64") }],
+    });
+    await b.keychain.setConnectorToken("gmail.googleapis.com", id, {
+      accessToken: `gmail_${id}`,
+      expiresAt: Date.now() + 3600000,
+    });
+  }
+  const prompt = await b.turn("!sysprompt", true);
+  assert.match(prompt, /execute scope:"owner"/);
+  assert.match(prompt, /U1[^\n]*npm[^\n]*no grant needed/);
+  assert.match(prompt, /U2[^\n]*npm[^\n]*no grant for this conversation/);
+  assert.ok(!prompt.includes("npm_U1"));
+  await b.workspace.write("channel:C1", "room-only.txt", "room_data");
+  const probe = `printf '%s|%s|%s|%s|%s' "\${NPM_TOKEN-unset}" "\${VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM-unset}" "$(cat ~/.custom-cli/auth 2>/dev/null || printf absent)" "\${AGENT_API_TOKEN-unset}" "$(test -f room-only.txt && printf room || printf isolated)"`;
+  assert.equal(await b.turn(`!owner ${probe}`, true), "npm_U1|gmail_U1|file_U1|unset|isolated");
+  assert.equal(await b.turn(`!owner ${probe}`, true, "U2"), "npm_U2|gmail_U2|file_U2|unset|isolated");
+  assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
+  assert.deepEqual(await b.keychain.grantsForScope("channel:C1"), []);
+  assert.ok((await b.auditLog.events()).some((event) => event.action === "keychain.open_speaker_use"));
+  // No speaker credential may persist through an owner-computer teardown.
+  assert.equal(await b.turn("!owner printf private > retained.txt", true), "(exit 0)");
+  assert.equal(await b.turn("!owner test -f retained.txt && echo leaked || echo clean", true), "clean");
+  await b.config.setSharingPosture("personal:U1", "isolated");
+  await assert.rejects(b.turn("!owner true", true), /owner-auth box is not available/);
+  await b.config.setSharingPosture("personal:U1", "open");
+  await b.config.setSharingPosture("channel:C1", "isolated");
+  await assert.rejects(b.turn("!owner true", true), /owner-auth box is not available/);
+  await b.config.setSharingPosture("channel:C1", "open");
+  await assert.rejects(
+    b.turn("!owner true", true, "U1", { origin: { kind: "automation" } }),
+    /owner-auth box is not available/,
+  );
+  await assert.rejects(
+    b.turn("!owner true", true, "U1", { origin: { kind: "ambient", live: true } }),
+    /owner-auth box is not available/,
+  );
+  await b.remove("U1");
+  await assert.rejects(b.turn("!owner true", true), /owner-auth box is not available/);
+});
