@@ -3069,7 +3069,6 @@ export async function awsRetireBackgroundWorkMembers(
     throw new CliError("task retirement requires deployment peers and exact member identities");
   return withBackgroundPeerLeases(peers, async () => {
     const first = await awsBackgroundWorkStatus(peers[0]!.config, peers[0]!.configDir, peers[0]!.candidatePath);
-    if (!first.status.enabled) throw new CliError("task retirement requires bootstrapped ownership control");
     for (const retired of terminatedMembers) {
       const member = first.status.members.find(
         (item) =>
@@ -3130,10 +3129,12 @@ async function assertBackgroundCohortReplaceable(
     (status.desiredDeploymentId === current.backgroundDeploymentId ||
       status.members.some(
         (member) =>
-          !member.retired && member.deploymentId === current.backgroundDeploymentId && member.state === "admitted",
+          !member.retired && member.deploymentId === current.backgroundDeploymentId && member.state !== "drained",
       ))
   )
-    throw new CliError("pause or hand over background ownership before replacing the current core cohort");
+    throw new CliError(
+      "pause or hand over background ownership and wait for every member to drain before replacing the current core cohort",
+    );
 }
 
 export async function awsSetBackgroundWork(
@@ -3191,6 +3192,8 @@ export async function awsSetBackgroundWork(
       let status = await readBackgroundWork(transport, cohort.deploymentId);
       if (!status.enabled)
         throw new CliError("explicitly bootstrap all background ownership cohorts before changing ownership");
+      if (!enabled && status.desiredDeploymentId !== null && status.desiredDeploymentId !== cohort.deploymentId)
+        throw new CliError("cannot disable background work on a different deployment's current owner");
       const desiredDeploymentId = enabled ? cohort.deploymentId : null;
       if (status.desiredDeploymentId !== desiredDeploymentId) {
         status = await mutateBackgroundWork(

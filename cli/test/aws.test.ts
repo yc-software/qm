@@ -5532,6 +5532,33 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     };
     assert.deepEqual((await awsBackgroundWorkStatus(single, dir)).taskArns, [taskArn]);
     await assert.rejects(awsSetBackgroundWork(single, dir, true), /explicitly bootstrap/);
+    const stoppedLegacyArn = "arn:aws:ecs:us-west-2:123456789012:task/stopped-legacy-core";
+    ownership.members.push({
+      ...ownership.members[0]!,
+      instanceId: "legacy-dead",
+      taskArn: stoppedLegacyArn,
+      state: "admitted",
+    });
+    const beforeBootstrap = JSON.parse(readFileSync(fake.state, "utf8"));
+    beforeBootstrap.stoppedTasks = {
+      [stoppedLegacyArn]: {
+        taskArn: stoppedLegacyArn,
+        lastStatus: "STOPPED",
+        group: "service:acme-core",
+        taskDefinitionArn: manifest.tasks.core,
+      },
+    };
+    writeFileSync(fake.state, JSON.stringify(beforeBootstrap));
+    await assert.rejects(
+      awsBootstrapBackgroundWork([{ config: single, configDir: dir }], manifest.backgroundDeploymentId),
+      /every enrolled/,
+    );
+    const retiredLegacy = await awsRetireBackgroundWorkMembers(
+      [{ config: single, configDir: dir }],
+      [{ instanceId: "legacy-dead", taskArn: stoppedLegacyArn, generation: 0 }],
+    );
+    assert.equal(retiredLegacy.generation, 0);
+    assert.equal(retiredLegacy.enabled, false);
     const bootstrapped = await awsBootstrapBackgroundWork(
       [{ config: single, configDir: dir }],
       manifest.backgroundDeploymentId,
@@ -5543,10 +5570,15 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       readFileSync(fake.log, "utf8"),
       /ecs update-service|register-task-definition|s3api put-object|ecr get-login-password/,
     );
+    ownership.desiredDeploymentId = "another-current-owner";
+    const beforeWrongPause = mutations.length;
+    await assert.rejects(awsSetBackgroundWork(single, dir, false), /different deployment/);
+    assert.equal(mutations.length, beforeWrongPause);
+    ownership.desiredDeploymentId = manifest.backgroundDeploymentId;
     await awsSetBackgroundWork(single, dir, false);
     await awsSetBackgroundWork(single, dir, true);
     assert.equal(ownership.generation, 3);
-    assert.equal(mutations.length, 3);
+    assert.equal(mutations.length, 4);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|register-task-definition|run-task/);
     const unchanged = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.deepEqual(unchanged.dynamo, persisted.dynamo);
@@ -5578,8 +5610,11 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       [{ instanceId: "terminated-instance", taskArn: stoppedArn, generation: 1 }],
     );
     assert.equal(retired.generation, 3);
-    assert.equal(retired.members[1]!.retired, true);
+    assert.equal(retired.members.at(-1)!.retired, true);
     await awsSetBackgroundWork(single, dir, false);
+    await assert.rejects(awsUp(single, dir, { yes: true, restart: ["core"] }), /every member to drain/);
+    await assert.rejects(awsRollback(single, manifest.id), /every member to drain/);
+    ownership.members[0]!.state = "drained";
     await awsUp(single, dir, { yes: true, restart: ["core"] });
     const replacement = JSON.parse(readFileSync(fake.state, "utf8"));
     const replacementManifest = JSON.parse(
@@ -5619,7 +5654,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     writeFileSync(fake.state, JSON.stringify(replacement));
     ownership.deploymentId = "stale-cohort";
     await assert.rejects(awsSetBackgroundWork(single, dir, false), /requested deployment/);
-    assert.equal(mutations.length, 5);
+    assert.equal(mutations.length, 6);
     ownership.deploymentId = replacementManifest.backgroundDeploymentId;
     await awsRollback(single, manifest.id);
     const rolledBack = JSON.parse(readFileSync(fake.state, "utf8"));

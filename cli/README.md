@@ -98,9 +98,11 @@ Once bootstrapped, background mode changes use generation-checked ownership
 requests without restarting ECS tasks. Activation waits for prior owners to stop
 claiming and every expected task to finish activation. Pausing stops new claims;
 in-flight turns can continue draining. Replacing or rolling back the active core
-cohort requires an explicit pause or handover first. Unresponsive members are never
+cohort requires an explicit pause or handover and proof that every member has
+drained first. A demotion refuses to pause a different current owner. Unresponsive members are never
 assumed dead: `awsRetireBackgroundWorkMembers` requires exact instance, task ARN,
-and generation identities plus ECS evidence that each task stopped.
+and generation identities plus ECS evidence that each task stopped. This recovery
+is also available before bootstrap for stopped legacy members.
 
 Core secret uploads defer activation to a subsequent staged `up --restart core`.
 The generic upload path refuses changes to either control credential while a
