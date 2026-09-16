@@ -89,6 +89,6 @@ test("controlled enrollment drains same-image legacy workers without self-supers
     assert.equal(await bridge.beat(), false);
     assert.equal(await old.beat(), false);
   } finally {
-    await factory.close();
+    await factory.pool.close();
   }
 });
