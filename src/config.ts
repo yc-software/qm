@@ -1,3 +1,4 @@
+import { isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseScopeId } from "./types.ts";
 import type { SandboxScopeDefaults } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
@@ -1030,9 +1031,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
     if (!env.DATABASE_URL) throw new Error("Background ownership requires DATABASE_URL");
     if (
-      !env.CORE_SIGNING_SECRET ||
-      !env.DEPLOYMENT_CONTROL_SECRET ||
-      env.DEPLOYMENT_CONTROL_SECRET.length < 32 ||
+      !isStrongSigningSecret(env.CORE_SIGNING_SECRET) ||
+      !isStrongSigningSecret(env.DEPLOYMENT_CONTROL_SECRET) ||
       env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET
     )
       throw new Error(
