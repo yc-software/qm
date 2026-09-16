@@ -2492,6 +2492,18 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     resetComposer,
     focusComposerEnd,
     fillSuggestedPrompt,
+    sendSuggestedPrompt: async (prompt: string, agent: Agent): Promise<void> => {
+      if (
+        agent !== ctx.chat.state.agent ||
+        agent.state.isStreaming ||
+        composerState.draft ||
+        composerState.attachments.length ||
+        composerState.processingFiles
+      )
+        return;
+      fillSuggestedPrompt(prompt, agent);
+      await sendPrompt(agent);
+    },
     resizeComposer,
     currentModelOption,
     carryModelPick,

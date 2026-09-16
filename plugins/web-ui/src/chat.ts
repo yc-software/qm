@@ -1,6 +1,7 @@
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
+import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
 import { isWelcomeConversation } from "./welcome-session";
 import { ADMIN_BASE } from "./shell";
@@ -1130,6 +1131,38 @@ export function createChatSurface(
     consumeBackgroundPanelRequest();
   }
 
+  let startingIdeas = false;
+
+  function ideasUnavailable(): boolean {
+    return (
+      startingIdeas ||
+      !chatState.agent ||
+      chatState.agent.state.isStreaming ||
+      Boolean(chatState.pendingSend) ||
+      Boolean(ctx.composer.state.draft) ||
+      Boolean(ctx.composer.state.attachments.length) ||
+      ctx.composer.state.processingFiles ||
+      hasUnresolvedApproval()
+    );
+  }
+
+  async function showWelcomeIdeas(): Promise<void> {
+    if (ideasUnavailable()) return;
+    startingIdeas = true;
+    const threadRef = `web:${appState.me!.user}:ideas:${crypto.randomUUID()}`;
+    mountContinuable(threadRef, null, null, []);
+    const agent = chatState.agent;
+    try {
+      if (agent) {
+        await ctx.composer.refreshRuntimeSelection(null, agent);
+        await ctx.composer.sendSuggestedPrompt(welcomeIdeasPrompt, agent);
+      }
+    } finally {
+      startingIdeas = false;
+      if (agent && agent === chatState.agent) drawActiveChat(agent);
+    }
+  }
+
   function welcomeGreeting(animate = true): TemplateResult {
     return html`
       <article class="message-row assistant-row welcome-greeting">
@@ -1137,6 +1170,8 @@ export function createChatSurface(
           <qm-onboarding-welcome
             .me=${appState.me}
             .animateWelcome=${animate}
+            .onMoreIdeas=${showWelcomeIdeas}
+            .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
             .adminBase=${ADMIN_BASE}
           ></qm-onboarding-welcome>

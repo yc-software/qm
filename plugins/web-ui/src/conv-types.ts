@@ -129,6 +129,7 @@ export interface ComposerSurface {
   resetComposer(): void;
   focusComposerEnd(): void;
   fillSuggestedPrompt(prompt: string, agent: Agent): void;
+  sendSuggestedPrompt(prompt: string, agent: Agent): Promise<void>;
   resizeComposer(): void;
   currentModelOption(): ModelOption | undefined;
   carryModelPick(fromThreadRef: string | null, toThreadRef: string): void;

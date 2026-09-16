@@ -1,3 +1,4 @@
+import type { TurnRequest } from "../types.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
 
 const ONBOARDING_SKILL_NAME = "onboarding";
@@ -72,4 +73,17 @@ export function renderPendingOnboardingPrompt(status: OnboardingStatus, version 
     "",
     `Use the \`memory\` tool as the source of truth. On completion or an explicit stop, preserve the notebook and add \`- Onboarding: completed ${version} on YYYY-MM-DD.\` so onboarding does not recur.`,
   ].join("\n");
+}
+
+export function isIdeasConversation(input: {
+  surface?: string;
+  conversation: Pick<TurnRequest["conversation"], "kind" | "threadRef">;
+}): boolean {
+  return (
+    input.surface === "web" &&
+    input.conversation.kind === "dm" &&
+    /^web:.+:ideas:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      input.conversation.threadRef,
+    )
+  );
 }

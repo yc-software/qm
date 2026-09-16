@@ -31,6 +31,8 @@ import {
 export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
+    onMoreIdeas: { attribute: false },
+    ideasDisabled: { type: Boolean },
     animateWelcome: { type: Boolean },
     setupOnly: { type: Boolean },
     widget: {},
@@ -46,6 +48,8 @@ export class OnboardingWelcome extends LitElement {
     connectionError: { state: true },
   };
   declare me: Me | null;
+  declare onMoreIdeas: (() => void) | undefined;
+  declare ideasDisabled: boolean;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
   declare widget: "all" | "apps" | "slack";
@@ -78,6 +82,7 @@ export class OnboardingWelcome extends LitElement {
   constructor() {
     super();
     this.me = null;
+    this.ideasDisabled = false;
     this.animateWelcome = true;
     this.setupOnly = false;
     this.widget = "all";
@@ -399,14 +404,26 @@ export class OnboardingWelcome extends LitElement {
                     </div>`
                   : nothing
               }
-              <p class="welcome-beat" style=${`--welcome-delay:${cohort ? 2400 : 400}ms`}>
-                ${cohort ? "And welcome" : "Welcome"} to QM, ${cohort ? "YC’s" : "your"} agent harness. Use it to
-                research customers, build tools, and automate the everyday work of running
-                ${this.me?.companyName?.trim() || "your company"}.
-              </p>
-              <p class="welcome-beat" style=${`--welcome-delay:${cohort ? 2800 : 700}ms`}>
-                The easiest way to get up and running:
-              </p>`
+              ${
+                cohort
+                  ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">
+                        And welcome to QM, the agent harness we use to run YC.
+                      </p>
+                      <p class="welcome-beat" style="--welcome-delay:2600ms">
+                        Use it to research customers and investors, fundraise, and automate the everyday work of running
+                        ${this.me?.companyName?.trim() || "your company"}.
+                        ${this.onMoreIdeas ? html`<button type="button" class="welcome-more-ideas" ?disabled=${this.ideasDisabled} @click=${this.onMoreIdeas}>More ideas</button>` : nothing}
+                      </p>
+                      <p class="welcome-beat" style="--welcome-delay:2800ms">
+                        Think of it as your YC partner in a box. The more you use QM, the more context we have, the more
+                        we can help.
+                      </p>`
+                  : html`<p class="welcome-beat" style="--welcome-delay:400ms">
+                        Welcome to QM, your agent harness. Use it to research customers, build tools, and automate the
+                        everyday work of running ${this.me?.companyName?.trim() || "your company"}.
+                      </p>
+                      <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
+              }`
       }
       ${
         this.widget !== "apps" && this.me?.permissions?.includes("admin")

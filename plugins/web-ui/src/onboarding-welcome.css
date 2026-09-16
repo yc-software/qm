@@ -299,3 +299,26 @@ qm-onboarding-welcome {
   font-size: 13px;
   color: var(--foreground);
 }
+
+.welcome-more-ideas {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: color-mix(in srgb, var(--foreground) 40%, var(--muted-foreground));
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.welcome-more-ideas:hover,
+.welcome-more-ideas:focus-visible {
+  color: var(--foreground);
+  text-decoration-color: currentColor;
+}
+.welcome-more-ideas:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

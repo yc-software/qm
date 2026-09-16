@@ -107,6 +107,7 @@ import { createSkillMaterializer, skillsIndex, SKILLS_DIR } from "../skills/mate
 import {
   detectOnboardingStatus,
   onboardingSkillVisible,
+  isIdeasConversation,
   PROACTIVE_OPENER_PROMPT,
   renderPendingOnboardingPrompt,
 } from "../onboarding/onboarding.ts";
@@ -1213,8 +1214,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ? `\n\n## What you remember\nYou're in ${memoryContext}. Scope headings and \`(said in …)\` tags identify provenance. You may use facts from these included, authorized memories to answer this request; do not ask for them to be shared again merely because they came from another scope. Context-specific instructions and preferences still apply only to their source context unless the user says otherwise.\n\n${recalled}`
         : "";
 
-      let onboardingBlock = "";
-      if (useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
+      let onboardingBlock = isIdeasConversation(input)
+        ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."
+        : "";
+      if (!onboardingBlock && useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
         const fullMemory = await deps.memory.read(memoryScopeId).catch(swallowAs("orchestrator: memory read", ""));
         onboardingBlock = renderPendingOnboardingPrompt(detectOnboardingStatus(fullMemory));
       }
