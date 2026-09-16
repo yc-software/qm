@@ -1752,7 +1752,9 @@ async function applyServiceTargets(
   const changed: string[] = [];
   try {
     for (const workload of options.webBeforePortal
-      ? [...workloads].sort((a, b) => Number(b === "web-ui") - Number(a === "web-ui"))
+      ? [...workloads].sort(
+          (a, b) => Number(a === "portal") - Number(b === "portal") || Number(b === "web-ui") - Number(a === "web-ui"),
+        )
       : workloads) {
       if (options.webBeforePortal && workload === "portal" && targets["web-ui"]) {
         await awaitServiceTargets(

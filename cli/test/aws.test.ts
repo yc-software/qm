@@ -4734,6 +4734,91 @@ test("AWS doctor still fails a pushed secret store holding a placeholder value",
   assert.match(probe.failures[0]!, /CORE_SIGNING_SECRET: missing, placeholder, or insecure value/);
 });
 
+for (const mode of ["draining", "stale", "failed"] as const) {
+  test(`AWS submits independent workloads before the portal dependency gate: ${mode}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-dependency-rollout-"));
+    const selected: QmConfig = {
+      ...config,
+      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
+      aws: {
+        ...config.aws!,
+        services: {
+          ...config.aws!.services,
+          linear: {
+            ecrRepository: "qm-linear",
+            ecsService: "acme-linear",
+            cpu: 256,
+            memory: 512,
+            architecture: "amd64",
+          },
+        },
+      },
+    };
+    writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+    chmodSync(join(dir, "docker"), 0o755);
+    const fake = statefulAws(
+      dir,
+      selected,
+      {},
+      {
+        drainPolls: mode === "draining" ? 4 : 0,
+        ignoreUpdate: mode === "stale",
+        rolloutFailed: mode === "failed",
+      },
+    );
+    const before = JSON.parse(readFileSync(fake.state, "utf8")).services;
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${dir}:${priorPath}`;
+    try {
+      if (mode === "draining") await awsUp(selected, dir, { yes: true });
+      else
+        await assert.rejects(
+          () => awsUp(selected, dir, { yes: true }),
+          mode === "stale" ? /requested task definition/ : /PRIMARY rollout is FAILED/,
+        );
+      const calls = readFileSync(fake.log, "utf8").trim().split("\n");
+      const webUpdate = calls.findIndex(
+        (line) => line.includes("ecs update-service") && line.includes("--service acme-web-ui"),
+      );
+      const webPoll = calls.findIndex((line, i) => i > webUpdate && line.includes("ecs describe-services"));
+      const portalUpdate = calls.findIndex(
+        (line) => line.includes("ecs update-service") && line.includes("--service acme-portal"),
+      );
+      for (const workload of ["core", "linear"]) {
+        const update = calls.findIndex(
+          (line) => line.includes("ecs update-service") && line.includes(`--service acme-${workload}`),
+        );
+        assert.ok(webUpdate < update && update < webPoll, `${workload} starts before waiting on web`);
+      }
+      if (mode === "draining") {
+        assert.ok(webPoll < portalUpdate);
+        assert.ok(
+          calls.slice(webPoll, portalUpdate).filter((line) => line.includes("ecs describe-services")).length >= 5,
+          "portal waits for old web tasks to retire",
+        );
+      } else {
+        assert.equal(portalUpdate, -1, "portal is untouched when its dependency fails");
+        const after = JSON.parse(readFileSync(fake.state, "utf8"));
+        for (const workload of ["web-ui", "core", "linear"]) {
+          const name = `acme-${workload}`;
+          assert.equal(after.services[name].taskDefinition, before[name].taskDefinition);
+          assert.equal(after.services[name].desiredCount, before[name].desiredCount);
+          assert.equal(
+            calls.filter((line) => line.includes("ecs update-service") && line.includes(`--service ${name}`)).length,
+            2,
+            `${workload} is compensated`,
+          );
+        }
+        assert.equal(after.dynamo["deployment/current"], undefined);
+      }
+    } finally {
+      process.env.PATH = priorPath;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("AWS private canary reaches core without a core ingress target and refuses missing current tasks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-private-canary-"));
   writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
