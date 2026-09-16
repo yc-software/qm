@@ -74,9 +74,15 @@ export function createPgBossCronQueue(
         );
         await boss.work(TICK_QUEUE, { pollingIntervalSeconds: 1 }, () => handlers.onTick());
       } catch (e) {
-        await Promise.all([boss.offWork(FIRE_QUEUE, { wait: false }), boss.offWork(TICK_QUEUE, { wait: false })]).catch(
-          () => {},
-        );
+        if (initialized) {
+          await Promise.all([
+            boss.offWork(FIRE_QUEUE, { wait: false }),
+            boss.offWork(TICK_QUEUE, { wait: false }),
+          ]).catch(() => {});
+        } else {
+          await boss.stop({ close: true, graceful: false }).catch(() => {});
+          await closePool();
+        }
         throw e;
       }
       started = true;

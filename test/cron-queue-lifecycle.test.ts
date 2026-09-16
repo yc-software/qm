@@ -5,6 +5,7 @@ type Adapter = { executeSql(text: string, values?: unknown[]): Promise<unknown> 
 const pools: { closed: boolean }[] = [];
 let adapter: Adapter;
 let failStart = false;
+let failWork = false;
 
 mock.module("../src/persistence/pg-pool.ts", {
   namedExports: {
@@ -36,7 +37,10 @@ mock.module("pg-boss", {
         if (failStart) throw new Error("startup failed");
       }
       async createQueue() {}
-      async work() {}
+      async work() {
+        if (failWork) throw new Error("polling failed");
+      }
+      async offWork() {}
       async send() {
         await adapter.executeSql("SELECT 1");
       }
@@ -84,4 +88,28 @@ test("startup failure closes the database and permits a fresh start", async () =
   } finally {
     await queue.stop();
   }
+});
+
+test("resuming polling failure preserves the database for admitted callbacks", async () => {
+  const queue = createPgBossCronQueue("postgres://unused");
+  await queue.start(handlers, 60_000);
+  await queue.stopClaims!();
+  const count = pools.length;
+  failWork = true;
+  try {
+    await assert.rejects(queue.start(handlers, 60_000), /polling failed/);
+    assert.equal(queue.healthy(), false);
+    assert.equal(pools.at(-1)?.closed, false);
+    await adapter.executeSql("SELECT 1");
+  } finally {
+    failWork = false;
+  }
+  try {
+    await queue.start(handlers, 60_000);
+    assert.equal(pools.length, count);
+    assert.ok(queue.healthy());
+  } finally {
+    await queue.stop();
+  }
+  assert.ok(pools.at(-1)?.closed);
 });
