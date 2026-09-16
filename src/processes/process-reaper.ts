@@ -42,7 +42,7 @@ export function createReaperKillHook(
 
 export interface ProcessReaper {
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
   sweep(): Promise<{ reaped: number }>;
 }
 

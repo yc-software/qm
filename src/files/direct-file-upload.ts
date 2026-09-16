@@ -54,7 +54,7 @@ export interface DirectFileUploads {
   abort(id: string): Promise<void>;
   sweep(): Promise<void>;
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export function createDirectFileUploads(options: {

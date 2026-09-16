@@ -60,7 +60,7 @@ interface Authority {
 
 export interface SwarmService {
   start(): void;
-  stop(): void;
+  stop(): Promise<void>;
   sweep(): Promise<void>;
   inspect(caller: SwarmCaller): Promise<{
     id: string;

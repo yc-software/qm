@@ -1430,3 +1430,41 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
   assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 36_000 }, "the next slot is chained without a hold");
   scheduler.stop();
 });
+
+test("scheduler stop waits for delayed queue startup and supports an awaited restart", async () => {
+  const gate = Promise.withResolvers<void>();
+  let starts = 0;
+  let stops = 0;
+  const scheduler = createScheduler({
+    crons: createCronStore(),
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => ({ status: "ok", reply: "unused" }),
+    jobQueue: {
+      start: async () => {
+        starts++;
+        await gate.promise;
+      },
+      enqueueFire: async () => {},
+      healthy: () => false,
+      stop: async () => {
+        stops++;
+      },
+    },
+  });
+  scheduler.start(1000);
+  scheduler.start(1000);
+  const stopping = scheduler.stop();
+  assert.equal(scheduler.stop(), stopping);
+  scheduler.start(1000);
+  assert.equal(starts, 1);
+  assert.equal(stops, 0);
+  gate.resolve();
+  await stopping;
+  assert.equal(stops, 1);
+  scheduler.start(1000);
+  await scheduler.stop();
+  assert.equal(starts, 2);
+  assert.equal(stops, 2);
+});

@@ -10,7 +10,7 @@ const DEFAULT_INTERVAL_MS = 300_000;
 export interface SkillSyncEngine {
   tick(now?: number): Promise<void>;
   start(intervalMs: number): void;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export interface SkillSyncDeps {

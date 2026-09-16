@@ -24,7 +24,7 @@ const DEFAULT_MIN_FIRE_INTERVAL_MS = 60_000;
 export interface MonitorPoller {
   tick(now?: number): Promise<void>;
   start(intervalMs: number): void;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export interface MonitorPollerDeps {

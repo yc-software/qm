@@ -384,12 +384,15 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 
 export interface Runtime {
   start(): void;
+  startBackground(): void;
+  stopBackground(): Promise<void>;
+  backgroundDrained(): Promise<void>;
   stop(): Promise<void>;
   releaseInFlightRuns(): Promise<void>;
 }
 
 export function stopWithBackstop(
-  runtime: Runtime,
+  runtime: Pick<Runtime, "stop" | "releaseInFlightRuns">,
   shutdownDrainMs: number,
   label: string,
   beforeExit?: () => void,
@@ -2256,45 +2259,82 @@ export function buildApp(
         { immediate: true },
       )
     : null;
+  let backgroundRunning = false;
+  let backgroundStopping: Promise<void> | null = null;
+  let backgroundGeneration = 0;
+  function startBackground(): void {
+    if (backgroundRunning || backgroundStopping) return;
+    backgroundRunning = true;
+    drain.start();
+    const generation = ++backgroundGeneration;
+    for (const worker of workers) {
+      const drained = worker.drained();
+      worker.start();
+      void drained
+        .then(() => {
+          if (backgroundRunning && generation === backgroundGeneration) worker.start();
+        })
+        .catch(swallowAs("wiring: worker resume failed", undefined));
+    }
+    reaper.start();
+    processReaper?.start();
+    monitorPoller?.start(config.monitorPollMs);
+    monitorRetentionSweeper.start();
+    if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
+    blobSweeper.start();
+    fileUploads?.start();
+    idleSweeper?.start();
+    keepWarmSweeper.start();
+    deepIdleSweeper?.start();
+    wakeSweep.start();
+    swarms?.start();
+    orphanedSignalSweeper.start();
+    sessionReturnSweeper.start();
+  }
+  function stopBackground(): Promise<void> {
+    if (backgroundStopping) return backgroundStopping;
+    backgroundRunning = false;
+    backgroundGeneration++;
+    const stopping = [
+      reaper.stop(),
+      processReaper?.stop(),
+      monitorPoller?.stop(),
+      monitorRetentionSweeper.stop(),
+      skillSyncEngine.stop(),
+      idleSweeper?.stop(),
+      keepWarmSweeper.stop(),
+      deepIdleSweeper?.stop(),
+      blobSweeper.stop(),
+      fileUploads?.stop(),
+      wakeSweep.stop(),
+      swarms?.stop(),
+      orphanedSignalSweeper.stop(),
+      sessionReturnSweeper.stop(),
+      ...workers.map((worker) => worker.stopClaims()),
+    ];
+    backgroundStopping = Promise.all(stopping)
+      .then(() => {})
+      .finally(() => {
+        backgroundStopping = null;
+      });
+    return backgroundStopping;
+  }
   const runtime: Runtime = {
     start() {
       flyTunnel?.monitor();
-      if (!config.backgroundWorkEnabled) return;
-      for (const w of workers) w.start();
-      reaper.start();
-      processReaper?.start();
-      monitorPoller?.start(config.monitorPollMs);
-      monitorRetentionSweeper.start();
-      if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
-      blobSweeper.start();
-      fileUploads?.start();
-      idleSweeper?.start();
-      keepWarmSweeper.start();
-      deepIdleSweeper?.start();
-      wakeSweep.start();
-      swarms?.start();
-      orphanedSignalSweeper.start();
-      sessionReturnSweeper.start();
-      drain.start();
+      if (config.backgroundWorkEnabled) startBackground();
+    },
+    startBackground,
+    stopBackground,
+    async backgroundDrained() {
+      await backgroundStopping;
+      await Promise.all(workers.map((worker) => worker.drained()));
     },
     async releaseInFlightRuns() {
       await Promise.all(workers.map((w) => w.releaseInFlight()));
     },
     async stop() {
-      reaper.stop();
-      processReaper?.stop();
-      monitorPoller?.stop();
-      monitorRetentionSweeper.stop();
-      skillSyncEngine.stop();
-      idleSweeper?.stop();
-      keepWarmSweeper.stop();
-      deepIdleSweeper?.stop();
-      blobSweeper.stop();
-      fileUploads?.stop();
-      wakeSweep.stop();
-      swarms?.stop();
-      orphanedSignalSweeper.stop();
-      sessionReturnSweeper.stop();
+      await stopBackground();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
         swallowAs("wiring: worker drain failed", undefined),
       );

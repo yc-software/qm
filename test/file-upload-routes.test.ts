@@ -52,7 +52,7 @@ const fake: DirectFileUploads = {
   },
   async sweep() {},
   start() {},
-  stop() {},
+  async stop() {},
 };
 const token = (actorId: string, scope = personal) =>
   mintCapabilityToken({ actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 }, secret);
