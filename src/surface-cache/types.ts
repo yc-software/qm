@@ -5,10 +5,11 @@ export interface CachedMessage {
   broadcast?: boolean;
   subtype?: string;
   authorId?: string;
+  botId?: string;
   authorName?: string;
   text: string;
   replyCount?: number;
-  files?: Array<{ fileId: string; name?: string; mimetype?: string }>;
+  files?: Array<{ fileId: string; name?: string; title?: string; size?: number; mimetype?: string }>;
   mentions?: Record<string, string>;
   self?: boolean;
   bot?: boolean;
@@ -25,6 +26,8 @@ export interface CachedFile {
   ts: string;
   fileId: string;
   name?: string;
+  title?: string;
+  size?: number;
   mimetype?: string;
   createdAt: number;
 }
@@ -53,6 +56,7 @@ export interface IngestEvent {
   broadcast?: boolean;
   subtype?: string;
   authorId?: string;
+  botId?: string;
   authorName?: string;
   text?: string;
   mentions?: Record<string, string>;
@@ -63,7 +67,7 @@ export interface IngestEvent {
   deleted?: boolean;
   handled?: boolean;
   createdAt?: number;
-  files?: Array<{ fileId: string; name?: string; mimetype?: string }>;
+  files?: Array<{ fileId: string; name?: string; title?: string; size?: number; mimetype?: string }>;
   members?: string[];
   containerName?: string;
   kind?: "channel" | "dm" | "group";

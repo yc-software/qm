@@ -214,9 +214,17 @@ export function createSlackHistoryReader(deps: {
             ...(m.sub ? { thread_ts: m.sub } : {}),
             ...(m.self || m.authorId ? { user: m.self ? deps.ids.botUserId : m.authorId } : {}),
             ...(m.authorName ? { username: m.authorName } : {}),
-            ...(m.bot ? { bot_id: m.self ? deps.ids.ownBotId : "mirrored-bot" } : {}),
+            ...(m.bot ? { bot_id: m.botId ?? (m.self ? deps.ids.ownBotId : "mirrored-bot") } : {}),
             ...(m.files?.length
-              ? { files: m.files.map((f) => ({ id: f.fileId, name: f.name, mimetype: f.mimetype })) }
+              ? {
+                  files: m.files.map((f) => ({
+                    id: f.fileId,
+                    name: f.name,
+                    title: f.title,
+                    size: f.size,
+                    mimetype: f.mimetype,
+                  })),
+                }
               : {}),
           }));
         if (mirrored.length && (!threadTs || rows.some((m) => m.ts === threadTs) || before)) {

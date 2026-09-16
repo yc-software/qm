@@ -758,3 +758,24 @@ test("untyped edit channel lookup failure withholds acknowledgement for retry", 
   assert.equal(acks, 0);
   assert.equal(f.events.length, 0);
 });
+
+test("mention, DM and thread dispatch preserve bot identity and presentation name", async () => {
+  for (const path of ["mention", "dm", "thread"]) {
+    const f = fixture({ external: true, stake: async () => true });
+    await f.fire({
+      type: path === "mention" ? "app_mention" : "message",
+      channel: path === "dm" ? "D1" : "C1",
+      channel_type: path === "dm" ? "im" : "channel",
+      ts: "2",
+      ...(path === "thread" ? { thread_ts: "1" } : {}),
+      user: "U1",
+      bot_id: "BOTHER",
+      bot_profile: { name: "Report bot" },
+      text: path === "mention" ? "<@UBOT> report" : "report",
+    });
+    assert.equal(f.dispatches.length, 1, path);
+    assert.equal(f.dispatches[0][1].botId, "BOTHER", path);
+    assert.equal(f.dispatches[0][1].authorName, "Report bot", path);
+    assert.equal(f.dispatches[0][1].botAuthored, true, path);
+  }
+});

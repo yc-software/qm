@@ -83,6 +83,7 @@ interface Incoming {
   userId: string | undefined;
   actor?: ActorAssertion;
   authorName?: string;
+  botId?: string;
   rawText: string;
   subtype?: string;
   files: SlackFile[];
@@ -412,6 +413,9 @@ export function createTurnHandler(deps: {
           subtype: inc.subtype,
           files: inc.files,
           user: inc.userId,
+          bot_id: inc.botId,
+          username: inc.authorName,
+          ...(inc.botAuthored ? { bot_profile: { name: inc.authorName } } : {}),
           thread_ts: inc.threadTs,
           channel_type: channelType(inc.kind, conversationKind),
         },

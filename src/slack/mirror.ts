@@ -47,6 +47,7 @@ export function slackMessageToIngestEvent(
     ...(m.thread_ts !== undefined || !opts.partial
       ? { sub: m.thread_ts && m.thread_ts !== m.ts ? String(m.thread_ts) : null }
       : {}),
+    ...(m.bot_id ? { botId: String(m.bot_id) } : {}),
     ...(m.user ? { authorId: String(m.user) } : {}),
     ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
     text: opts.text ?? decodeSlackEntities(raw),
@@ -55,7 +56,13 @@ export function slackMessageToIngestEvent(
       : {}),
     files: content.files
       .filter((file) => file.id)
-      .map((file) => ({ fileId: file.id!, name: file.name, mimetype: file.mimetype })),
+      .map((file) => ({
+        fileId: file.id!,
+        name: file.name,
+        ...(file.title !== undefined ? { title: file.title } : {}),
+        ...(file.size !== undefined ? { size: file.size } : {}),
+        mimetype: file.mimetype,
+      })),
     ...(Object.keys(opts.mentions ?? {}).length ? { mentions: opts.mentions } : {}),
     ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
     ...(mentionsBot(raw, ids.botUserId) ? { mentionsSelf: true } : {}),
