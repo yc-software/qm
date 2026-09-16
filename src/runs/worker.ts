@@ -1,3 +1,4 @@
+import type { AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { errorAlreadyRecorded, type ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -113,6 +114,7 @@ export interface WorkerDeps extends ProcessDeps {
   sessions: SessionStore;
   canClaim?: () => boolean;
   onClaimed?: () => void;
+  admittedWork?: AdmittedWork;
 }
 
 export interface Worker {
@@ -203,7 +205,9 @@ export function createWorker(deps: WorkerDeps): Worker {
       claimDone = null;
       deps.onClaimed?.();
       try {
-        await processRun(deps, run, { background: true });
+        const work = () => processRun(deps, run, { background: true });
+        if (deps.admittedWork) await deps.admittedWork.run(work);
+        else await work();
       } catch (e) {
         swallow("worker: background run crashed", e);
       } finally {

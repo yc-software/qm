@@ -1,3 +1,4 @@
+import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { createResourceSearchMethods } from "./app-resource-search.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import { createAppHelpers } from "./app-helpers.ts";
@@ -24,6 +25,16 @@ export function createApp(deps: AppDeps): App {
     ...createMessagingMethods(deps, helpers, ambient),
     ...createDeploymentMethods(deps, helpers),
     ...createSkillMethods(deps, helpers),
+  };
+  const turn = methods.turn;
+  methods.turn = async (req, replay) => {
+    if (!deps.admittedWork || req.async) return turn(req, replay);
+    try {
+      return await deps.admittedWork.run(() => turn(req, replay));
+    } catch (error) {
+      if (error instanceof WorkAdmissionClosed) return { status: "refused", reason: error.message };
+      throw error;
+    }
   };
   Object.assign(app, methods);
   return Object.assign(app, createSearchMethods(deps, app, helpers), createResourceSearchMethods(deps, app, helpers));

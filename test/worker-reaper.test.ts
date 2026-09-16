@@ -672,3 +672,62 @@ test("runtime pauses without closing stores and restores worker capacity after a
     await built.runtime.stop();
   }
 });
+
+test("inline turns remain admitted through pause and queued intake survives rollback", async () => {
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
+      backgroundDeploymentId: "controlled-test",
+      workers: 1,
+    }),
+  );
+  let admitted = true;
+  built.runtime.setBackgroundAdmission(() => admitted);
+  const completing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const complete = built.runs.complete.bind(built.runs);
+  let first = true;
+  built.runs.complete = async (...args) => {
+    if (first) {
+      first = false;
+      completing.resolve();
+      await release.promise;
+    }
+    return complete(...args);
+  };
+  const turn = (threadRef: string, async = false) =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef },
+      text: "hello",
+      async,
+    });
+  const running = turn("inline-before-pause");
+  try {
+    await completing.promise;
+    admitted = false;
+    await built.runtime.stopBackgroundClaims();
+    let drained = false;
+    const draining = built.runtime.backgroundDrained().then(() => {
+      drained = true;
+    });
+    await sleep(10);
+    assert.equal(drained, false);
+    assert.equal((await turn("inline-after-pause")).status, "refused");
+    const queued = await turn("queued-after-pause", true);
+    assert.equal(queued.status, "queued");
+    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
+    release.resolve();
+    assert.equal((await running).status, "ok");
+    await draining;
+    admitted = true;
+    built.runtime.startBackground();
+    assert.equal((await built.runs.waitFor(queued.runId!, 5000)).status, "done");
+    assert.equal((await turn("inline-after-resume")).status, "ok");
+  } finally {
+    release.resolve();
+    await running;
+    await built.runtime.stop();
+  }
+});

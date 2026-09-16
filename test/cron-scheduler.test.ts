@@ -1646,3 +1646,63 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
   await oldWork;
   await scheduler.stop();
 });
+
+test("manual cron preparation and detached fire retain admission across pause", async () => {
+  const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
+  const work = createAdmittedWork();
+  const crons = createCronStore();
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "test",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  const entered = Promise.withResolvers<void>();
+  const allowLookup = Promise.withResolvers<void>();
+  const called = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const get = crons.get.bind(crons);
+  crons.get = async (id) => {
+    entered.resolve();
+    await allowLookup.promise;
+    return get(id);
+  };
+  const scheduler = createScheduler({
+    admittedWork: work,
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: () =>
+      work.run(async () => {
+        called.resolve();
+        await finish.promise;
+        return { status: "ok" as const, reply: "done" };
+      }),
+  });
+  const starting = scheduler.runNow(cron.id);
+  await entered.promise;
+  work.pause();
+  await scheduler.stopClaims();
+  let drained = false;
+  const draining = scheduler.drained().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false);
+  assert.deepEqual(await scheduler.runNow(cron.id), { started: false, reason: "unavailable" });
+  allowLookup.resolve();
+  const started = await starting;
+  assert.equal(started.started, true);
+  await called.promise;
+  assert.equal(drained, false);
+  finish.resolve();
+  await draining;
+  await work.drained();
+  work.resume();
+  const resumed = await scheduler.runNow(cron.id);
+  assert.equal(resumed.started, true);
+  if (resumed.started) await resumed.settled;
+  await scheduler.stop();
+});

@@ -1,3 +1,4 @@
+import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
@@ -570,6 +571,7 @@ export interface App {
 }
 
 export interface AppDeps {
+  admittedWork?: AdmittedWork;
   resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;

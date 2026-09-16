@@ -113,3 +113,11 @@ infrastructure proof that every legacy task has retired, including pending tasks
 Do not clear task protection or terminate live turns to finish enrollment.
 If enrollment is abandoned, the legacy heartbeat expiry permits older workers
 to resume their existing claim loop.
+
+Synchronous turns and manually started cron callbacks are admitted work too. A
+paused deployment refuses new synchronous execution while still accepting durable
+asynchronous submissions for the active workers. Accepted turns, scheduled
+callbacks, and their nested work keep running with their existing leases; their
+completion is part of the deployment's drain acknowledgment. Resuming ownership
+restores synchronous admission without restarting or canceling those calls.
+Task protection also counts admitted foreground work while the process drains.

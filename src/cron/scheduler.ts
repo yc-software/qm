@@ -1,3 +1,4 @@
+import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import {
   parseScopeId,
@@ -66,6 +67,7 @@ export interface Scheduler {
 }
 
 export interface SchedulerDeps {
+  admittedWork?: AdmittedWork;
   crons: CronStore;
   deliveries: DeliveryStore;
   idempotency: IdempotencyStore;
@@ -188,6 +190,7 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
 
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
+  const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
 
@@ -359,12 +362,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
-    await leaderLease.hold(TICK_LEASE_KEY, async () => {
-      await fireDue(t, observed);
-      await sweepStranded(t);
-      await gcFires(t);
-      await deps.sweepAsks?.(t).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", errMessage(e)));
-    });
+    await withWork(() =>
+      leaderLease.hold(TICK_LEASE_KEY, async () => {
+        await fireDue(t, observed);
+        await sweepStranded(t);
+        await gcFires(t);
+        await deps.sweepAsks?.(t).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", errMessage(e)));
+      }),
+    );
   };
 
   const makeSweeper = () =>
@@ -474,10 +479,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     oldSweeps.add(work);
     void work.finally(() => oldSweeps.delete(work));
   };
-  const pending = new Set<Promise<void>>();
+  const pending = new Set<Promise<unknown>>();
   async function runQueueTask(work: () => Promise<void>): Promise<void> {
     if (stopped) return;
-    const task = work();
+    const task = withWork(work);
     pending.add(task);
     try {
       await task;
@@ -488,25 +493,40 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   return {
     tick,
     async runNow(cronId) {
-      const cron = await deps.crons.get(cronId);
-      if (!cron || cron.archived || !cron.enabled) return { started: false, reason: "unavailable" };
-      const t = now();
-      const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
-      const begin = await deps.crons.beginFire(
-        cronId,
-        { fireKey, threadRef: cronFireThreadRef(cron.id, fireKey), firedAt: t, status: "running" },
-        { exclusive: true },
-      );
-      if (!begin.begun) {
-        return begin.running
-          ? { started: false, reason: "already_running", running: begin.running }
-          : { started: false, reason: "unavailable" };
+      try {
+        const preparing = withWork(async (): Promise<RunNowResult> => {
+          const cron = await deps.crons.get(cronId);
+          if (!cron || cron.archived || !cron.enabled) return { started: false, reason: "unavailable" };
+          const t = now();
+          const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
+          const begin = await deps.crons.beginFire(
+            cronId,
+            { fireKey, threadRef: cronFireThreadRef(cron.id, fireKey), firedAt: t, status: "running" },
+            { exclusive: true },
+          );
+          if (!begin.begun) {
+            return begin.running
+              ? { started: false, reason: "already_running", running: begin.running }
+              : { started: false, reason: "unavailable" };
+          }
+          const settled = withWork(() => fire(cron, t, fireKey)).then(
+            () => undefined,
+            (e: unknown) => console.error("%s", `[scheduler] manual fire of cron ${cronId} failed:`, errMessage(e)),
+          );
+          pending.add(settled);
+          void settled.finally(() => pending.delete(settled));
+          return { started: true, fireKey, settled };
+        });
+        pending.add(preparing);
+        try {
+          return await preparing;
+        } finally {
+          pending.delete(preparing);
+        }
+      } catch (error) {
+        if (error instanceof WorkAdmissionClosed) return { started: false, reason: "unavailable" };
+        throw error;
       }
-      const settled = fire(cron, t, fireKey).then(
-        () => undefined,
-        (e: unknown) => console.error("%s", `[scheduler] manual fire of cron ${cronId} failed:`, errMessage(e)),
-      );
-      return { started: true, fireKey, settled };
     },
     notifyChanged(cronId) {
       if (!deps.jobQueue) return;
@@ -570,7 +590,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return pausing;
     },
     async drained() {
-      await Promise.all([...oldSweeps, ...pending]);
+      while (oldSweeps.size || pending.size) await Promise.all([...oldSweeps, ...pending]);
     },
     stop() {
       if (stopping) return stopping;
@@ -585,7 +605,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await pausing;
         await Promise.all(sweeps);
         await Promise.all(oldSweeps);
-        await Promise.allSettled(pending);
+        while (pending.size) await Promise.allSettled(pending);
         await deps.jobQueue?.stop();
         stopFailed = false;
       })()

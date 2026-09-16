@@ -1,3 +1,4 @@
+import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { Monitor, TurnRequest, TurnResult } from "../types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
@@ -28,6 +29,7 @@ export interface MonitorPoller {
 }
 
 export interface MonitorPollerDeps {
+  admittedWork?: AdmittedWork;
   monitors: MonitorStore;
   processes: ProcessRegistry;
   sandbox: Sandbox;
@@ -307,7 +309,9 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
-    await leaderLease.hold(TICK_LEASE_KEY, () => pollAll(t, observed));
+    const work = () => leaderLease.hold(TICK_LEASE_KEY, () => pollAll(t, observed));
+    if (deps.admittedWork) await deps.admittedWork.run(work);
+    else await work();
   };
 
   const sweeper = createSweeper(

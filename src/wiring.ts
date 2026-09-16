@@ -1,3 +1,4 @@
+import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
   createBackgroundOwnershipStore,
@@ -310,7 +311,7 @@ import {
 import { createEcsTaskProtection, type TaskProtection } from "./runs/task-protection.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import {
   createMemoryProcessRegistry,
   createPostgresProcessRegistry,
@@ -525,6 +526,14 @@ export function buildApp(
     modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
+  let backgroundAdmission = () => !config.backgroundDeploymentId;
+  let noteAdmitted = () => {};
+  const admittedWork = createAdmittedWork({
+    canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
+    onAdmitted: () => noteAdmitted(),
+  });
+  const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
+    createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   if (config.databaseUrl && !config.connectorSecretKey) {
     throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
   }
@@ -691,7 +700,7 @@ export function buildApp(
       : {}),
   });
   const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
     label: "deployment layer refresh",
   });
   let skillsReady: Promise<void>;
@@ -1865,6 +1874,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    admittedWork,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
@@ -2119,6 +2129,7 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   const scheduler = createScheduler({
+    admittedWork,
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     crons,
     deliveries,
@@ -2169,6 +2180,7 @@ export function buildApp(
   const monitorPoller: MonitorPoller | null =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
+          admittedWork,
           monitors,
           processes,
           sandbox,
@@ -2198,7 +2210,6 @@ export function buildApp(
     directory,
     currentScopeMembers,
   });
-  let backgroundAdmission = () => !config.backgroundDeploymentId;
   const backgroundOwnership = config.backgroundDeploymentId
     ? {
         store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
@@ -2235,10 +2246,12 @@ export function buildApp(
   const drain: DrainController = createDrainController({
     registry: instanceRegistry,
     protection: taskProtection,
-    busy: () => workers.some((w) => w.busy()),
+    busy: () => admittedWork.busy() || workers.some((w) => w.busy()),
   });
+  noteAdmitted = () => drain.noteBusy();
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
+      admittedWork,
       runs,
       sessions,
       orchestrator,
@@ -2302,6 +2315,7 @@ export function buildApp(
   function startBackground(): void {
     if (backgroundRunning) return;
     backgroundRunning = true;
+    admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
     for (const worker of workers) {
@@ -2340,6 +2354,7 @@ export function buildApp(
     else startPeriodic();
   }
   function stopBackground(): Promise<void> {
+    admittedWork.pause();
     backgroundRunning = false;
     const previous = backgroundStopping;
     backgroundGeneration++;
@@ -2373,6 +2388,7 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       flyTunnel?.monitor();
+      drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
@@ -2386,13 +2402,14 @@ export function buildApp(
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all(workers.map((worker) => worker.drained()));
+      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
     },
     async releaseInFlightRuns() {
       await Promise.all(workers.map((w) => w.releaseInFlight()));
     },
     async stop() {
       await stopBackground();
+      await admittedWork.drained();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
         swallowAs("wiring: worker drain failed", undefined),
       );

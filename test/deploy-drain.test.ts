@@ -154,3 +154,41 @@ test("a failing protection endpoint degrades silently and canClaim stays governe
   assert.equal(drain.canClaim(), true);
   drain.stop();
 });
+
+test("admitted foreground work keeps task protection through background pause", async () => {
+  const { createAdmittedWork } = await import("../src/util/admitted-work.ts");
+  const changes: boolean[] = [];
+  let noteBusy = () => {};
+  const work = createAdmittedWork({ onAdmitted: () => noteBusy() });
+  const drain = createDrainController({
+    registry: { beat: async () => false },
+    protection: {
+      set: async (enabled) => {
+        changes.push(enabled);
+      },
+    },
+    busy: work.busy,
+    sweepMs: 5,
+  });
+  noteBusy = () => drain.noteBusy();
+  const finish = Promise.withResolvers<void>();
+  drain.start();
+  const admitted = work.run(() => finish.promise);
+  try {
+    await sleep(15);
+    work.pause();
+    assert.equal(changes.at(-1), true);
+    changes.length = 0;
+    await sleep(15);
+    assert.ok(changes.length > 0 && changes.every(Boolean));
+    finish.resolve();
+    await admitted;
+    await work.drained();
+    await sleep(15);
+    assert.equal(changes.at(-1), false);
+  } finally {
+    finish.resolve();
+    await admitted;
+    await drain.stop();
+  }
+});
