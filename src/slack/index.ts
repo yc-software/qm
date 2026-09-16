@@ -489,6 +489,7 @@ export async function startSlackPlugin(
   return {
     async stop(): Promise<void> {
       if (stopped) {
+        await replaySweeper?.stop();
         await app.stop();
         return;
       }
