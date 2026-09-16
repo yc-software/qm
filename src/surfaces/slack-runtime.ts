@@ -12,9 +12,12 @@ export function createSlackRuntimeReconciler<Config>(opts: {
   let active: { plugin: { stop(): Promise<void> }; version: string; config: Config } | null = null;
   let timer: NodeJS.Timeout | null = null;
   let inFlight: Promise<void> | null = null;
+  let stopping: Promise<void> | null = null;
+  let stopped = false;
 
   const reconcile = async (): Promise<void> => {
     const desired = await opts.load();
+    if (stopped) return;
     if (!desired) {
       if (active) {
         await active.plugin.stop();
@@ -28,11 +31,12 @@ export function createSlackRuntimeReconciler<Config>(opts: {
       await previous.plugin.stop();
       active = null;
     }
+    if (stopped) return;
     try {
       const plugin = await opts.startPlugin(desired.config);
       active = { plugin, version: desired.version, config: desired.config };
     } catch (error) {
-      if (previous) {
+      if (previous && !stopped) {
         try {
           const plugin = await opts.startPlugin(previous.config);
           active = { plugin, version: previous.version, config: previous.config };
@@ -47,6 +51,7 @@ export function createSlackRuntimeReconciler<Config>(opts: {
   };
 
   const run = (): Promise<void> => {
+    if (stopped) return Promise.resolve();
     if (inFlight) return inFlight;
     inFlight = reconcile().finally(() => {
       inFlight = null;
@@ -59,19 +64,28 @@ export function createSlackRuntimeReconciler<Config>(opts: {
 
   return {
     start() {
+      if (timer || stopping || (stopped && active)) return;
+      stopped = false;
       tick();
       timer = setInterval(tick, opts.intervalMs ?? 5_000);
       timer.unref();
     },
     reconcile: run,
-    async stop() {
+    stop(): Promise<void> {
+      if (stopping) return stopping;
+      stopped = true;
       if (timer) clearInterval(timer);
       timer = null;
-      await inFlight;
-      if (active) {
-        await active.plugin.stop();
-        active = null;
-      }
+      stopping = (async () => {
+        await inFlight?.catch(() => {});
+        if (active) {
+          await active.plugin.stop();
+          active = null;
+        }
+      })().finally(() => {
+        stopping = null;
+      });
+      return stopping;
     },
   };
 }
