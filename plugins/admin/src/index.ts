@@ -6,7 +6,11 @@ import { createHash } from "node:crypto";
 import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import {
+  verifyPortalIdentity,
+  PORTAL_IDENTITY_HEADER,
+  type PortalIdentity,
+} from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import {
   CORE_API_URL as CORE,
@@ -79,13 +83,17 @@ function brandedShell(branding: OrgBranding): Shell {
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 
-const cookiePrincipal = (req: IncomingMessage): string | null => {
+const cookieIdentity = (req: IncomingMessage): Pick<PortalIdentity, "p" | "n"> | null => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
-  const principal =
-    token && PORTAL_IDENTITY_SECRET ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now())?.p : null;
-  return principal ?? (!CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY ? cookie(req, "admin") : null);
+  const identity =
+    token && PORTAL_IDENTITY_SECRET ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now()) : null;
+  if (identity) return identity;
+  const principal = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY ? cookie(req, "admin") : null;
+  return principal ? { p: principal } : null;
 };
+
+const cookiePrincipal = (req: IncomingMessage): string | null => cookieIdentity(req)?.p ?? null;
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 function portalIdentityHeader(): Record<string, string> {
@@ -374,11 +382,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
   if (method === "GET" && (pathname === "/api/me" || pathname === "/api/whoami")) {
-    const p = cookiePrincipal(req);
+    const identity = cookieIdentity(req);
+    const p = identity?.p;
     if (!p) return json(res, 401, { error: "signed_out" });
     const who = await coreWhoami(p);
     if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
-    return json(res, 200, { principal: p, org: ORG, ...who });
+    const name = identity.n;
+    const displayName = typeof name === "string" ? name.trim() : "";
+    return json(res, 200, { principal: p, org: ORG, ...who, ...(displayName ? { displayName } : {}) });
   }
   if (method === "POST" && pathname === "/api/logout") {
     res.writeHead(200, {

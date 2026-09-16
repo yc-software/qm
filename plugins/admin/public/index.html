@@ -7224,15 +7224,16 @@
         }
         $("org-tag").textContent = me.data.org;
         orgId = me.data.org;
-        $("who-name").textContent = me.data.principal;
+        const accountLabel = me.data.displayName?.trim() || me.data.principal;
+        $("who-name").textContent = accountLabel;
         if (me.data.isAdmin === false) {
           $("who").classList.remove("hidden");
-          $("na-sub").textContent = me.data.principal;
+          $("na-sub").textContent = accountLabel;
           $("na-org").textContent = me.data.org;
           return showView("notadmin-view", "You don't have admin access.");
         }
         $("who").classList.remove("hidden");
-        showView("app-view", "Signed in as " + me.data.principal);
+        showView("app-view", "Signed in as " + accountLabel);
 
         if (!new URLSearchParams(location.search).get("scope")) scope = "org:" + orgId;
         route();

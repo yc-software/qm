@@ -142,6 +142,29 @@ test("a forwarded portal identity is relayed to core (so an enforcing core can v
   });
 });
 
+test("account endpoints expose the signed display name without changing authorization", async () => {
+  const token = mintPortalIdentity(
+    { p: "U-admin", n: "  Alice Example  ", exp: Date.now() + 60_000 },
+    "admin-whoami-test-secret",
+  );
+  for (const path of ["/api/me", "/api/whoami"]) {
+    const response = await fetch(`${base}${path}`, {
+      headers: { "x-portal-identity": token, cookie: "admin=U-rando" },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      principal: "U-admin",
+      displayName: "Alice Example",
+      org: "acme",
+      isAdmin: true,
+      role: "org_admin",
+      scopeId: "org:acme",
+    });
+    assert.equal(lastActor, "U-admin@acme");
+    assert.equal(lastPortalIdentity, token);
+  }
+});
+
 test("an unsigned or wrongly-signed portal identity is not accepted as an admin principal", async () => {
   const claims = Buffer.from(JSON.stringify({ p: "U-admin", exp: Date.now() + 60_000 })).toString("base64url");
   for (const token of [
@@ -152,6 +175,32 @@ test("an unsigned or wrongly-signed portal identity is not accepted as an admin 
   ]) {
     const r = await fetch(`${base}/api/whoami`, { headers: { "x-portal-identity": token } });
     assert.equal(r.status, 401, `forged identity ${token.slice(0, 24)}… must not authenticate`);
+  }
+});
+
+test("missing, blank, and non-string signed names retain the principal-only account response", async () => {
+  for (const name of [undefined, "", " \t\n ", null, 42, [], {}]) {
+    const token = mintPortalIdentity(
+      JSON.parse(JSON.stringify({ p: "U-rando", n: name, exp: Date.now() + 60_000 })),
+      "admin-whoami-test-secret",
+    );
+    const response = await fetch(`${base}/api/me`, { headers: { "x-portal-identity": token } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { principal: "U-rando", org: "acme", isAdmin: false });
+  }
+});
+
+test("unverified names never decorate an unsigned test-cookie identity", async () => {
+  for (const token of [
+    mintPortalIdentity({ p: "U-admin", n: "Forged Name", exp: Date.now() + 60_000 }, "attacker-key"),
+    mintPortalIdentity({ p: "U-admin", n: "Expired Name", exp: Date.now() - 1_000 }, "admin-whoami-test-secret"),
+  ]) {
+    const response = await fetch(`${base}/api/me`, {
+      headers: { "x-portal-identity": token, cookie: "admin=U-rando" },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { principal: "U-rando", org: "acme", isAdmin: false });
+    assert.equal(lastActor, "U-rando@acme");
   }
 });
 

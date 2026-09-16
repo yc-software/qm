@@ -1,8 +1,41 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+
+test("account labels prefer the display name and retain principal fallback in every signed-in view", async () => {
+  const source = html.match(/async function refresh\(\) \{[\s\S]*?\n {6}\}/)?.[0];
+  assert.ok(source);
+  for (const isAdmin of [true, false]) {
+    for (const displayName of [undefined, null, "", " \t\n ", "  Alice Example  ", "<img src=x onerror=alert(1)>"]) {
+      const elements = new Map<string, { textContent: string; classList: { remove(): void } }>();
+      const views: string[][] = [];
+      const principal = "entra:example-tenant:example-user";
+      const context = {
+        $: (id: string) => {
+          if (!elements.has(id)) elements.set(id, { textContent: "", classList: { remove() {} } });
+          return elements.get(id);
+        },
+        api: async () => ({ ok: true, data: { principal, displayName, isAdmin, org: "acme" } }),
+        showView: (...args: string[]) => views.push(args),
+        loadScopeDirectory() {},
+        route() {},
+        URLSearchParams,
+        location: { search: "" },
+      };
+      await runInNewContext(`${source}; refresh();`, context);
+      const expected = displayName?.trim() || principal;
+      assert.equal(elements.get("who-name")?.textContent, expected);
+      if (isAdmin) assert.deepEqual(views.at(-1), ["app-view", `Signed in as ${expected}`]);
+      else {
+        assert.equal(elements.get("na-sub")?.textContent, expected);
+        assert.equal(views.at(-1)?.[0], "notadmin-view");
+      }
+    }
+  }
+});
 
 function resolvedDisplay(classes: string[]) {
   const styles = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
