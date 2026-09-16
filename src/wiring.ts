@@ -3,6 +3,7 @@ import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunText, type RunStreamEvent } from "./runs/run-stream-events.ts";
+import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
@@ -1777,6 +1778,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),

@@ -1,5 +1,6 @@
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
+import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
 import type {
@@ -327,6 +328,10 @@ export interface App {
   listConversationPins(threadRef: string, reader: string): Promise<SessionPinView[] | null>;
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
   listSessions(principalId: string): Promise<Session[]>;
+  searchResources(
+    principalId: string,
+    query: string,
+  ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
   searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
   search(
     query: string,
@@ -563,6 +568,7 @@ export interface App {
 }
 
 export interface AppDeps {
+  resourceSearch?: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;

@@ -189,7 +189,7 @@ export async function canAdministerCron(
 
 export async function canAdministerWebhook(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  webhook: Webhook,
+  webhook: Pick<Webhook, "ownerScopeId" | "owner">,
   actorId: string,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {

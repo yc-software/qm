@@ -473,7 +473,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return undefined;
   }
 
-  function canManageSkill(skill: Skill, principalId: string): Promise<boolean> {
+  function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {
     return principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId);
   }
 
@@ -511,7 +511,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await effectiveDeploymentPermission(d, principalId)) != null;
   }
 
-  async function principalGitPermission(d: Deployment, principalId: string): Promise<"read" | "write" | null> {
+  async function principalGitPermission(
+    d: Pick<Deployment, "id" | "ownerScopeId" | "createdBy" | "createdInScope">,
+    principalId: string,
+  ): Promise<"read" | "write" | null> {
     if (!principalId) return null;
     const { kind } = parseScopeId(d.ownerScopeId);
     if (await principalManagesArtifactHome(d.ownerScopeId, d.createdBy, principalId)) return "write";

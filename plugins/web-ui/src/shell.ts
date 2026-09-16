@@ -82,7 +82,7 @@ import { openChatSearch } from "./search";
 import { closeBrowse, openBrowse } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { renderDeploys } from "./deploys";
+import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import {
   inboxOpenCount,
@@ -1067,6 +1067,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
+    if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);
     if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
     if (wanted === "inbox" && wantedItem) openInboxItemById(wantedItem);

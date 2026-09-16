@@ -1228,6 +1228,16 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
+    path: "/api/resources/search",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/resources/search?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
+      ),
+  },
+  {
+    method: "GET",
     path: "/api/search",
     handle: async (c) => {
       const { res, url, user } = c;

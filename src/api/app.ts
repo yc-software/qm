@@ -1,3 +1,4 @@
+import { createResourceSearchMethods } from "./app-resource-search.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import { createAppHelpers } from "./app-helpers.ts";
 import { createAmbientHelpers } from "./app-ambient.ts";
@@ -25,5 +26,5 @@ export function createApp(deps: AppDeps): App {
     ...createSkillMethods(deps, helpers),
   };
   Object.assign(app, methods);
-  return Object.assign(app, createSearchMethods(deps, app, helpers));
+  return Object.assign(app, createSearchMethods(deps, app, helpers), createResourceSearchMethods(deps, app, helpers));
 }
