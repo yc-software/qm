@@ -119,7 +119,7 @@ import {
   harnessSupportsEffort,
   harnessSupportsFastMode,
 } from "./model-options";
-import { browserRenderableImage, chipBadge, formatBytes, icon, relTime, waveLoader } from "./ui";
+import { browserRenderableImage, chipBadge, copyText, formatBytes, icon, relTime, waveLoader } from "./ui";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -1663,9 +1663,9 @@ export function createChatSurface(
                 type="button"
                 ${tip("Copy")}
                 aria-label="Copy message"
-                @click=${(e: Event) => void copyMessage(text, e.currentTarget as HTMLButtonElement)}
+                @click=${(e: Event) => void copyText(text, e.currentTarget as HTMLButtonElement)}
               >
-                ${icon(Copy, 13)}
+                ${icon(Copy, 13)}${icon(Check, 13)}
               </button>`
             : nothing
         }
@@ -1731,21 +1731,6 @@ export function createChatSurface(
     } catch {
       return "";
     }
-  }
-
-  async function copyMessage(text: string, btn: HTMLButtonElement): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      return;
-    }
-    btn.classList.add("copied");
-    btn.replaceChildren(icon(Check, 13));
-    setTimeout(() => {
-      if (!btn.isConnected) return;
-      btn.classList.remove("copied");
-      btn.replaceChildren(icon(Copy, 13));
-    }, 1200);
   }
 
   function withReturnTo(url: string): string {

@@ -31,7 +31,8 @@ test("brand name follows the server-injected deployment label", () => {
   }
 });
 
-test("rapid copy feedback restores the original button markup once", async () => {
+test("rapid copy feedback toggles a class and never rewrites the button markup", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
@@ -44,9 +45,12 @@ test("rapid copy feedback restores the original button markup once", async () =>
     const original = button.innerHTML;
     await copyText("first", button);
     await copyText("second", button);
-    assert.equal(button.textContent, "Copied");
-    await new Promise((resolve) => setTimeout(resolve, 1250));
+    assert.ok(button.classList.contains("copied"));
     assert.equal(button.innerHTML, original);
+    t.mock.timers.tick(1199);
+    assert.ok(button.classList.contains("copied"), "the second copy restarts the feedback window");
+    t.mock.timers.tick(1);
+    assert.ok(!button.classList.contains("copied"));
   } finally {
     if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
     else delete (globalThis as { navigator?: Navigator }).navigator;

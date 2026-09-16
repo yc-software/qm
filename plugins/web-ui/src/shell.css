@@ -1799,6 +1799,10 @@ button.subagent-chip:hover {
 .msg-copy.copied {
   color: var(--foreground);
 }
+.msg-copy.copied > svg:first-of-type,
+.msg-copy:not(.copied) > svg:nth-of-type(2) {
+  display: none;
+}
 @media (prefers-reduced-motion: reduce) {
   .message-meta {
     transition: none;
@@ -4377,6 +4381,12 @@ button.subagent-chip:hover {
 }
 .btn:hover {
   background: var(--secondary);
+}
+.btn.copied > * {
+  display: none;
+}
+.btn.copied::after {
+  content: "Copied";
 }
 .btn.primary {
   background: var(--cta);

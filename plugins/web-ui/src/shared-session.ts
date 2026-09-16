@@ -1,7 +1,7 @@
 import "./shell.css";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { html, render } from "lit";
-import { Lock, ArrowUpRight, Copy, File, FileImage } from "lucide";
+import { Lock, ArrowUpRight, Check, Copy, File, FileImage } from "lucide";
 import { createTranscriptViewport } from "./transcript-viewport";
 import { decorateTextCodeBlocks } from "./text-code";
 import { markdown } from "./message-markdown";
@@ -74,10 +74,10 @@ render(
                               : ""
                           }
                         </div>
-                        ${message.role === "assistant" ? html`<div class="message-meta"><button class="msg-copy" aria-label="Copy message" title="Copy" @click=${(e: Event) => void copyText(message.text, e.currentTarget as HTMLButtonElement)}>${icon(Copy, 13)}</button></div>` : ""}
+                        ${message.role === "assistant" ? html`<div class="message-meta"><button class="msg-copy" aria-label="Copy message" title="Copy" @click=${(e: Event) => void copyText(message.text, e.currentTarget as HTMLButtonElement)}>${icon(Copy, 13)}${icon(Check, 13)}</button></div>` : ""}
                         ${message.role === "user" ? html`<button class="pin-toggle" type="button" hidden aria-expanded="false">Show more</button>` : ""}
                       </div>
-                      ${message.role === "user" ? html`<div class="message-meta"><button class="msg-copy" aria-label="Copy message" title="Copy" @click=${(e: Event) => void copyText(message.text, e.currentTarget as HTMLButtonElement)}>${icon(Copy, 13)}</button></div>` : ""}
+                      ${message.role === "user" ? html`<div class="message-meta"><button class="msg-copy" aria-label="Copy message" title="Copy" @click=${(e: Event) => void copyText(message.text, e.currentTarget as HTMLButtonElement)}>${icon(Copy, 13)}${icon(Check, 13)}</button></div>` : ""}
                     </article>
                   `,
                 )

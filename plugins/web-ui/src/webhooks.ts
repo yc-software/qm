@@ -202,7 +202,7 @@ function copyRow(text: string) {
     <div class="copyrow">
       <code class="mono">${text}</code>
       <button class="btn" @click=${(e: Event) => void copyText(text, e.currentTarget as HTMLButtonElement)}>
-        Copy
+        <span>Copy</span>
       </button>
     </div>
   `;
