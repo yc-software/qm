@@ -68,7 +68,8 @@ try {
   }
   const partial = summary.sessions >= maxSessions || values.after !== "";
   report(partial ? "partial" : "complete");
-  process.exitCode = summary.busy || (!values.apply && summary.changed) ? 1 : partial ? 2 : 0;
+  process.exitCode = partial ? 2 : 0;
+  if (summary.busy || (!values.apply && summary.changed)) process.exitCode = 1;
 } finally {
   await client.end();
 }
