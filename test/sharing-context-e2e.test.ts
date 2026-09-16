@@ -414,15 +414,18 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.match(prompt, /U2[^\n]*npm[^\n]*no grant for this conversation/);
   assert.ok(!prompt.includes("npm_U1"));
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
-  const probe = `printf '%s|%s|%s|%s|%s' "\${NPM_TOKEN-unset}" "\${VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM-unset}" "$(cat ~/.custom-cli/auth 2>/dev/null || printf absent)" "\${AGENT_API_TOKEN-unset}" "$(test -f room-only.txt && printf room || printf isolated)"`;
+  const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   assert.equal(await b.turn(`!owner ${probe}`, true), "npm_U1|gmail_U1|file_U1|unset|isolated");
   assert.equal(await b.turn(`!owner ${probe}`, true, "U2"), "npm_U2|gmail_U2|file_U2|unset|isolated");
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   assert.deepEqual(await b.keychain.grantsForScope("channel:C1"), []);
   assert.ok((await b.auditLog.events()).some((event) => event.action === "keychain.open_speaker_use"));
   // No speaker credential may persist through an owner-computer teardown.
-  assert.equal(await b.turn("!owner printf private > retained.txt", true), "(exit 0)");
-  assert.equal(await b.turn("!owner test -f retained.txt && echo leaked || echo clean", true), "clean");
+  assert.equal(await b.turn(`!owner python3 -c 'open("retained.txt","w").write("private")'`, true), "(exit 0)");
+  assert.equal(
+    await b.turn(`!owner python3 -c 'import os; print("leaked" if os.path.exists("retained.txt") else "clean")'`, true),
+    "clean",
+  );
   await b.config.setSharingPosture("personal:U1", "isolated");
   await assert.rejects(b.turn("!owner true", true), /owner-auth box is not available/);
   await b.config.setSharingPosture("personal:U1", "open");
