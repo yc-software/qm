@@ -27,8 +27,14 @@ test("editable background activity is rendered inside the composer surface", () 
 });
 
 test("composer status rows share the responsive input font size", () => {
-  const sizes = [...css.matchAll(/--composer-font-size: (\d+)px/g)].map((match) => Number(match[1]));
-  assert.deepEqual(sizes, [15, 16]);
+  const sizes = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap((rule) =>
+    [...rule[2].matchAll(/--composer-font-size: (\d+)px/g)].map((match) => [rule[1].trim(), Number(match[1])]),
+  );
+  assert.deepEqual(sizes, [
+    [".composer-wrap", 15],
+    [".composer-wrap", 16],
+    ["body.app-edit-embed .composer-wrap", 13],
+  ]);
   for (const selector of [".live-work-line", ".bg-activity-strip", ".composer-input"]) {
     const blocks = css.matchAll(new RegExp(`${selector.replaceAll(".", "\\.")} \\{([^}]+)\\}`, "g"));
     const declarations = [...blocks].flatMap((match) => [...match[1].matchAll(/font-size: ([^;]+);/g)]);

@@ -1,13 +1,29 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import test from "node:test";
 
 const split = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
-test("a pane renders one header: the chat's own session topbar stays out of panes", () => {
-  assert.match(chat, /\$\{glanceTier \|\| ctx\.pane \? nothing : sessionTopbar\(\)\}/);
+test("only full standalone chats render their own session topbar", () => {
+  const expression = chat.match(/\$\{([^{}]+\? nothing : sessionTopbar\(\))\}/)?.[1];
+  assert.ok(expression);
+  for (const pane of [false, true]) {
+    for (const editingApp of [null, "my-app"]) {
+      for (const glanceTier of [null, "card", "strip"]) {
+        const shown = runInNewContext(expression, {
+          ctx: { pane },
+          editingApp,
+          glanceTier,
+          nothing: false,
+          sessionTopbar: () => true,
+        });
+        assert.equal(shown, !pane && !editingApp && !glanceTier);
+      }
+    }
+  }
 });
 
 test("the pane tab carries the scope / title breadcrumb", () => {
@@ -49,6 +65,20 @@ test("inline pane chrome is exactly tools, split, full screen, close", () => {
 });
 
 test("a topbar-less pane keeps the two-row grid: transcript bounded, composer at the bottom", () => {
-  assert.match(chat, /class="custom-chat-shell \$\{ctx\.pane \? "in-pane" : ""\}/);
+  const classes = chat.match(/class="(custom-chat-shell [\s\S]*?)"\s+@dragenter/)?.[1];
+  assert.ok(classes);
+  for (const pane of [false, true]) {
+    for (const editingApp of [null, "my-app"]) {
+      const rendered: string[] = runInNewContext(`\`${classes}\``, {
+        ctx: { pane, composer: { state: { dragging: false } } },
+        editingApp,
+        emptyChat: false,
+        glanceTier: null,
+      }).split(/\s+/);
+      assert.equal(rendered.includes("in-pane"), pane);
+      assert.equal(rendered.includes("app-edit-chat"), Boolean(editingApp));
+    }
+  }
   assert.match(css, /\.custom-chat-shell\.in-pane \{\s*grid-template-rows: minmax\(0, 1fr\) auto;\s*\}/);
+  assert.match(css, /\.app-edit-chat \{\s*grid-template-rows: minmax\(0, 1fr\) auto;\s*\}/);
 });

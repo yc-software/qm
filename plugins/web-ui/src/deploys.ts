@@ -52,6 +52,7 @@ let deployQuery = "";
 let deployTab: DeploymentTab = "yours";
 let deployPageHost: HTMLElement | null = null;
 let activeDeploy: DeploymentView | null = null;
+let visibleVersionCount = 10;
 let editingDeploy: { id: string; field: "displayName" | "name" } | null = null;
 let deployDraft = "";
 let deploySaving = false;
@@ -235,6 +236,7 @@ export function openDeployById(id: string): void {
 }
 
 async function openDeploy(d: DeploymentView): Promise<void> {
+  visibleVersionCount = 10;
   editingDeploy = null;
   deployDraft = "";
   deployNotices = withoutDeploymentDetailNotice(deployNotices);
@@ -255,7 +257,7 @@ async function openDeploy(d: DeploymentView): Promise<void> {
 
 function drawDeployDetail(d: DeploymentView, loading = false): void {
   if (appState.currentView !== "deploys" || !appState.mainEl || activeDeploy?.id !== d.id) return;
-  const host = document.createElement("div");
+  const host = appState.mainEl.querySelector<HTMLElement>(".deploy-detail-pane") ?? document.createElement("div");
   host.className = "resource-pane deploy-detail-pane";
   const versions = [...(d.versions ?? [])].sort((a, b) => b.version - a.version);
   const running = d.status === "running";
@@ -333,7 +335,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           ${
             versions.length
               ? html`<div class="deploy-version-list">
-                  ${versions.map(
+                  ${versions.slice(0, visibleVersionCount).map(
                     (version) => html`
                       <div class="deploy-version-row">
                         <div>
@@ -349,13 +351,27 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                 </div>`
               : html`<div class="empty compact">No version history available.</div>`
           }
+          ${
+            versions.length > visibleVersionCount
+              ? html`<button
+                  class="btn"
+                  type="button"
+                  @click=${() => {
+                    visibleVersionCount += 10;
+                    drawDeployDetail(d);
+                  }}
+                >
+                  Show older versions
+                </button>`
+              : nothing
+          }
         </section>
       </div>
       ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
     `,
     host,
   );
-  appState.mainEl.replaceChildren(host);
+  if (host.parentElement !== appState.mainEl) appState.mainEl.replaceChildren(host);
 }
 
 function returnToDeploysList(): void {

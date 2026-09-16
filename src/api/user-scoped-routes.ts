@@ -100,6 +100,7 @@ const USER_SCOPED: Rule[] = [
   pat("POST", "/v1/deployments/:id/restore"),
   pat("POST", "/v1/deployments/:id/rollback"),
   pat("POST", "/v1/deployments/:id/redeploy"),
+  pat("GET", "/v1/deployments/:id/share"),
   pat("POST", "/v1/deployments/:id/share"),
   pat("GET", "/v1/approvals/:id"),
   pat("GET", "/v1/approvals/pending"),

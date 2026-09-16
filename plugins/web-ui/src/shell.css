@@ -11843,7 +11843,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  box-shadow: var(--chat-surface-shadow);
   animation: none;
 }
 .deployment-permissions-dialog .permission-control .menu-popover::after {

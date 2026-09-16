@@ -12,6 +12,8 @@ The agent identified the app from server-supplied conversation context, then pub
 
 ![Compact app management](manage.png)
 
+Long histories show the latest ten versions initially. “Show older versions” reveals ten more per click; tests exercise up to 150 versions.
+
 ## Permissions
 
 ![Owner permissions dialog](permissions.png)

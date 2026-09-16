@@ -434,7 +434,7 @@ const FAMILIES: AgentApiFamily[] = [
       (m === "GET" && /^\/v1\/deployments\/[^/]+$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+\/logs$/.test(p)) ||
-      (m === "GET" && /^\/v1\/deployments\/[^/]+\/git-url$/.test(p)) ||
+      (m === "GET" && /^\/v1\/deployments\/[^/]+\/(git-url|share)$/.test(p)) ||
       (m === "POST" && /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on)$/.test(p)),
     guidance:
       'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`publish`) is reachable only by its owner plus whoever the owner shares it with. To widen or narrow that — "share it with everyone" or "share it with <teammate>" — POST /v1/deployments/:id/share with `scope:"org"` or `recipient:"<name>"`; no redeploy. To rename or take down an app, use name / display-name / archive. POST /v1/deployments/:id/always-on with `{alwaysOn:true|false}` keeps an app permanently warm (no idle cold starts) or returns it to sleep-when-idle. Anyone who manages the app can change these: its owner from any conversation, a current member of the channel/team it was published from, or someone granted "manage" access.',
@@ -468,6 +468,11 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/deployments/:id/git-url",
         summary:
           "get an authed git remote URL for a deployment you can reach (clone its source; push a new version if you have write access) — returns {url, permission}",
+      },
+      {
+        method: "GET",
+        path: "/v1/deployments/:id/share",
+        summary: "list access grants for an app you own (:id is its name or id) — returns {grantees}; owner-only",
       },
       {
         method: "POST",

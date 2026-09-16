@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { stripTypeScriptTypes } from "node:module";
 import { createContext, runInContext } from "node:vm";
+import { JSDOM } from "jsdom";
 import { deploymentListRefreshCanRedraw, type DeploymentView } from "../src/deploy-view.ts";
 import {
   withDeploymentListNotice,
@@ -121,6 +122,7 @@ function renderHarness(requestedId: string | null = null) {
     deployLoading: false,
     deployNotices: { list: "", detail: null },
     activeDeploy: null,
+    visibleVersionCount: 70,
     editingDeploy: null,
     deployDraft: "",
     deployRefreshSeq: 0,
@@ -170,6 +172,7 @@ test("the initial list refresh leaves an opened detail and its loading state unt
   const rendering = h.render();
   await new Promise((resolve) => setImmediate(resolve));
   const opening = h.open();
+  assert.equal(h.context.visibleVersionCount, 10);
   assert.equal(h.requests[0]!.path, "/api/deployments");
   assert.equal(h.requests[1]!.path, "/api/deployments/opened-app");
   h.requests[0]!.resolve({ deployments: [] });
@@ -216,4 +219,112 @@ test("the empty Yours tab does not imply the account has no deployments", () => 
   assert.doesNotMatch(source, /No deployments yet\./);
   const messages = readFileSync(new URL("../src/deploy-view.ts", import.meta.url), "utf8");
   assert.doesNotMatch(messages, /You have no apps\./);
+});
+
+for (const count of [0, 7, 23, 150]) {
+  test(`version history reveals ${count} versions in newest-first batches of ten`, () => {
+    const deployment = {
+      id: "history-app",
+      currentVersion: count,
+      appliedVersion: 1,
+      versions: Array.from({ length: count }, (_, index) => ({ version: index + 1, createdAt: 1000 })),
+    };
+    const handlers: Array<() => void> = [];
+    const redraws: unknown[] = [];
+    const context = createContext({
+      d: deployment,
+      nothing: "",
+      drawDeployDetail: (value: unknown) => redraws.push(value),
+      html(strings: TemplateStringsArray, ...values: unknown[]) {
+        const text = (value: unknown): string => {
+          if (typeof value === "function") {
+            handlers.push(value as () => void);
+            return "";
+          }
+          return Array.isArray(value) ? value.map(text).join("") : String(value);
+        };
+        return strings.reduce(
+          (result, part, index) => result + part + (index < values.length ? text(values[index]) : ""),
+          "",
+        );
+      },
+    });
+    const initialCount = source.match(/let visibleVersionCount = \d+;/)?.[0];
+    const orderedVersions = bodyOf("drawDeployDetail").match(/const versions = [^;]+;/)?.[0];
+    const section = source.match(
+      /<section class="deploy-detail-section">\s*<h3>Version history<\/h3>[\s\S]*?<\/section>/,
+    )?.[0];
+    assert.ok(initialCount && orderedVersions && section);
+    runInContext(stripTypeScriptTypes(initialCount + orderedVersions), context);
+    let shown = 10;
+    for (;;) {
+      handlers.length = 0;
+      const rendered = runInContext(stripTypeScriptTypes(`html\`${section}\``), context) as string;
+      const numbers = [...rendered.matchAll(/<strong>v(\d+)<\/strong/g)].map((match) => Number(match[1]));
+      assert.deepEqual(
+        numbers,
+        Array.from({ length: Math.min(shown, count) }, (_, index) => count - index),
+      );
+      assert.equal(rendered.includes("No version history available."), count === 0);
+      assert.equal(rendered.includes('class="badge ok">Live'), count > 0 && shown >= count);
+      assert.equal(rendered.includes('class="badge">Latest'), count > 1);
+      assert.equal(rendered.includes("Show older versions"), shown < count);
+      assert.equal(handlers.length, shown < count ? 1 : 0);
+      if (shown >= count) break;
+      handlers[0]!();
+      assert.equal(redraws.at(-1), deployment);
+      shown += 10;
+    }
+    assert.deepEqual(
+      deployment.versions.map((version) => version.version),
+      Array.from({ length: count }, (_, index) => index + 1),
+    );
+  });
+}
+
+test("detail redraws reuse the scroll container and retain focus", () => {
+  const dom = new JSDOM("<main></main>");
+  try {
+    const mainEl = dom.window.document.querySelector("main")!;
+    const deployment = { id: "app" };
+    const context = createContext({
+      appState: { currentView: "deploys", mainEl },
+      document: dom.window.document,
+      d: deployment,
+      activeDeploy: deployment,
+      editingDeploy: null,
+      deployNotices: {},
+      archiveCandidate: null,
+      deployToast: null,
+      visibleVersionCount: 10,
+      nothing: "",
+      html: () => "",
+      render(_template: unknown, host: HTMLElement) {
+        if (!host.firstChild) host.append(dom.window.document.createElement("button"));
+      },
+      deploymentContextScope: () => null,
+      listBackLink: () => "",
+      returnToDeploysList() {},
+      deploymentTitle: () => "App",
+      statusClass: () => "",
+      statusLabel: () => "",
+      deploymentSlug: () => "app",
+      deploymentLatestAt: () => null,
+      ownerLabel: () => "",
+      permissionBadge: () => "",
+      canManage: () => false,
+    });
+    runInContext(stripTypeScriptTypes(bodyOf("drawDeployDetail")), context);
+    runInContext("drawDeployDetail(d)", context);
+    const host = mainEl.firstElementChild as HTMLElement;
+    const button = host.querySelector("button")!;
+    host.scrollTop = 450;
+    button.focus();
+    runInContext("drawDeployDetail(d)", context);
+    assert.equal(mainEl.firstElementChild, host);
+    assert.equal(host.scrollTop, 450);
+    assert.equal(dom.window.document.activeElement, button);
+  } finally {
+    dom.window.close();
+  }
 });
