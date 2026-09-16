@@ -1309,3 +1309,28 @@ test("screening defaults off and model screening requires an explicit backend", 
     );
   }
 });
+
+test("AWS ownership control is opt-in and reserves deployment identity allocation", () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    imageLabel: "release",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
+  };
+  withConfig({ target: "aws", aws }, ({ path }) =>
+    assert.equal(loadConfigAt(path).config.aws!.backgroundWorkControl, undefined),
+  );
+  withConfig({ target: "aws", aws: { ...aws, backgroundWorkControl: true } }, ({ path }) =>
+    assert.equal(loadConfigAt(path).config.aws!.backgroundWorkControl, true),
+  );
+  withConfig({ target: "aws", aws: { ...aws, backgroundWorkControl: "true" } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /backgroundWorkControl/),
+  );
+  withConfig({ target: "aws", aws, env: { core: { BACKGROUND_DEPLOYMENT_ID: "reused" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /allocated/),
+  );
+});

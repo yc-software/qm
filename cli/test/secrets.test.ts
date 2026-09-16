@@ -419,3 +419,36 @@ test("shared Fly publishing requires private peers only when selected", () => {
     }
   }
 });
+
+test("deployment control credentials are conditional and cannot be delivered to plugins or sandboxes", () => {
+  assert.equal(
+    computedSecrets(makeConfig()).some((secret) => secret.name === "DEPLOYMENT_CONTROL_SECRET"),
+    false,
+  );
+  const aws = { backgroundWorkControl: true } as NonNullable<QmConfig["aws"]>;
+  const config = makeConfig({ target: "aws", aws });
+  const control = secretByName(config, "DEPLOYMENT_CONTROL_SECRET");
+  assert.equal(control.required, true);
+  assert.deepEqual(control.services, ["core"]);
+  assert.throws(
+    () =>
+      computedSecrets({
+        ...config,
+        plugins: [{ name: "external", secrets: [{ name: "DEPLOYMENT_CONTROL_SECRET" }] }],
+      }),
+    /only to core/,
+  );
+  assert.throws(
+    () => computedSecrets({ ...config, sandbox: { app: "sandbox", secretEnv: ["DEPLOYMENT_CONTROL_SECRET"] } }),
+    /only to core/,
+  );
+  assert.throws(
+    () =>
+      computedSecrets({
+        ...config,
+        services: ["core", "portal"],
+        secretEnv: { portal: { TOKEN: "DEPLOYMENT_CONTROL_SECRET" } },
+      }),
+    /only to core/,
+  );
+});

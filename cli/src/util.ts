@@ -275,7 +275,10 @@ export function isInvalidSecret(name: string, value: string | undefined): boolea
     );
   }
   return (
-    (name === "CONNECTOR_SECRET_KEY" || name === "CORE_SIGNING_SECRET" || name === "SKILL_SIGNING_SECRET") &&
+    (name === "CONNECTOR_SECRET_KEY" ||
+      name === "CORE_SIGNING_SECRET" ||
+      name === "SKILL_SIGNING_SECRET" ||
+      name === "DEPLOYMENT_CONTROL_SECRET") &&
     candidate.length < 32
   );
 }

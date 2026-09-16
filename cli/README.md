@@ -77,6 +77,37 @@ configuration only, so it prints that timestamp as the matching data restore
 point (`aws rds restore-db-instance-to-point-in-time`);
 `aws.predeployDbSnapshot: false` opts out.
 
+AWS deployments can opt into durable background ownership with
+`aws.backgroundWorkControl: true`. Deploy protocol-capable core images to every
+participating stack before bootstrapping ownership. The CLI allocates a unique
+`BACKGROUND_DEPLOYMENT_ID` for each replacement core cohort and records it in the
+deployment manifest. A no-op deployment and automatic ECS task replacement keep
+that identity; an explicit core restart allocates a new one. Pending preparation
+is persisted before ECS changes, and an ambiguous previous deployment must be
+reconciled before another identity can be allocated.
+
+Control requests require both `CORE_SIGNING_SECRET` and a distinct
+`DEPLOYMENT_CONTROL_SECRET` of at least 32 characters. The control secret is
+restricted to core. Configuring an identity preserves the legacy background flag
+until explicit bootstrap verifies every participating task. The exported
+`awsBootstrapBackgroundWork` adapter accepts all peer configurations and an exact
+desired deployment identity, or `null` to start paused. It refuses missing cohorts
+and inconsistent durable membership.
+
+Once bootstrapped, background mode changes use generation-checked ownership
+requests without restarting ECS tasks. Activation waits for prior owners to stop
+claiming and every expected task to finish activation. Pausing stops new claims;
+in-flight turns can continue draining. Replacing or rolling back the active core
+cohort requires an explicit pause or handover first. Unresponsive members are never
+assumed dead: `awsRetireBackgroundWorkMembers` requires exact instance, task ARN,
+and generation identities plus ECS evidence that each task stopped.
+
+Core secret uploads defer activation to a subsequent staged `up --restart core`.
+The generic upload path refuses changes to either control credential while a
+controlled cohort is recorded, because replacing credentials before coordinating
+all running processes would break ownership control. Legacy AWS deployments keep
+the task replacement path when ownership control is not configured.
+
 Batch operators can set `QM_DEPLOY_PROGRESS_FILE` to a new absolute file path and
 `QM_DEPLOY_PROGRESS_TOKEN` to a unique attempt identifier for candidate `up --yes`.
 After all forward service updates have been submitted, the CLI atomically creates
