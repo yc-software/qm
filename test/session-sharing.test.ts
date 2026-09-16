@@ -2,13 +2,14 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { sharedMessages, type SessionShare } from "../src/sessions/session-share.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
@@ -38,6 +39,112 @@ const entries = [
   entry("tool_result", { callId: "post", ok: true, secret: "POST_RESULT_SECRET" }, 10),
   entry("assistant", { text: "UNPUBLISHED_SECRET" }, 11),
 ];
+
+const original = [
+  ...entries,
+  entry("user", { text: "File", attachments: [{ artifactId: "f1", secret: "SECRET" }] }, 12),
+];
+
+const org = scopeId("org", "default-org");
+const alice = scopeId("personal", "alice");
+
+async function sharingHarness(t: TestContext) {
+  const bytes = createMemoryDurableByteStore();
+  const h = {
+    visible: original,
+    accessible: true,
+    fileData: "<script>attachment contents</script>" as string | null,
+    liveSessionScope: alice as string | null,
+    puts: 0,
+    base: "",
+    store: createMemoryMap<SessionShare>(),
+    identity: createIdentityService(),
+    deliveries: createDeliveryStore(),
+    config: createMemoryConfigStore("default-org"),
+    create: (audience = "internal", principalId = "alice") =>
+      fetch(`${h.base}/v1/sessions/s1/share`, { method: "POST", body: JSON.stringify({ audience, principalId }) }),
+    read: (token: string, audience = "internal", tail = "", viewer = "bob") =>
+      fetch(
+        `${h.base}/v1/${audience === "external" ? "public-shares" : "shared-sessions"}/${token}${tail}?viewer=${viewer}&inline=1`,
+      ),
+    audiences: (viewer = "alice") => fetch(`${h.base}/v1/sessions/s1/share?viewer=${viewer}`),
+  };
+  const countedBytes = {
+    ...bytes,
+    put: async (...args: Parameters<typeof bytes.put>) => {
+      h.puts++;
+      return bytes.put(...args);
+    },
+  };
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url!, "http://localhost");
+    const parts = url.pathname.split("/");
+    const method = req.method!;
+    const route = sessionSharingRoutes.find(
+      (route) =>
+        "method" in route &&
+        route.method === method &&
+        "path" in route &&
+        route.path.split("/")[2] === parts[2] &&
+        route.path.split("/").length === parts.length,
+    );
+    if (!route) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    await route.handle({
+      req,
+      res,
+      method,
+      url,
+      pathname: url.pathname,
+      params: { id: "s1", token: parts[3], fileId: parts[5] },
+      body: body ? JSON.parse(body) : null,
+      actor: null,
+      deps: {
+        identity: h.identity,
+        sessionShares: h.store,
+        sessionShareBytes: countedBytes,
+        deliveries: h.deliveries,
+        config: h.config,
+        sessions: { get: async () => (h.liveSessionScope ? { id: "s1", scopeId: h.liveSessionScope } : null) },
+      },
+      app: {
+        canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
+          h.accessible && user === "alice" && h.visible.some((entry) => entry.seq === bounds.minSeq),
+        getSessionForViewer: async (_id: string, user: string) =>
+          h.accessible && user === "alice"
+            ? { session: { id: "s1", threadRef: "web:alice:s1", scopeId: alice }, entries: h.visible }
+            : null,
+        openFileForViewer: async (id: string, user: string) =>
+          id === "f1" && user === "alice" && h.fileData !== null
+            ? {
+                name: "example.html",
+                mimetype: "text/html",
+                sizeBytes: Buffer.byteLength(h.fileData),
+                stream: Readable.from(h.fileData),
+              }
+            : null,
+      },
+    } as unknown as ApiCtx);
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  t.after(() => server.close());
+  h.base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  return h;
+}
+
+async function shareToken(response: Promise<Response>): Promise<string> {
+  return ((await (await response).json()) as { share: { token: string } }).share.token;
+}
+
+async function firstFileId(response: Promise<Response>): Promise<string> {
+  const data = (await (await response).json()) as { messages: Array<{ attachments?: Array<{ id: string }> }> };
+  return data.messages.at(-1)!.attachments![0]!.id;
+}
 
 test("shared transcript allowlists visible message fields and published replies", () => {
   assert.deepEqual(sharedMessages(entries), [
@@ -77,90 +184,11 @@ test("work phases and approval decisions remain outside the shared message snaps
 });
 
 test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
-  const store = createMemoryMap<SessionShare>();
-  const bytes = createMemoryDurableByteStore();
-  let puts = 0;
-  const countedBytes = {
-    ...bytes,
-    put: async (...args: Parameters<typeof bytes.put>) => {
-      puts++;
-      return bytes.put(...args);
-    },
-  };
-  const identity = createIdentityService();
-  const deliveries = createDeliveryStore();
-  const original = [
-    ...entries,
-    entry("user", { text: "File", attachments: [{ artifactId: "f1", secret: "SECRET" }] }, 12),
-  ];
-  let visible = original;
-  let accessible = true;
-  let fileData: string | null = "<script>attachment contents</script>";
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url!, "http://localhost");
-    const parts = url.pathname.split("/");
-    const method = req.method!;
-    const route = sessionSharingRoutes.find(
-      (route) =>
-        "method" in route &&
-        route.method === method &&
-        "path" in route &&
-        route.path.split("/")[2] === parts[2] &&
-        route.path.split("/").length === parts.length,
-    );
-    if (!route) {
-      res.writeHead(404);
-      res.end();
-      return;
-    }
-    let body = "";
-    for await (const chunk of req) body += chunk;
-    await route.handle({
-      req,
-      res,
-      method,
-      url,
-      pathname: url.pathname,
-      params: { id: "s1", token: parts[3], fileId: parts[5] },
-      body: body ? JSON.parse(body) : null,
-      actor: null,
-      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
-      app: {
-        canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
-          accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
-        getSessionForViewer: async (_id: string, user: string) =>
-          accessible && user === "alice"
-            ? {
-                session: { id: "s1", threadRef: "web:alice:s1", scopeId: scopeId("personal", "alice") },
-                entries: visible,
-              }
-            : null,
-        openFileForViewer: async (id: string, user: string) =>
-          id === "f1" && user === "alice" && fileData !== null
-            ? {
-                name: "example.html",
-                mimetype: "text/html",
-                sizeBytes: Buffer.byteLength(fileData),
-                stream: Readable.from(fileData),
-              }
-            : null,
-      },
-    } as unknown as ApiCtx);
-  });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  t.after(() => server.close());
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const create = (audience = "internal", principalId = "alice") =>
-    fetch(`${base}/v1/sessions/s1/share`, { method: "POST", body: JSON.stringify({ audience, principalId }) });
-  const read = (token: string, audience = "internal", tail = "", viewer = "bob") =>
-    fetch(
-      `${base}/v1/${audience === "external" ? "public-shares" : "shared-sessions"}/${token}${tail}?viewer=${viewer}&inline=1`,
-    );
-  assert.equal((await create("invalid")).status, 400);
-  assert.equal((await create("internal", "bob")).status, 404);
-  const first = (await (await create()).json()) as { share: { token: string } };
-  const token = first.share.token;
-  const response = await read(token);
+  const h = await sharingHarness(t);
+  assert.equal((await h.create("invalid")).status, 400);
+  assert.equal((await h.create("internal", "bob")).status, 404);
+  const token = await shareToken(h.create());
+  const response = await h.read(token);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
   const text = await response.text();
@@ -170,26 +198,26 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   const data = JSON.parse(text);
   const fileId = data.messages.at(-1).attachments[0].id;
   assert.notEqual(fileId, "f1");
-  assert.equal((await read(token, "external")).status, 404);
-  assert.equal((await read(token, "internal", "", "")).status, 403);
-  visible = [...original, entry("user", { text: "New message" }, 13)];
-  const second = (await (await create()).json()) as { share: { token: string } };
-  assert.notEqual(second.share.token, token);
-  assert.equal((await (await read(token)).text()).includes("New message"), false);
-  assert.equal((await (await read(second.share.token)).text()).includes("New message"), true);
-  const external = (await (await create("external")).json()) as { share: { token: string } };
-  assert.equal((await read(external.share.token, "external", "", "")).status, 200);
-  assert.equal((await read(external.share.token)).status, 404);
-  assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
-  visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];
-  const delivery = await deliveries.enqueue({
+  assert.equal((await h.read(token, "external")).status, 404);
+  assert.equal((await h.read(token, "internal", "", "")).status, 403);
+  h.visible = [...original, entry("user", { text: "New message" }, 13)];
+  const second = await shareToken(h.create());
+  assert.notEqual(second, token);
+  assert.equal((await (await h.read(token)).text()).includes("New message"), false);
+  assert.equal((await (await h.read(second)).text()).includes("New message"), true);
+  const external = await shareToken(h.create("external"));
+  assert.equal((await h.read(external, "external", "", "")).status, 200);
+  assert.equal((await h.read(external)).status, 404);
+  assert.equal((await h.read(second, "internal", `/files/${fileId}`)).status, 404);
+  h.visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];
+  const delivery = await h.deliveries.enqueue({
     destination: { type: "web", target: "web:alice:s1" },
     text: "Generated",
     attachments: [{ artifactId: "f1", blobId: "blob-f1", name: "example.html", mimetype: "text/html", sizeBytes: 34 }],
     provenance: {
       sourceSessionId: "s1",
       sourceThreadRef: "web:alice:s1",
-      sourceScopeId: scopeId("personal", "alice"),
+      sourceScopeId: alice,
       sourceAssistantEntrySeq: 2,
       trigger: "conversation",
       surface: "web",
@@ -197,15 +225,15 @@ test("fresh shares freeze messages and authorized attachments with separate audi
     },
     idempotencyKey: "generated",
   });
-  const pendingShare = (await (await create()).json()) as { share: { token: string } };
-  assert.equal((await (await read(pendingShare.share.token)).text()).includes("example.html"), false);
+  const pendingShare = await shareToken(h.create());
+  assert.equal((await (await h.read(pendingShare)).text()).includes("example.html"), false);
   for (const [index, change] of [
     { shadow: true },
     { destination: { type: "web", target: "another-thread" } },
     { provenance: { ...delivery.provenance!, sourceSessionId: "another-session" } },
     { provenance: { ...delivery.provenance!, sourceAssistantEntrySeq: 99 } },
   ].entries()) {
-    const rejected = await deliveries.enqueue({
+    const rejected = await h.deliveries.enqueue({
       destination: delivery.destination,
       text: "PRIVATE_DELIVERY_TEXT",
       attachments: delivery.attachments,
@@ -213,37 +241,118 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       ...change,
       idempotencyKey: `excluded-${index}`,
     });
-    await deliveries.ack(rejected.id, Date.now());
+    await h.deliveries.ack(rejected.id, Date.now());
   }
-  const excludedShare = (await (await create()).json()) as { share: { token: string } };
-  const excludedText = await (await read(excludedShare.share.token)).text();
+  const excludedShare = await shareToken(h.create());
+  const excludedText = await (await h.read(excludedShare)).text();
   assert.equal(excludedText.includes("example.html"), false);
   assert.equal(excludedText.includes("PRIVATE_DELIVERY_TEXT"), false);
-  await deliveries.ack(delivery.id, Date.now());
-  const generatedShare = (await (await create()).json()) as { share: { token: string } };
-  assert.equal((await (await read(generatedShare.share.token)).text()).includes("example.html"), true);
-  visible = original;
-  const beforePuts = puts;
-  visible = [...original, entry("user", { attachments: [{ artifactId: "missing" }] }, 13)];
-  assert.equal((await create()).status, 409);
-  assert.equal(puts, beforePuts);
-  visible = original;
-  fileData = null;
-  const download = await read(token, "internal", `/files/${fileId}`);
+  await h.deliveries.ack(delivery.id, Date.now());
+  const generatedShare = await shareToken(h.create());
+  assert.equal((await (await h.read(generatedShare)).text()).includes("example.html"), true);
+  h.visible = original;
+  const beforePuts = h.puts;
+  h.visible = [...original, entry("user", { attachments: [{ artifactId: "missing" }] }, 13)];
+  assert.equal((await h.create()).status, 409);
+  assert.equal(h.puts, beforePuts);
+  h.visible = original;
+  h.fileData = null;
+  const download = await h.read(token, "internal", `/files/${fileId}`);
   assert.equal(download.status, 200);
   assert.equal(download.headers.get("content-type"), "application/octet-stream");
   assert.match(download.headers.get("content-disposition")!, /^attachment;/);
   assert.match(download.headers.get("content-security-policy")!, /sandbox/);
   assert.equal(await download.text(), "<script>attachment contents</script>");
-  assert.equal((await create()).status, 409);
-  visible = visible.slice(1);
-  assert.equal((await read(token)).status, 404);
-  visible = original;
-  await identity.deactivate("bob");
-  assert.equal((await read(token)).status, 403);
-  accessible = false;
-  assert.equal((await read(external.share.token, "external")).status, 404);
-  assert.equal((await fetch(`${base}/v1/sessions/s1/share`, { method: "DELETE" })).status, 404);
+  assert.equal((await h.create()).status, 409);
+  h.visible = h.visible.slice(1);
+  assert.equal((await h.read(token)).status, 404);
+  h.visible = original;
+  await h.identity.deactivate("bob");
+  assert.equal((await h.read(token)).status, 403);
+  h.accessible = false;
+  assert.equal((await h.read(external, "external")).status, 404);
+  assert.equal((await fetch(`${h.base}/v1/sessions/s1/share`, { method: "DELETE" })).status, 404);
+});
+
+test("authenticated-only sharing governs external shares at creation and on every read", async (t) => {
+  const h = await sharingHarness(t);
+  const finance = scopeId("team", "finance");
+  const publicRead = (token: string, tail = "") => h.read(token, "external", tail, "");
+  assert.deepEqual(await (await h.audiences()).json(), { audiences: ["internal", "external"] });
+  assert.equal((await h.audiences("bob")).status, 404);
+  assert.equal((await h.audiences("")).status, 403);
+  const external = await shareToken(h.create("external"));
+  const fileId = await firstFileId(publicRead(external));
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 200);
+
+  await h.config.setAuthenticatedOnlySharing(org, true);
+  const storedShares = (await h.store.all()).length;
+  const storedBytes = h.puts;
+  const rejected = await h.create("external");
+  assert.equal(rejected.status, 403);
+  assert.equal(((await rejected.json()) as { error: string }).error, "external_sharing_prohibited");
+  assert.equal((await h.store.all()).length, storedShares);
+  assert.equal(h.puts, storedBytes);
+  assert.deepEqual(await (await h.audiences()).json(), { audiences: ["internal"] });
+  await h.config.setAuthenticatedOnlySharing(alice, false);
+  assert.equal((await h.create("external")).status, 403);
+  assert.equal((await publicRead(external)).status, 404);
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 404);
+  assert.equal((await h.read(external, "internal", "", "alice")).status, 404);
+  const internal = await shareToken(h.create("internal"));
+  const internalFileId = await firstFileId(h.read(internal));
+  assert.equal((await h.read(internal, "internal", `/files/${internalFileId}`)).status, 200);
+
+  await h.config.setAuthenticatedOnlySharing(org, false);
+  assert.equal((await publicRead(external)).status, 200);
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 200);
+  await h.config.setAuthenticatedOnlySharing(alice, true);
+  assert.equal((await h.create("external")).status, 403);
+  assert.equal((await publicRead(external)).status, 404);
+  assert.deepEqual(await (await h.audiences()).json(), { audiences: ["internal"] });
+  await h.config.setAuthenticatedOnlySharing(alice, false);
+  await h.config.setAuthenticatedOnlySharing(finance, true);
+  assert.equal((await h.create("external")).status, 200);
+  assert.equal((await publicRead(external)).status, 200);
+
+  h.liveSessionScope = finance;
+  assert.equal((await publicRead(external)).status, 404);
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 404);
+  h.liveSessionScope = null;
+  assert.equal((await publicRead(external)).status, 404);
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 404);
+  h.liveSessionScope = alice;
+  assert.equal((await publicRead(external)).status, 200);
+  const config = h.config;
+  h.config = undefined as unknown as typeof config;
+  assert.equal((await h.create("external")).status, 403);
+  assert.equal((await h.create("internal")).status, 200);
+  assert.equal((await publicRead(external)).status, 404);
+  h.config = config;
+  assert.equal((await publicRead(external)).status, 200);
+
+  h.accessible = false;
+  assert.equal((await publicRead(external)).status, 404);
+  assert.equal((await publicRead(external, `/files/${fileId}`)).status, 404);
+  assert.equal((await h.audiences()).status, 404);
+});
+
+test("authenticated-only sharing is the organization setting or the scope's own and never loosens", async () => {
+  const shared = createMemoryMap<PersistedScopedFlag>();
+  const a = createMemoryConfigStore("default-org", { authenticatedOnlySharing: shared });
+  const b = createMemoryConfigStore("default-org", { authenticatedOnlySharing: shared });
+  const finance = scopeId("team", "finance");
+  const sales = scopeId("team", "sales");
+  assert.equal(await a.getAuthenticatedOnlySharingDurable(finance), false);
+  await a.setAuthenticatedOnlySharing(finance, true);
+  assert.equal(await b.getAuthenticatedOnlySharingDurable(finance), true);
+  assert.equal(await b.getAuthenticatedOnlySharingDurable(sales), false);
+  await a.setAuthenticatedOnlySharing(org, true);
+  await a.setAuthenticatedOnlySharing(finance, false);
+  assert.equal(await b.getAuthenticatedOnlySharingDurable(finance), true);
+  assert.equal(await b.getAuthenticatedOnlySharingDurable(sales), true);
+  await a.setAuthenticatedOnlySharing(org, false);
+  assert.equal(await b.getAuthenticatedOnlySharingDurable(finance), false);
 });
 
 test("attachment projection includes only user and delivered attachments", () => {

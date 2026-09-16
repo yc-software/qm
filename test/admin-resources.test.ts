@@ -515,6 +515,49 @@ test("security posture round-trips through durable scoped governance", async () 
   }
 });
 
+test("authenticated-only sharing is scope-admin governed and reads back as the effective policy", async () => {
+  const srv = start();
+  const read = async (scope: string) =>
+    (
+      (await (await fetch(`${srv.base}/v1/admin/scopes/${scope}?view=governance`, { headers: ADMIN })).json()) as {
+        authenticatedOnlySharing: boolean;
+      }
+    ).authenticatedOnlySharing;
+  const put = (scope: string, on: boolean) =>
+    fetch(`${srv.base}/v1/admin/scopes/${scope}/authenticated-only-sharing`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ on }),
+    });
+  try {
+    assert.equal(await read("org:default-org"), false);
+    assert.equal(await read("team:finance"), false);
+    assert.equal((await put("team:finance", true)).status, 200);
+    assert.equal(await read("team:finance"), true);
+    assert.equal(await read("org:default-org"), false);
+    assert.equal((await put("org:default-org", true)).status, 200);
+    assert.equal((await put("team:finance", false)).status, 200);
+    assert.equal(await read("team:finance"), true);
+    assert.equal(await read("team:sales"), true);
+    assert.equal(await read("org:default-org"), true);
+    const anonymous = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/authenticated-only-sharing`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ on: false }),
+    });
+    assert.ok([401, 403].includes(anonymous.status), `anonymous PUT returned ${anonymous.status}`);
+    const nonAdmin = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/authenticated-only-sharing`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+      body: JSON.stringify({ on: false }),
+    });
+    assert.equal(nonAdmin.status, 403);
+    assert.equal(await read("org:default-org"), true);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("sharing posture round-trips through scoped governance with organization and room vetoes", async () => {
   const srv = start();
   try {

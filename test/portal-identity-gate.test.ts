@@ -134,6 +134,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       "/v1/memory/history?principalId=",
       "/v1/contexts/policy?scope=channel:C1&principalId=",
       "/v1/sessions/s1/background?viewer=",
+      "/v1/sessions/s1/share?viewer=",
       "/v1/shared-sessions/token?viewer=",
       "/v1/shared-sessions/token/files/file?viewer=",
       "/v1/sessions/s1/background/p1/output?viewer=",

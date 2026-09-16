@@ -1680,6 +1680,18 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/sessions/:id/share",
+    handle: async ({ res, user, params }: WebCtx) => {
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(
+        res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(params.id!)}/share?viewer=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
     method: "POST",
     path: "/api/sessions/:id/share",
     handle: async ({ req, res, user, params }: WebCtx) => {

@@ -2,9 +2,12 @@ import { html, render } from "lit";
 import { X, Link, Copy, Check, Users, Globe, ChevronDown } from "lucide";
 import { icon, toggleFormMenu, closeFormMenus } from "./ui";
 import { api, withBase } from "./core-bridge";
+import { swallow } from "../../chassis/src/errors.ts";
+
+type Audience = "internal" | "external";
 
 interface ShareState {
-  share: { token: string; audience: "internal" | "external"; createdAt: number } | null;
+  share: { token: string; audience: Audience; createdAt: number } | null;
 }
 
 export async function openSessionShare(id: string): Promise<void> {
@@ -27,7 +30,8 @@ export async function openSessionShare(id: string): Promise<void> {
   position();
   let state: ShareState = { share: null };
   let busy = false;
-  let audience = "internal";
+  let audience: Audience = "internal";
+  let audiences: Audience[] | null = null;
   let error = "";
   let copied = false;
   const endpoint = `/api/sessions/${encodeURIComponent(id)}/share`;
@@ -65,6 +69,7 @@ export async function openSessionShare(id: string): Promise<void> {
     }
   };
   const draw = () => {
+    const offered: Audience[] = audiences ?? ["internal"];
     const saveLabel = state.share ? "Create new link" : "Create link";
     const url = state.share
       ? new URL(withBase(`/share/${state.share.audience}/${state.share.token}`), location.origin).href
@@ -84,7 +89,7 @@ export async function openSessionShare(id: string): Promise<void> {
               aria-label="Who can view"
               aria-haspopup="menu"
               aria-expanded="false"
-              ?disabled=${busy}
+              ?disabled=${busy || offered.length < 2}
               @click=${toggleFormMenu}
               @keydown=${(event: KeyboardEvent) => {
                 if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -117,7 +122,7 @@ export async function openSessionShare(id: string): Promise<void> {
                 }
               }}
             >
-              ${(["internal", "external"] as const).map(
+              ${offered.map(
                 (value) =>
                   html`<button
                     type="button"
@@ -144,6 +149,14 @@ export async function openSessionShare(id: string): Promise<void> {
           <span class="share-access-label">Can view</span>
         </div>
         ${audience === "external" ? html`<p class="share-external-warning" role="status">⚠️ External. Double-check what you're sharing.</p>` : ""}
+        ${
+          audiences === null || audiences.includes("external")
+            ? ""
+            : html`<p class="share-privacy-note share-policy-note" role="status">
+                Links for anyone are turned off by policy. Only signed-in members of your organization can view this
+                share.
+              </p>`
+        }
         ${
           state.share
             ? html`
@@ -196,4 +209,11 @@ export async function openSessionShare(id: string): Promise<void> {
   dialog.setAttribute("aria-labelledby", "session-share-heading");
   draw();
   dialog.showModal();
+  void api<{ audiences: Audience[] }>(endpoint)
+    .then((policy) => {
+      audiences = policy.audiences;
+      if (!policy.audiences.includes(audience)) audience = policy.audiences[0] ?? "internal";
+      draw();
+    })
+    .catch((e) => swallow("web-ui: read share audiences", e));
 }

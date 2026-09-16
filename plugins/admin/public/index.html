@@ -4452,7 +4452,8 @@
         display: none;
       }
       #card-security-posture > .head p,
-      #card-external-slack > .head p {
+      #card-external-slack > .head p,
+      #card-authenticated-only-sharing > .head p {
         display: none;
       }
       .choice-stack {
@@ -5721,6 +5722,51 @@
                     ><span class="status" id="st-external-slack-participants"></span>
                   </div>
                 </section>
+                <section class="card sv-governance setting-row hidden" id="card-authenticated-only-sharing">
+                  <div class="head">
+                    <h2>Session share links</h2>
+                    <p>
+                      Default allows links for anyone. Authenticated only refuses new anyone-with-the-link shares for
+                      conversations in this scope and stops existing public links from resolving. An organization-wide
+                      setting cannot be loosened by a narrower scope.
+                    </p>
+                  </div>
+                  <div class="body">
+                    <p id="authenticated-only-sharing-effective"></p>
+                    <input type="checkbox" id="authenticated-only-sharing" hidden />
+                    <div class="choice-stack">
+                      <label class="posture-choice"
+                        ><input
+                          type="radio"
+                          name="authenticated-only-sharing-choice"
+                          value="off"
+                          data-checkbox-for="authenticated-only-sharing"
+                        /><span
+                          ><strong>Allow links for anyone</strong
+                          ><small>Default. Members may share a conversation with anyone who has the link.</small></span
+                        ></label
+                      >
+                      <label class="posture-choice"
+                        ><input
+                          type="radio"
+                          name="authenticated-only-sharing-choice"
+                          value="on"
+                          data-checkbox-for="authenticated-only-sharing"
+                        /><span
+                          ><strong>Authenticated only</strong
+                          ><small
+                            >Shares can be viewed only by signed-in members of the organization. New public links are
+                            refused and existing ones stop resolving.</small
+                          ></span
+                        ></label
+                      >
+                    </div>
+                  </div>
+                  <div class="foot">
+                    <button class="primary" data-save="authenticated-only-sharing">Apply</button
+                    ><span class="status" id="st-authenticated-only-sharing"></span>
+                  </div>
+                </section>
                 <section class="card sv-governance setting-row hidden" id="card-internal-member-overrides">
                   <div class="head">
                     <h2 id="internal-member-overrides-title">Internal member overrides</h2>
@@ -6570,6 +6616,7 @@
           $("card-sharing-posture"),
           governanceAmbient,
           $("card-external-slack"),
+          $("card-authenticated-only-sharing"),
           $("card-internal-member-overrides"),
           $("card-command-policy"),
           $("card-egress"),
@@ -8249,6 +8296,24 @@
           document
             .querySelectorAll('[data-checkbox-for="external-slack-participants"]')
             .forEach((input) => (input.checked = input.value === (r.data.externalSlackParticipants ? "on" : "off")));
+        }
+        const showAuthenticatedOnlySharing = "authenticatedOnlySharing" in r.data;
+        $("card-authenticated-only-sharing").classList.toggle("hidden", !showAuthenticatedOnlySharing);
+        if (showAuthenticatedOnlySharing) {
+          const authenticatedOnly = !!r.data.authenticatedOnlySharing;
+          const authenticatedOnlyLabel = (on) => (on ? "Authenticated only" : "Allow links for anyone");
+          $("authenticated-only-sharing-effective").textContent =
+            (r.data.authenticatedOnlySharingOverride == null
+              ? scope.startsWith("org:")
+                ? "Default"
+                : "Following organization"
+              : "Configured: " + authenticatedOnlyLabel(r.data.authenticatedOnlySharingOverride)) +
+            " · Effective: " +
+            authenticatedOnlyLabel(authenticatedOnly);
+          $("authenticated-only-sharing").checked = authenticatedOnly;
+          document
+            .querySelectorAll('[data-checkbox-for="authenticated-only-sharing"]')
+            .forEach((input) => (input.checked = input.value === (authenticatedOnly ? "on" : "off")));
         }
         const showInternalOverrides = scope.startsWith("org:") && "internalMemberOverrides" in r.data;
         $("card-internal-member-overrides").classList.toggle("hidden", !showInternalOverrides);
@@ -10991,6 +11056,7 @@
         "ambient-policy": () => collectAmbientPolicy(),
         egress: () => collectEgress(),
         "external-slack-participants": () => ({ on: $("external-slack-participants").checked }),
+        "authenticated-only-sharing": () => ({ on: $("authenticated-only-sharing").checked }),
         "internal-member-overrides": () => ({
           members: [
             ...new Set(
@@ -11031,6 +11097,7 @@
         "ambient-policy": "st-ambient-policy",
         egress: "st-egress",
         "external-slack-participants": "st-external-slack-participants",
+        "authenticated-only-sharing": "st-authenticated-only-sharing",
         "internal-member-overrides": "st-internal-member-overrides",
         "org-ambient": "st-org-ambient",
         "channel-header-pin-default": "st-channel-header-pin-default",
@@ -11046,6 +11113,7 @@
         "auto-flagger",
         "soul",
         "external-slack-participants",
+        "authenticated-only-sharing",
         "runtime",
         "webui-models",
         "people-directory-url",
@@ -11166,6 +11234,24 @@
               : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
             confirmLabel: body.on ? "Allow external audiences" : "Require internal audiences",
             danger: !!body.on,
+          });
+        }
+        if (key === "authenticated-only-sharing") {
+          const before = !!JSON.parse(sectionSnapshots.get(key) || "{}").on;
+          const label = (on) => (on ? "Authenticated only" : "Links for anyone allowed");
+          return reviewGovernanceChange({
+            title: body.on ? "Require sign-in for shared conversations?" : "Allow public share links again?",
+            subtitle: "This applies to new shares and to every existing public link in the selected scope.",
+            facts: [
+              ["Scope", governanceScopeName()],
+              ["Current", label(before)],
+              ["Proposed", label(body.on)],
+            ],
+            warning: body.on
+              ? "New anyone-with-the-link shares are refused and existing public links stop resolving while this is on."
+              : "Every public link created before the prohibition becomes readable again by anyone who holds it, without signing in.",
+            confirmLabel: body.on ? "Require sign-in" : "Allow public links",
+            danger: !body.on,
           });
         }
         if (key === "internal-member-overrides") {

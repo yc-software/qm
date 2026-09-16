@@ -10,6 +10,25 @@ import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
+import type { ScopeId } from "../../types.ts";
+
+async function externalSharingProhibited(deps: ApiCtx["deps"], scope: ScopeId | undefined): Promise<boolean> {
+  if (!deps.config || !scope) return true;
+  return deps.config.getAuthenticatedOnlySharingDurable(scope);
+}
+
+async function shareAudiences(ctx: ApiCtx): Promise<void> {
+  const { deps, app, res, params, url } = ctx;
+  res.setHeader("Cache-Control", "no-store");
+  const viewer = ctx.actor?.p ?? url.searchParams.get("viewer");
+  await deps.identity?.refresh();
+  if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer)))
+    return sendJson(res, 403, { error: "forbidden" });
+  const source = await app.getSessionForViewer(params.id!, viewer, { tailTurns: 1 });
+  if (!source) return sendJson(res, 404, { error: "not_found" });
+  const prohibited = await externalSharingProhibited(deps, source.session.scopeId);
+  return sendJson(res, 200, { audiences: prohibited ? ["internal"] : ["internal", "external"] });
+}
 
 async function createShare(ctx: ApiCtx): Promise<void> {
   const { deps, app, res, body, params } = ctx;
@@ -23,6 +42,11 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   if (!deps.sessionShares || !deps.sessionShareBytes) return sendJson(res, 503, { error: "sharing_unavailable" });
   const source = await app.getSessionForViewer(params.id!, viewer);
   if (!source) return sendJson(res, 404, { error: "not_found" });
+  if (audience === "external" && (await externalSharingProhibited(deps, source.session.scopeId)))
+    return sendJson(res, 403, {
+      error: "external_sharing_prohibited",
+      message: "Links for anyone are turned off by policy for this conversation. Share with your organization instead.",
+    });
   const deliveries =
     (await deps.deliveries?.listBySourceSession(source.session.id, source.session.threadRef, { limit: 10_000 })) ?? [];
   if (deliveries.length >= 10_000) return sendJson(res, 413, { error: "share_too_large" });
@@ -118,6 +142,8 @@ async function readShare(ctx: ApiCtx): Promise<void> {
   const external = ctx.pathname.startsWith("/v1/public-shares/");
   if (!share || share.audience !== (external ? "external" : "internal"))
     return sendJson(res, 404, { error: "not_found" });
+  if (external && (await externalSharingProhibited(deps, (await deps.sessions?.get(share.sessionId))?.scopeId)))
+    return sendJson(res, 404, { error: "not_found" });
   await deps.identity?.refresh();
   if (!external) {
     const viewer = ctx.actor?.p ?? url.searchParams.get("viewer");
@@ -148,6 +174,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
 }
 
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
+  { method: "GET", path: "/v1/sessions/:id/share", auth: "source", handle: shareAudiences },
   { method: "POST", path: "/v1/sessions/:id/share", auth: "source", handle: createShare },
   ...["shared-sessions", "public-shares"].flatMap((prefix): Route[] => [
     { method: "GET", path: `/v1/${prefix}/:token`, auth: "source", handle: readShare },

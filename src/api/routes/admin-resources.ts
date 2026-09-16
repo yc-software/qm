@@ -455,6 +455,16 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "authenticated-only-sharing",
+    kind: "boolean",
+    target: "any",
+    label:
+      "Authenticated-only session sharing: conversations in this scope can be shared only with signed-in members of the organization. Creating an anyone-with-the-link share is refused and existing public links stop resolving. An organization-wide setting cannot be loosened by a narrower scope.",
+    readKey: "authenticatedOnlySharing",
+    get: (deps, scope) => deps.config!.getAuthenticatedOnlySharingDurable(scope),
+    apply: generic(boolBody, (deps, scope, on) => deps.config!.setAuthenticatedOnlySharing(scope, on)),
+  },
+  {
     id: "internal-member-overrides",
     kind: "string-list",
     target: "org",
