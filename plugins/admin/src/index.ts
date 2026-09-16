@@ -38,7 +38,7 @@ const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..
       "</style>",
   );
 const BRAND_MARK = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/brand-mark.svg"));
-const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+const ADMIN_SCRIPT = BASE_HTML.match(/<script>([\s\S]*?)<\/script>/i)?.[1] ?? "";
 const ADMIN_CSP = [
   "default-src 'self'",
   `script-src 'sha256-${createHash("sha256").update(ADMIN_SCRIPT).digest("base64")}'`,

@@ -98,7 +98,7 @@ test("design system routes embed the shared component library and retain the scr
   const html = await response.text();
   const css = readFileSync(new URL("../public/admin-components.css", import.meta.url), "utf8");
   assert.ok(html.includes("<style data-admin-components>" + css + "</style>"));
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
   assert.ok(script);
   const hash = createHash("sha256").update(script).digest("base64");
   assert.ok(response.headers.get("content-security-policy")?.includes("sha256-" + hash));
