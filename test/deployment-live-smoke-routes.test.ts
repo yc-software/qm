@@ -149,7 +149,10 @@ test("live smoke keeps singleflight through client disconnect and cleanup", asyn
   });
   try {
     const response = await srv.request("POST", body());
-    await response.body!.cancel();
+    const reader = response.body!.getReader();
+    assert.equal(new TextDecoder().decode((await reader.read()).value).trim(), "");
+    assert.equal(new TextDecoder().decode((await reader.read()).value).trim(), "");
+    await reader.cancel();
     assert.equal((await srv.request("POST", body())).status, 409);
     assert.equal(calls, 1);
     release();
