@@ -1132,6 +1132,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
+  if ((method === "GET" || method === "POST") && pathname === "/v1/background-work") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
+      ...FORWARD_DEPLOYMENT_LAYER_HEADERS,
+      "authorization",
+    ]);
+  }
+
   if (isDeploymentLayerPassthrough(method, pathname)) {
     return proxyToUpstream(
       req,

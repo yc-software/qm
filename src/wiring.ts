@@ -2494,6 +2494,9 @@ export function serverDeps(
   const carriedModelAuth = harnessCarriedModelAuth(config);
   return {
     production: config.production,
+    ...(built.backgroundOwnership
+      ? { backgroundOwnership: built.backgroundOwnership, deploymentControlSecret: config.deploymentControlSecret }
+      : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),

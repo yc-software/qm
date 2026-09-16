@@ -1,3 +1,4 @@
+import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
@@ -163,6 +164,8 @@ export interface ServerDeps {
   sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;
   deploymentLayer?: DeploymentLayerStore;
+  backgroundOwnership?: { store: BackgroundOwnershipStore; instanceId: string; deploymentId: string };
+  deploymentControlSecret?: string;
   credentialServices?: () => readonly string[];
   brokeredServices?: () => readonly string[];
   deployDialTimeoutMs?: number;
