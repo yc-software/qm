@@ -187,6 +187,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const shell = await vite.ssrLoadModule("/src/shell.ts");
   const sessions = await vite.ssrLoadModule("/src/sessions.ts");
   const conversations = await vite.ssrLoadModule("/src/conversations.ts");
+  const split = await vite.ssrLoadModule("/src/split.ts");
   return {
     requests,
     setConnections: (items, status = 200) => {
@@ -207,6 +208,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       conversations.mainConversation(),
     mainText: () => dom.window.document.querySelector(".main")?.textContent ?? "",
     close: async () => {
+      split.exitSplitIfActive();
+      for (const conversation of conversations.allConversations()) conversations.disposeConversation(conversation);
       releaseSessions();
       releaseTranscript();
       releaseApprovals();
