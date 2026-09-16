@@ -50,7 +50,8 @@
     "lint": "eslint .",
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
-    "lint:knip": "knip"
+    "lint:knip": "knip",
+    "migrate:transcript-tape": "node scripts/migrate-transcript-tape.ts"
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"
