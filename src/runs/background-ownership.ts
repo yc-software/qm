@@ -7,6 +7,7 @@ export interface BackgroundMember {
   generation: number;
   state: "admitted" | "relinquished" | "drained";
   retired: boolean;
+  ready: boolean;
 }
 
 export interface BackgroundOwnership {
@@ -76,7 +77,13 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
             throw new BackgroundOwnershipConflict("Instance identity cannot change");
           return;
         }
-        state.members.push({ ...identity, generation: state.generation, state: "drained", retired: false });
+        state.members.push({
+          ...identity,
+          generation: state.generation,
+          state: "drained",
+          retired: false,
+          ready: false,
+        });
       });
     },
     transition(request: BackgroundTransition) {
@@ -136,6 +143,20 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
         }
         member.generation = state.generation;
         member.state = "admitted";
+        member.ready = false;
+      });
+    },
+    markReady(instanceId: string, generation: number) {
+      return update((state) => {
+        expectGeneration(state, generation);
+        const member = memberOf(state, instanceId);
+        if (
+          member.generation !== generation ||
+          member.state !== "admitted" ||
+          (state.enabled && state.desiredDeploymentId !== member.deploymentId)
+        )
+          throw new BackgroundOwnershipConflict("Instance admission changed");
+        member.ready = true;
       });
     },
     acknowledge(instanceId: string, generation: number, next: "relinquished" | "drained") {
@@ -146,6 +167,7 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
         if (next === "drained" && member.state !== "relinquished")
           throw new BackgroundOwnershipConflict("Instance must relinquish before reporting drained");
         member.state = next;
+        member.ready = false;
       });
     },
     retire(request: {
@@ -173,6 +195,7 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
             throw new BackgroundOwnershipConflict("Termination evidence does not match the enrolled instance");
           member.state = "drained";
           member.retired = true;
+          member.ready = false;
         }
         state.lastRequestId = request.requestId;
         state.lastRequest = fingerprint;
@@ -180,7 +203,5 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
     },
   };
 }
-
-export type BackgroundOwnershipStore = ReturnType<typeof createBackgroundOwnershipStore>;
 
 export type BackgroundOwnershipStore = ReturnType<typeof createBackgroundOwnershipStore>;
