@@ -672,7 +672,7 @@ function liveThreads(): ReadonlySet<string> {
   return live;
 }
 
-export function sessionWorking(s: CoreSession): boolean {
+function sessionWorking(s: CoreSession): boolean {
   return rowIndicators(s, liveThreads()).working;
 }
 

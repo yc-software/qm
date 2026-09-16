@@ -220,3 +220,34 @@ function collapseToolItems(items: TimelineItem[], status: WorkBlock["status"]): 
   }
   return out;
 }
+
+export function sessionToolView(
+  call: ToolPayload,
+  result: ToolPayload,
+  sessions: readonly { id: string; title?: string | null }[],
+): { action: string; chipTitle?: string; sessionId?: string; detail: string } {
+  const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
+  const target = result.sessionId ?? call.target;
+  const session =
+    sessions.find((row) => row.id === target) ??
+    sessions.find((row) => result.result?.includes(`(sessionId ${row.id})`));
+  const sessionId = session?.id ?? result.sessionId;
+  let chipTitle = session?.title || result.title || call.name || "Subagent";
+  let detail = "";
+  if (action === "read" && !target && result.children === undefined) return { action, detail: "subagents" };
+  if (action === "read" && result.children !== undefined) {
+    return { action, detail: `${result.children} subagent${result.children === 1 ? "" : "s"}` };
+  }
+  if (action === "open" && !session?.title && !result.title && !call.name && call.task) {
+    chipTitle = call.task.split("\n")[0].slice(0, 48);
+  }
+  if (action === "write") {
+    const verbs: Record<string, string> = {
+      steered: "steered",
+      queued_turn: "queued a turn",
+      interrupted: "interrupted",
+    };
+    detail = result.delivered ? (verbs[result.delivered] ?? result.delivered) : "";
+  } else if (action === "read") detail = result.status ?? "";
+  return { action, chipTitle, ...(sessionId ? { sessionId } : {}), detail };
+}

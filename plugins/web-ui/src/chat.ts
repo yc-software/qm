@@ -98,6 +98,7 @@ import {
   toolCategory,
   toolRowKind,
   toolExecutionOutput,
+  sessionToolView,
   type TimelineItem,
   type ToolPayload,
   type ToolRowModel,
@@ -125,7 +126,6 @@ import {
   addPendingSession,
   onSessionDragStart,
   endSessionDrag,
-  sessionWorking,
   dropPendingSession,
   groupDmTitle,
   refreshSessions,
@@ -1017,7 +1017,7 @@ export function createChatSurface(
             </div>
             ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
             <section class="chat-scroll readonly-scroll">
-              ${pinnedStrip()} ${subagentStrip()}
+              ${pinnedStrip()}
               <div class="message-stack">
                 ${inheritedHeader()}
                 ${
@@ -1360,7 +1360,7 @@ export function createChatSurface(
           ${glanceTier || ctx.pane ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
           <section class="chat-scroll">
-            ${pinnedStrip()} ${subagentStrip()}
+            ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
@@ -1498,6 +1498,8 @@ export function createChatSurface(
     const work = msg.work;
     const cacheable =
       !isStreaming &&
+      !(message as { subagentMail?: SubagentMailRef }).subagentMail &&
+      !work?.activity.some((activity) => (activity.payload as ToolPayload | null)?.tool === "session") &&
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);
     const forkable = Boolean(chatState.threadRef && chatState.sessionId && chatState.agent);
@@ -2461,14 +2463,14 @@ export function createChatSurface(
   }
 
   const SESSION_ACTION_LABELS: Record<string, { active: string; done: string; attempted: string }> = {
-    open: { active: "Opening subagent", done: "Opened subagent", attempted: "Tried opening subagent" },
-    write: { active: "Messaging subagent", done: "Messaged subagent", attempted: "Tried messaging subagent" },
+    open: { active: "Creating", done: "Created", attempted: "Tried creating" },
+    write: { active: "Messaging", done: "Messaged", attempted: "Tried messaging" },
     interrupt: {
-      active: "Interrupting subagent",
-      done: "Interrupted subagent",
-      attempted: "Tried interrupting subagent",
+      active: "Interrupting",
+      done: "Interrupted",
+      attempted: "Tried interrupting",
     },
-    read: { active: "Checking subagents", done: "Checked subagents", attempted: "Tried checking subagents" },
+    read: { active: "Checking", done: "Checked", attempted: "Tried checking" },
   };
 
   const SUBAGENT_MAIL_NOTES: Record<string, string> = {
@@ -2479,21 +2481,9 @@ export function createChatSurface(
     refused: "was refused",
   };
 
-  function subagentStrip(): TemplateResult | typeof nothing {
-    if (!chatState.sessionId) return nothing;
-    const children = sessionsState.list.filter((session) => session.parentSessionId === chatState.sessionId);
-    if (!children.length) return nothing;
-    return html`<nav class="subagent-strip" aria-label="Subagents">
-      ${children.map((session) => subagentChip(session.title || "Subagent", session.id))}
-    </nav>`;
-  }
-
   function subagentChip(title: string, sessionId?: string): TemplateResult {
     const session = sessionsState.list.find((row) => row.id === sessionId);
-    let status = session && sessionWorking(session) ? "Working" : "";
-    if (session?.awaitingInput) status = "Needs your reply";
-    const inner = html`${icon(Bot, 13)}<span dir="auto">${session?.title || title}</span
-      >${status ? html`<span class="subagent-chip-status">${status}</span>` : nothing}`;
+    const inner = html`<span dir="auto">${session?.title || title}</span>`;
     if (!sessionId) return html`<span class="subagent-chip">${inner}</span>`;
     return html`<button
       class="subagent-chip"
@@ -2513,31 +2503,6 @@ export function createChatSurface(
     >
       ${inner}
     </button>`;
-  }
-
-  function sessionToolView(
-    call: ToolPayload,
-    result: ToolPayload,
-  ): { action: string; chipTitle?: string; sessionId?: string; detail: string } {
-    const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
-    const sessionId = result.sessionId;
-    let chipTitle = result.title ?? call.name ?? call.target;
-    let detail = "";
-    if (action === "open" && !chipTitle && call.task) chipTitle = firstLine(call.task, 48);
-    if (action === "write") {
-      const verbs: Record<string, string> = {
-        steered: "steered",
-        queued_turn: "queued a turn",
-        interrupted: "interrupted",
-      };
-      detail = result.delivered ? (verbs[result.delivered] ?? result.delivered) : "";
-    } else if (action === "read") {
-      if (result.children !== undefined) {
-        chipTitle = undefined;
-        detail = `${result.children} subagent${result.children === 1 ? "" : "s"}`;
-      } else if (result.status) detail = result.status;
-    }
-    return { action, ...(chipTitle ? { chipTitle } : {}), ...(sessionId ? { sessionId } : {}), detail };
   }
 
   function firstLine(s: string, max?: number): string {
@@ -2676,7 +2641,7 @@ export function createChatSurface(
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
     if (tool === "session") {
-      const view = sessionToolView(call, result);
+      const view = sessionToolView(call, result, sessionsState.list);
       const labels = SESSION_ACTION_LABELS[view.action] ?? UNKNOWN_TOOL;
       let sessionLabel = labels.attempted;
       if (kind === "running") sessionLabel = stale ? `${labels.active} (interrupted)` : labels.active;

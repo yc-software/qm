@@ -1687,20 +1687,6 @@ a.chat-row-open {
   font-style: italic;
 }
 
-.subagent-strip {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--background);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 20px;
-}
-.subagent-chip-status {
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
 .subagent-chip {
   display: inline-flex;
   align-items: center;
