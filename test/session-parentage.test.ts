@@ -166,3 +166,22 @@ test("late human child messages retain their sender and revalidate access", asyn
   assert.equal(await built.runs.activeForThread(child.threadRef), null);
   assert.deepEqual(await built.signals.pending(run.id), []);
 });
+
+test("ordinary sessions are not subject to the subagent tree queue limit", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ordinary-queue-")) }));
+  const actor = { id: "U1", type: "internal" as const };
+  const session = await built.sessions.getOrCreateByThread("web:U1:ordinary-queue", "dm", "personal:U1");
+  assert.equal(await built.featureFlags.enabled("persistent_subagents", "personal:U1"), false);
+  for (let i = 0; i < 11; i++) {
+    await built.runs.enqueue({
+      sessionId: session.threadRef,
+      request: {
+        actor,
+        conversation: { kind: "dm", threadRef: session.threadRef, audience: [actor] },
+        text: `ordinary task ${i}`,
+        origin: { kind: "human" },
+      },
+    });
+  }
+  assert.equal((await built.runs.inFlightForThread(session.threadRef)).length, 11);
+});

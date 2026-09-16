@@ -38,7 +38,7 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
     );
     chmodSync(binary, 0o755);
     const notifications: unknown[] = [];
-    const server = new CodexAppServer({
+    const server: CodexAppServer = new CodexAppServer({
       binaryPath: binary,
       cwd: dir,
       onNotification: (_method, params) => {
@@ -56,3 +56,56 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
     assert.equal(server.error(), null);
   });
 }
+
+test("a waiting tool cannot block another thread's RPC response or tool call", { timeout: 5000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-wait-"));
+  const binary = join(dir, "codex");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "start") {
+    send({ id: message.id, result: {} });
+    send({ id: "parent-wait", method: "item/tool/call", params: { threadId: "parent" } });
+  } else if (message.method === "child/start") {
+    send({ method: "child/started", params: {} });
+    send({ id: message.id, result: { started: true } });
+    send({ id: "child-message", method: "item/tool/call", params: { threadId: "child" } });
+  } else if (message.id === "parent-wait") {
+    send({ method: "parent/completed", params: message.result });
+  }
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const childMessage = Promise.withResolvers<void>();
+  const parentCompleted = Promise.withResolvers<unknown>();
+  const notifications: string[] = [];
+  const server: CodexAppServer = new CodexAppServer({
+    binaryPath: binary,
+    cwd: dir,
+    onNotification: (method, params) => {
+      notifications.push(method);
+      if (method === "parent/completed") parentCompleted.resolve(params);
+    },
+    onRequest: async (_method, params) => {
+      if ((params as { threadId: string }).threadId === "child") {
+        childMessage.resolve();
+        return {};
+      }
+      const started = await server.request("child/start");
+      await childMessage.promise;
+      return started;
+    },
+  });
+  t.after(async () => {
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await server.request("start");
+  assert.deepEqual(await parentCompleted.promise, { started: true });
+  assert.deepEqual(notifications, ["child/started", "parent/completed"]);
+});

@@ -1416,7 +1416,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       target: Type.Optional(
         Type.String({
           description:
-            "Message/followup/read target: parent, accessible sessionId, or child/sibling title (read: omit to list children).",
+            "Message/followup/read target: literal parent, accessible sessionId, or exact child/sibling title. Do not invent filesystem paths such as /root/name. read: omit to list children.",
         }),
       ),
       text: Type.Optional(Type.String({ description: "write: the message to deliver." })),

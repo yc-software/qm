@@ -306,11 +306,18 @@ export class CodexAppServer {
       await this.options.onNotification(message.method, message.params);
       return;
     }
+    void this.respond(message.id, message.method, message.params).catch((error) => {
+      this.failAll(error instanceof Error ? error : new Error(String(error)));
+      this.process.kill("SIGTERM");
+    });
+  }
+
+  private async respond(id: JsonRpcId, method: string, params: unknown): Promise<void> {
     try {
-      const result = await this.options.onRequest(message.method, message.params);
-      await this.send({ id: message.id, result });
+      const result = await this.options.onRequest(method, params);
+      await this.send({ id, result });
     } catch (error) {
-      await this.send({ id: message.id, error: { code: -32000, message: errMessage(error) } });
+      await this.send({ id, error: { code: -32000, message: errMessage(error) } });
     }
   }
 

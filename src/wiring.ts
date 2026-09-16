@@ -1307,6 +1307,7 @@ export function buildApp(
         const known = await sessions.getByThread(input.sessionId);
         if (
           known &&
+          (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
           !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
           (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
             SUBAGENT_TREE_RUN_CAP

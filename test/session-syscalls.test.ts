@@ -757,3 +757,45 @@ test("wait is cancelled and disabled actors cannot open or send", async () => {
   assert.equal((await api.open({ task: "forbidden" })).ok, false);
   assert.equal((await api.write({ target: "any", text: "forbidden" })).ok, false);
 });
+
+test("queued results recheck source-entry visibility after participant tenure changes", async () => {
+  const r = await rig();
+  const other: Principal = { id: "U2", type: "internal" };
+  const sharedScope = scopeId("group", "G1");
+  const shared = await r.sessions.getOrCreateByThread("group:G1:mail-tenure", "group", sharedScope);
+  for (const id of [actor.id, other.id]) await r.sessions.addParticipant(shared.id, id);
+  const sharedConversation: Conversation = { kind: "group", threadRef: shared.threadRef, audience: [actor, other] };
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
+  const api = factory.forTurn({
+    session: shared,
+    scopeId: sharedScope,
+    request: { actor, conversation: sharedConversation },
+  });
+  const opened = await api.open({ task: "shared result" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const { lease } = await r.sessions.acquireLease(child.id);
+  const entry = await r.sessions.append(lease!, {
+    type: "assistant",
+    payload: { text: "OLD_PRIVATE_RESULT" },
+    scopeLabel: sharedScope,
+  });
+  await r.sessions.releaseLease(lease!);
+  const [run] = await r.runs.inFlightForThread(child.threadRef);
+  const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, {
+    status: "ok",
+    reply: "OLD_PRIVATE_RESULT",
+    sourceAssistantEntrySeq: entry.seq,
+  });
+  await deliverSubagentMail(
+    { sessions: r.sessions, runs: r.runs, mailbox: r.mailbox, maxAttempts: 3 },
+    (await r.runs.get(run!.id))!,
+  );
+  assert.equal((await api.receive!()).length, 1);
+  await r.sessions.removeParticipant(child.id, other.id);
+  await r.sessions.addParticipant(child.id, other.id);
+  assert.equal((await r.sessions.visibleEntries(child.id, other.id)).length, 0);
+  assert.deepEqual(await api.receive!(), []);
+  assert.equal((await r.mailbox.pending(shared.id)).length, 1);
+});
