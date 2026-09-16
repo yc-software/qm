@@ -8,6 +8,54 @@ const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as
   typeof entriesToMessages
 >[1];
 
+test("waiting for an approval decision does not count as active work", () => {
+  const activity: WorkBlock["activity"] = [
+    { seq: 1, parentSeq: null, type: "tool_call", payload: { command: "help" }, createdAt: 101_000 },
+    { seq: 2, parentSeq: 1, type: "tool_result", payload: { blocked: "needs_approval" }, createdAt: 108_000 },
+  ];
+  assert.equal(workSeconds({ status: "working", startedAt: 100_000, activity }), 8);
+  assert.equal(workSeconds({ status: "complete", startedAt: 100_000, finishedAt: 700_000, activity }), 8);
+  const history = entriesToMessages([
+    ...activity,
+    { seq: 3, type: "approval_resolved", payload: { command: "help", approved: false }, createdAt: 700_000 },
+  ]);
+  assert.equal(workSeconds((history[0] as AssistantWork).work!), 7);
+  const resumed = [
+    ...activity,
+    { seq: 4, parentSeq: null, type: "text" as const, payload: { text: "continuing" }, createdAt: 710_000 },
+  ];
+  assert.equal(workSeconds({ status: "complete", startedAt: 700_000, finishedAt: 715_000, activity: resumed }), 15);
+});
+
+for (const type of ["approval_request", "tool_result", "tool_call"] as const) {
+  test(`${type} timing preserves initial thinking without counting the approval wait`, () => {
+    const activity: WorkBlock["activity"] = [
+      { seq: 1, parentSeq: null, type: "tool_call", payload: { command: "help" }, createdAt: 112_000 },
+      {
+        seq: 2,
+        parentSeq: 1,
+        type,
+        payload: { blocked: "needs_approval", workStartedAt: 100_000, workFinishedAt: 113_000 },
+        createdAt: 113_000,
+      },
+    ];
+    const live = workSeconds({ status: "complete", startedAt: 100_000, activity });
+    for (const decided of [false, true]) {
+      const entries: SessionEntry[] = [...activity];
+      if (decided)
+        entries.push({
+          seq: 3,
+          type: "approval_resolved",
+          payload: { command: "help", approved: false },
+          createdAt: 700_000,
+        });
+      const work = (entriesToMessages(entries)[0] as AssistantWork).work!;
+      assert.equal(workSeconds(work), live);
+      assert.equal(workSeconds(work), 13);
+    }
+  });
+}
+
 test("work duration survives a transcript refresh — persisted turn timing wins over activity inference", () => {
   const runStartedAt = 100_000;
   const runFinishedAt = 113_000;
@@ -93,6 +141,48 @@ test("live and historical rendering consume the same duration helper (source-lev
     "chat renders via the shared helper",
   );
 
-  assert.match(chat, /`Working for \$\{secs\}s` : workedLabel\("Worked", secs\)/);
-  assert.match(chat, /function segmentSummaryLabel[\s\S]{0,400}?workSeconds\(work\)/);
+  assert.match(chat, /workedLabel\(work.status === "working" \? "Working" : "Worked", secs\)/);
+  assert.match(chat, /function workLabel[\s\S]{0,400}?workSeconds\(work\)/);
+});
+
+test("live and completed work use compact minute and second labels", () => {
+  for (const prefix of ["Working", "Worked"]) {
+    for (const [seconds, duration] of [
+      [7, "7s"],
+      [60, "1m"],
+      [65, "1m 5s"],
+      [365, "6m 5s"],
+    ] as const)
+      assert.equal(workedLabel(prefix, seconds), `${prefix} for ${duration}`);
+  }
+});
+
+test("work duration ends at final-answer start while the run stays active and survives history projection", () => {
+  const phase = {
+    seq: 3,
+    parentSeq: null,
+    type: "text_start" as const,
+    payload: { phase: "final_answer", streamOffset: 11 },
+    createdAt: 108_000,
+  };
+  const work: WorkBlock = { status: "working", startedAt: 100_000, activity: [phase] };
+  assert.equal(workSeconds(work), 8);
+  assert.equal(work.status, "working");
+  const entries: SessionEntry[] = [
+    { seq: 1, type: "user", payload: { text: "check" }, createdAt: 100_000 },
+    { seq: 2, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 102_000 },
+    phase,
+    {
+      seq: 4,
+      type: "assistant",
+      payload: { text: "All clear.", workStartedAt: 100_000, workFinishedAt: 115_000 },
+      createdAt: 115_000,
+    },
+  ];
+  const messages = entriesToMessages(entries, MODEL);
+  const answer = messages.find((message) => message.role === "assistant") as AssistantWork;
+  assert.ok(answer.work);
+  assert.equal(workSeconds(answer.work), 8);
+  assert.equal(answer.work.status, "complete");
+  assert.equal(answer.work.activity.find((entry) => entry.type === "text_start")?.seq, 3);
 });

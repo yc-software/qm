@@ -111,6 +111,7 @@ export type EntryType =
   | "user"
   | "assistant"
   | "thinking"
+  | "text_start"
   | "text"
   | "tool_call"
   | "tool_result"

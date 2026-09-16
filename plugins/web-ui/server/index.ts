@@ -2404,6 +2404,15 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "PATCH",
+    path: "/api/runs/:id/input",
+    handle: async (c) => {
+      const body = await readJson<{ text?: unknown; expectedText?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      return relayCore(c.res, "PATCH", `/v1/runs/${encodeURIComponent(c.params.id!)}/input`, JSON.stringify(body));
+    },
+  },
+  {
     method: "POST",
     path: "/api/runs/:id/withdraw",
     handle: async (c) => {

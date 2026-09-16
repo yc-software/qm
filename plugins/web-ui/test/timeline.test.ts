@@ -1,7 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolActivity, WorkBlock } from "../src/core-bridge.ts";
-import { buildTimeline, toolCategory, toolRowKind, toolExecutionOutput, type ToolRowModel } from "../src/timeline.ts";
+import {
+  messageWorkTimeline,
+  currentTextPhase,
+  streamedAnswer,
+  streamingTextTail,
+  buildTimeline,
+  toolCategory,
+  toolRowKind,
+  toolExecutionOutput,
+  type ToolRowModel,
+} from "../src/timeline.ts";
 
 function act(seq: number, type: ToolActivity["type"], payload: unknown): ToolActivity {
   return { seq, parentSeq: null, type, payload, createdAt: seq };
@@ -368,4 +378,89 @@ test("unscreened execution retains its warning and failure status without parsin
     ),
     "failed",
   );
+});
+
+test("recorded narration is consumed once per occurrence while the next block streams", () => {
+  const text = "Checking.";
+  const activity = [act(1, "text", { text }), act(2, "tool_call", { tool: "lookup" })];
+  assert.equal(streamingTextTail(text + "\n\n" + text, activity), text);
+  activity.push(act(3, "tool_result", { tool: "lookup" }), act(4, "text", { text }));
+  assert.equal(streamingTextTail(text + "\n\n" + text + "\n\nFinal", activity), "Final");
+  assert.equal(streamingTextTail("Check", activity), "");
+  assert.equal(streamingTextTail("Different reply", activity), "Different reply");
+  assert.equal(streamingTextTail("    indented code", []), "    indented code");
+});
+
+test("one work timeline includes initial and repeated narration but excludes the authoritative final occurrence", () => {
+  const activity = [
+    act(1, "text", { text: "Same" }),
+    act(2, "tool_call", { tool: "lookup", callId: "a" }),
+    act(3, "text", { text: "Same" }),
+    act(4, "tool_result", { tool: "lookup", callId: "a" }),
+    act(5, "text", { text: "Same" }),
+  ];
+  const work: WorkBlock = { status: "complete", activity };
+  const items = messageWorkTimeline(work, "Same");
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["text", "tool", "text"],
+  );
+  assert.equal(activity.length, 5);
+  assert.equal(messageWorkTimeline({ ...work, status: "working" }, "").length, 4);
+});
+
+test("work projection omits empty and redacted thinking without changing parallel tool pairing", () => {
+  const work: WorkBlock = {
+    status: "failed",
+    activity: [
+      act(1, "thinking", { redacted: true, thinking: "secret" }),
+      act(2, "thinking", { thinking: " " }),
+      act(3, "tool_call", { tool: "a", callId: "a" }),
+      act(4, "tool_call", { tool: "b", callId: "b" }),
+      act(5, "tool_result", { callId: "b" }),
+      act(6, "tool_result", { callId: "a" }),
+    ],
+  };
+  const items = messageWorkTimeline(work, "");
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["tool", "tool"],
+  );
+  assert.equal(items[0]?.kind === "tool" && items[0].row.result?.seq, 6);
+  assert.equal(items[1]?.kind === "tool" && items[1].row.result?.seq, 5);
+});
+
+test("explicit commentary remains folded even when the final answer repeats it", () => {
+  const activity = [act(1, "text", { text: "Same", phase: "commentary" })];
+  assert.equal(messageWorkTimeline({ status: "complete", activity }, "Same").length, 1);
+});
+
+test("explicit public phases use offsets and never appear as tool rows", () => {
+  const work: WorkBlock = {
+    status: "working",
+    activity: [
+      act(1, "text", { text: "Same words", phase: "commentary" }),
+      act(2, "text_start", { phase: "final_answer", streamOffset: 12 }),
+    ],
+  };
+  assert.deepEqual(currentTextPhase(work), { phase: "final_answer", streamOffset: 12, startedAt: 2 });
+  assert.deepEqual(
+    buildTimeline(work).map((item) => item.kind),
+    ["text"],
+  );
+  work.activity.push(act(3, "text_start", { phase: "commentary", streamOffset: 24 }));
+  assert.equal(currentTextPhase(work)?.phase, "commentary");
+  work.activity.push(act(4, "text_start", { phase: "final_answer", streamOffset: -1 }));
+  assert.equal(currentTextPhase(work), null);
+});
+
+test("stopped stream projection uses the final boundary even when final text repeats commentary", () => {
+  const work: WorkBlock = {
+    status: "working",
+    activity: [
+      act(1, "text", { text: "Same words", phase: "commentary" }),
+      act(2, "text_start", { phase: "final_answer", streamOffset: 12 }),
+    ],
+  };
+  assert.equal(streamedAnswer("Same words\n\nSame words again", work), "Same words again");
 });

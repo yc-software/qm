@@ -25,8 +25,7 @@ function fixture() {
           const limit = row.style.getPropertyValue("--pin-expanded-max");
           return Math.min(fullHeight, limit ? parseFloat(limit) : fullHeight);
         }
-        if (row.classList.contains("pin-fits")) return fullHeight;
-        return Math.min(fullHeight, parseFloat(row.style.getPropertyValue("--pin-clamp")) || 320);
+        return Math.min(fullHeight, 46.5);
       },
     },
   });
@@ -90,7 +89,7 @@ function fixture() {
 test("long prompts clamp to the pane and expand or collapse through their button", () => {
   const f = fixture();
   try {
-    assert.equal(f.row.style.getPropertyValue("--pin-clamp"), "105px");
+    assert.equal(f.content.clientHeight, 46.5);
     assert.equal(f.toggle.hidden, false);
     f.toggle.click();
     assert.equal(f.row.classList.contains("pin-expanded"), true);
@@ -104,13 +103,13 @@ test("long prompts clamp to the pane and expand or collapse through their button
   }
 });
 
-test("pane resizes respect the minimum and maximum preview heights", () => {
+test("pane resizes keep the compact preview height", () => {
   const f = fixture();
   try {
     f.resize(100);
-    assert.equal(f.row.style.getPropertyValue("--pin-clamp"), "96px");
+    assert.equal(f.content.clientHeight, 46.5);
     f.resize(2000);
-    assert.equal(f.row.style.getPropertyValue("--pin-clamp"), "320px");
+    assert.equal(f.content.clientHeight, 46.5);
   } finally {
     f.close();
   }
@@ -219,7 +218,7 @@ test("expanding a scrolled prompt stays sticky with a bounded scrollable body", 
     f.toggle.click();
     assert.equal(f.content.scrollTop, 0);
     assert.equal(f.row.classList.contains("stuck"), true);
-    assert.equal(f.content.clientHeight, 105);
+    assert.equal(f.content.clientHeight, 46.5);
     assert.equal(f.scroller.scrollTop, 500);
   } finally {
     f.close();
@@ -261,6 +260,24 @@ test("an expanded prompt stays in flow when its chrome alone cannot fit", () => 
     assert.equal(f.row.classList.contains("sticky-disabled"), true);
     f.setPins(30);
     assert.equal(f.row.classList.contains("sticky-disabled"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("repeated prompt measurement preserves the disclosure text node", () => {
+  const f = fixture();
+  try {
+    const label = f.toggle.firstChild;
+    for (const height of [300, 200, 500]) {
+      f.resize(height);
+      assert.equal(f.toggle.firstChild, label);
+    }
+    f.toggle.click();
+    const expandedLabel = f.toggle.firstChild;
+    assert.notEqual(expandedLabel, label);
+    f.resize(400);
+    assert.equal(f.toggle.firstChild, expandedLabel);
   } finally {
     f.close();
   }

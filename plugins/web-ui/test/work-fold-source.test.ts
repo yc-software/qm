@@ -5,16 +5,12 @@ import test from "node:test";
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
-test("finished turns render mid-turn text OUTSIDE the collapsed fold, at its place in the timeline", () => {
-  assert.match(chat, /if \(demoted\) continue;\s*\n\s*if \(it\.kind === "text"\) \{\s*\n\s*flushSeg\(\);/);
-  assert.match(chat, /class="work-said"/);
-  assert.match(chat, /<details class="work-fold"/);
-});
-
-test("the fold summary counts tool calls only — spoken text is never tallied as a hidden 'message'", () => {
-  assert.match(chat, /function segmentSummaryLabel\(/);
-  assert.ok(!/message\$\{messages === 1/.test(chat), "old 'N messages' summary should be gone");
-  assert.match(chat, /it\.kind === "tool"/);
+test("live and completed work share one chronological duration fold", () => {
+  assert.match(chat, /<details class="work work-fold work-/);
+  assert.match(chat, /messageWorkTimeline\(work, active \? "" : text\)/);
+  assert.match(chat, /const label = stopping \? "Stopping…" : workLabel\(work\)/);
+  assert.match(chat, /\?open=\$\{active \|\| !!work.pendingApprovals\?\.length\}/);
+  assert.doesNotMatch(chat, /function segmentSummaryLabel/);
 });
 
 test("promoted speech keeps full reply styling", () => {
@@ -24,9 +20,8 @@ test("promoted speech keeps full reply styling", () => {
 test("a demoted post-delivery self-log remains auditable but is omitted from the UI", () => {
   const bridge = readFileSync(new URL("../src/core-bridge.ts", import.meta.url), "utf8");
   assert.match(bridge, /payload: \{ text, demoted: true \}/);
-  assert.match(chat, /demoted === true/);
-  assert.match(chat, /if \(demoted\) continue;/);
-  assert.match(chat, /return parts\.length \? .* : html``;/);
+  const timeline = readFileSync(new URL("../src/timeline.ts", import.meta.url), "utf8");
+  assert.match(timeline, /!payload\?\.demoted/);
 });
 
 test("the fold chevron rotates when a work-fold is open", () => {
@@ -34,7 +29,7 @@ test("the fold chevron rotates when a work-fold is open", () => {
 });
 
 test("expanded tool activity uses a compact log rhythm", () => {
-  assert.match(css, /\.work-divider \{[\s\S]{0,120}?margin: 8px 0 10px;/);
+  assert.match(css, /\.work-divider \{[\s\S]{0,120}?margin: 0 0 10px;/);
   assert.match(css, /\.work-rows \{[\s\S]{0,120}?gap: 5px;/);
   assert.match(css, /\.tool-row,[\s\S]{0,220}?font-size: 13px;[\s\S]{0,80}?line-height: 1\.35;/);
   assert.match(css, /\.tool-row \.tool-summary \{[\s\S]{0,80}?min-height: 24px;/);
@@ -65,7 +60,7 @@ test("thinking stays in sequence but is independently collapsible", () => {
 
 test("dense activity rows let their icons carry repeated type labels", () => {
   assert.match(chat, /\$\{preview \|\| "Thinking"\}/);
-  assert.match(chat, /const visible = detail \|\| label;/);
+  assert.match(chat, /if \(kind === "failed"\) statusLabel = "Failed";/);
   assert.match(chat, />\$\{visible\}<\/span>/);
   assert.doesNotMatch(chat, />Thinking\$\{preview/);
   assert.doesNotMatch(chat, />\$\{label\}\$\{detail/);

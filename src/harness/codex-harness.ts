@@ -126,6 +126,8 @@ type ActiveTurn = {
   reject(error: Error): void;
   responseItems: CodexItem[];
   completedItems: CodexItem[];
+  publicMessages: Map<string, CodexItem & { complete?: boolean }>;
+  stoppedReply?: string;
   taskIds: Map<string, string>;
   taskStatuses: Map<string, TaskStatus>;
   taskResults: Set<string>;
@@ -497,11 +499,41 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           });
         }
         if (method === "item/agentMessage/delta" && threadId === state.threadId && typeof p.delta === "string") {
+          if (state.stopped) return;
+          const id = typeof p.itemId === "string" ? p.itemId : "";
+          const item = state.publicMessages.get(id) ?? { type: "agentMessage" };
+          item.text = (typeof item.text === "string" ? item.text : "") + p.delta;
+          state.publicMessages.set(id, item);
           state.firstOutputAt ??= Date.now();
           state.turn.onDelta?.(p.delta);
         }
         if ((method === "item/started" || method === "item/completed") && p.item && typeof p.item === "object") {
           const item = p.item as CodexItem;
+          if (threadId === state.threadId && item.type === "agentMessage") {
+            if (state.stopped) return;
+            const id = typeof item.id === "string" ? item.id : "";
+            state.publicMessages.set(id, {
+              ...item,
+              text: typeof item.text === "string" ? item.text : "",
+              complete: method === "item/completed",
+            });
+            if (method === "item/started")
+              await state.turn.onTextBlockStart?.(
+                item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined,
+              );
+            if (
+              method === "item/completed" &&
+              item.phase === "commentary" &&
+              typeof item.text === "string" &&
+              item.text.trim()
+            ) {
+              await state.turn.emit({
+                type: "text",
+                payload: { text: item.text, phase: "commentary" },
+                scopeLabel: state.turn.scopeLabel,
+              });
+            }
+          }
           if (method === "item/completed") {
             state.completedItems.push(item);
             if (state.turn.tape && !state.tapeError) {
@@ -996,6 +1028,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         reject: rejectCompleted,
         responseItems: [],
         completedItems: [],
+        publicMessages: new Map(),
         taskIds: new Map(),
         taskStatuses: new Map(),
         taskResults: new Set(),
@@ -1078,11 +1111,37 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     };
     let turnId = "";
     const interrupt = async (stopped: boolean) => {
+      if (stopped && !state.stopped) {
+        state.stoppedReply = textFromTurn({
+          id: turnId,
+          status: "interrupted",
+          items: [...state.publicMessages.values()].filter((item) => item.phase !== "commentary"),
+        });
+      }
       state.stopped ||= stopped;
       toolAbort.abort();
       if (turnId) await rt.server.request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
     };
     state.interrupt = () => interrupt(false);
+    let stoppedReplySaved: Promise<void> | undefined;
+    const saveStoppedReply = (): Promise<void> => {
+      stoppedReplySaved ??= (async () => {
+        for (const item of state.publicMessages.values()) {
+          if (item.phase === "commentary" && !item.complete && typeof item.text === "string" && item.text.trim())
+            await turn.emit({
+              type: "text",
+              payload: { text: item.text, phase: "commentary" },
+              scopeLabel: turn.scopeLabel,
+            });
+        }
+        await turn.emit({
+          type: "assistant",
+          payload: { text: state.stoppedReply ?? "", stopped: true },
+          scopeLabel: turn.scopeLabel,
+        });
+      })();
+      return stoppedReplySaved;
+    };
     const onCancel = () => {
       runtimeCleanupRequested = true;
       void interrupt(true);
@@ -1188,9 +1247,10 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       }
       if (result.status === "failed" && !state.stopped && !ref.runtimeHandoff)
         throw codexProviderFailure(result.error?.message ?? "Codex turn failed");
-      if (turn.cancel?.aborted) {
-        runtimeCleanupRequested = true;
-        turnResult = { reply: "", stopped: true };
+      if (state.stopped || turn.cancel?.aborted) {
+        if (turn.cancel?.aborted) runtimeCleanupRequested = true;
+        await saveStoppedReply();
+        turnResult = { reply: state.stoppedReply ?? "", stopped: true };
       } else {
         const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : textFromTurn(result);
@@ -1217,7 +1277,8 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     } catch (error) {
       if (turn.cancel?.aborted) {
         runtimeCleanupRequested = true;
-        turnResult = { reply: "", stopped: true };
+        await saveStoppedReply();
+        turnResult = { reply: state.stoppedReply ?? "", stopped: true };
       } else {
         throw error;
       }
