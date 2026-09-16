@@ -56,19 +56,36 @@ describe("deployment redeploy route", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("forwards env and home files to the deploy service", async () => {
+  it("forwards env, home files and alwaysOn to the deploy service and answers with the view", async () => {
     const body = {
       entrypoint: "node app.js",
       files: [{ path: "app.js", data: "listen" }],
       homeFiles: [{ path: ".npmrc", data: "token" }],
       env: { DB_URL: "postgres://one" },
+      alwaysOn: false,
     };
     const response = await post("/v1/deployments/envy/redeploy", body);
     assert.equal(response.status, 200);
     assert.deepEqual(received, body);
+    const { deployment } = (await response.json()) as { deployment: { versions: Record<string, unknown>[] } };
+    assert.deepEqual(Object.keys(deployment.versions[0]!), ["version", "createdAt"], "no snapshot paths or env");
   });
 
   it("still requires an entrypoint and files", async () => {
     assert.equal((await post("/v1/deployments/envy/redeploy", { env: { A: "1" } })).status, 400);
+  });
+
+  it("rejects malformed optional fields", async () => {
+    const valid = { entrypoint: "node app.js", files: [] };
+    for (const bad of [
+      { alwaysOn: "false" },
+      { env: "DB=two" },
+      { env: null },
+      { env: ["A=1"] },
+      { homeFiles: null },
+    ]) {
+      const response = await post("/v1/deployments/envy/redeploy", { ...valid, ...bad });
+      assert.equal(response.status, 400, JSON.stringify(bad));
+    }
   });
 });
