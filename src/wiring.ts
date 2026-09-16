@@ -387,7 +387,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
 import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, swallowAs } from "./util/errors.ts";
-import { sleep } from "./util/async.ts";
+import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 
 export interface Runtime {
@@ -2409,10 +2409,12 @@ export function buildApp(
     },
     async stop() {
       await stopBackground();
-      await admittedWork.drained();
-      await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
-        swallowAs("wiring: worker drain failed", undefined),
-      );
+      await Promise.all([
+        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
+          swallowAs("wiring: admitted work drain failed", undefined),
+        ),
+        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
+      ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
       await drain.stop();
       runs.close?.();

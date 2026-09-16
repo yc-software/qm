@@ -731,3 +731,48 @@ test("inline turns remain admitted through pause and queued intake survives roll
     await built.runtime.stop();
   }
 });
+
+test("final shutdown bounds tracked worker drain without claiming ownership is drained", async () => {
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "bounded-drain-")),
+      workers: 1,
+      shutdownDrainMs: 30,
+    }),
+  );
+  const completing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const complete = built.runs.complete.bind(built.runs);
+  built.runs.complete = async (...args) => {
+    completing.resolve();
+    await release.promise;
+    return complete(...args);
+  };
+  const queued = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "bounded-worker" },
+    text: "hello",
+    async: true,
+  });
+  built.runtime.start();
+  try {
+    await completing.promise;
+    let drained = false;
+    const ownershipDrain = built.runtime.backgroundDrained().then(() => {
+      drained = true;
+    });
+    await Promise.race([
+      built.runtime.stop(),
+      sleep(2000).then(() => assert.fail("shutdown exceeded its drain budget")),
+    ]);
+    assert.equal(drained, false);
+    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
+    release.resolve();
+    await ownershipDrain;
+    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
+  } finally {
+    release.resolve();
+    await built.runtime.backgroundDrained();
+  }
+});
