@@ -35,6 +35,7 @@ export function createSurfaceContextFulfiller(deps: {
   clientOptions: Record<string, unknown>;
   readHistory?: SlackHistoryReader;
   historyClient?: any;
+  historyLimit?: number;
   historyRateLimitOptions?: { managed?: boolean; setupUrl?: string };
 }): { fulfillSurfaceContext(client: any, r: SurfaceContextRequest): Promise<void> } {
   const { core, directory, serializer, botToken, trustedFileHost, userToken, clientOptions } = deps;
@@ -88,7 +89,7 @@ export function createSurfaceContextFulfiller(deps: {
         await client.conversations.replies({
           channel,
           ts: threadTs,
-          limit: managed ? SHARED_SLACK_HISTORY_LIMIT : RECENT_THREAD_LIMIT,
+          limit: managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? RECENT_THREAD_LIMIT),
           ...page,
         }),
       );
@@ -97,7 +98,7 @@ export function createSurfaceContextFulfiller(deps: {
     const { messages, hasMore } = parseMessageList(
       await client.conversations.history({
         channel,
-        limit: managed ? SHARED_SLACK_HISTORY_LIMIT : RECENT_HISTORY_LIMIT,
+        limit: managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? RECENT_HISTORY_LIMIT),
         ...page,
       }),
     );
@@ -244,7 +245,10 @@ export function createSurfaceContextFulfiller(deps: {
       }
       const count = Math.max(
         1,
-        Math.min(RECENT_THREAD_LIMIT, Number(q.count) || (managed ? SHARED_SLACK_HISTORY_LIMIT : 100)),
+        Math.min(
+          RECENT_THREAD_LIMIT,
+          Number(q.count) || (managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? 100)),
+        ),
       );
       const before = typeof q.before === "string" && q.before ? q.before : undefined;
       const outcomes = await Promise.allSettled([

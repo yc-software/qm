@@ -235,6 +235,7 @@ export async function startSlackPlugin(
     ) as Pick<typeof historyApi.conversations, "history" | "replies">,
   };
   const readHistory = createSlackHistoryReader({
+    historyLimit: cfg.historyLimit,
     core,
     ids,
     historyClient,
@@ -350,6 +351,7 @@ export async function startSlackPlugin(
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({
+    historyLimit: cfg.historyLimit,
     rateLimitNotice,
     historyClient,
     readHistory,

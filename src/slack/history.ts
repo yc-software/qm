@@ -34,10 +34,11 @@ export function createSlackHistoryReader(deps: {
   source?: SlackContextSource;
   ids: BotIdentity;
   managed?: boolean;
+  historyLimit?: number;
   setupUrl?: string;
   historyClient?: { conversations: { history(args: any): Promise<unknown>; replies(args: any): Promise<unknown> } };
 }): SlackHistoryReader {
-  const limit = deps.managed ? SHARED_SLACK_HISTORY_LIMIT : 200;
+  const limit = deps.managed ? SHARED_SLACK_HISTORY_LIMIT : (deps.historyLimit ?? 200);
   async function liveHistory(
     client: any,
     channel: string,

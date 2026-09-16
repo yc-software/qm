@@ -246,6 +246,15 @@ your per-dev name + tokens live only in your local app and your gitignored `.env
   the full member list (with a Slack-Connect / guest external marker, and an actor-only
   fallback when membership is unreadable) so the core's audience-floor is fine-grained.
 
+## History page size
+
+`SLACK_HISTORY_LIMIT` optionally sets the live history/replies page size and default
+`read_thread` result count for workspace-owned apps (integer 1–200). Without it,
+owned apps request 200-message pages and return up to 100 messages by default.
+Shared-app installations use 15 for both defaults regardless of this setting.
+An explicit tool count overrides the result count, but not the live page size.
+Stored mirror reads keep their existing window; shadow comparisons match the live page size.
+
 ## Mirror qualification
 
 `SLACK_CONTEXT_SOURCE` controls conversation context and default Slack tool reads:
