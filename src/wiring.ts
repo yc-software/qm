@@ -1735,7 +1735,10 @@ export function buildApp(
   }> | null> => {
     const puller = orchestratorDeps.surfaceContext;
     if (!puller) return null;
-    const result = await puller.pull("slack", { conversationTarget: container, count: opts?.limit ?? 100 });
+    const result = await puller.pull("slack", {
+      conversationTarget: container,
+      ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
+    });
     if (!result) return null;
     return (result.messages as Array<Record<string, unknown>>).map((m) => ({
       container,

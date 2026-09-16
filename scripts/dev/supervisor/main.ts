@@ -276,6 +276,7 @@ function writeLegacyMeta(booting: boolean): void {
     run_store: durability.runStore,
     watch: watch ? "1" : "0",
     slack: slackOn(readBootSpec()) ? "1" : "0",
+    web: readBootSpec().web === false ? "0" : "1",
     created_epoch: String(startedAt),
     created: new Date(startedAt * 1000).toISOString().replace("T", " ").slice(0, 19),
   };
@@ -325,7 +326,11 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("env", "ok", harnessDetail);
 
   phase("deps", "start");
-  await ensureDeps(worktree, { watch: spec.watch, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" }, log);
+  await ensureDeps(
+    worktree,
+    { web: spec.web, watch: spec.watch, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" },
+    log,
+  );
   phase("deps", "ok");
 
   phase("sandbox", "start");
@@ -403,6 +408,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     ports,
     baseEnv: assembled.env,
     watch: spec.watch,
+    web: spec.web,
     webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/",
     ...(tokens ? { slack: { botToken: tokens.botToken, appToken: tokens.appToken } } : {}),
     sessionStore,
@@ -482,7 +488,14 @@ async function boot(): Promise<void> {
       phase("verify", "ok", "Slack off -- nothing to verify");
     }
     bootedAt = nowEpoch();
-    bootResult = { ok: true, slackEnabled: slackOn(spec), slot, handle, ...verified.result } as BootResult;
+    bootResult = {
+      ok: true,
+      webEnabled: spec.web !== false,
+      slackEnabled: slackOn(spec),
+      slot,
+      handle,
+      ...verified.result,
+    } as BootResult;
     writeLegacyMeta(false);
     persistState();
     finishBoot();
@@ -687,7 +700,8 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     });
     const dryEnvSha = computeEnvSha(assembled.env);
     const allHealthy =
-      children.size === CHILD_ORDER.length && [...children.values()].every((c) => c.state === "healthy");
+      children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
+      [...children.values()].every((c) => c.state === "healthy");
     return {
       ok: true,
       noop: dryEnvSha === currentEnvSha && allHealthy,
@@ -703,7 +717,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
   const newGitSha = gitHead(worktree);
   const noopEligible =
     newEnvSha === currentEnvSha &&
-    children.size === CHILD_ORDER.length &&
+    children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
     [...children.values()].every((c) => c.state === "healthy");
   if (!force && noopEligible) {
     return {
@@ -781,6 +795,7 @@ async function statusReport(): Promise<StatusReport> {
     },
     harness,
     slackEnabled,
+    webEnabled: readBootSpec().web !== false,
     watch,
     turnsLive: harness !== "mock",
     publicApiUrl: sandbox?.publicApiUrl ?? null,

@@ -461,7 +461,7 @@ export interface SurfaceContextQuery {
   conversationTarget?: string;
   channelId?: string;
   channelName?: string;
-  count: number;
+  count?: number;
   viewer?: string;
   before?: string;
   match?: string;

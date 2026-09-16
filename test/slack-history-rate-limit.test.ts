@@ -69,3 +69,99 @@ test("Slack history 429 returns immediately instead of sleeping inside the SDK",
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+for (const source of ["live", "shadow", "mirror"] as const) {
+  for (const managed of [false, true]) {
+    test(`${source} history uses the ${managed ? "shared" : "workspace-owned"} app page size`, async () => {
+      const { createSlackHistoryReader } = await import("../src/slack/history.ts");
+      const calls: Array<{ method: string; args: any }> = [];
+      const client = {
+        conversations: Object.fromEntries(
+          ["history", "replies"].map((method) => [
+            method,
+            async (args: any) => {
+              calls.push({ method, args });
+              return { messages: [{ ts: "1.0", text: "parent", reply_count: 1 }], has_more: true };
+            },
+          ]),
+        ),
+      };
+      const reader = createSlackHistoryReader({
+        core: {} as import("../src/api/slack-core-client.ts").SlackCoreClient,
+        ids: { botUserId: "UBOT", ownBotId: "BBOT" } as import("../src/slack/directory.ts").BotIdentity,
+        source,
+        managed,
+      });
+      const channel = await reader(client, "C1", undefined, "10.0", true);
+      const thread = await reader(client, "C1", "1.0");
+      assert.equal(calls.length, source === "mirror" ? 2 : 3);
+      assert.ok(calls.some((call) => call.method === "history"));
+      assert.ok(calls.some((call) => call.method === "replies"));
+      assert.ok(calls.every((call) => call.args.limit === (managed ? 15 : 200)));
+      assert.equal(calls[0]!.args.latest, "10.0");
+      assert.equal(calls[0]!.args.inclusive, false);
+      for (const page of [channel, thread]) {
+        assert.equal(page.hasMore, true);
+        assert.equal(
+          page.note,
+          source === "mirror" ? "Slack history is truncated; older messages may be absent." : undefined,
+        );
+      }
+    });
+  }
+}
+
+for (const managed of [false, true]) {
+  test(`surface history defaults for ${managed ? "shared" : "workspace-owned"} apps`, async () => {
+    const { createSurfaceContextFulfiller } = await import("../src/slack/surface-context.ts");
+    let outcome: any;
+    const calls: any[] = [];
+    const client = {
+      conversations: Object.fromEntries(
+        ["history", "replies"].map((method) => [
+          method,
+          async (args: any) => {
+            calls.push(args);
+            return {
+              messages: Array.from({ length: Math.min(args.limit, 15) }, (_, i) => ({
+                ts: String((method === "history" ? 100 : 200) + i),
+                text: `message ${i}`,
+                user: "U1",
+              })),
+              has_more: true,
+            };
+          },
+        ]),
+      ),
+    };
+    const fulfiller = createSurfaceContextFulfiller({
+      core: {
+        fulfillContextRequest: async (_id: string, result: unknown) => {
+          outcome = result;
+        },
+      } as unknown as import("../src/api/slack-core-client.ts").SlackCoreClient,
+      directory: {} as import("../src/slack/directory.ts").Directory,
+      serializer: {
+        shapeRecentMessages: async (_client: unknown, raw: any[]) => raw.map((m) => ({ ...m, name: "Alice" })),
+      } as unknown as import("../src/slack/conversation-view.ts").ConversationSerializer,
+      botToken: "test",
+      clientOptions: {},
+      historyRateLimitOptions: { managed },
+    });
+    const query = { conversationTarget: "C1:1.0" };
+    await fulfiller.fulfillSurfaceContext(client, {
+      id: "test",
+      query,
+    } as import("../src/api/slack-core-client.ts").SurfaceContextRequest);
+    assert.equal(outcome.result.messages.length, managed ? 15 : 30);
+    assert.equal(outcome.result.hasMore, true);
+    assert.ok(outcome.result.nextBefore);
+    assert.ok(calls.every((args) => args.limit === (managed ? 15 : 200)));
+    assert.equal(outcome.result.note, undefined);
+    await fulfiller.fulfillSurfaceContext(client, {
+      id: "test",
+      query: { ...query, count: 5 },
+    } as import("../src/api/slack-core-client.ts").SurfaceContextRequest);
+    assert.equal(outcome.result.messages.length, 5);
+  });
+}

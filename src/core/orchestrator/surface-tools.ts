@@ -35,7 +35,6 @@ import { adminSessionUrl } from "../../util/admin-links.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
-const SURFACE_READ_DEFAULT = 100;
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
@@ -295,12 +294,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     readThread: async (opts?: { limit?: number }) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
       if (!currentDestination.target) return { ok: false, message: "this conversation has no thread to read" };
-      const count = Math.max(1, Math.min(SURFACE_READ_MAX, opts?.limit ?? SURFACE_READ_DEFAULT));
       const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
         conversationTarget: currentDestination.target,
         viewer: actor.id,
         ...rateLimitRecipient,
-        count,
+        ...(opts?.limit !== undefined ? { count: Math.max(1, Math.min(SURFACE_READ_MAX, opts.limit)) } : {}),
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };

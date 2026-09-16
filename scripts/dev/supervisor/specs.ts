@@ -6,6 +6,7 @@ export interface SpecInputs {
   ports: SlotPorts;
   baseEnv: Record<string, string>;
   watch: boolean;
+  web?: boolean;
   webUiBasePath: string;
   slack?: { botToken: string; appToken: string };
   sessionStore: string;
@@ -27,7 +28,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
   siblingBase.CODEX_AUTH_FILE = "";
   const orgId = i.baseEnv.DEV_INSTANCE_ORG_ID || "acme";
   const signing: Record<string, string> = i.coreSigningSecret ? { CORE_SIGNING_SECRET: i.coreSigningSecret } : {};
-  return [
+  const specs: ChildSpec[] = [
     {
       name: "core",
       cwd: i.worktree,
@@ -40,7 +41,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         PORT: String(i.ports.core),
         ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
-        PUBLIC_WEB_URL: `http://localhost:${i.ports.portal}`,
+        PUBLIC_WEB_URL: i.web === false ? "" : `http://localhost:${i.ports.portal}`,
         ...(i.slack
           ? {
               SLACK_BOT_TOKEN: i.slack.botToken,
@@ -48,7 +49,8 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
               DEV_INTROSPECTION: "1",
               DEV_HEALTH_PORT: String(i.ports.slackHealth),
             }
-          : {}),
+          : { SLACK_BOT_TOKEN: "", SLACK_APP_TOKEN: "" }),
+        DEV_INSTANCE_NO_SLACK: i.slack ? "0" : "1",
         CORE_ORG_ID: orgId,
         SHUTDOWN_DRAIN_MS: "2000",
       },
@@ -101,4 +103,5 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       stopGraceMs: 5_000,
     },
   ];
+  return i.web === false ? specs.filter((spec) => spec.name === "core") : specs;
 }

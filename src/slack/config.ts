@@ -61,6 +61,7 @@ export function slackPluginConfigFromEnv(
   env: Record<string, string | undefined>,
   receiverFactory?: SlackPluginConfig["receiverFactory"],
 ): SlackPluginConfig | null {
+  if (env.DEV_INSTANCE_NO_SLACK === "1") return null;
   const eventsMode = env.SLACK_EVENTS_MODE?.trim() === "http" ? "http" : "socket";
   if (!env.SLACK_BOT_TOKEN) return null;
   if (!receiverFactory && eventsMode === "socket" && !env.SLACK_APP_TOKEN) return null;
@@ -113,6 +114,7 @@ export function normalizeSlackApiUrl(raw: string): string {
 }
 
 export function slackAccountConfigsFromEnv(env: Record<string, string | undefined>): SlackPluginConfig[] {
+  if (env.DEV_INSTANCE_NO_SLACK === "1") return [];
   const raw = env.SLACK_ACCOUNTS?.trim();
   if (!raw) return [];
   let parsed: unknown;

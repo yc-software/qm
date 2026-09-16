@@ -1179,7 +1179,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error("SECURITY_SCREEN_TIMEOUT_MS must be a positive integer no greater than 2147483647");
   }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
-  const publicUrl = env.PUBLIC_WEB_URL ?? publicApiUrl;
+  const publicUrl = env.PUBLIC_WEB_URL || publicApiUrl;
   const deployProvider = env.DEPLOY_PROVIDER ?? "docker";
   if (
     deployProvider !== "aws" &&

@@ -58,6 +58,7 @@ function parseCli() {
         follow: { type: "boolean", short: "f", default: false },
         fix: { type: "boolean", default: false },
         sandbox: { type: "string", default: "auto" },
+        surface: { type: "string" },
         "no-slack": { type: "boolean", default: false },
         "no-watch": { type: "boolean", default: false },
         org: { type: "string" },
@@ -75,7 +76,7 @@ const command = positionals[0] ?? "up";
 const store = poolStore();
 
 const commandOptions: Record<string, readonly string[]> = {
-  up: ["json", "force", "strict", "rotate", "sandbox", "no-slack", "no-watch", "org"],
+  up: ["json", "force", "strict", "rotate", "sandbox", "surface", "no-slack", "no-watch", "org"],
   down: ["json"],
   status: ["json"],
   restart: ["json"],
@@ -116,7 +117,18 @@ function emitJson(payload: unknown): void {
 }
 
 const orgId = opts.org ?? process.env.DEV_INSTANCE_ORG_ID ?? "acme";
-const withSlack = !opts["no-slack"] && process.env.DEV_INSTANCE_NO_SLACK !== "1";
+const requestedSurface =
+  opts.surface ?? (opts["no-slack"] || process.env.DEV_INSTANCE_NO_SLACK === "1" ? "web" : undefined);
+if (requestedSurface !== undefined && !["web", "slack", "both"].includes(requestedSurface)) {
+  console.error("dev: --surface must be web, slack, or both");
+  process.exit(EXIT.usage);
+}
+if (opts.surface && opts["no-slack"] && opts.surface !== "web") {
+  console.error("dev: --no-slack conflicts with --surface " + opts.surface);
+  process.exit(EXIT.usage);
+}
+let withSlack = requestedSurface === "slack" || requestedSurface === "both";
+let withWeb = requestedSurface !== "slack";
 const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
@@ -219,6 +231,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `admin_port=${ports.admin}`,
       `portal_port=${ports.portal}`,
       `slack=${withSlack ? "1" : "0"}`,
+      `web=${withWeb ? "1" : "0"}`,
       "booting=1",
       `owner_pid=${process.pid}`,
       `created_epoch=${nowEpoch()}`,
@@ -249,6 +262,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
         canaryChannel,
         strict: opts.strict,
         slack: withSlack,
+        web: withWeb,
       },
       null,
       2,
@@ -305,14 +319,17 @@ function printSuccess(result: BootResult, branch: string): void {
       : `[ok] dev instance up -- slot ${result.slot} (browser only -- Slack off)`,
   );
   out(`   branch : ${branch}`);
-  out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
+  if (result.webEnabled !== false)
+    out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
   out(
     `   core   : http://localhost:${ports.core}  (org=${orgId}, session_store=${meta.session_store}, run_store=${meta.run_store})`,
   );
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
-  out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
-  out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
-  out(`   logs   : ${lock}/{core,web,portal,supervisor}.log`);
+  if (result.webEnabled !== false)
+    out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
+  if (result.webEnabled !== false)
+    out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
+  out(`   logs   : ${lock}`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
 }
@@ -325,9 +342,16 @@ async function cmdUp(): Promise<number> {
 
   const mine = myLease(worktree, store);
   if (mine) {
+    if (requestedSurface === undefined) {
+      withSlack = mine.meta.slack !== "0";
+      withWeb = mine.meta.web !== "0";
+    }
     const sock = resolveSocketPath(mine.lockDir);
     if (await supervisorReachable(sock)) {
-      if (opts.rotate) {
+      if (withSlack !== (mine.meta.slack !== "0") || withWeb !== (mine.meta.web !== "0")) {
+        out(`switching surfaces on ${mine.slot}...`);
+        await teardownLease(mine);
+      } else if (opts.rotate) {
         out(`rotating away from ${mine.slot}...`);
         writeSlotFlag(mine.slot, { reason: "manual rotate", at: nowEpoch() }, store);
         await teardownLease(mine);
@@ -642,10 +666,15 @@ async function main(): Promise<number> {
     case "logs":
       return await cmdLogs();
     case "doctor":
-      return await runDoctor({ json: opts.json, fix: opts.fix, store, slack: withSlack });
+      return await runDoctor({
+        json: opts.json,
+        fix: opts.fix,
+        store,
+        slack: requestedSurface === undefined ? myLease(repoRoot(), store)?.meta.slack === "1" : withSlack,
+      });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|auto] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }

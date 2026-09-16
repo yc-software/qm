@@ -1,12 +1,12 @@
 ---
 name: dev-instance
-description: Run the current worktree as a production-shaped local dev instance — core, Slack, web UI, admin, portal, on a real Pi LLM + Postgres — reachable in Slack as your own bot. Each developer uses their own set of Slack apps from their own machine's pool store, so many worktrees (yours and a teammate's) can run reachable at once without colliding. Use when asked to /dev-instance, "spin this up so I can QA it in Slack", or "let me test your branch end to end".
+description: Run the current worktree as a production-shaped local dev instance with web, Slack, or both, on a real LLM + Postgres. Each developer uses their own set of Slack apps from their own machine's pool store, so many worktrees (yours and a teammate's) can run reachable at once without colliding. Use when asked to /dev-instance, "spin this up so I can QA it in Slack", or "let me test your branch end to end".
 ---
 
 # dev-instance
 
-`dev-instance` runs the current worktree as a full, production-shaped stack on your
-machine and makes it reachable in Slack as one of _your_ bots. It is the way to QA a
+`dev-instance` runs the current worktree with the surfaces needed for the task.
+Choose web for browser/admin work, Slack for bot work, and both only for cross-surface QA. It is the way to QA a
 branch end to end: real LLM turns, a real sandbox, a real local Postgres (empty by
 default; opt in to prod data), and the real Slack/web/admin surfaces.
 
@@ -14,7 +14,9 @@ Use the repo-root launcher (a thin wrapper over the TypeScript CLI in `scripts/d
 every command accepts `--json` for machine-readable output):
 
 ```bash
-bash scripts/dev-instance.sh up
+bash scripts/dev-instance.sh up --surface web
+bash scripts/dev-instance.sh up --surface slack
+bash scripts/dev-instance.sh up --surface both
 bash scripts/dev-instance.sh status
 bash scripts/dev-instance.sh down
 bash scripts/dev-instance.sh doctor
@@ -27,22 +29,29 @@ bash scripts/dev-instance.sh logs [child] [-f]
 `npm run dev-instance:doctor` are equivalent. The Codex-visible skill copy lives at
 `.codex/skills/dev-instance/SKILL.md`; keep the two skill descriptions equivalent.
 
+New instances default to web only. `npm run dev-instance:web`,
+`npm run dev-instance:slack`, and `npm run dev-instance:both` select a surface explicitly.
+Bare `up` preserves the mode of an existing instance. Explicitly selecting a different
+surface tears down and boots the worktree again, claiming the appropriate slot.
+`--no-slack` (and `DEV_INSTANCE_NO_SLACK=1`) remain aliases for web only.
+
 ## What `up` Starts
 
-`up` claims one free Slack app slot from **this machine's** pool store (see "Slack reach"
+`up --surface slack` and `up --surface both` claim one free Slack app slot from **this machine's** pool store (see "Slack reach"
 below), then spawns a **per-slot supervisor daemon** that owns the production-shaped stack:
 
-- core API + workers
-- Slack Socket Mode plugin (connected as the claimed app's bot)
-- web UI surface
-- admin surface
-- portal front door proxying `/web-ui/` and `/admin/`
+- core API + workers in every mode
+- Slack Socket Mode plugin in `slack` and `both`
+- web UI, admin, and portal front door in `web` and `both`
+
+Web-only instances need no Slack app or pool credentials. Slack-only instances skip
+web dependencies, builds, and web/portal processes.
 
 The supervisor restarts crashed children with backoff, waits for a port to actually free
 before respawning (no more EADDRINUSE), health-probes everything every 10s, and writes a
 heartbeat so slot reclaim can tell "actively in use" from "abandoned".
 
-**`up` only prints success after proving the bot is reachable**: the Slack socket must be
+**When Slack is enabled, `up` only prints success after proving the bot is reachable**: the Slack socket must be
 the app's _only_ connection (`num_connections == 1`, read from the hello frame) and — when
 the slot has a `CANARY_CHANNEL` — a posted canary message must arrive back over that same
 socket. If Slack reports multiple connections, `up` flags the slot for 30 minutes and
@@ -172,7 +181,7 @@ self-API calls can reach your local core. None of that runs on the default local
 
 ## After Startup
 
-Report the slot, portal URL, Slack handle, and log directory. To test Slack-specific
+Report the slot, enabled surfaces, their URLs or Slack handle, and log directory. To test Slack-specific
 behavior, DM the printed `@<handle>` (on Alice's machine that's one of `@bot1 … @bot10`)
 in `example.slack.com`; for admin and web behavior, open the printed portal URL. Tear down
 with `bash scripts/dev-instance.sh down` when QA is finished.

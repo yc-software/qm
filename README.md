@@ -68,9 +68,11 @@ flowchart LR
 ```
 
 For durability, set `DATABASE_URL` and `SESSION_STORE=postgres` — without it, sessions
-live in process memory and vanish on restart. To exercise a branch end to end — core,
-Slack, web, admin, portal, against a real model and real Postgres — run
-`npm run dev-instance`.
+live in process memory and vanish on restart. To exercise a branch against a real model and real Postgres, run
+`npm run dev-instance:web` for web/admin or `npm run dev-instance:slack` for Slack.
+Use `npm run dev-instance:both` when testing both surfaces together. Bare
+`npm run dev-instance` defaults to web for new instances and preserves the surface
+on reload. Switch an existing instance with an explicit surface command.
 
 ## Architecture
 
