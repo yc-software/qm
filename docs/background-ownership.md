@@ -63,3 +63,33 @@ When a process cannot acknowledge, the trusted operator must independently prove
 ```
 
 Retirement preserves the ownership generation, updates `lastRequestId`, and marks only the matching members retired and drained. Retired task identities cannot enroll again. An unreachable HTTP endpoint, old heartbeat, or elapsed timeout is not termination evidence.
+
+## Live deployment session check
+
+A ready, active deployment accepts `POST /v1/deployment/live-session` with the
+same source signature and distinct deployment bearer credential. The exact body
+contains `requestId` (a fresh UUID), `expectedDeploymentId`, `expectedGeneration`,
+and `expectedTaskArns` (the exact healthy task cohort). The endpoint rejects
+unknown fields, inactive ownership, incomplete readiness, stale generations,
+and mismatched membership before starting work.
+
+The check runs the same fixed session command used by the standalone deployment
+smoke: a real model reply, persisted turns, generated title, session error log,
+session archival, then the configured PostgreSQL catalog checks. The request
+cannot select a principal, URL, model, prompt, or command. Model HTTP requests
+have a five-minute limit; other HTTP requests and database operations have
+30-second limits. These are failure bounds, not a release-duration claim.
+
+The response is newline-delimited JSON with an initial newline and five-second
+whitespace heartbeats, followed by one final object containing `ok`, `requestId`,
+`deploymentId`, `instanceId`, `taskArn`, and `generation`. A failed result adds a
+fixed error code without raw model, database, or credential details. Ownership
+and cohort readiness are checked again before success. Heartbeats alone never
+prove success; the caller must receive and verify the complete final object.
+
+Request IDs are durably consumed across replicas and cannot be replayed. Each
+process permits one check at a time, including its cleanup. Disconnecting the
+caller does not cancel the check or release that guard before cleanup finishes.
+The deployment lease still serializes operator requests across the cohort.
+An uncertain result must fail the release; do not retry automatically or fall
+back to a second canary execution.
