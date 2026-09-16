@@ -53,7 +53,10 @@ export class StableMarkdown extends ReactiveElement {
       if (node.nodeType === Node.TEXT_NODE) {
         if (node.textContent?.trim() || node.parentElement?.closest("p, h1, h2, h3, h4, h5, h6, li, td, th"))
           result.push(node as Text);
-      } else if (!(node instanceof Element) || !["code-block", "svg", "style", "script"].includes(node.localName))
+      } else if (
+        node.nodeType !== Node.ELEMENT_NODE ||
+        !["code-block", "svg", "style", "script"].includes((node as Element).localName)
+      )
         node.childNodes.forEach(visit);
     };
     visit(root);

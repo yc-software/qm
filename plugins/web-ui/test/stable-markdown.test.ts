@@ -38,6 +38,21 @@ async function mount(content: string): Promise<InstanceType<typeof StableMarkdow
   return block;
 }
 
+test("rendering works without a global Element constructor", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Element")!;
+  Reflect.deleteProperty(globalThis, "Element");
+  try {
+    const block = await mount("A **formatted** reply");
+    assert.equal(block.querySelector("strong")?.textContent, "formatted");
+    block.content += " with more text";
+    await block.updateComplete;
+    assert.match(block.textContent!, /with more text/);
+    block.remove();
+  } finally {
+    Object.defineProperty(globalThis, "Element", descriptor);
+  }
+});
+
 test("a failed render releases its layout notification and can render again", async (t) => {
   const block = await mount("Before");
   let completed = false;

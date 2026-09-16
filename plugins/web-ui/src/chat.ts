@@ -2329,28 +2329,37 @@ export function createChatSurface(
       isStreaming &&
       currentTextPhase(work)?.phase !== "final_answer" &&
       (work.status === "working" || work.status === "thinking");
-    const timeline = messageWorkTimeline(work, active ? "" : text);
+    const replies: string[] = [];
+    const timeline = messageWorkTimeline(work, active ? "" : text).filter((item) => {
+      const speech = item.kind === "tool" ? postSpeechText(item.row) : null;
+      if (speech === null) return true;
+      replies.push(speech);
+      return false;
+    });
     const tail = active ? streamingTextTail(text, work.activity) : "";
-    if (!timeline.length && !tail.trim() && !work.pendingApprovals?.length) return html``;
     const stopping = active && runSlot.stopGeneration === runSlot.generation;
     const label = stopping ? "Stopping…" : workLabel(work);
-    return html`<details class="work work-fold work-${work.status}" ?open=${active || !!work.pendingApprovals?.length}>
-      <summary class="work-head">${sheenLabel(label, active)}${icon(ChevronRight, 14)}</summary>
-      <div class="work-divider"></div>
-      <div class="work-rows">
-        ${repeat(
-          timeline,
-          (item) => {
-            if (item.kind === "tool")
-              return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
-            if (item.kind === "approval") return `approval:${item.approval.requestId}`;
-            return `${item.kind}:${item.activity.seq}`;
-          },
-          (item) => renderTimelineItem(item, work),
-        )}
-        ${tail.trim() ? html`<div class="work-said streaming-text live-stream">${markdown(tail, true, streamingTextTail(baseline, work.activity))}</div>` : nothing}
-      </div>
-    </details>`;
+    const fold =
+      timeline.length || tail.trim() || work.pendingApprovals?.length
+        ? html`<details class="work work-fold work-${work.status}" ?open=${active || !!work.pendingApprovals?.length}>
+            <summary class="work-head">${sheenLabel(label, active)}${icon(ChevronRight, 14)}</summary>
+            <div class="work-divider"></div>
+            <div class="work-rows">
+              ${repeat(
+                timeline,
+                (item) => {
+                  if (item.kind === "tool")
+                    return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
+                  if (item.kind === "approval") return `approval:${item.approval.requestId}`;
+                  return `${item.kind}:${item.activity.seq}`;
+                },
+                (item) => renderTimelineItem(item, work),
+              )}
+              ${tail.trim() ? html`<div class="work-said streaming-text live-stream">${markdown(tail, true, streamingTextTail(baseline, work.activity))}</div>` : nothing}
+            </div>
+          </details>`
+        : nothing;
+    return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
   }
 
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
@@ -2405,8 +2414,6 @@ export function createChatSurface(
     if (item.kind === "thinking") return thinkingRow(item.activity);
     if (item.kind === "text") return messageRow(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
-    const speech = postSpeechText(item.row);
-    if (speech) return messageRow({ ...item.row.call!, payload: { text: speech } });
     return toolRow(item.row, work, status, stale);
   }
 
