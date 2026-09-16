@@ -74,11 +74,12 @@ test("live smoke requires distinct credentials, rejects capabilities and arbitra
     calls++;
   });
   try {
-    for (const credentials of [
+    const invalidCredentials: Record<string, string>[] = [
       { authorization: "" },
       { authorization: `Bearer ${sourceSecret}` },
       { "x-signature": "invalid" },
-    ]) {
+    ];
+    for (const credentials of invalidCredentials) {
       assert.equal((await srv.request("POST", body(), credentials)).status, 401);
     }
     const capability = await mintCapabilityToken(
