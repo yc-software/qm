@@ -90,7 +90,7 @@ prove success; the caller must receive and verify the complete final object.
 Request IDs are durably consumed across replicas and cannot be replayed. Each
 process permits one check at a time, including its cleanup. Disconnecting the
 caller does not cancel the check or release that guard before cleanup finishes.
-The deployment lease still serializes operator requests across the cohort.
+Singleflight is per process, and durable request IDs prevent replay. Requests with distinct IDs can run concurrently on different replicas. The release workflow serializes its own requests.
 An uncertain result must fail the release; do not retry automatically or fall
 back to a second canary execution.
 
