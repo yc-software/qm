@@ -1109,7 +1109,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description:
-            "Env vars baked into the version. When republishing, omit to keep the previous version's env; pass an object to replace it ({} clears).",
+            "Env vars baked into the version. When republishing, omit to keep the env of the most recent version (including a failed attempt); pass an object to replace it ({} clears).",
         }),
       ),
       rollbackTo: Type.Optional(

@@ -32,6 +32,7 @@ export interface RedeployInput {
   files: DeployFile[];
   homeFiles?: DeployFile[];
   env?: Record<string, string>;
+  stampEnv?: Record<string, string>;
   alwaysOn?: boolean;
 }
 
@@ -53,6 +54,7 @@ export interface DeployOrUpdateInput {
   files?: DeployFile[];
   homeFiles?: DeployFile[];
   env?: Record<string, string>;
+  stampEnv?: Record<string, string>;
   renameFrom?: string;
   rollbackTo?: number;
   share?: Array<{ scope: ScopeId; permission: Permission }>;
@@ -354,6 +356,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
+      const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
       const d = await deps.deployStore.create({
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
@@ -363,7 +366,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(homeDir ? { homeDir } : {}),
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
-        ...(input.env ? { env: input.env } : {}),
+        ...(env ? { env } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
@@ -386,7 +389,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         let homeDir = input.homeFiles === undefined ? current?.homeDir : undefined;
         if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);
-        const env = input.env ?? current?.env;
+        const inherited = input.env ?? current?.env;
+        const env = input.stampEnv ? { ...inherited, ...input.stampEnv } : inherited;
         const v = await deps.deployStore.addVersion(id, {
           entrypoint: input.entrypoint,
           snapshotDir,
@@ -651,7 +655,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           resource: existing.id,
           scopeLabel: existing.ownerScopeId,
         });
-        if ((input.entrypoint !== undefined || input.files !== undefined) && input.files) {
+        if (input.files?.length) {
           const entrypoint = requiredEntrypoint(input.entrypoint, existing);
           await this.redeploy(existing.id, {
             entrypoint,
@@ -659,6 +663,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
             ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
             ...(input.env ? { env: input.env } : {}),
+            ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
           });
           if (input.defaultAudience)
             await reconcileDefaultAudience((await deps.deployStore.get(existing.id))!, input.defaultAudience, false);
@@ -700,6 +705,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
           ...(input.env ? { env: input.env } : {}),
+          ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
         });
         isCreate = false;
       } else {
@@ -713,6 +719,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
           ...(input.env ? { env: input.env } : {}),
+          ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
         });
         isCreate = true;

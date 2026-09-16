@@ -132,7 +132,8 @@ publish({
 - **Immutable versions + rollback.** Every publish is a new immutable version; `rollbackTo`
   is an instant pointer flip. Safe to ship often.
 - **Env carries over.** `env` is baked into each version; a republish that omits `env` keeps
-  the previous version's, and passing `env` replaces it (`{}` clears).
+  the most recent version's (including a failed attempt), and passing `env` replaces it
+  (`{}` clears).
 - **Posture-aware egress.** Deployment network access follows the operator's configured
   deployment provider and egress policy. Declare required hosts and credentials explicitly;
   never assume arbitrary outbound access.

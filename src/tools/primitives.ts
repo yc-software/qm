@@ -48,7 +48,7 @@ import type {
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
 import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
-import { currentVersionOf, publicUrlOf } from "../deploy/deploy-store.ts";
+import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -996,11 +996,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             ),
           )
         : {};
-      const stamped = Object.keys(authEnv).length > 0;
-      const target = input.renameFrom ?? input.name;
-      const env =
-        input.env ??
-        (stamped && target !== undefined ? currentVersionOf(await deps.deploy.getDeployment(target))?.env : undefined);
 
       const pc = deps.publishContext;
       const aud: PublishAudience =
@@ -1035,7 +1030,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.renameFrom !== undefined ? { renameFrom: input.renameFrom } : {}),
-          ...(env || stamped ? { env: { ...env, ...authEnv } } : {}),
+          ...(input.env !== undefined ? { env: input.env } : {}),
+          ...(Object.keys(authEnv).length ? { stampEnv: authEnv } : {}),
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(doReconcile

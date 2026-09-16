@@ -90,4 +90,7 @@ test("deploy-service: redeploy inherits the current version's env and home files
   await s.service.rollbackDeployment(d.id, 3);
   await s.service.redeploy(d.id, { entrypoint: "node x", files: [] });
   assert.deepEqual((await versionAt(5)).env, { DB_URL: "postgres://two" }, "inherits from the rolled-back version");
+
+  await s.service.redeploy(d.id, { entrypoint: "node x", files: [], stampEnv: { STAMP: "s" } });
+  assert.deepEqual((await versionAt(6)).env, { DB_URL: "postgres://two", STAMP: "s" }, "stampEnv merges on top");
 });

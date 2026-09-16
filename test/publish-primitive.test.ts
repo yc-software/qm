@@ -221,7 +221,7 @@ test("publish by name keeps the previous version's env unless the call replaces 
   assert.deepEqual(envs, [{ DB: "one" }, { DB: "one" }, { OTHER: "x" }, {}]);
 });
 
-test("publish from a layer with split env stamps it on top of the inherited env", async () => {
+test("publish from a layer with split env stamps it on top of the previous version's env when env is omitted", async () => {
   const s = svc();
   const files = [{ path: "app/server.js", data: bytes("v1") }];
   const splitEnv = { ACTING: "{actingSlackUserId}" };
@@ -231,11 +231,13 @@ test("publish from a layer with split env stamps it on top of the inherited env"
     name: "dash",
     env: { DB: "one" },
   });
+  await ctx(s.deploy, { files, splitEnv }).publish({ dir: "app", name: "dash", env: { DB: "two" } });
   await ctx(s.deploy, { files, splitEnv }).publish({ dir: "app", name: "dash" });
   const envs = (await s.deployStore.getByName("dash"))!.versions.map((v) => v.env);
   assert.deepEqual(envs, [
     { DB: "one", ACTING: "U1" },
-    { DB: "one", ACTING: "U1" },
+    { DB: "two", ACTING: "U1" },
+    { DB: "two", ACTING: "U1" },
   ]);
 });
 
@@ -286,6 +288,7 @@ test("publish: renameFrom moves the link but keeps the id (and shares ride the i
 
   assert.equal(renamed.id, created.id);
   assert.equal(renamed.url, "/d/new-name/");
+  assert.equal((await s.deployStore.getByName("new-name"))!.versions.length, 1, "a pure rename ships no version");
   assert.equal(await s.deployStore.getByName("old-name"), null);
   assert.equal((await s.deployStore.getByName("new-name"))!.id, created.id);
   assert.equal((await s.acl.grantsFor(scopeId("personal", "U1"), `deployment:${created.id}`)).length, 1);
