@@ -32,7 +32,8 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
       token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
       appId: process.env.QM_SLACK_APP_ID ?? "",
       store: built.slackInstallation,
-      reconcile: config.backgroundWorkEnabled ? () => slackRuntime.reconcile() : undefined,
+      reconcile:
+        config.backgroundWorkEnabled || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
     })
   : undefined;
 const server = createServer(built.app, {
@@ -83,7 +84,7 @@ if (config.deployProvider === "docker") {
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   built.scheduler.start(1000);
   built.suggestedActivityMaintenance.start();
-} else {
+} else if (!config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
 
@@ -187,9 +188,6 @@ function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[qm] ${signal} received, shutting down`);
-  void backgroundController
-    ?.stop()
-    .catch((error) => console.error("[qm] background controller stop failed:", errMessage(error)));
   void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
@@ -198,7 +196,18 @@ function shutdown(signal: string): void {
   built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();
-  stopWithBackstop(built.runtime, config.shutdownDrainMs, "qm", () => server.closeAllConnections());
+  stopWithBackstop(
+    {
+      async stop() {
+        await backgroundController?.stop();
+        await built.runtime.stop();
+      },
+      releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
+    },
+    config.shutdownDrainMs,
+    "qm",
+    () => server.closeAllConnections(),
+  );
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

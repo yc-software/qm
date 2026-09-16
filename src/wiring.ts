@@ -2279,6 +2279,7 @@ export function buildApp(
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
+  let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
   function startBackground(): void {
     if (backgroundRunning) return;
@@ -2299,6 +2300,11 @@ export function buildApp(
       reaper.start();
       processReaper?.start();
       monitorPoller?.start(config.monitorPollMs);
+      void monitorDrained
+        .then(() => {
+          if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(config.monitorPollMs);
+        })
+        .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
@@ -2312,17 +2318,15 @@ export function buildApp(
       sessionReturnSweeper.start();
     };
     if (backgroundStopping)
-      void backgroundStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
+      void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
     else startPeriodic();
   }
   function stopBackground(): Promise<void> {
     backgroundRunning = false;
-    if (backgroundStopping) {
-      for (const worker of workers) void worker.stopClaims();
-      return backgroundStopping;
-    }
+    const previous = backgroundStopping;
     backgroundGeneration++;
     const monitorStopping = monitorPoller?.stop();
+    monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
       reaper.stop(),
       processReaper?.stop(),
@@ -2340,12 +2344,13 @@ export function buildApp(
       ...workers.map((worker) => worker.stopClaims()),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    backgroundStopping = Promise.all([backgroundClaimsStopping, monitorStopping])
+    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
       .then(() => {})
       .finally(() => {
-        backgroundStopping = null;
+        if (backgroundStopping === draining) backgroundStopping = null;
       });
-    return backgroundStopping;
+    backgroundStopping = draining;
+    return draining;
   }
   const runtime: Runtime = {
     start() {
@@ -2467,7 +2472,9 @@ export function buildApp(
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
-    ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
+    ...(config.suggestedActivitiesEnabled && (config.backgroundWorkEnabled || config.backgroundDeploymentId)
+      ? { suggestedActivities }
+      : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     suggestedActivityMaintenance,
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
