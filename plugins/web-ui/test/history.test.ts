@@ -1,9 +1,12 @@
+import { buildTimeline, messageWorkTimeline } from "../src/timeline.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   attachPendingApprovals,
+  continuableMessages,
+  messagesWithStreaming,
   currentEarlierCount,
   entriesToMessages,
   forkOriginDetails,
@@ -14,6 +17,95 @@ import {
   type PendingApproval,
   type SessionEntry,
 } from "../src/core-bridge.ts";
+
+test("approval decisions remain visible history events instead of unresolved tool rows", () => {
+  const messages = entriesToMessages([
+    { type: "user", seq: 1, createdAt: 1, payload: { text: "show help" } },
+    { type: "tool_result", seq: 2, createdAt: 2, payload: { tool: "execute", blocked: "needs_approval" } },
+    { type: "assistant", seq: 3, createdAt: 3, payload: { text: "" } },
+    { type: "approval_resolved", seq: 4, createdAt: 4, payload: { command: "rm -r --help", approved: false } },
+    {
+      type: "approval_resolved",
+      seq: 5,
+      createdAt: 5,
+      payload: { command: "rm -r --help", approved: true, scope: "once" },
+    },
+  ]);
+  assert.deepEqual(messages.slice(-2), [
+    { role: "approval-decision", command: "rm -r --help", approved: false, timestamp: 4 },
+    { role: "approval-decision", command: "rm -r --help", approved: true, scope: "once", timestamp: 5 },
+  ]);
+});
+
+test("steering keeps the active turn together through hydration and tool completion", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "start" }, createdAt: 1, seq: 1 },
+    { type: "text", payload: { text: "Working", phase: "commentary" }, createdAt: 2, seq: 2 },
+    { type: "tool_call", payload: { tool: "execute", callId: "one", command: "sleep 40" }, createdAt: 3, seq: 3 },
+    { type: "user", payload: { text: "change direction", steered: true }, createdAt: 4, seq: 4 },
+    { type: "user", payload: { text: "finish briefly", steered: true }, createdAt: 5, seq: 5 },
+  ];
+  const active = entriesToMessages(entries);
+  assert.deepEqual(
+    active.map((message) => message.role),
+    ["user", "user", "user", "assistant"],
+  );
+  const resumed = continuableMessages(active);
+  assert.deepEqual(
+    resumed.messages.map((message) => message.role),
+    ["user", "user", "user"],
+  );
+  assert.equal(resumed.popped.length, 1);
+  assert.deepEqual(
+    (resumed.popped[0] as AssistantWork).work?.activity.map((entry) => entry.seq),
+    [2, 3],
+  );
+  const finished = entriesToMessages([
+    ...entries,
+    { type: "tool_result", payload: { tool: "execute", callId: "one", code: 0 }, createdAt: 6, seq: 6 },
+    { type: "assistant", payload: { text: "Done" }, createdAt: 7, seq: 7 },
+  ]);
+  assert.deepEqual(
+    finished.map((message) => message.role),
+    ["user", "user", "user", "assistant"],
+  );
+  const work = (finished.at(-1) as AssistantWork).work!;
+  assert.deepEqual(
+    work.activity.map((entry) => entry.seq),
+    [2, 3, 6],
+  );
+  const tools = buildTimeline(work).filter((item) => item.kind === "tool");
+  assert.equal(tools.length, 1);
+  assert.equal(tools[0]!.row.call?.seq, 3);
+  assert.equal(tools[0]!.row.result?.seq, 6);
+});
+
+test("steering preserves an in-flight post and does not promote its closing narration", () => {
+  const messages = entriesToMessages([
+    { type: "user", payload: { text: "start" }, createdAt: 1, seq: 1 },
+    {
+      type: "tool_call",
+      payload: { tool: "web", action: "post", text: "Delivered", callId: "one" },
+      createdAt: 2,
+      seq: 2,
+    },
+    { type: "user", payload: { text: "finish briefly", steered: true }, createdAt: 3, seq: 3 },
+    { type: "tool_result", payload: { tool: "web", action: "post", ok: true, callId: "one" }, createdAt: 4, seq: 4 },
+    { type: "user", payload: { text: "no more posts", steered: true }, createdAt: 5, seq: 5 },
+    { type: "text", payload: { text: "Finished posting" }, createdAt: 6, seq: 6 },
+    { type: "assistant", payload: { text: "" }, createdAt: 7, seq: 7 },
+  ]);
+  const replies = messages.filter((message) => message.role === "assistant") as AssistantWork[];
+  assert.equal(replies.length, 2);
+  assert.deepEqual(
+    replies.map((message) => message.content),
+    [[{ type: "text", text: "Delivered" }], [{ type: "text", text: "" }]],
+  );
+  assert.deepEqual(
+    replies[1]!.work?.activity.map((entry) => entry.seq),
+    [6],
+  );
+});
 
 test("fork provenance separates inherited entries at the boundary", () => {
   const entries: SessionEntry[] = [
@@ -879,6 +971,7 @@ test("a surface post renders as the reply bubble; the closing self-log demotes t
   );
   const trailer = msgs[2] as AssistantWork & { content: Array<{ text?: string }> };
   assert.equal(trailer.content[0]?.text ?? "", "", "the self-log is not a reply bubble");
+  assert.deepEqual(messageWorkTimeline(trailer.work!, ""), [], "the demoted-only trailer has no visible work fold");
   assert.ok(
     JSON.stringify(trailer.work?.activity ?? []).includes("Replied in thread"),
     "the self-log survives as work narration",
@@ -1410,4 +1503,87 @@ test("a surface post's sent files render as delivered files on the reply bubble"
     ],
     "the attachments the post actually sent are surfaced on the message",
   );
+});
+
+for (const text of ["Partial answer", "", "(stopped)"]) {
+  test(`stopped history retains its state without promoting commentary: ${text || "empty"}`, () => {
+    const entries: SessionEntry[] = [
+      { seq: 1, type: "user", payload: { text: "check" }, createdAt: 1 },
+      { seq: 2, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 2 },
+      { seq: 3, type: "assistant", payload: { text, stopped: true }, createdAt: 3 },
+    ];
+    const messages = entriesToMessages(entries);
+    const answer = messages.find((message) => message.role === "assistant") as AssistantWork;
+    assert.equal(answer.stopReason, "aborted");
+    assert.deepEqual(answer.content, [{ type: "text", text }]);
+    assert.equal(answer.work?.activity.length, 1);
+    assert.equal(messageWorkTimeline(answer.work!, text)[0]?.kind, "text");
+  });
+}
+
+test("live approval decisions are outside tool folds and reconcile by request identity", () => {
+  const entry = {
+    type: "approval_resolved" as const,
+    seq: 8,
+    parentSeq: null,
+    createdAt: 100,
+    payload: { requestId: "approval-1", command: "help", approved: true, scope: "once" },
+  };
+  const streaming = {
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+    work: { status: "working", activity: [entry] },
+  } as unknown as AgentMessage;
+  const live = messagesWithStreaming([], streaming);
+  assert.equal(live.length, 2);
+  assert.equal((live[0] as { role: string }).role, "approval-decision");
+  assert.equal(live[1], streaming);
+  assert.deepEqual(messagesWithStreaming([streaming]), live);
+  assert.deepEqual(buildTimeline((streaming as AssistantWork).work!), []);
+  const history = entriesToMessages([entry]);
+  assert.deepEqual(messagesWithStreaming(history, streaming), [...history, streaming]);
+  const repeated = {
+    ...streaming,
+    work: { status: "working", activity: [{ ...entry, seq: 9, createdAt: 200 }] },
+  } as unknown as AgentMessage;
+  assert.equal(messagesWithStreaming(history, repeated).length, 3);
+  const denied = { ...entry, payload: { ...entry.payload, requestId: "approval-2", approved: false } };
+  const denialStream = { ...streaming, work: { status: "complete", activity: [denied] } } as unknown as AgentMessage;
+  assert.equal(messagesWithStreaming(history, denialStream).length, 3);
+});
+
+test("a recorded decision clears stale approval labels without consuming a later request", () => {
+  const pending = { requestId: "same-command", command: "help" };
+  const blocked = (createdAt: number) =>
+    ({
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      timestamp: createdAt,
+      work: {
+        status: "complete",
+        pendingApprovals: [pending],
+        activity: [{ seq: 1, parentSeq: null, type: "tool_result", payload: { blocked: "needs_approval" }, createdAt }],
+      },
+    }) as unknown as AgentMessage;
+  const decision = {
+    type: "approval_resolved" as const,
+    seq: 2,
+    parentSeq: null,
+    createdAt: 200,
+    payload: { requestId: pending.requestId, command: pending.command, approved: false },
+  };
+  const old = blocked(100);
+  const fresh = blocked(300);
+  const streaming = {
+    role: "assistant",
+    content: [],
+    work: { status: "working", activity: [decision] },
+  } as unknown as AgentMessage;
+  const visible = messagesWithStreaming([old, fresh], streaming);
+  assert.deepEqual((visible[0] as AssistantWork).work?.pendingApprovals, []);
+  assert.equal(visible[1], fresh);
+  assert.deepEqual((old as AssistantWork).work?.pendingApprovals, [pending]);
+  const history = messagesWithStreaming([old, ...entriesToMessages([decision]), fresh]);
+  assert.deepEqual((history[0] as AssistantWork).work?.pendingApprovals, []);
+  assert.equal(history.at(-1), fresh);
 });

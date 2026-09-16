@@ -12,6 +12,119 @@ const cases = [
   { name: "an unterminated final frame at EOF", text: "before\u2028after", ending: "", fragmented: true },
 ];
 
+test("Codex tool requests do not block other calls, notifications, or RPC responses", { timeout: 3000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-tool-concurrency-"));
+  const binary = join(dir, "codex");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "start") {
+    send({ id: "first", method: "item/tool/call" });
+    send({ id: "second", method: "item/tool/call" });
+    send({ id: "third", method: "item/tool/call" });
+    send({ method: "progress", params: 1 });
+    send({ method: "progress", params: 2 });
+    send({ id: message.id, result: "started" });
+  } else if (message.method === "nested") send({ id: message.id, result: "nested reply" });
+  else if (["first", "second", "third"].includes(message.id)) send({ method: "tool/replied", params: message });
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const release = Promise.withResolvers<void>();
+  const firstDone = Promise.withResolvers<void>();
+  const calls: number[] = [];
+  const notifications: unknown[] = [];
+  const replies: unknown[] = [];
+  const server: CodexAppServer = new CodexAppServer({
+    binaryPath: binary,
+    cwd: dir,
+    onNotification: async (method, params) => {
+      if (method === "progress") {
+        await Promise.resolve();
+        notifications.push(params);
+      } else {
+        replies.push(params);
+        if ((params as { id: string }).id === "first") firstDone.resolve();
+      }
+    },
+    onRequest: async () => {
+      const index = calls.length;
+      calls.push(index);
+      if (index === 0) {
+        assert.equal(await server.request("nested"), "nested reply");
+        await release.promise;
+      }
+      if (index === 2) throw new Error("tool failed");
+      return index;
+    },
+  });
+  t.after(async () => {
+    release.resolve();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(await server.request("start", {}, AbortSignal.timeout(1000)), "started");
+  assert.deepEqual(calls, [0, 1, 2]);
+  assert.deepEqual(notifications, [1, 2]);
+  release.resolve();
+  await firstDone.promise;
+  assert.deepEqual(replies, [
+    { id: "second", result: 1 },
+    { id: "third", error: { code: -32000, message: "tool failed" } },
+    { id: "first", result: 0 },
+  ]);
+  assert.equal(server.error(), null);
+});
+
+for (const fails of [false, true]) {
+  test(`Codex tolerates an in-flight tool ${fails ? "failure" : "result"} after transport close`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-tool-close-"));
+    const binary = join(dir, "codex");
+    writeFileSync(
+      binary,
+      `#!${process.execPath}
+const readline = require("node:readline");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const request = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ id: "tool", method: "item/tool/call" }) + "\\n");
+  process.stdout.write(JSON.stringify({ id: request.id, result: "started" }) + "\\n");
+});
+`,
+    );
+    chmodSync(binary, 0o755);
+    const release = Promise.withResolvers<void>();
+    const finished = Promise.withResolvers<void>();
+    const server = new CodexAppServer({
+      binaryPath: binary,
+      cwd: dir,
+      onNotification: () => {},
+      onRequest: async () => {
+        await release.promise;
+        finished.resolve();
+        if (fails) throw new Error("late failure");
+        return "late result";
+      },
+    });
+    t.after(async () => {
+      release.resolve();
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    assert.equal(await server.request("start", {}, AbortSignal.timeout(1000)), "started");
+    await server.close();
+    const error = server.error();
+    release.resolve();
+    await finished.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(server.error(), error);
+  });
+}
+
 for (const { name, text, ending, fragmented } of cases) {
   test(`Codex JSON-RPC preserves ${name}`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "qm-codex-framing-"));

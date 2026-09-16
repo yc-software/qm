@@ -60,6 +60,7 @@ export function createTurnMethods(
   | "syncRunStream"
   | "activeRunForThread"
   | "withdrawRun"
+  | "editQueuedRun"
   | "signalRun"
   | "replayOrphanedRunSignals"
 > {
@@ -620,6 +621,29 @@ export function createTurnMethods(
       return {
         status: run.status,
         result: run.result ? await withAdminLink(run.result) : run.result,
+        ...(run.request.surface === "web" &&
+        !run.request.approval &&
+        !run.request.envelopeWrapped &&
+        !(run.request.proactiveOpener && !run.request.text.trim()) &&
+        isPersonAuthored(resolveTurnOrigin(run.request).kind)
+          ? {
+              input: {
+                runId: run.id,
+                seq: run.turnUserSeq,
+                text: run.request.displayText ?? run.request.text ?? "",
+                createdAt: run.createdAt,
+                ...(run.request.attachments?.length
+                  ? {
+                      attachments: run.request.attachments.map(({ name, mimetype, sizeBytes }) => ({
+                        name,
+                        mimetype,
+                        sizeBytes,
+                      })),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
         startedAt: run.startedAt,
         finishedAt: run.finishedAt,
         ...(partial ? { partial } : {}),
@@ -651,6 +675,22 @@ export function createTurnMethods(
           ...(run.request.attachments?.length ? { hasAttachments: true } : {}),
         }));
       return { runId: live.id, ...(queued.length ? { queued } : {}) };
+    },
+
+    async editQueuedRun(runId, text, expectedText, viewer) {
+      const run = await deps.runs.get(runId);
+      if (!run || (viewer && (!samePerson(run.request.actor.id, viewer) || !(await viewerMayUseRun(run, viewer)))))
+        return { edited: false, reason: "not_found" };
+      if (
+        run.request.surface !== "web" ||
+        run.request.envelopeWrapped ||
+        !isPersonAuthored(resolveTurnOrigin(run.request).kind)
+      )
+        return { edited: false, reason: "not_editable" };
+      if (!text.trim() && !run.request.attachments?.length) return { edited: false, reason: "empty_text" };
+      return (await deps.runs.editPendingText(runId, text, expectedText))
+        ? { edited: true }
+        : { edited: false, reason: "changed_or_started" };
     },
 
     async withdrawRun(runId, viewer) {

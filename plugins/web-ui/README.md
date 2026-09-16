@@ -1,6 +1,6 @@
 # Web UI plugin
 
-An end-user web surface with a custom ChatGPT/Claude-style chat shell, stitched to the
+An end-user web surface with a custom chat shell, connected to the
 platform core. It still uses Pi's `Agent` state machine and selected Pi web utilities
 for markdown, attachment loading, and model metadata, but the visible conversation UI is
 owned by this plugin. Two processes:
@@ -156,8 +156,8 @@ the CSS media queries, the composer, and the split canvas.
   alongside the light/dark choice.
   The UI drives Pi's `Agent` with a custom `streamFn` (`src/core-bridge.ts`) instead of
   mounting Pi's stock `AgentInterface`.
-- **Slash-command skill picker** — type `/` at the start of the composer for a Codex-style
-  autofill of the **skills** available to you (B6): icon · name · description · scope, with the
+- **Slash-command skill picker** — type `/` at the start of the composer to browse the
+  **skills** available to you (B6): icon · name · description · scope, with the
   typed letters emboldened. Arrow/Tab/Enter to choose (it inserts `/<name> `), Esc/click-out to
   dismiss. The list is the signed-in principal's _visible_ skills — the same set the agent gets
   materialized into a DM turn — fetched once per session via the server's `/api/skills` proxy

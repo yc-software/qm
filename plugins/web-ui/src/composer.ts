@@ -26,6 +26,7 @@ import {
 import {
   api,
   ApiError,
+  editQueuedRun,
   approvalBlocksComposer,
   latestTranscriptSeq,
   MAX_ATTACHMENT_BYTES,
@@ -291,6 +292,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   const pastedTextIds = new Set<string>();
 
   const queuedRuns = new Map<string, QueuedRun[]>();
+  let queuedEdit: { runId: string; threadRef: string; original: string; text: string; saving: boolean } | null = null;
 
   function queuedRunsFor(threadRef: string | null): QueuedRun[] {
     return (threadRef ? queuedRuns.get(threadRef) : undefined) ?? [];
@@ -762,7 +764,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function queuedStrip(agent: Agent): TemplateResult | typeof nothing {
-    const queued = queuedRunsFor(ctx.chat.state.threadRef);
+    const queued = [...queuedRunsFor(ctx.chat.state.threadRef)];
+    if (queuedEdit?.threadRef === ctx.chat.state.threadRef && !queued.some((q) => q.runId === queuedEdit?.runId))
+      queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
     if (!queued.length) return nothing;
     const steerable =
       agent.state.isStreaming && ctx.chat.hasLiveRun() && harnessSupportsSteer(currentModelOption()?.harnessId ?? "");
@@ -773,33 +777,103 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     };
     return html`
       <div class="queued-strip" role="list" aria-label="Queued messages">
-        ${queued.map(
-          (q) => html`
-            <div class="queued-chip" role="listitem">
-              <span class="queued-tag">Queued</span>
-              <span class="queued-text" dir="auto" ${tip(q.text || "Files, no text")}
-                >${q.text || (q.hasAttachments ? "(files)" : "")}</span
-              >
-              <button
-                type="button"
-                class="queued-steer"
-                ?disabled=${!steerable || q.hasAttachments}
-                ${tip(steerTip(q))}
-                @click=${() => void steerQueued(agent, q)}
-              >
-                ${icon(CornerDownRight, 13)}<span>Steer</span>
-              </button>
-              <button
-                type="button"
-                class="chip-x"
-                aria-label="Remove queued message"
-                ${tip("Remove")}
-                @click=${() => void removeQueued(agent, q)}
-              >
-                ${icon(X, 13)}
-              </button>
-            </div>
-          `,
+        ${queued.map((q) =>
+          queuedEdit?.runId === q.runId && queuedEdit.threadRef === ctx.chat.state.threadRef
+            ? html` <div class="queued-chip queued-editing" role="listitem">
+                <textarea
+                  class="queued-edit-input"
+                  aria-label="Edit queued message"
+                  rows="3"
+                  .value=${live(queuedEdit.text)}
+                  ?disabled=${queuedEdit.saving}
+                  @input=${(event: Event) => {
+                    if (queuedEdit) queuedEdit.text = (event.target as HTMLTextAreaElement).value;
+                  }}
+                  @keydown=${(event: KeyboardEvent) => {
+                    if (event.isComposing || queuedEdit?.saving) return;
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      cancelQueuedEdit(agent);
+                    } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void saveQueuedEdit(agent);
+                    }
+                  }}
+                ></textarea>
+                <button
+                  type="button"
+                  class="queued-steer"
+                  aria-keyshortcuts="Control+Enter Meta+Enter"
+                  ?disabled=${queuedEdit.saving}
+                  @click=${() => void saveQueuedEdit(agent)}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  class="queued-steer"
+                  ?disabled=${queuedEdit.saving}
+                  @click=${() => cancelQueuedEdit(agent)}
+                >
+                  Cancel
+                </button>
+              </div>`
+            : html`
+                <div class="queued-chip" role="listitem">
+                  <span class="queued-tag">Queued</span>
+                  <span class="queued-text" dir="auto" ${tip(q.text || "Files, no text")}
+                    >${q.text || (q.hasAttachments ? "(files)" : "")}</span
+                  >
+                  <button
+                    type="button"
+                    class="queued-steer"
+                    ?disabled=${!steerable || q.hasAttachments}
+                    ${tip(steerTip(q))}
+                    @click=${() => void steerQueued(agent, q)}
+                  >
+                    ${icon(CornerDownRight, 13)}<span>Steer</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="queued-steer"
+                    aria-label="Edit queued message"
+                    @click=${() => {
+                      const edit = (queuedEdit = {
+                        runId: q.runId,
+                        threadRef: ctx.chat.state.threadRef!,
+                        original: q.text,
+                        text: q.text,
+                        saving: false,
+                      });
+                      ctx.chat.drawActiveChat(agent);
+                      requestAnimationFrame(() => {
+                        if (
+                          queuedEdit !== edit ||
+                          ctx.chat.state.threadRef !== edit.threadRef ||
+                          ctx.chat.state.agent !== agent
+                        )
+                          return;
+                        const input = ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(".queued-edit-input");
+                        input?.focus();
+                        input?.setSelectionRange(input.value.length, input.value.length);
+                      });
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    class="chip-x"
+                    aria-label="Remove queued message"
+                    ${tip("Remove")}
+                    @click=${() => void removeQueued(agent, q)}
+                  >
+                    ${icon(X, 13)}
+                  </button>
+                </div>
+              `,
         )}
       </div>
     `;
@@ -1886,6 +1960,42 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     }
   }
 
+  function cancelQueuedEdit(agent: Agent): void {
+    if (queuedEdit?.saving) return;
+    queuedEdit = null;
+    composerState.error = "";
+    ctx.chat.drawActiveChat(agent);
+    focusComposerEnd();
+  }
+
+  async function saveQueuedEdit(agent: Agent): Promise<void> {
+    const edit = queuedEdit;
+    if (!edit || edit.saving) return;
+    edit.saving = true;
+    composerState.error = "";
+    ctx.chat.drawActiveChat(agent);
+    try {
+      await editQueuedRun(edit.runId, edit.text, edit.original);
+      setQueuedRuns(
+        edit.threadRef,
+        queuedRunsFor(edit.threadRef).map((q) => (q.runId === edit.runId ? { ...q, text: edit.text } : q)),
+      );
+      if (queuedEdit === edit) {
+        queuedEdit = null;
+        if (ctx.chat.state.threadRef === edit.threadRef && ctx.chat.state.agent === agent) focusComposerEnd();
+      }
+    } catch (error) {
+      if (ctx.chat.state.threadRef === edit.threadRef)
+        composerState.error =
+          error instanceof ApiError && error.status === 409
+            ? "That message changed or already started. Your edit was not saved."
+            : errMessage(error, "Could not edit the queued message.");
+    } finally {
+      edit.saving = false;
+      if (ctx.chat.state.threadRef === edit.threadRef) ctx.chat.drawActiveChat(agent);
+    }
+  }
+
   async function removeQueued(agent: Agent, queued: QueuedRun): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
     if (!threadRef) return;
@@ -1995,6 +2105,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     clearComposerDom(agent);
     try {
       if (ctx.chat.state.normalStreamFn) agent.streamFn = ctx.chat.state.normalStreamFn;
+      ctx.chat.scrollToBottom();
       await agent.prompt(userSendMessage(text, attachments.length ? attachments : undefined));
       restoreBlockedSend(agent, sentFromThread, text, attachments);
       restoreFailedAttachments(agent, text, attachments);

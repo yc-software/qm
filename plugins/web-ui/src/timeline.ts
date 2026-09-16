@@ -166,11 +166,14 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   const rowByCallId = new Map<string, ToolRowModel>();
   let open: ToolRowModel | null = null;
   for (const a of work.activity) {
+    if (a.type === "text_start") continue;
     if (a.type === "thinking") {
       items.push({ kind: "thinking", activity: a });
       open = null;
     } else if (a.type === "text") {
       items.push({ kind: "text", activity: a });
+      open = null;
+    } else if (a.type === "approval_resolved") {
       open = null;
     } else if (a.type === "tool_call") {
       const row: ToolRowModel = { call: a, result: null };
@@ -252,4 +255,59 @@ export function sessionToolView(
     detail = result.delivered ? (verbs[result.delivered] ?? result.delivered) : "";
   } else if (action === "read") detail = result.status ?? "";
   return { action, chipTitle, ...(sessionId ? { sessionId } : {}), detail };
+}
+
+export function currentTextPhase(work: WorkBlock): {
+  phase: "commentary" | "final_answer";
+  streamOffset: number;
+  startedAt: number;
+} | null {
+  const entry = work.activity.findLast((activity) => activity.type === "text_start");
+  if (!entry) return null;
+  const payload = entry.payload as { phase?: unknown; streamOffset?: unknown } | null;
+  if (
+    (payload?.phase !== "commentary" && payload?.phase !== "final_answer") ||
+    typeof payload.streamOffset !== "number" ||
+    !Number.isSafeInteger(payload.streamOffset) ||
+    payload.streamOffset < 0
+  )
+    return null;
+  return { phase: payload.phase, streamOffset: payload.streamOffset, startedAt: entry.createdAt };
+}
+
+export function streamedAnswer(text: string, work: WorkBlock): string {
+  const phase = currentTextPhase(work);
+  return phase?.phase === "final_answer" ? text.slice(phase.streamOffset) : streamingTextTail(text, work.activity);
+}
+
+export function streamingTextTail(text: string, activity: ToolActivity[]): string {
+  let tail = text;
+  for (const entry of activity) {
+    if (entry.type !== "text") continue;
+    const spoken = ((entry.payload as { text?: string } | null)?.text ?? "").trim();
+    if (!spoken) continue;
+    const candidate = tail.trimStart();
+    if (candidate.startsWith(spoken)) tail = candidate.slice(spoken.length).replace(/^\s*?\n\n/, "");
+    else if (spoken.startsWith(candidate)) return "";
+    else break;
+  }
+  return tail;
+}
+
+export function messageWorkTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
+  const timeline = buildTimeline(work);
+  const lastText = finalText.trim() ? timeline.findLastIndex((item) => item.kind === "text") : -1;
+  return timeline.filter((item, index) => {
+    if (item.kind === "thinking") {
+      const payload = item.activity.payload as { thinking?: string; redacted?: boolean } | null;
+      return !payload?.redacted && Boolean(payload?.thinking?.trim());
+    }
+    if (item.kind !== "text") return true;
+    const payload = item.activity.payload as { text?: string; demoted?: boolean; phase?: string } | null;
+    return (
+      !payload?.demoted &&
+      Boolean(payload?.text?.trim()) &&
+      !(index === lastText && payload?.phase !== "commentary" && payload?.text?.trim() === finalText.trim())
+    );
+  });
 }

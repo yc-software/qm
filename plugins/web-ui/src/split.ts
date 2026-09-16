@@ -1,4 +1,5 @@
 import { openSessionShare } from "./session-share";
+import { preserveTranscriptScroll } from "./transcript-viewport";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import {
@@ -198,6 +199,14 @@ function buildDock(): DockviewApi {
     disableFloatingGroups: true,
   });
   const inner = dockEl.querySelector(":scope > .dv-dockview") as HTMLElement | null;
+  let restoreScroll = () => {};
+  api.onWillMutateLayout(() => {
+    restoreScroll = preserveTranscriptScroll(host);
+  });
+  api.onDidMutateLayout(() => {
+    restoreScroll();
+    restoreScroll = () => {};
+  });
   const box = (inner ?? dockEl).getBoundingClientRect();
   if (box.width > 0) api.layout(box.width, box.height, true);
   const holdTileCap = (e: DockviewWillDropEvent): void => {
@@ -240,6 +249,7 @@ function buildDock(): DockviewApi {
   });
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
+    persistSoon();
   });
   dockEl.addEventListener("pointerdown", (e) => {
     if (!(e.target instanceof Element) || !e.target.closest(".dv-sash")) return;

@@ -259,6 +259,7 @@ export function createMockHarness(): Harness {
             cmd.slice(cmd.indexOf("!preamble-then-quiet") + "!preamble-then-quiet".length).trim() ||
             "Still queued — silent.";
           if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
+          await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
           await turn.emit({
             type: "tool_call",
             payload: { tool: "execute", command: "check" },
@@ -272,6 +273,7 @@ export function createMockHarness(): Harness {
           const narration =
             cmd.slice(cmd.indexOf("!narrate-no-update") + "!narrate-no-update".length).trim() || "Nothing new.";
           if (turn.onDelta) for (const chunk of streamChunks(narration)) turn.onDelta(chunk);
+          await turn.emit({ type: "text", payload: { text: narration }, scopeLabel: turn.scopeLabel });
           await turn.emit({
             type: "tool_call",
             payload: { tool: "execute", command: "check" },
@@ -280,9 +282,20 @@ export function createMockHarness(): Harness {
           await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
           usedTool = true;
           reply = `${narration}\n\n[no-update]`;
+        } else if (command0.startsWith("!phased-reply")) {
+          await turn.onTextBlockStart?.("commentary");
+          turn.onDelta?.("Checking.");
+          await turn.emit({
+            type: "text",
+            payload: { text: "Checking.", phase: "commentary" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.onTextBlockStart?.("final_answer");
+          reply = "All clear.";
         } else if (command0.startsWith("!preamble")) {
           const preamble = cmd.slice(cmd.indexOf("!preamble") + "!preamble".length).trim() || "On it — checking.";
           if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
+          await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
           await turn.emit({
             type: "tool_call",
             payload: { tool: "execute", command: "check" },

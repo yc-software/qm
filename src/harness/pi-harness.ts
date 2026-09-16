@@ -2344,7 +2344,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             }
             const finalEntry = await turn.emit({
               type: "assistant",
-              payload: { text: reply },
+              payload: { text: reply, stopped: true },
               scopeLabel: turn.scopeLabel,
             });
             const stoppedPartial = stoppedPartialTapeMessage(freshMessages, reply, finalEntry.createdAt);

@@ -1876,21 +1876,19 @@ button.subagent-chip:hover {
   overflow-anchor: none;
 }
 
-.streaming-text .tok-in {
-  animation: tok-in 0.42s ease-out both;
+qm-markdown .tok-in {
+  animation: tok-in 0.18s ease-out both;
 }
 @keyframes tok-in {
   from {
     opacity: 0;
-    filter: blur(1.5px);
   }
   to {
     opacity: 1;
-    filter: blur(0);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .streaming-text .tok-in {
+  qm-markdown .tok-in {
     animation: none;
   }
 }
@@ -1933,20 +1931,10 @@ button.subagent-chip:hover {
 .user-bubble > .pin-content {
   display: flow-root;
 }
-.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits) .user-bubble > .pin-content {
+.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
   position: relative;
-  max-height: var(--pin-clamp, 320px);
+  max-height: 2lh;
   overflow: hidden;
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
-}
-.message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits) .user-bubble > .pin-content::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0;
-  height: 18px;
-  backdrop-filter: blur(2px);
-  mask-image: linear-gradient(to bottom, transparent, #000);
-  pointer-events: none;
 }
 .message-stack .user-row.pin-expanded .user-bubble > .pin-content {
   max-height: var(--pin-expanded-max);
@@ -2001,6 +1989,23 @@ button.subagent-chip:hover {
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.2;
+}
+.queued-editing {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.queued-edit-input {
+  flex-basis: 100%;
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  line-height: 1.5;
 }
 .queued-chip + .queued-chip {
   margin-top: -10px;
@@ -2277,6 +2282,8 @@ button.subagent-chip:hover {
 .work summary.work-head {
   list-style: none;
   cursor: pointer;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 .work summary.work-head::-webkit-details-marker {
   display: none;
@@ -2299,9 +2306,8 @@ button.subagent-chip:hover {
   transform: rotate(90deg);
 }
 .work-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 8px 0 10px;
+  height: 0;
+  margin: 0 0 10px;
 }
 .work-rows {
   display: flex;
@@ -9932,11 +9938,7 @@ h3.ambient-field-label {
 .mini-convo-body .message-stack {
   width: 100%;
 }
-.mini-convo-body
-  .message-stack
-  .user-row:not(:has(~ .user-row)):not(.pin-expanded):not(.pin-fits)
-  .user-bubble
-  > .pin-content {
+.mini-convo-body .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
   max-height: 100px;
 }
 .mini-convo-missing {

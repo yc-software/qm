@@ -62,6 +62,7 @@ test("a mid-prompt cancel takes the stopped exit: partial persisted replay-safe,
     const finalEntry = sink.entries.at(-1);
     assert.equal(finalEntry?.type, "assistant");
     assert.equal((finalEntry?.payload as { text?: unknown } | undefined)?.text, "(stopped)");
+    assert.equal((finalEntry?.payload as { stopped?: boolean } | undefined)?.stopped, true);
     const cleanPartial = sink.tape.find(
       (rec) =>
         rec.kind === "message" &&

@@ -112,7 +112,7 @@ export interface HarnessTurnInput {
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
-  onTextBlockStart?(): void;
+  onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
 }
 

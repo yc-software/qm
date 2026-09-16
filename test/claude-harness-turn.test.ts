@@ -167,6 +167,138 @@ test("a user stop that surfaces as a non-success SDK result is a clean stop, and
   );
 });
 
+for (const late of [
+  { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: " late" } } },
+  resultMessage("replacement after stop"),
+]) {
+  test(`Claude freezes partial output when cancellation races with ${late.type}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    const deltas: string[] = [];
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+      };
+      waiting.resolve();
+      await release.promise;
+      yield late;
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({ cancel: cancel.signal, onDelta: (text) => deltas.push(text) });
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, true);
+    assert.equal(result.reply, "Visible partial");
+    assert.deepEqual(deltas, ["Visible partial"]);
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      [{ text: "Visible partial", stopped: true }],
+    );
+  });
+}
+
+for (const bookkeeping of ["request recording", "thinking persistence"]) {
+  test(`Claude preserves its partial reply when stopped during ${bookkeeping}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+      };
+      yield {
+        type: "assistant",
+        message: { id: "thinking", content: [{ type: "thinking", thinking: "Checking the answer." }] },
+      };
+      yield resultMessage("replacement after stop");
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({ cancel: cancel.signal });
+    const pause = async () => {
+      waiting.resolve();
+      await release.promise;
+    };
+    if (bookkeeping === "request recording") turn.recordLlmRequest = pause;
+    else {
+      const emit = turn.emit;
+      turn.emit = async (entry) => {
+        if (entry.type === "thinking") await pause();
+        return emit(entry);
+      };
+    }
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, true);
+    assert.equal(result.reply, "Visible partial");
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      [{ text: "Visible partial", stopped: true }],
+    );
+  });
+}
+
+for (const persistence of ["final entry", "reply checkpoint"]) {
+  for (const ending of ["close", "throw"]) {
+    test(`Claude completes a committed reply when cancelled during ${persistence} persistence and the SDK will ${ending}`, async () => {
+      const waiting = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const cancel = new AbortController();
+      currentScript = (prompts) => {
+        const generator = (async function* () {
+          await prompts[Symbol.asyncIterator]().next();
+          yield {
+            type: "stream_event",
+            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
+          };
+          yield resultMessage("Final full answer");
+          if (ending === "throw") throw new Error("query interrupted");
+        })();
+        if (ending === "throw") generator.return = async () => ({ done: true, value: undefined });
+        return generator;
+      };
+      const harness = createClaudeHarness({});
+      const { turn, entries } = harnessTurn({ cancel: cancel.signal });
+      const pause = async () => {
+        waiting.resolve();
+        await release.promise;
+      };
+      if (persistence === "final entry") {
+        const emit = turn.emit;
+        turn.emit = async (entry) => {
+          if (entry.type === "assistant") await pause();
+          return emit(entry);
+        };
+      } else {
+        turn.tape = async (entry) => {
+          if (entry.kind === "annotation") await pause();
+        };
+      }
+      const running = harness.turns.runTurn(turn);
+      await waiting.promise;
+      cancel.abort();
+      release.resolve();
+      const result = await running;
+      assert.equal(result.stopped, undefined);
+      assert.equal(result.reply, "Final full answer");
+      assert.deepEqual(
+        entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+        [{ text: "Final full answer" }],
+      );
+    });
+  }
+}
+
 test("model calls are counted per API response and charged their real input tokens", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();

@@ -353,6 +353,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const initial = userMessage(text, turn.images);
     let pendingPrompts = 1;
     let stopped = false;
+    let interrupted = false;
     let result: SDKResultMessage | null = null;
     const thinking: string[] = [];
     const flushThinking = async () => {
@@ -446,6 +447,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     active.add(sdkQuery);
     const interrupt = async (fromUser: boolean) => {
       stopped ||= fromUser;
+      interrupted = true;
       queue.close();
       await sdkQuery.interrupt().catch(() => undefined);
       controller.abort();
@@ -542,7 +544,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       queue.push(initial);
       const consume = (async () => {
         for await (const message of sdkQuery) {
-          if (settled) break;
+          if (settled || interrupted) break;
           if (message.type === "assistant") {
             const usage = message.message.usage;
             const seen = {
@@ -645,6 +647,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           result = message;
           await recordStep(message);
           await flushThinking();
+          if (interrupted) break;
           const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
@@ -678,26 +681,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             ])
           : consume);
       } catch (error) {
-        if (!controller.signal.aborted || error instanceof NonRetryableTurnError) throw error;
-        const reply = streamedText.trim();
-        await flushThinking();
-        if (reply && !ref.runtimeHandoff && !ref.silentRequested && !ref.pausedOnApproval) {
-          const finalEntry = await turn.emit({
-            type: "assistant",
-            payload: { text: reply, stopped: true },
-            scopeLabel: turn.scopeLabel,
-          });
-          await tapeReplyCheckpoint(turn, finalEntry);
-        }
-        return {
-          reply: ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval ? "" : reply,
-          ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
-          ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
-          ...(ref.silentRequested ? { silent: true } : {}),
-          ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
-          ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
-          modelCalls: Math.max(1, callUsage.size),
-        };
+        if ((!interrupted && !controller.signal.aborted) || error instanceof NonRetryableTurnError) throw error;
       }
       const finalResult = result as SDKResultMessage | null;
       const stoppedPartial = async (): Promise<HarnessTurnResult> => {
@@ -719,8 +703,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           ...(ref.silentRequested ? { silent: true } : {}),
           ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
           ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
+          modelCalls: Math.max(1, callUsage.size),
         };
       };
+      if (interrupted && (pendingPrompts > 0 || finalResult?.subtype !== "success")) return stoppedPartial();
       if (!finalResult) {
         if (controller.signal.aborted) return stoppedPartial();
         throw new Error("Claude Agent SDK ended without a result");
