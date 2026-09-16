@@ -8,10 +8,10 @@ test("the transcript renders rows through the settled-row cache", () => {
   assert.match(chat, /messages\.map\(\(m, i\) =>\s*settledChatMessage\(m, i - inheritedOffset,/);
 });
 
-test("live or approval-paused rows bypass the cache (their render reads mutable state)", () => {
+test("live, approval-paused, and subagent rows bypass the cache (their render reads mutable state)", () => {
   assert.match(
     chat,
-    /const cacheable =\s*!isStreaming &&\s*\(!work \|\| \(\(work\.status === "complete" \|\| work\.status === "failed"\) && !work\.pendingApprovals\?\.length\)\)/,
+    /const cacheable =\s*!isStreaming &&\s*!\(message as \{ subagentMail\?: SubagentMailRef \}\)\.subagentMail &&\s*!work\?\.activity\.some\(\(activity\) => \(activity\.payload as ToolPayload \| null\)\?\.tool === "session"\) &&\s*\(!work \|\| \(\(work\.status === "complete" \|\| work\.status === "failed"\) && !work\.pendingApprovals\?\.length\)\)/,
   );
   assert.match(chat, /if \(!cacheable\) return chatMessage\(message, index, isStreaming\);/);
 });

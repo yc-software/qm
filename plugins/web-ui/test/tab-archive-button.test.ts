@@ -13,7 +13,10 @@ const fn = (src: string, name: string): string => {
 };
 
 test("a tab offers an archive button beside close, for real sessions only", () => {
-  assert.match(split, /this\.inStrip[\s\S]*?split-tab-actions[\s\S]*?sessionId \? sessionActions\(sessionId, true\)/);
+  assert.match(
+    split,
+    /this\.inStrip[\s\S]*?split-tab-actions[\s\S]*?sessionId \? sessionActions\(sessionId, true, panel\.id\)/,
+  );
   const btn = fn(split, "sessionActions");
   assert.match(btn, /archiveSessionById\(sessionId\)/);
   assert.match(btn, /@pointerdown=[\s\S]*?if \(inTab\) e\.stopPropagation\(\)/);
@@ -42,5 +45,5 @@ test("a lone session keeps archive in the group header instead of the tab", () =
   const css = read("shell.css");
   assert.match(css, /\.dv-single-tab \.split-tab-actions\s*\{\s*display: none/);
   assert.match(css, /\.dv-single-tab \.split-group-session-action\s*\{\s*display: inline-flex/);
-  assert.match(split, /sessionId \? sessionActions\(sessionId, false\) : nothing/);
+  assert.match(split, /sessionId \? sessionActions\(sessionId, false, panel!\.id\) : nothing/);
 });

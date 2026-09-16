@@ -10,7 +10,7 @@ const css = read("shell.css");
 test("tab and header sharing use the same session actions", () => {
   assert.match(
     split,
-    /this\.inStrip[\s\S]*?split-tab-actions[\s\S]*?sessionId \? sessionActions\(sessionId, true\) : nothing/,
+    /this\.inStrip[\s\S]*?split-tab-actions[\s\S]*?sessionId \? sessionActions\(sessionId, true, panel\.id\) : nothing/,
   );
   const actions = split.slice(split.indexOf("function sessionActions"), split.indexOf("class PaneTab"));
   assert.match(actions, /split-tab-share[\s\S]*?openSessionShare\(sessionId\)[\s\S]*?icon\(Link, 13\)/);
@@ -21,7 +21,7 @@ test("tab and header sharing use the same session actions", () => {
 test("a lone header orders tools before sharing and archive", () => {
   const group = split.slice(split.indexOf("class GroupActions"), split.indexOf("function notePaneSession"));
   const render = group.slice(group.indexOf("    render("));
-  assert.match(render, /split-tools[\s\S]*?sessionActions\(sessionId, false\)[\s\S]*?buttons\.map/);
+  assert.match(render, /split-tools[\s\S]*?sessionActions\(sessionId, false, panel!\.id\)[\s\S]*?buttons\.map/);
   assert.match(css, /\.dv-single-tab \.split-tab-actions\s*\{\s*display: none/);
   assert.match(css, /\.split-group-session-action\s*\{\s*display: none/);
   assert.match(css, /\.dv-single-tab \.split-group-session-action\s*\{\s*display: inline-flex/);
