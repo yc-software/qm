@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createServer } from "../src/api/server.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -66,6 +68,16 @@ test("ownership controls require both source and distinct deployment credentials
     ];
     for (const credentials of invalidCredentials) {
       assert.equal((await srv.request("POST", transition(), credentials)).status, 401);
+    }
+    const capability = await mintCapabilityToken(
+      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
+      "capability-only-secret".repeat(3),
+    );
+    for (const method of ["GET", "POST"]) {
+      const response = await srv.request(method, method === "POST" ? transition() : undefined, {
+        "x-agent-capability": capability,
+      });
+      assert.equal(response.status, 403);
     }
     assert.equal((await srv.store.get()).generation, 0);
     assert.equal((await srv.request("GET")).status, 200);
