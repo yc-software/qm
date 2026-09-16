@@ -2392,7 +2392,6 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       flyTunnel?.monitor();
-      drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
