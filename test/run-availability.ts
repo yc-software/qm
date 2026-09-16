@@ -321,3 +321,39 @@ test(
     }
   },
 );
+
+test(
+  "Postgres claims preserve a locked session head while other sessions progress",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const { url, cleanup } = await isolatedPostgres();
+    const runtime = createPostgresRunStore(url);
+    const pool = new pg.Pool({ connectionString: url });
+    const holder = await pool.connect();
+    try {
+      const first = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
+      const second = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
+      const other = (await runtime.runs.enqueue({ sessionId: "independent", request })).run;
+      await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = 'ordered'");
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM runs WHERE id = $1 FOR UPDATE", [first.id]);
+      const claimedOther = await runtime.runs.claim("other-worker", 5_000);
+      assert.equal(claimedOther?.id, other.id, "a locked head blocks its siblings without blocking another session");
+      assert.equal(await runtime.runs.claim("waiting-worker", 5_000), null);
+      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
+      await holder.query("ROLLBACK");
+      const claimedFirst = await runtime.runs.claim("head-worker", 5_000);
+      assert.equal(claimedFirst?.id, first.id);
+      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
+      await runtime.runs.complete(first.id, claimedFirst!.leaseToken!, { status: "ok" });
+      const claimedSecond = await runtime.runs.claimById(second.id, "inline-worker", 5_000);
+      assert.equal(claimedSecond?.id, second.id);
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
+      await runtime.close();
+      await pool.end();
+      await cleanup();
+    }
+  },
+);

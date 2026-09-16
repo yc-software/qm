@@ -32,6 +32,12 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     return false;
   }
 
+  function pendingRuns(now: number): Run[] {
+    return [...runs.values()]
+      .filter((r) => r.status === "pending" && !sessionUnavailable(r.sessionId, now))
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
   function settle(run: Run): void {
     if (!isTerminal(run.status)) return;
     events.emit(run.id, run);
@@ -75,17 +81,15 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async claim(workerId, ttlMs) {
       const now = Date.now();
-      const pending = [...runs.values()]
-        .filter((r) => r.status === "pending" && !sessionUnavailable(r.sessionId, now))
-        .sort((a, b) => a.createdAt - b.createdAt);
-      const run = pending[0];
+      const run = pendingRuns(now)[0];
       if (!run) return null;
       return lease(run, workerId, ttlMs);
     },
 
     async claimById(runId, workerId, ttlMs) {
       const run = runs.get(runId);
-      if (!run || run.status !== "pending" || sessionUnavailable(run.sessionId, Date.now())) return null;
+      if (!run || pendingRuns(Date.now()).find((pending) => pending.sessionId === run.sessionId)?.id !== runId)
+        return null;
       return lease(run, workerId, ttlMs);
     },
 

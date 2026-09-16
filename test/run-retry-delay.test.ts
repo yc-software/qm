@@ -55,6 +55,7 @@ for (const backend of ["memory", "postgres"] as const) {
         t.mock.timers.tick(29_999);
         assert.equal(await runs.claim("worker-3", 60_000), null);
         t.mock.timers.tick(1);
+        assert.equal(await runs.claimById(later.id, "inline-worker", 60_000), null);
         const retried = await runs.claim("worker-3", 60_000);
         assert.equal(retried?.id, first.id);
         assert.equal(retried?.attempts, 2);

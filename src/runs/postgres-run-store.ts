@@ -224,6 +224,33 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     return { requeued: false, applied: rowCount > 0 };
   }
 
+  async function claim(workerId: string, ttlMs: number, runId?: string): Promise<Run | null> {
+    const token = randomUUID();
+    const now = Date.now();
+    try {
+      const { rows } = await q(
+        `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
+           attempts=attempts+1, started_at=COALESCE(started_at,$4)
+         WHERE id = (
+           SELECT candidate.id FROM runs candidate WHERE candidate.status='pending'
+             AND candidate.retry_after <= $4
+             AND ($5::text IS NULL OR candidate.id=$5)
+             AND NOT EXISTS (
+               SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
+                 AND (sibling.status='running' OR (sibling.status='pending'
+                   AND (sibling.retry_after > $4 OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
+             )
+           ORDER BY candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
+         ) RETURNING *`,
+        [token, now + ttlMs, workerId, now, runId ?? null],
+      );
+      return rows[0] ? rowToRun(rows[0]) : null;
+    } catch (err) {
+      if (isUniqueViolation(err)) return null;
+      throw err;
+    }
+  }
+
   const runs: RunStore = {
     subscribeAvailable(listener, options) {
       availabilityListeners.set(listener, options?.pollMs ?? 50);
@@ -263,49 +290,9 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    async claim(workerId, ttlMs): Promise<Run | null> {
-      const token = randomUUID();
-      const now = Date.now();
-      try {
-        const { rows } = await q(
-          `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
-             attempts=attempts+1, started_at=COALESCE(started_at,$4)
-           WHERE id = (
-             SELECT id FROM runs WHERE status='pending'
-               AND retry_after <= $4
-               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND retry_after > $4))
-             ORDER BY created_at ASC, seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
-           ) RETURNING *`,
-          [token, now + ttlMs, workerId, now],
-        );
-        return rows[0] ? rowToRun(rows[0]) : null;
-      } catch (err) {
-        if (isUniqueViolation(err)) return null;
-        throw err;
-      }
-    },
+    claim,
 
-    async claimById(runId, workerId, ttlMs): Promise<Run | null> {
-      const token = randomUUID();
-      const now = Date.now();
-      try {
-        const { rows } = await q(
-          `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
-             attempts=attempts+1, started_at=COALESCE(started_at,$4)
-           WHERE id = (
-             SELECT id FROM runs WHERE id=$5 AND status='pending'
-               AND retry_after <= $4
-               AND session_id NOT IN (SELECT session_id FROM runs WHERE status='running' OR (status='pending' AND retry_after > $4))
-             FOR UPDATE SKIP LOCKED LIMIT 1
-           ) RETURNING *`,
-          [token, now + ttlMs, workerId, now, runId],
-        );
-        return rows[0] ? rowToRun(rows[0]) : null;
-      } catch (err) {
-        if (isUniqueViolation(err)) return null;
-        throw err;
-      }
-    },
+    claimById: (runId, workerId, ttlMs) => claim(workerId, ttlMs, runId),
 
     async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
       const { rowCount } = await q(
