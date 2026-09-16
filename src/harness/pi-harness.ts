@@ -1132,9 +1132,6 @@ export interface ProviderKeys {
   [provider: string]: string | undefined;
 }
 
-// buildModelRuntime runs per turn; the models.json only changes when the
-// custom-provider registry does, so cache the materialized file per registry
-// version instead of leaking a temp dir per turn.
 let cachedCustomModels: { version: number; path: string | null } | null = null;
 function customModelsPath(): string | null {
   const version = customProvidersVersion() + gatewayModelsVersion();
@@ -1166,9 +1163,6 @@ export async function buildModelRuntime(
       refresh: "",
       expires: Number.MAX_SAFE_INTEGER,
     }));
-  // Custom providers must exist in the runtime's own registry — a runtime
-  // API key alone is invisible to its availability checks. models.json is
-  // the sanctioned vocabulary, so materialize one when any are registered.
   const modelsPath = customModelsPath();
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
@@ -1219,7 +1213,8 @@ export async function buildModelRuntime(
   ): { model: Model<Api>; options: T } => {
     const request = modelGatewayRequest(modelGateway, model);
     if (!request) {
-      const providerModelId = codexProviderModelId(model.id);
+      const providerModelId =
+        model.provider === CODEX_SUBSCRIPTION_PROVIDER ? codexProviderModelId(model.id) : model.id;
       const passthrough = retained(options);
       return {
         model,
