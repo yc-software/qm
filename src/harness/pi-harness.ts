@@ -60,6 +60,8 @@ import {
   getRequiredModel,
   modelSupportsFastMode,
   contextTokenBudgetForModel,
+  CODEX_SUBSCRIPTION_PROVIDER,
+  codexProviderModelId,
 } from "../model/pi-models.ts";
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
@@ -1148,22 +1150,28 @@ function customModelsPath(): string | null {
   return path;
 }
 
-async function buildModelRuntime(
+export async function buildModelRuntime(
   keys: ProviderKeys | string,
   modelGateway?: ModelGatewayTransportConfig,
   cacheRetention?: "long",
 ): Promise<ModelRuntime> {
   await modelGateway?.refresh?.();
-  const k: ProviderKeys = typeof keys === "string" ? { anthropic: keys } : keys;
+  const { [CODEX_SUBSCRIPTION_PROVIDER]: subscriptionToken, ...apiKeys }: ProviderKeys =
+    typeof keys === "string" ? { anthropic: keys } : keys;
+  const credentials = new InMemoryCredentialStore();
+  if (subscriptionToken)
+    await credentials.modify(CODEX_SUBSCRIPTION_PROVIDER, async () => ({
+      type: "oauth",
+      access: subscriptionToken,
+      refresh: "",
+      expires: Number.MAX_SAFE_INTEGER,
+    }));
   // Custom providers must exist in the runtime's own registry — a runtime
   // API key alone is invisible to its availability checks. models.json is
   // the sanctioned vocabulary, so materialize one when any are registered.
   const modelsPath = customModelsPath();
-  const runtime = await ModelRuntime.create({
-    credentials: new InMemoryCredentialStore(),
-    modelsPath,
-  });
-  for (const [provider, apiKey] of Object.entries(k)) {
+  const runtime = await ModelRuntime.create({ credentials, modelsPath });
+  for (const [provider, apiKey] of Object.entries(apiKeys)) {
     if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
   if (modelGateway) {
@@ -1189,59 +1197,67 @@ async function buildModelRuntime(
   }
   const retained = <T extends object | undefined>(options: T): T =>
     cacheRetention ? ({ ...options, cacheRetention } as T) : options;
+  const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(
+    options: T,
+    model: Model<Api>,
+    target: () => Promise<string>,
+  ): T =>
+    ({
+      ...options,
+      onPayload: async (payload: unknown) => {
+        const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
+        const body = transformed === undefined ? payload : transformed;
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          throw new Error("model request payload must be an object");
+        }
+        return { ...body, model: await target() };
+      },
+    }) as T;
+  const route = <T extends ModelsSimpleStreamOptions | undefined>(
+    model: Model<Api>,
+    options: T,
+  ): { model: Model<Api>; options: T } => {
+    const request = modelGatewayRequest(modelGateway, model);
+    if (!request) {
+      const providerModelId = codexProviderModelId(model.id);
+      const passthrough = retained(options);
+      return {
+        model,
+        options:
+          providerModelId === model.id ? passthrough : wireModelId(passthrough, model, async () => providerModelId),
+      };
+    }
+    const routed = {
+      ...retained(options),
+      apiKey: request.apiKey,
+      transformHeaders: async (headers: ProviderHeaders) => ({
+        ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
+        ...request.headers,
+      }),
+    } as T;
+    return {
+      model: request.model,
+      options: wireModelId(routed, model, async () => {
+        await modelGateway?.refresh?.();
+        const current = modelGatewayRequest(modelGateway, model);
+        if (!current) throw new Error(`Gateway model is unavailable: ${model.id}`);
+        return current.target;
+      }),
+    };
+  };
   const stream = runtime.stream.bind(runtime);
   runtime.stream = (<TApi extends Api>(
     model: Model<TApi>,
     context: Context,
     options?: ModelsApiStreamOptions<TApi>,
   ) => {
-    const request = modelGatewayRequest(modelGateway, model);
-    if (!request) return stream(model, context, retained(options));
-    const routedOptions = {
-      ...retained(options),
-      apiKey: request.apiKey,
-      transformHeaders: async (headers: ProviderHeaders) => ({
-        ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
-        ...request.headers,
-      }),
-      onPayload: async (payload: unknown) => {
-        const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-        const body = transformed === undefined ? payload : transformed;
-        if (!body || typeof body !== "object" || Array.isArray(body)) {
-          throw new Error("model gateway request payload must be an object");
-        }
-        await modelGateway?.refresh?.();
-        const current = modelGatewayRequest(modelGateway, model);
-        if (!current) throw new Error(`Gateway model is unavailable: ${model.id}`);
-        return { ...body, model: current.target };
-      },
-    } as unknown as ModelsApiStreamOptions<TApi>;
-    return stream(request.model, context, routedOptions);
+    const routed = route(model, options as ModelsSimpleStreamOptions | undefined);
+    return stream(routed.model as Model<TApi>, context, routed.options as unknown as ModelsApiStreamOptions<TApi>);
   }) as typeof runtime.stream;
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
-    const request = modelGatewayRequest(modelGateway, model);
-    if (!request) return streamSimple(model, context, retained(options));
-    const routedOptions = {
-      ...retained(options),
-      apiKey: request.apiKey,
-      transformHeaders: async (headers: ProviderHeaders) => ({
-        ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
-        ...request.headers,
-      }),
-      onPayload: async (payload: unknown) => {
-        const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-        const body = transformed === undefined ? payload : transformed;
-        if (!body || typeof body !== "object" || Array.isArray(body)) {
-          throw new Error("model gateway request payload must be an object");
-        }
-        await modelGateway?.refresh?.();
-        const current = modelGatewayRequest(modelGateway, model);
-        if (!current) throw new Error(`Gateway model is unavailable: ${model.id}`);
-        return { ...body, model: current.target };
-      },
-    } as ModelsSimpleStreamOptions;
-    return streamSimple(request.model, context, routedOptions);
+    const routed = route(model, options);
+    return streamSimple(routed.model, context, routed.options);
   }) as typeof runtime.streamSimple;
   return runtime;
 }

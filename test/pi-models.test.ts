@@ -14,6 +14,8 @@ import {
   MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
+  codexProviderModelId,
+  codexSubscriptionModelId,
 } from "../src/model/pi-models.ts";
 
 test("every selectable base model resolves against the pi-ai registry", () => {
@@ -32,6 +34,17 @@ test("selectable models span providers (multi-provider is wired)", () => {
   assert.ok(providers.has("anthropic"), "expected at least one Anthropic model");
   assert.ok(providers.has("openai"), "expected at least one OpenAI model (gpt-5.6)");
   assert.ok(providers.has("openrouter"), "expected an OpenRouter-hosted open-model option");
+});
+
+test("codex subscription ids stay namespaced inside QM and bare toward the provider", () => {
+  assert.equal(codexSubscriptionModelId("gpt-5.6-sol"), "codex/gpt-5.6-sol");
+  assert.equal(codexSubscriptionModelId("codex/gpt-5.6-sol"), "codex/gpt-5.6-sol");
+  assert.equal(codexProviderModelId("codex/gpt-5.6-sol"), "gpt-5.6-sol");
+  assert.equal(codexProviderModelId("gpt-5.6-sol"), "gpt-5.6-sol");
+  const subscription = getRequiredModel("codex/gpt-5.6-sol");
+  assert.equal(subscription.id, "codex/gpt-5.6-sol");
+  assert.equal(String(subscription.provider), "openai-codex");
+  assert.equal(getRequiredModel(codexProviderModelId(subscription.id)).provider, "openai");
 });
 
 test("unknown models are not silently accepted", () => {

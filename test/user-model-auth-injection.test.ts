@@ -240,5 +240,6 @@ test("individual OAuth routing preserves exact supported runtime selections", ()
   );
   assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-6-astra", "codex")?.model, "gpt-6-astra");
   assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5", "pi")?.model, "codex/gpt-5.5");
+  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5", "codex")?.model, "gpt-5.5");
   assert.equal(resolveIndividualAuthRouting(null, apikey("openai", "test"), "codex/gpt-5.5", "pi"), null);
 });
