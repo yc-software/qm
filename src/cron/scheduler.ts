@@ -59,6 +59,8 @@ export interface Scheduler {
   runNow(cronId: string): Promise<RunNowResult>;
   notifyChanged(cronId: string): void;
   start(intervalMs: number): void;
+  stopClaims(): Promise<void>;
+  drained(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -324,7 +326,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
-  const fireDue = async (t: number): Promise<void> => {
+  const fireDue = async (t: number, observed: number): Promise<void> => {
     const due = await deps.crons.due(t);
     let batch = due;
     if (due.length > maxFiresPerTick) {
@@ -342,6 +344,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
     }
     for (const cron of batch) {
+      if (stopped || observed !== epoch) break;
       try {
         const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
         if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
@@ -353,8 +356,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
+    const observed = epoch;
     await leaderLease.hold(TICK_LEASE_KEY, async () => {
-      await fireDue(t);
+      await fireDue(t, observed);
       await sweepStranded(t);
       await gcFires(t);
       await deps.sweepAsks?.(t).catch((e: unknown) => console.error("[scheduler] ask sweep failed:", errMessage(e)));
@@ -389,6 +393,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function fireJob(job: CronFireJob): Promise<void> {
+    const observed = epoch;
     const cron = await deps.crons.get(job.cronId);
     if (!cron || cron.archived || !cron.enabled) return;
     const slot = nextSlot(cron);
@@ -402,7 +407,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await deps.jobQueue!.enqueueFire({ ...job, notBefore: cron.deferUntil! });
       return;
     }
+    if (stopped || observed !== epoch) return;
     if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
+    if (stopped || observed !== epoch) {
+      await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+      return;
+    }
     try {
       const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
       if (authzFailed || deferred) {
@@ -421,6 +431,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function reconcile(): Promise<void> {
     try {
       for (const cron of await deps.crons.list()) {
+        if (stopped) break;
         if (cron.archived || !cron.enabled) continue;
         const job = nextJob(cron);
         if (job) await deps.jobQueue!.enqueueFire(job);
@@ -449,6 +460,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   );
 
   let stopped = false;
+  let epoch = 0;
   let started = false;
   let stopFailed = false;
   let starting: Promise<void> | null = null;
@@ -518,17 +530,33 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
         );
     },
+    async stopClaims() {
+      stopped = true;
+      epoch++;
+      stopSignal.resolve();
+      void sweeper.stop();
+      void leaseGuard.stop();
+      await starting;
+      if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
+      else await deps.jobQueue?.stop();
+    },
+    async drained() {
+      await Promise.all([sweeper.stop(), leaseGuard.stop()]);
+      await Promise.allSettled(pending);
+    },
     stop() {
       if (stopping) return stopping;
       stopped = true;
+      epoch++;
       stopSignal.resolve();
       started = false;
       const sweeps = [sweeper.stop(), leaseGuard.stop()];
       stopping = (async () => {
         await starting;
-        await deps.jobQueue?.stop();
+        if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
         await Promise.all(sweeps);
         await Promise.allSettled(pending);
+        await deps.jobQueue?.stop();
         stopFailed = false;
       })()
         .catch((error: unknown) => {

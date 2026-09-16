@@ -188,7 +188,7 @@ export function createWorker(deps: WorkerDeps): Worker {
         await waitForWork(observed);
         continue;
       }
-      if (stopped) {
+      if (stopped || (deps.canClaim && !deps.canClaim())) {
         if (run.leaseToken !== null)
           await deps.runs
             .releaseLease(run.id, run.leaseToken)

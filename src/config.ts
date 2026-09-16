@@ -113,6 +113,8 @@ export interface Config {
   backgroundJobTtlMs: number;
   backgroundJobTtlMaxMs: number;
   backgroundWorkEnabled: boolean;
+  backgroundDeploymentId?: string;
+  deploymentControlSecret?: string;
   buildSha?: string;
   ecsTaskProtection: boolean;
   ecsAgentUri?: string;
@@ -1023,6 +1025,20 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
+    if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
+      throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
+    if (!env.DATABASE_URL) throw new Error("Background ownership requires DATABASE_URL");
+    if (
+      !env.CORE_SIGNING_SECRET ||
+      !env.DEPLOYMENT_CONTROL_SECRET ||
+      env.DEPLOYMENT_CONTROL_SECRET.length < 32 ||
+      env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET
+    )
+      throw new Error(
+        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters and CORE_SIGNING_SECRET",
+      );
+  }
   const swarmDefaults = resolveSwarmSettings(
     env.SWARM_DEFAULTS === undefined ? undefined : JSON.parse(env.SWARM_DEFAULTS),
   );
@@ -1371,6 +1387,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
     backgroundWorkEnabled:
       boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
+    ...(env.BACKGROUND_DEPLOYMENT_ID
+      ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
+      : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     ecsTaskProtection: boolEnvStrict("ECS_TASK_PROTECTION", env.ECS_TASK_PROTECTION) ?? true,
     ...(env.ECS_AGENT_URI ? { ecsAgentUri: env.ECS_AGENT_URI } : {}),

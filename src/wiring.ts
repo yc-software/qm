@@ -1,3 +1,8 @@
+import {
+  createBackgroundOwnershipStore,
+  type BackgroundOwnershipStore,
+  type BackgroundOwnership,
+} from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
@@ -385,6 +390,8 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 export interface Runtime {
   start(): void;
   startBackground(): void;
+  stopBackgroundClaims(): Promise<void>;
+  setBackgroundAdmission(check: () => boolean): void;
   stopBackground(): Promise<void>;
   backgroundDrained(): Promise<void>;
   stop(): Promise<void>;
@@ -417,6 +424,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  backgroundOwnership?: { store: BackgroundOwnershipStore; instanceId: string; deploymentId: string };
   suggestedActivityMaintenance: Sweeper;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
@@ -2187,8 +2195,16 @@ export function buildApp(
     directory,
     currentScopeMembers,
   });
+  let backgroundAdmission = () => !config.backgroundDeploymentId;
+  const backgroundOwnership = config.backgroundDeploymentId
+    ? {
+        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
+        instanceId: randomUUID(),
+        deploymentId: config.backgroundDeploymentId,
+      }
+    : undefined;
   const instanceRegistry: InstanceRegistry =
-    config.buildSha && pgArtifactMap
+    config.buildSha && pgArtifactMap && !config.backgroundDeploymentId
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
           buildSha: config.buildSha,
@@ -2211,7 +2227,7 @@ export function buildApp(
       heartbeatIntervalMs: config.heartbeatIntervalMs,
       errors,
       pollMs: 250,
-      canClaim: () => drain.canClaim(),
+      canClaim: () => backgroundAdmission() && drain.canClaim(),
       onClaimed: () => drain.noteBusy(),
     }),
   );
@@ -2261,9 +2277,10 @@ export function buildApp(
     : null;
   let backgroundRunning = false;
   let backgroundStopping: Promise<void> | null = null;
+  let backgroundClaimsStopping: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
   function startBackground(): void {
-    if (backgroundRunning || backgroundStopping) return;
+    if (backgroundRunning) return;
     backgroundRunning = true;
     drain.start();
     const generation = ++backgroundGeneration;
@@ -2276,29 +2293,38 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: worker resume failed", undefined));
     }
-    reaper.start();
-    processReaper?.start();
-    monitorPoller?.start(config.monitorPollMs);
-    monitorRetentionSweeper.start();
-    if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
-    blobSweeper.start();
-    fileUploads?.start();
-    idleSweeper?.start();
-    keepWarmSweeper.start();
-    deepIdleSweeper?.start();
-    wakeSweep.start();
-    swarms?.start();
-    orphanedSignalSweeper.start();
-    sessionReturnSweeper.start();
+    const startPeriodic = () => {
+      if (!backgroundRunning || generation !== backgroundGeneration) return;
+      reaper.start();
+      processReaper?.start();
+      monitorPoller?.start(config.monitorPollMs);
+      monitorRetentionSweeper.start();
+      if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
+      blobSweeper.start();
+      fileUploads?.start();
+      idleSweeper?.start();
+      keepWarmSweeper.start();
+      deepIdleSweeper?.start();
+      wakeSweep.start();
+      swarms?.start();
+      orphanedSignalSweeper.start();
+      sessionReturnSweeper.start();
+    };
+    if (backgroundStopping)
+      void backgroundStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
+    else startPeriodic();
   }
   function stopBackground(): Promise<void> {
-    if (backgroundStopping) return backgroundStopping;
     backgroundRunning = false;
+    if (backgroundStopping) {
+      for (const worker of workers) void worker.stopClaims();
+      return backgroundStopping;
+    }
     backgroundGeneration++;
+    const monitorStopping = monitorPoller?.stop();
     const stopping = [
       reaper.stop(),
       processReaper?.stop(),
-      monitorPoller?.stop(),
       monitorRetentionSweeper.stop(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
@@ -2312,7 +2338,8 @@ export function buildApp(
       sessionReturnSweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
-    backgroundStopping = Promise.all(stopping)
+    backgroundClaimsStopping = Promise.all(stopping).then(() => {});
+    backgroundStopping = Promise.all([backgroundClaimsStopping, monitorStopping])
       .then(() => {})
       .finally(() => {
         backgroundStopping = null;
@@ -2322,9 +2349,16 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       flyTunnel?.monitor();
-      if (config.backgroundWorkEnabled) startBackground();
+      if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
+    setBackgroundAdmission(check) {
+      backgroundAdmission = check;
+    },
+    async stopBackgroundClaims() {
+      void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
+      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
+    },
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
@@ -2433,6 +2467,7 @@ export function buildApp(
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
+    ...(backgroundOwnership ? { backgroundOwnership } : {}),
     suggestedActivityMaintenance,
     uiState: artifactMap<PersistedUiState>("web_ui_state"),
     sessionShares: artifactMap<SessionShare>("session_shares"),

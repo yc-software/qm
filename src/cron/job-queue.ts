@@ -18,6 +18,7 @@ export interface CronJobQueue {
   start(handlers: CronQueueHandlers, tickIntervalMs: number): Promise<void>;
   enqueueFire(job: CronFireJob): Promise<void>;
   healthy(): boolean;
+  stopClaims?(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -96,6 +97,11 @@ export function createPgBossCronQueue(
     },
     healthy() {
       return started && Date.now() - lastSendOkAt < HEALTHY_SEND_MAX_AGE_MS;
+    },
+    async stopClaims() {
+      started = false;
+      void ticker?.stop();
+      await Promise.all([boss.offWork(FIRE_QUEUE, { wait: false }), boss.offWork(TICK_QUEUE, { wait: false })]);
     },
     async stop() {
       started = false;
