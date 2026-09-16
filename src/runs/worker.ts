@@ -117,6 +117,8 @@ export interface WorkerDeps extends ProcessDeps {
 
 export interface Worker {
   start(): void;
+  stopClaims(): Promise<void>;
+  drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
   releaseInFlight(): Promise<void>;
   busy(): boolean;
@@ -150,6 +152,7 @@ export function createWorker(deps: WorkerDeps): Worker {
   }
   let stopped = false;
   let loopDone: Promise<void> | null = null;
+  let claimDone: Promise<void> | null = null;
   let inFlight: { runId: string; leaseToken: string; threadRef: string } | null = null;
   let releasedLeaseToken: string | null = null;
   let releasing: Promise<void> | null = null;
@@ -163,10 +166,16 @@ export function createWorker(deps: WorkerDeps): Worker {
       }
       const observed = generation;
       let run: Run | null;
+      let claimed!: () => void;
+      claimDone = new Promise<void>((resolve) => {
+        claimed = resolve;
+      });
       try {
         run = await deps.runs.claim(workerId, deps.leaseTtlMs);
         claimFailures = 0;
       } catch (e) {
+        claimed();
+        claimDone = null;
         claimFailures += 1;
         if (claimFailures >= CLAIM_FAIL_CRASH_CONSECUTIVE) throw e;
         swallow("worker: claim failed (transient, retrying)", e);
@@ -174,6 +183,8 @@ export function createWorker(deps: WorkerDeps): Worker {
         continue;
       }
       if (!run) {
+        claimed();
+        claimDone = null;
         await waitForWork(observed);
         continue;
       }
@@ -182,10 +193,14 @@ export function createWorker(deps: WorkerDeps): Worker {
           await deps.runs
             .releaseLease(run.id, run.leaseToken)
             .catch((e) => swallow("worker: post-stop claim handback failed", e));
+        claimed();
+        claimDone = null;
         break;
       }
       inFlight =
         run.leaseToken !== null ? { runId: run.id, leaseToken: run.leaseToken, threadRef: run.sessionId } : null;
+      claimed();
+      claimDone = null;
       deps.onClaimed?.();
       try {
         await processRun(deps, run, { background: true });
@@ -197,6 +212,14 @@ export function createWorker(deps: WorkerDeps): Worker {
     }
   }
 
+  function stopClaims(): Promise<void> {
+    stopped = true;
+    unsubscribe?.();
+    unsubscribe = undefined;
+    notify();
+    return claimDone ?? Promise.resolve();
+  }
+
   return {
     start() {
       if (loopDone) return;
@@ -205,7 +228,9 @@ export function createWorker(deps: WorkerDeps): Worker {
         pollMs,
         onResync: notify,
       });
-      loopDone = loop();
+      loopDone = loop().finally(() => {
+        loopDone = null;
+      });
     },
     busy() {
       return inFlight !== null;
@@ -230,13 +255,11 @@ export function createWorker(deps: WorkerDeps): Worker {
       })();
       return releasing;
     },
+    stopClaims,
+    drained: () => loopDone ?? Promise.resolve(),
     async stop(drainMs = STOP_DRAIN_MS) {
-      stopped = true;
-      unsubscribe?.();
-      unsubscribe = undefined;
-      notify();
+      void stopClaims();
       await Promise.race([loopDone, sleep(drainMs, { unref: true })]);
-      loopDone = null;
     },
   };
 }

@@ -532,3 +532,89 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
     await built.runtime.stop();
   }
 });
+
+test("timed-out stop cannot resurrect a worker while its previous turn drains", async () => {
+  const { runs } = createMemoryRunStore();
+  const sessions = createMemorySessionStore();
+  const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const { orchestrator, started, unblock } = gatedOrchestrator();
+  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await started;
+  await worker.stop(5);
+  const second = (await runs.enqueue({ sessionId: "t2", request: turn, maxAttempts: 3 })).run;
+  worker.start();
+  await sleep(30);
+  assert.equal((await runs.get(second.id))?.status, "pending");
+  unblock();
+  await worker.drained();
+  assert.equal((await runs.get(first.id))?.status, "done");
+  assert.equal((await runs.get(second.id))?.status, "pending");
+  worker.start();
+  await sleep(30);
+  await worker.stop();
+  assert.equal((await runs.get(second.id))?.status, "done");
+});
+
+test("stopClaims relinquishes new work while keeping an active turn and its heartbeats alive", async () => {
+  const { runs } = createMemoryRunStore();
+  const sessions = createMemorySessionStore();
+  const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const { orchestrator, started, unblock } = gatedOrchestrator();
+  let beats = 0;
+  const heartbeat = runs.heartbeat.bind(runs);
+  runs.heartbeat = (...args) => {
+    beats++;
+    return heartbeat(...args);
+  };
+  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, heartbeatIntervalMs: 5, pollMs: 5 });
+  worker.start();
+  await started;
+  await worker.stopClaims();
+  let drained = false;
+  const draining = worker.drained().then(() => {
+    drained = true;
+  });
+  await sleep(30);
+  assert.equal(drained, false);
+  assert.ok(beats > 0);
+  assert.equal((await runs.get(first.id))?.status, "running");
+  unblock();
+  await draining;
+  assert.equal((await runs.get(first.id))?.status, "done");
+});
+
+test("stopClaims waits for an outstanding claim to be handed back before acknowledging", async () => {
+  const { runs } = createMemoryRunStore();
+  const sessions = createMemorySessionStore();
+  const pending = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const claim = runs.claim.bind(runs);
+  const gate = Promise.withResolvers<void>();
+  const claiming = Promise.withResolvers<void>();
+  runs.claim = async (...args) => {
+    claiming.resolve();
+    await gate.promise;
+    return claim(...args);
+  };
+  let turns = 0;
+  const orchestrator = {
+    handleTurn: async () => {
+      turns++;
+      return { status: "ok", reply: "unexpected" };
+    },
+  } as unknown as Orchestrator;
+  const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await claiming.promise;
+  let relinquished = false;
+  const stopping = worker.stopClaims().then(() => {
+    relinquished = true;
+  });
+  await sleep(10);
+  assert.equal(relinquished, false);
+  gate.resolve();
+  await stopping;
+  await worker.drained();
+  assert.equal(turns, 0);
+  assert.equal((await runs.get(pending.id))?.status, "pending");
+});
