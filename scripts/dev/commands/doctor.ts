@@ -75,7 +75,7 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
     });
     if (reachable) {
       const status = (await supervisorRequest(sock, "GET", "/status", undefined, 8000)).body as StatusReport;
-      for (const name of CHILD_ORDER) {
+      for (const name of status.webEnabled === false ? ["core"] : CHILD_ORDER) {
         const child = status.children[name];
         checks.push({
           id: `child:${name}`,

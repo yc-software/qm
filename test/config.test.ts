@@ -337,6 +337,11 @@ test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
   assert.equal(apiOnly.publicUrl, "https://agent-api.example");
   assert.equal(apiOnly.publicWebUrl, undefined);
 
+  const disabledWeb = loadConfig({ PUBLIC_API_URL: "https://agent-api.example", PUBLIC_WEB_URL: "" });
+  assert.equal(disabledWeb.apiBaseUrl, "https://agent-api.example");
+  assert.equal(disabledWeb.publicUrl, "https://agent-api.example");
+  assert.equal(disabledWeb.publicWebUrl, undefined);
+
   const web = loadConfig({ PUBLIC_API_URL: "https://agent-api.example", PUBLIC_WEB_URL: "https://portal.example" });
   assert.equal(web.apiBaseUrl, "https://agent-api.example");
   assert.equal(web.publicUrl, "https://portal.example");

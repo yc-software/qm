@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { ensureDeps } from "../scripts/dev/lib/deps.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { envSha, errMessage, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
@@ -442,11 +444,11 @@ test("supervised children share the selected dev org", () => {
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });
 
-test("child specs omit Slack env when no Slack tokens are supplied", () => {
+test("child specs disable environment Slack tokens when no Slack tokens are supplied", () => {
   const inputs: SpecInputs = {
     worktree: "/tmp/worktree",
     ports: slotPorts("pool1"),
-    baseEnv: {},
+    baseEnv: { SLACK_BOT_TOKEN: "inherited-bot", SLACK_APP_TOKEN: "inherited-app" },
     watch: false,
     webUiBasePath: "/",
     sessionStore: "memory",
@@ -459,11 +461,27 @@ test("child specs omit Slack env when no Slack tokens are supplied", () => {
     sandboxEnv: {},
   };
   const core = buildChildSpecs(inputs).find((spec) => spec.name === "core")!;
-  assert.equal(core.env.SLACK_BOT_TOKEN, undefined);
-  assert.equal(core.env.SLACK_APP_TOKEN, undefined);
+  assert.equal(core.env.DEV_INSTANCE_NO_SLACK, "1");
+  assert.equal(core.env.SLACK_BOT_TOKEN, "");
+  assert.equal(core.env.SLACK_APP_TOKEN, "");
   assert.equal(core.env.DEV_INTROSPECTION, undefined);
   assert.equal(core.env.DEV_HEALTH_PORT, undefined);
   assert.equal(core.env.CORE_ORG_ID, "acme");
+  inputs.web = false;
+  inputs.slack = { botToken: "xoxb-test", appToken: "xapp-test" };
+  const slackOnly = buildChildSpecs(inputs);
+  assert.deepEqual(
+    slackOnly.map((spec) => spec.name),
+    ["core"],
+  );
+  assert.equal(slackOnly[0]!.env.SLACK_BOT_TOKEN, "xoxb-test");
+  assert.equal(slackOnly[0]!.env.DEV_INSTANCE_NO_SLACK, "0");
+  assert.equal(slackOnly[0]!.env.PUBLIC_WEB_URL, "");
+  inputs.web = true;
+  assert.deepEqual(
+    buildChildSpecs(inputs).map((spec) => spec.name),
+    ["core", "web", "portal"],
+  );
 });
 
 test("formatAge renders the bash-compatible shapes", () => {
@@ -477,4 +495,29 @@ test("dev errors preserve messages without calling custom object stringifiers", 
   const unsafe = { toString: () => assert.fail("object stringification must not run") };
   assert.equal(errMessage(unsafe), "Unknown error");
   assert.equal(errMessage({ ...unsafe, message: "actionable failure" }), "actionable failure");
+});
+
+test("Slack-only dependency preparation needs no web installation or build", async () => {
+  const worktree = mkdtempSync(join(tmpdir(), "qm-dev-deps-"));
+  try {
+    mkdirSync(join(worktree, "node_modules/emoji-datasource"), { recursive: true });
+    await ensureDeps(worktree, { web: false, watch: false, webUiBasePath: "/" }, () => {
+      assert.fail("Slack-only startup must not install or build web dependencies");
+    });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+test("dev CLI rejects invalid or conflicting surface selection before startup", () => {
+  for (const args of [
+    ["up", "--surface", "invalid"],
+    ["up", "--surface", "slack", "--no-slack"],
+    ["up", "--surface", "both", "--no-slack"],
+    ["status", "--surface", "web"],
+  ]) {
+    const result = spawnSync(process.execPath, ["scripts/dev/cli.ts", ...args], { encoding: "utf8" });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /surface/);
+  }
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createActorGate, createDenyResponder, normalizeAllowFrom, parseAllowFrom } from "../src/slack/allow-from.ts";
-import { slackAccountConfigsFromEnv } from "../src/slack/config.ts";
+import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv } from "../src/slack/config.ts";
 
 test("parseAllowFrom splits, lowercases, strips @-prefixes, and dedupes", () => {
   assert.deepEqual(parseAllowFrom("Alice@Example.com, @example.org example.org\nbob@example.com"), [
@@ -103,4 +103,23 @@ test("createDenyResponder throttles repeats per key but not across keys", () => 
   assert.equal(r.shouldSend("C1:U2"), false);
   assert.equal(r.shouldSend("C1:U3"), true);
   assert.equal(r.shouldSend("D9:U2"), true);
+});
+
+test("web-only dev instances disable Slack from environment, stored installations, and extra accounts", () => {
+  const env = {
+    DEV_INSTANCE_NO_SLACK: "1",
+    SLACK_BOT_TOKEN: "xoxb-stored",
+    SLACK_APP_TOKEN: "xapp-stored",
+    SLACK_ACCOUNTS: JSON.stringify([{ id: "extra", botToken: "xoxb-extra", appToken: "xapp-extra" }]),
+  };
+  assert.equal(slackPluginConfigFromEnv(env), null);
+  assert.equal(
+    slackPluginConfigFromEnv(env, () => {
+      throw new Error("disabled receiver must not start");
+    }),
+    null,
+  );
+  assert.deepEqual(slackAccountConfigsFromEnv(env), []);
+  assert.ok(slackPluginConfigFromEnv({ ...env, DEV_INSTANCE_NO_SLACK: "0" }));
+  assert.equal(slackAccountConfigsFromEnv({ ...env, DEV_INSTANCE_NO_SLACK: "0" }).length, 1);
 });
