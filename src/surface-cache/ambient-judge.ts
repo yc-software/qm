@@ -1,3 +1,4 @@
+import { resolveMentions } from "../slack/mrkdwn.ts";
 import type { CachedMessage } from "./surface-cache.ts";
 
 const AMBIENT_JUDGE_SYSTEM = `You are the ambient mind for a chat container — a thin, cheap observer that decides whether the
@@ -49,7 +50,7 @@ export interface AmbientBatch {
 
 export function renderAmbientPrompt(batch: AmbientBatch): string {
   const fmt = (m: CachedMessage): string =>
-    `${m.authorName || m.authorId || "someone"}${m.bot ? " (bot)" : ""}: ${m.text}`;
+    `${m.authorName || m.authorId || "someone"}${m.bot ? " (bot)" : ""}: ${resolveMentions(m.text, m.mentions ? new Map(Object.entries(m.mentions)) : undefined)}`;
   const fmtBackdrop = (m: CachedMessage): string =>
     m.handled || m.mentionsSelf ? `${fmt(m)} [handled by the direct responder — do not re-engage]` : fmt(m);
   const shown = (ms: CachedMessage[]): CachedMessage[] => ms.filter((m) => !m.deleted && (m.text ?? "").trim());
