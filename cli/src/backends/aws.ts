@@ -88,6 +88,43 @@ import {
   type DeploymentLayerTransport,
 } from "../deployment-layer.ts";
 
+export async function awsCoreRequest(
+  config: QmConfig,
+  url: URL,
+  init: RequestInit,
+): Promise<{ status: number; body: string }> {
+  const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
+  if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
+  if (awsPublicOrigin(config).protocol === "http:") {
+    assertCloudFrontLayerTarget(config, url, target);
+    const response = await fetch(url, init);
+    return { status: response.status, body: await response.text() };
+  }
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      url,
+      {
+        hostname: target,
+        servername: url.hostname,
+        method: init.method,
+        headers: { ...(init.headers as Record<string, string>), host: url.host },
+        signal: init.signal ?? undefined,
+        agent: false,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () =>
+          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+        );
+      },
+    );
+    request.on("error", reject);
+    request.end(init.body as string | undefined);
+  });
+}
+
 export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
   urlOf: (config) => {
     const url = new URL(config.apiUrl ?? config.publicUrl);
@@ -96,38 +133,7 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
     url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
     return url;
   },
-  request: async (config, url, init) => {
-    const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
-    if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
-    if (awsPublicOrigin(config).protocol === "http:") {
-      assertCloudFrontLayerTarget(config, url, target);
-      const response = await fetch(url, init);
-      return { status: response.status, body: await response.text() };
-    }
-    return new Promise((resolve, reject) => {
-      const request = https.request(
-        url,
-        {
-          hostname: target,
-          servername: url.hostname,
-          method: init.method,
-          headers: { ...(init.headers as Record<string, string>), host: url.host },
-          signal: init.signal ?? undefined,
-          agent: false,
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on("data", (chunk: Buffer) => chunks.push(chunk));
-          response.on("error", reject);
-          response.on("end", () =>
-            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
-          );
-        },
-      );
-      request.on("error", reject);
-      request.end(init.body as string | undefined);
-    });
-  },
+  request: awsCoreRequest,
   secretFallback: (config) =>
     config.aws
       ? capture(process.env.AWS_BIN ?? "aws", [
