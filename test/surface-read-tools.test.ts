@@ -61,6 +61,32 @@ async function subToolResult(built: any, root: string, tool: string, deadlineMs 
   throw new Error(`no assistant reply for ${tool}`);
 }
 
+test("read_thread leaves an omitted limit to the surface provider", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  let running = true;
+  const queries: any[] = [];
+  const loop = (async () => {
+    while (running) {
+      for (const request of await built.app.pendingContextRequests("slack")) {
+        queries.push(request.query);
+        await built.app.fulfillContextRequest(request.id, { result: { messages: [] } });
+      }
+      await sleep(20);
+    }
+  })();
+  try {
+    await built.app.turn(mention("!read_thread", "C10", "1000.1"));
+    assert.match(await subToolResult(built, "C10:1000.1", "read_thread"), /read 0 message/);
+    assert.equal(queries.length, 1);
+    assert.equal(queries[0].count, undefined);
+  } finally {
+    running = false;
+    await loop;
+    await built.runtime.stop();
+  }
+});
+
 test("whats_new returns POINTERS (counts of new-here + other active threads), never message prose", async () => {
   const built = freshApp();
   built.runtime.start();

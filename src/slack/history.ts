@@ -2,7 +2,7 @@ import { slackMessageToIngestEvent } from "./mirror.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackContextSource } from "./config.ts";
 import { decodeSlackEntities } from "./lib.ts";
-import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
+import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { CachedMessage } from "../surface-cache/types.ts";
 import type { BotIdentity } from "./directory.ts";
@@ -37,6 +37,7 @@ export function createSlackHistoryReader(deps: {
   setupUrl?: string;
   historyClient?: { conversations: { history(args: any): Promise<unknown>; replies(args: any): Promise<unknown> } };
 }): SlackHistoryReader {
+  const limit = deps.managed ? SHARED_SLACK_HISTORY_LIMIT : 200;
   async function liveHistory(
     client: any,
     channel: string,
@@ -45,7 +46,7 @@ export function createSlackHistoryReader(deps: {
     expandThreads = false,
   ): Promise<SlackHistoryPage> {
     const historyClient = deps.historyClient ?? client;
-    const paging = { channel, limit: 200, ...(before ? { latest: before, inclusive: false } : {}) };
+    const paging = { channel, limit, ...(before ? { latest: before, inclusive: false } : {}) };
     const page = parseMessageList(
       threadTs
         ? await historyClient.conversations.replies({ ...paging, ts: threadTs })
@@ -58,7 +59,7 @@ export function createSlackHistoryReader(deps: {
         parents.map(async (m) => {
           try {
             return {
-              page: parseMessageList(await historyClient.conversations.replies({ channel, ts: m.ts, limit: 200 })),
+              page: parseMessageList(await historyClient.conversations.replies({ channel, ts: m.ts, limit })),
               failed: false,
             };
           } catch {
@@ -83,23 +84,24 @@ export function createSlackHistoryReader(deps: {
     threadTs?: string,
     before?: string,
     expandThreads = false,
+    pageLimit = 200,
   ): Promise<{ rows: CachedMessage[]; hasMore: boolean; truncatedExpansions?: number }> {
     const read = deps.core.readSurfaceMessages!;
-    const options = { limit: 201, noFallback: true, ...(before ? { before } : {}) };
+    const options = { limit: pageLimit + 1, noFallback: true, ...(before ? { before } : {}) };
     if (threadTs) {
       const [parents, replies] = await Promise.all([
         read(channel, { at: threadTs, noFallback: true, ...(before ? { before } : {}) }),
         read(channel, { ...options, sub: threadTs, oldestFirst: true }),
       ]);
       const rows = [...parents, ...replies];
-      return { rows: rows.slice(0, 200), hasMore: rows.length > 200 };
+      return { rows: rows.slice(0, pageLimit), hasMore: rows.length > pageLimit };
     }
     const rootPage = await read(channel, { ...options, channelHistory: true });
-    const roots = rootPage.slice(-200);
-    const hasMore = rootPage.length > 200;
+    const roots = rootPage.slice(-pageLimit);
+    const hasMore = rootPage.length > pageLimit;
     if (!expandThreads) return { rows: roots, hasMore };
     const parents = roots.filter((m) => (m.replyCount ?? 0) > 0).slice(-5);
-    const expanded = await Promise.all(parents.map((m) => mirrorHistory(channel, m.ts)));
+    const expanded = await Promise.all(parents.map((m) => mirrorHistory(channel, m.ts, undefined, false, pageLimit)));
     return {
       rows: [...new Map([...roots, ...expanded.flatMap((page) => page.rows)].map((m) => [m.ts, m])).values()],
       hasMore,
@@ -116,7 +118,7 @@ export function createSlackHistoryReader(deps: {
   ): Promise<void> {
     if (!deps.core.readSurfaceMessages) return;
     try {
-      const mirrorPage = await mirrorHistory(channel, threadTs, before, expandThreads);
+      const mirrorPage = await mirrorHistory(channel, threadTs, before, expandThreads, limit);
       const rows = mirrorPage.rows;
       const timestamps = new Set(rows.map((m) => m.ts));
       const liveTimestamps = new Set(live.raw.flatMap((m) => (m.ts ? [m.ts] : [])));
@@ -253,7 +255,7 @@ export function createSlackHistoryReader(deps: {
       }
     }
     try {
-      const paging = { channel, limit: 200, ...(before ? { latest: before, inclusive: false } : {}) };
+      const paging = { channel, limit, ...(before ? { latest: before, inclusive: false } : {}) };
       const page = parseMessageList(
         threadTs
           ? await historyClient.conversations.replies({ ...paging, ts: threadTs })

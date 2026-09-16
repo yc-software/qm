@@ -1,3 +1,5 @@
+export const SHARED_SLACK_HISTORY_LIMIT = 15;
+
 export function slackHistoryRateLimitMessage(
   error: unknown,
   opts: { setupUrl?: string; managed?: boolean; format?: "slack" } = {},

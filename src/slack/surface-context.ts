@@ -1,5 +1,5 @@
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
-import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
+import { SHARED_SLACK_HISTORY_LIMIT, slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
@@ -38,6 +38,8 @@ export function createSurfaceContextFulfiller(deps: {
   historyRateLimitOptions?: { managed?: boolean; setupUrl?: string };
 }): { fulfillSurfaceContext(client: any, r: SurfaceContextRequest): Promise<void> } {
   const { core, directory, serializer, botToken, trustedFileHost, userToken, clientOptions } = deps;
+
+  const managed = deps.historyRateLimitOptions?.managed === true;
 
   async function fulfillLiveSearch(
     query: string,
@@ -83,12 +85,21 @@ export function createSurfaceContextFulfiller(deps: {
     const page = before ? { latest: before, inclusive: false } : {};
     if (threadTs) {
       const { messages, hasMore } = parseMessageList(
-        await client.conversations.replies({ channel, ts: threadTs, limit: RECENT_THREAD_LIMIT, ...page }),
+        await client.conversations.replies({
+          channel,
+          ts: threadTs,
+          limit: managed ? SHARED_SLACK_HISTORY_LIMIT : RECENT_THREAD_LIMIT,
+          ...page,
+        }),
       );
       return { raw: messages, hasMore };
     }
     const { messages, hasMore } = parseMessageList(
-      await client.conversations.history({ channel, limit: RECENT_HISTORY_LIMIT, ...page }),
+      await client.conversations.history({
+        channel,
+        limit: managed ? SHARED_SLACK_HISTORY_LIMIT : RECENT_HISTORY_LIMIT,
+        ...page,
+      }),
     );
     return { raw: messages.slice().reverse(), hasMore };
   }
@@ -231,7 +242,10 @@ export function createSurfaceContextFulfiller(deps: {
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }
-      const count = Math.max(1, Math.min(RECENT_THREAD_LIMIT, Number(q.count) || 100));
+      const count = Math.max(
+        1,
+        Math.min(RECENT_THREAD_LIMIT, Number(q.count) || (managed ? SHARED_SLACK_HISTORY_LIMIT : 100)),
+      );
       const before = typeof q.before === "string" && q.before ? q.before : undefined;
       const outcomes = await Promise.allSettled([
         fetchContextHistory(client, channel, undefined, before),
