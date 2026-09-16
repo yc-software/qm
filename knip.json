@@ -59,6 +59,10 @@
         "hljs-real-sql",
         "hljs-real-markdown"
       ]
+    },
+    "deploy/connector-sdk": {
+      "entry": ["build.mjs"],
+      "ignoreDependencies": ["@composio/core"]
     }
   }
 }
