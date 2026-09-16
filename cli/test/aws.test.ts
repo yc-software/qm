@@ -3003,7 +3003,10 @@ test("AWS candidate deploy migration failure preserves the runtime and releases 
   const fake = statefulAws(dir, oneServiceConfig(), {}, { migrationExitCode: 1 });
   const before = JSON.parse(readFileSync(fake.state, "utf8"));
   try {
-    await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true, candidate: candidatePath }), /migration task failed/);
+    await assert.rejects(
+      () => awsUp(oneServiceConfig(), dir, { yes: true, candidate: candidatePath }),
+      /migration task failed/,
+    );
     const calls = readFileSync(fake.log, "utf8");
     assert.doesNotMatch(calls, /ecs (?:deregister-task-definition|update-service)/);
     assert.equal(calls.match(/ecs register-task-definition/g)?.length, 1);
