@@ -74,6 +74,6 @@ test("combined cleanup is opt-in for provider implementations", () => {
 test("posixJoin rejects parent path segments", () => {
   assert.equal(posixJoin("/root/workspace", "a/b.txt"), "/root/workspace/a/b.txt");
   assert.equal(posixJoin("/root/workspace/", "/a/./b.txt"), "/root/workspace/a/./b.txt");
-  assert.throws(() => posixJoin("/root/workspace", "../x"), /escapes the workspace/);
-  assert.throws(() => posixJoin("/root/workspace", "a/../../x"), /escapes the workspace/);
+  assert.throws(() => posixJoin("/root/workspace", "../x"), /must stay inside the workspace/);
+  assert.throws(() => posixJoin("/root/workspace", "a/../../x"), /must stay inside the workspace/);
 });

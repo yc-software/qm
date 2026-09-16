@@ -23,7 +23,7 @@ const posixDirname = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf
 const BLOB_TRANSFER_TTL_MS = 2 * 60_000;
 
 export function posixJoin(base: string, rel: string): string {
-  if (hasParentPathSegment(rel)) throw new Error(`path ${rel} escapes the workspace: parent segments are not allowed`);
+  if (hasParentPathSegment(rel)) throw new Error(`${rel} must stay inside the workspace — no .. path segments`);
   const clean = rel.replace(/^\/+/, "");
   return clean ? `${base.replace(/\/+$/, "")}/${clean}` : base;
 }
