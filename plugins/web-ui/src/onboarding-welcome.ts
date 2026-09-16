@@ -7,11 +7,12 @@ import {
   type ConnectionAttempt,
 } from "./connection-return";
 import { LitElement, html, nothing } from "lit";
-import { ArrowUpRight, Check } from "lucide";
-import { icon, slackMark } from "./ui";
+import { Check } from "lucide";
+import { icon } from "./ui";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
 import type { Me } from "./shell-state";
 import "./onboarding-welcome.css";
+import "./onboarding-slack";
 import {
   connectionPreviewEnabled,
   previewParameters,
@@ -409,17 +410,11 @@ export class OnboardingWelcome extends LitElement {
       }
       ${
         this.widget !== "apps" && this.me?.permissions?.includes("admin")
-          ? html`<a
-              class="welcome-slack welcome-beat"
+          ? html`<qm-onboarding-slack
+              class="welcome-beat"
               style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
-              href=${`${this.adminBase}/connectors?setup=slack`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              ${slackMark(24)}<span
-                ><strong>Add to Slack</strong><small>Work with QM where your team already talks.</small></span
-              >${icon(ArrowUpRight, 16)}
-            </a>`
+              .adminBase=${this.adminBase}
+            ></qm-onboarding-slack>`
           : nothing
       }
       ${

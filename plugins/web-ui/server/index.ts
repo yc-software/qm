@@ -183,7 +183,7 @@ const SPA_CSP = [
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",
   "base-uri 'none'",
-  "form-action 'self'",
+  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin} https://slack.com` : ""}`,
   "object-src 'none'",
 ].join("; ");
 
@@ -192,7 +192,7 @@ function withSecurityHeaders(headers: Record<string, string>): Record<string, st
     ...headers,
     "content-security-policy": SPA_CSP,
     "strict-transport-security": "max-age=63072000; includeSubDomains",
-    "referrer-policy": "no-referrer",
+    "referrer-policy": process.env.QM_SLACK_SERVICE_URL ? "strict-origin" : "no-referrer",
     "x-frame-options": "SAMEORIGIN",
     "x-content-type-options": "nosniff",
   };

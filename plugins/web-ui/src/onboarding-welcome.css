@@ -75,6 +75,10 @@ qm-onboarding-welcome {
   z-index: -1;
 }
 .welcome-slack {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 12px;
