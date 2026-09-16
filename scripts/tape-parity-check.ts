@@ -141,4 +141,15 @@ console.log(
     `real mismatches: ${realTotal} across ${realSessions} session(s), plus ${limitedRealTotal} on limited reads`,
   ].join("\n"),
 );
-process.exit(realTotal || limitedRealTotal || failed || vacuous ? 1 : 0);
+process.exit(
+  realTotal ||
+    limitedRealTotal ||
+    failed ||
+    vacuous ||
+    unservable.blocked ||
+    unservable.uncovered ||
+    limitedFallback ||
+    benign["coarse-gap"]
+    ? 1
+    : 0,
+);
