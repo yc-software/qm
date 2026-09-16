@@ -419,6 +419,23 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.equal(await b.turn(`!owner ${probe}`, true), "npm_U1|gmail_U1|file_U1|unset|isolated");
   assert.equal(await b.turn(`!owner ${probe}`, true, "U2"), "npm_U2|gmail_U2|file_U2|unset|isolated");
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
+  await b.directory.replaceGroups([
+    { groupId: "G1", principalId: "U1" },
+    { groupId: "G1", principalId: "U2" },
+  ]);
+  assert.equal(
+    await b.turn(`!owner ${probe}`, true, "U1", {
+      conversation: {
+        kind: "group",
+        channelRef: "G1",
+        threadRef: "G1:open-keychain",
+        audience: [{ externalId: "U1" }, { externalId: "U2" }],
+        publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
+      },
+    }),
+    "npm_U1|gmail_U1|file_U1|unset|isolated",
+  );
+  assert.deepEqual(await b.keychain.grantsForScope("group:G1"), []);
   assert.deepEqual(await b.keychain.grantsForScope("channel:C1"), []);
   assert.ok((await b.auditLog.events()).some((event) => event.action === "keychain.open_speaker_use"));
   // No speaker credential may persist through an owner-computer teardown.
