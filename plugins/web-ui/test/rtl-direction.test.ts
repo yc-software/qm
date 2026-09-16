@@ -17,9 +17,9 @@ test("settled and streaming transcript blocks select direction from their conten
   assert.match(chat, /import \{ markdown \} from "\.\/message-markdown"/);
   assert.match(
     messageMarkdown,
-    /<qm-markdown\s+dir="auto"\s+\.content=\$\{escapeLoneDollars\(normalizePlainTextFences\(text\)\)\}/,
+    /<qm-markdown\s+dir="auto"[^>]*?\.content=\$\{escapeLoneDollars\(normalizePlainTextFences\(text\)\)\}/,
   );
-  assert.match(chat, /\$\{markdown\(body\)\}/);
+  assert.match(chat, /\$\{markdown\(body, isStreaming, /);
   assert.match(chat, /class="streaming-text \$\{isStreaming \? "live-stream" : ""\}" dir="auto"/);
 });
 

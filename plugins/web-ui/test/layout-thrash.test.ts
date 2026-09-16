@@ -23,7 +23,7 @@ test("a box-size change re-arms the composer measure via ResizeObserver (fires a
 
 test("bottom-follow's skip path performs zero layout reads", () => {
   const fn = viewport.slice(viewport.indexOf("  function follow("));
-  const skip = fn.indexOf("if (!scroller || !following || frame !== null) return;");
+  const skip = fn.indexOf("if (!scroller || !following || contentUpdates.size > 0 || frame !== null) return;");
   const firstRead = fn.indexOf("const priorTop = element.scrollTop;");
   assert.ok(skip >= 0 && skip < firstRead);
   assert.match(viewport, /if \(changed\) syncSticky\(\);/);

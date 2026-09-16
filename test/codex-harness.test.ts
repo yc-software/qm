@@ -68,7 +68,7 @@ test("Codex replay keeps paired tool ids within the provider's 64-character limi
   assert.equal(codexReplayCallId("short-id"), "short-id");
 });
 
-function fakeCodexBinary(dir: string): string {
+function fakeCodexBinary(dir: string, commentary = false): string {
   const path = join(dir, "fake-codex");
   writeFileSync(
     path,
@@ -93,6 +93,14 @@ rl.on("line", (line) => {
   if (msg.method === "thread/inject_items") return send({ id: msg.id, result: {} });
   if (msg.method === "turn/start") {
     send({ id: msg.id, result: { turn: { id: "turn-1", status: "inProgress", items: [] } } });
+    if (${commentary}) {
+      for (const id of ["ack-1", "ack-2"]) {
+        send({ method: "item/started", params: { threadId: "thread-1", item: { type: "agentMessage", id, phase: "commentary" } } });
+        send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", itemId: id, delta: "Checking." } });
+        send({ method: "item/completed", params: { threadId: "thread-1", item: { type: "agentMessage", id, text: "Checking.", phase: "commentary" } } });
+      }
+      send({ method: "item/started", params: { threadId: "thread-1", item: { type: "agentMessage", id: "item-1", phase: "final_answer" } } });
+    }
     send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100 }, last: { inputTokens: 100 } } } });
     send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total: { inputTokens: 100 }, last: { inputTokens: 100 } } } });
     send({ method: "item/started", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "inProgress", senderThreadId: "thread-1", receiverThreadIds: ["child-1"], prompt: "return ALPHA", agentsStates: { "child-1": { status: "running", message: null } } } } });
@@ -1446,7 +1454,7 @@ for (const mode of ["turnFailed", "startRejected"] as const) {
   });
 }
 
-function stopReportsFailedCodexBinary(dir: string): string {
+function stopReportsFailedCodexBinary(dir: string, stream = false, final = true): string {
   const path = join(dir, "stop-failed-codex");
   writeFileSync(
     path,
@@ -1462,10 +1470,23 @@ rl.on("line", (line) => {
   if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-sf" } } });
   if (msg.method === "turn/start") {
     send({ id: msg.id, result: { turn: { id: "turn-sf", status: "inProgress", items: [] } } });
+    if (${stream}) {
+      send({ method: "item/started", params: { threadId: "thread-sf", item: { id: "ack", type: "agentMessage", phase: "commentary" } } });
+      send({ method: "item/agentMessage/delta", params: { threadId: "thread-sf", itemId: "ack", delta: "Checking." } });
+      if (${final}) {
+      send({ method: "item/completed", params: { threadId: "thread-sf", item: { id: "ack", type: "agentMessage", phase: "commentary", text: "Checking." } } });
+      send({ method: "item/started", params: { threadId: "thread-sf", item: { id: "answer", type: "agentMessage", phase: "final_answer" } } });
+      send({ method: "item/agentMessage/delta", params: { threadId: "thread-sf", itemId: "answer", delta: "Partial answer" } });
+      }
+    }
     return writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
   }
   if (msg.method === "turn/interrupt") {
     send({ id: msg.id, result: {} });
+    if (${stream}) {
+      send({ method: "item/agentMessage/delta", params: { threadId: "thread-sf", itemId: "answer", delta: " LATE" } });
+      send({ method: "item/completed", params: { threadId: "thread-sf", item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "BAD LATE COMPLETION" } } });
+    }
     return send({ method: "turn/completed", params: { threadId: "thread-sf", turn: { id: "turn-sf", status: "failed", error: { message: "turn interrupted" }, items: [] } } });
   }
 });
@@ -1725,3 +1746,123 @@ test(
     assert.deepEqual(requests, []);
   },
 );
+
+test("Codex persists repeated public commentary in order with distinct streaming blocks", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-commentary-"));
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir, true), env: testHarnessEnv(dir) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const streamed: string[] = [];
+  const scope = "personal:test" as ScopeId;
+  const result = await harness.turns.runTurn({
+    session: { id: "commentary" } as Session,
+    input: "check",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) => {
+      const saved = {
+        ...entry,
+        sessionId: "commentary",
+        seq: entries.length + 1,
+        createdAt: Date.now(),
+      } as SessionEntry;
+      entries.push(saved);
+      return saved;
+    },
+    recordModelCall: () => {},
+    onDelta: (delta) => {
+      streamed.push(delta);
+    },
+    onTextBlockStart: async (phase) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      streamed.push(`block:${phase}`);
+    },
+  });
+  assert.equal(result.reply, "hello");
+  assert.deepEqual(
+    entries.filter((entry) => entry.type === "text").map((entry) => entry.payload),
+    [
+      { text: "Checking.", phase: "commentary" },
+      { text: "Checking.", phase: "commentary" },
+    ],
+  );
+  assert.deepEqual(streamed, [
+    "block:commentary",
+    "Checking.",
+    "block:commentary",
+    "Checking.",
+    "block:final_answer",
+    "hello",
+  ]);
+});
+
+for (const final of [true, false]) {
+  for (const mechanism of ["signal", "cancel"] as const) {
+    test(`Codex saves only pre-stop ${final ? "final" : "commentary"} text via ${mechanism}`, async (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "qm-codex-partial-stop-"));
+      const signals = createMemoryRunSignalStore();
+      const harness = createCodexHarness({
+        binaryPath: stopReportsFailedCodexBinary(dir, true, final),
+        env: testHarnessEnv(dir),
+        signals,
+        turnWallClockMs: 5_000,
+      });
+      t.after(async () => {
+        await harness.turns.close?.();
+        rmSync(dir, { recursive: true, force: true });
+      });
+      const cancel = new AbortController();
+      const received = Promise.withResolvers<void>();
+      const entries: SessionEntry[] = [];
+      const deltas: string[] = [];
+      const scope = "personal:test" as ScopeId;
+      const running = harness.turns.runTurn({
+        session: { id: "partial-stop" } as Session,
+        runId: "partial-stop-run",
+        input: "check",
+        systemPrompt: "be concise",
+        history: [],
+        tools: {} as HarnessTurnInput["tools"],
+        scopeLabel: scope,
+        orgScopeId: scope,
+        cancel: cancel.signal,
+        emit: async (entry) => {
+          const saved = {
+            ...entry,
+            sessionId: "partial-stop",
+            seq: entries.length + 1,
+            createdAt: Date.now(),
+          } as SessionEntry;
+          entries.push(saved);
+          return saved;
+        },
+        recordModelCall: () => {},
+        onDelta: (text) => {
+          deltas.push(text);
+          if (text === (final ? "Partial answer" : "Checking.")) received.resolve();
+        },
+      });
+      await received.promise;
+      if (mechanism === "cancel") cancel.abort();
+      else await signals.send("partial-stop-run", { kind: "abort" });
+      const result = await running;
+      assert.equal(result.stopped, true);
+      assert.deepEqual(
+        entries.filter((entry) => entry.type === "text").map((entry) => entry.payload),
+        [{ text: "Checking.", phase: "commentary" }],
+      );
+      assert.equal(result.reply, final ? "Partial answer" : "");
+      assert.deepEqual(deltas, final ? ["Checking.", "Partial answer"] : ["Checking."]);
+      assert.deepEqual(
+        entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+        [{ text: final ? "Partial answer" : "", stopped: true }],
+      );
+    });
+  }
+}

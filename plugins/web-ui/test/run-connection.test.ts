@@ -1,12 +1,63 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { makeRunResumeStreamFn } from "../src/core-bridge.ts";
+import { Agent } from "@earendil-works/pi-agent-core";
+import {
+  continuableMessages,
+  makeCoreStreamFn,
+  makeRunResumeStreamFn,
+  messagesWithStreaming,
+  resumeAnchor,
+  RUN_IDLE_MS,
+  setClock,
+  userSendMessage,
+} from "../src/core-bridge.ts";
 import type { Api, Context, Model } from "@earendil-works/pi-ai";
 
 const model = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Model<Api>;
 const flush = async () => {
   for (let i = 0; i < 100; i++) await Promise.resolve();
 };
+
+for (const withAttachments of [false, true]) {
+  test(`a timed-out send reconnects to its original input${withAttachments ? " with attachments" : ""}`, async (t) => {
+    let time = 0;
+    setClock(() => time);
+    t.after(() => setClock(() => Date.now()));
+    const attachments = withAttachments
+      ? [{ id: "notes", type: "document", fileName: "notes.txt", mimeType: "text/plain", size: 5, content: "bm90ZXM=" }]
+      : undefined;
+    const input = userSendMessage("Check my document", attachments);
+    const agent = new Agent({ initialState: { model, messages: [input] } });
+    t.mock.method(globalThis, "fetch", async (url: unknown) => {
+      if (String(url).includes("/api/blobs")) return Response.json({ blobId: "notes-blob", sizeBytes: 5 });
+      if (String(url).endsWith("/api/turn")) return Response.json({ status: "queued", runId: "r" });
+      assert.equal((input as unknown as { runId?: string }).runId, "r");
+      time = RUN_IDLE_MS + 1;
+      return Response.json({ status: "running", result: null });
+    });
+    agent.streamFn = makeCoreStreamFn("web:u:reconnect", agent);
+    await agent.continue();
+    const failed = agent.state.messages.at(-1);
+    assert.equal((failed as { stopReason?: string }).stopReason, "error");
+    const resumed = continuableMessages(agent.state.messages, {
+      runId: "r",
+      seq: 10,
+      text: "Check my document",
+      createdAt: 1,
+    });
+    assert.deepEqual(resumed.messages, [input]);
+    assert.deepEqual(resumed.popped, [failed]);
+    assert.deepEqual((resumed.messages[0] as unknown as { attachments?: unknown[] }).attachments, attachments);
+    agent.state.messages = resumed.messages;
+    agent.streamFn = makeRunResumeStreamFn("r", { status: "done", result: { status: "ok", reply: "Done" } });
+    await agent.continue();
+    assert.equal(agent.state.messages.length, 2);
+    assert.equal(agent.state.messages[0], input);
+    const reply = agent.state.messages[1];
+    assert.ok(reply?.role === "assistant");
+    assert.deepEqual(reply.content, [{ type: "text", text: "Done" }]);
+  });
+}
 
 function streamingFetch(t: TestContext) {
   const original = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -187,4 +238,53 @@ test("reply completion waits for final result metadata rather than dropping appr
     "a",
   );
   assert.equal(state.polls, 0);
+});
+
+test("approval activity reaches the visible transcript before any response text", async (t) => {
+  const transport = streamingFetch(t);
+  const agent = new Agent({ initialState: { model, messages: [resumeAnchor()] } });
+  let projected: ReturnType<typeof messagesWithStreaming> = [];
+  agent.streamFn = makeRunResumeStreamFn("r", undefined, () => {
+    projected = messagesWithStreaming(agent.state.messages, agent.state.streamingMessage);
+  });
+  const completion = agent.continue();
+  await flush();
+  transport.send({
+    type: "CUSTOM",
+    name: "run",
+    value: {
+      status: "running",
+      result: null,
+      activity: [
+        {
+          seq: 57,
+          parentSeq: null,
+          type: "approval_resolved",
+          payload: { requestId: "a", command: "help", approved: true, scope: "once" },
+          createdAt: 100,
+        },
+      ],
+    },
+  });
+  await flush();
+  const beforeCompletion = projected.map((message) => (message as { role: string }).role);
+  transport.send({
+    type: "CUSTOM",
+    name: "run",
+    value: {
+      status: "done",
+      result: { status: "ok", reply: "Done" },
+      activity: [
+        {
+          seq: 57,
+          parentSeq: null,
+          type: "approval_resolved",
+          payload: { requestId: "a", command: "help", approved: true, scope: "once" },
+          createdAt: 100,
+        },
+      ],
+    },
+  });
+  await completion;
+  assert.ok(beforeCompletion.includes("approval-decision"), JSON.stringify(beforeCompletion));
 });

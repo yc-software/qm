@@ -1,3 +1,5 @@
+import { escapeHtml } from "./html-escape.ts";
+
 type HighlightResult = { value: string };
 type Hljs = {
   registerLanguage: (name: string, lang: unknown) => void;
@@ -11,10 +13,6 @@ let loading: Promise<void> | null = null;
 
 const LANGS = ["javascript", "typescript", "python", "xml", "css", "json", "bash", "sql", "markdown"] as const;
 const LANG_ALIASES: Record<string, string> = { html: "xml" };
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
 
 function rerenderMountedBlocks(): void {
   if (typeof document === "undefined") return;

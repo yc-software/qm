@@ -278,6 +278,13 @@ export interface App {
   ): Promise<{
     status: Run["status"];
     result: TurnResult | null;
+    input?: {
+      runId: string;
+      seq: number | null;
+      text: string;
+      createdAt: number;
+      attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
+    };
     partial?: string;
     alive?: boolean;
     stale?: boolean;
@@ -295,6 +302,12 @@ export interface App {
     threadRef: string,
     viewer?: string,
   ): Promise<{ runId: string; queued?: Array<{ runId: string; text: string; hasAttachments?: boolean }> } | null>;
+  editQueuedRun(
+    runId: string,
+    text: string,
+    expectedText: string,
+    viewer?: string,
+  ): Promise<{ edited: boolean; reason?: string }>;
   withdrawRun(runId: string, viewer?: string): Promise<{ withdrawn: boolean; reason?: string }>;
   signalRun(
     runId: string,

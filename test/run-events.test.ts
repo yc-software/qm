@@ -73,3 +73,76 @@ test("run events push deltas without snapshot polling and recover a separate wor
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("run events deliver a pending activity snapshot before subsequent text and recover held deltas", async () => {
+  const bus = createMemoryEventBus<RunStreamEvent>("ordered-test");
+  let reads = 0;
+  let workerText = "";
+  let status: "running" | "done" = "running";
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const app = {
+    async getRun() {
+      reads++;
+      if (reads === 3) {
+        entered.resolve();
+        await release.promise;
+      }
+      return {
+        status,
+        startedAt: 0,
+        finishedAt: null,
+        result: status === "done" ? { status: "ok", reply: workerText } : null,
+        activity:
+          reads >= 3 ? [{ seq: 1, parentSeq: null, type: "text", payload: { text: "working" }, createdAt: 0 }] : [],
+      };
+    },
+    subscribeRun(_runId, listener, onResync) {
+      return bus.subscribe(listener, { onResync });
+    },
+    syncRunStream(runId, offset) {
+      emitRunText(bus, runId, workerText.slice(offset), offset);
+    },
+  } as Pick<App, "getRun" | "subscribeRun" | "syncRunStream">;
+  const server = createServer((req, res) => {
+    void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, {
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    let wire = "";
+    const consume = (async () => {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) return;
+        wire += new TextDecoder().decode(next.value);
+      }
+    })();
+    await sleep(50);
+    assert.equal(reads, 2);
+    bus.emit({ runId: "run", kind: "refresh" });
+    await entered.promise;
+    workerText = "after-boundary";
+    bus.emit({ runId: "run", kind: "delta", offset: 0, text: workerText });
+    await sleep(30);
+    assert.doesNotMatch(wire, /after-boundary/);
+    release.resolve();
+    await sleep(50);
+    assert.ok(wire.indexOf("working") >= 0);
+    assert.ok(wire.indexOf("after-boundary") > wire.indexOf("working"));
+    assert.equal(wire.match(/after-boundary/g)?.length, 1);
+    status = "done";
+    bus.emit({ runId: "run", kind: "refresh" });
+    await consume;
+    assert.equal(bus.size(), 0);
+  } finally {
+    release.resolve();
+    controller.abort();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

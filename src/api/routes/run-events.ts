@@ -67,6 +67,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       res.destroy();
     } finally {
       refreshing = false;
+      sync();
     }
   };
   const unsubscribe = app.subscribeRun(
@@ -77,7 +78,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
         void refresh();
         return;
       }
-      if (event.kind !== "delta") return;
+      if (event.kind !== "delta" || refreshing) return;
       if (event.offset > offset) {
         sync();
         return;
