@@ -100,6 +100,20 @@ return its recorded boot flag and optional deployment identity. It returns
 boot flags or identities. Deployment wrappers can preserve the boot environment
 while changing durable ownership independently.
 
+The exported `awsBackgroundWorkCapacity(config, configDir, candidatePath?)` proves
+that an inactive controlled stack is currently reusable. It requires another
+owner, fully drained current membership, stable native deployments and exact task
+inventories for every workload, resolved deployment preparation, and explicitly
+disabled protection on every current core task. It never changes task protection
+or deployment state. The deploy role needs `ecs:GetTaskProtection` on its tasks.
+The result binds the manifest and deployment identities, ownership generation,
+workload task definitions, native deployment IDs, task ARNs, and protection proof.
+`awsBackgroundWorkStatus` also returns the current manifest ID for an active-owner
+proof. A release coordinator can combine both snapshots with immutable candidate
+provenance and compare them again under its production lock before any mutation.
+This is a point-in-time check, not a reservation: intervening maintenance or task
+replacement invalidates the proof and must block promotion.
+
 Live checks use the active ownership cohort's authenticated canary endpoint to
 verify a real model reply, session persistence, generated title, error records,
 session cleanup, and database catalog health. The CLI proves the exact healthy

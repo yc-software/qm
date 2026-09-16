@@ -350,6 +350,8 @@ test("the deploy role can run and inspect only stack-scoped deployment canaries"
 
   const inspect = policy.match(/Sid\s*= "InspectDeploymentCanaries"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
   assert.match(inspect, /ecs:DescribeTasks/);
+  assert.match(inspect, /ecs:GetTaskProtection/);
+  assert.doesNotMatch(policy, /ecs:UpdateTaskProtection/);
   assert.match(inspect, /task\/\$\{var\.cluster_name\}\/\*/);
   assert.doesNotMatch(inspect, /Resource\s*= "\*"/);
 });

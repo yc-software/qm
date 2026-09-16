@@ -443,7 +443,7 @@ resource "aws_iam_role_policy" "github_deploy" {
       {
         Sid      = "InspectDeploymentCanaries"
         Effect   = "Allow"
-        Action   = ["ecs:DescribeTasks"]
+        Action   = ["ecs:DescribeTasks", "ecs:GetTaskProtection"]
         Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task/${var.cluster_name}/*"]
       },
       {
