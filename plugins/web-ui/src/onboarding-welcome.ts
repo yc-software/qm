@@ -1,3 +1,11 @@
+import {
+  isConnectionReturn,
+  takeConnectionReturn,
+  completeConnectionReturn,
+  saveConnectionAttempt,
+  clearConnectionAttempt,
+  type ConnectionAttempt,
+} from "./connection-return";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check } from "lucide";
 import { icon, slackMark } from "./ui";
@@ -25,6 +33,7 @@ export class OnboardingWelcome extends LitElement {
     animateWelcome: { type: Boolean },
     setupOnly: { type: Boolean },
     widget: {},
+    returnKey: {},
     base: {},
     adminBase: {},
     loading: { state: true },
@@ -32,17 +41,30 @@ export class OnboardingWelcome extends LitElement {
     authorizing: { state: true },
     authorizationError: { state: true },
     connectionOutcome: { state: true },
+    connections: { state: true },
+    connectionError: { state: true },
   };
   declare me: Me | null;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
   declare widget: "all" | "apps" | "slack";
+  declare returnKey: string;
   declare base: string;
   declare adminBase: string;
   declare loading: boolean;
   declare error: string;
   declare authorizing: string;
   declare authorizationError: string;
+  private connections: Array<{ id: string; toolkit: string }> = [];
+  private connectionError = "";
+  private realReturn: ConnectionAttempt | null = null;
+  private connectionsController?: AbortController;
+  private restoreScrollTop: number | null = null;
+  private returnError = "";
+  private returnAccount = "";
+  private refreshConnections = () => {
+    if (!this.preview && this.widget !== "slack" && !document.hidden) void this.loadConnections();
+  };
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
   private returned: PreviewAttempt | null = null;
@@ -58,6 +80,7 @@ export class OnboardingWelcome extends LitElement {
     this.animateWelcome = true;
     this.setupOnly = false;
     this.widget = "all";
+    this.returnKey = "welcome";
     this.base = "/";
     this.adminBase = "/admin";
     this.loading = true;
@@ -74,6 +97,30 @@ export class OnboardingWelcome extends LitElement {
   }
   protected firstUpdated(): void {
     const params = previewParameters();
+    const returnUrl =
+      !this.preview && this.widget !== "slack" ? takeConnectionReturn(this.previewUser(), this.returnKey) : null;
+    const realParams = returnUrl?.url.searchParams;
+    const returning = !this.preview && isConnectionReturn();
+    if (realParams) {
+      const attempt = returnUrl!.attempt;
+      this.realReturn = returnUrl!.verified ? null : attempt;
+      this.returnError = realParams.get("error") ?? "";
+      this.returnAccount = realParams.get("connectedAccountId") ?? "";
+      if (attempt) {
+        this.pickerState = { ...attempt.picker };
+        this.restoreScrollTop = attempt.scrollTop;
+        this.retryService = attempt.service;
+        this.connectionOutcome = returnUrl!.verified ? "" : "checking";
+      } else this.connectionOutcome = "expired";
+      const clean = new URL(location.href);
+      for (const key of ["composioReturn", "status", "error", "connectedAccountId"]) clean.searchParams.delete(key);
+      history.replaceState(history.state, "", clean);
+    }
+    if (!this.preview && this.widget !== "slack") {
+      window.addEventListener("focus", this.refreshConnections);
+      document.addEventListener("visibilitychange", this.refreshConnections);
+      void this.loadConnections();
+    }
     if (this.preview) {
       const visible = new URL(location.href);
       visible.searchParams.set("connectionDemo", "1");
@@ -110,6 +157,7 @@ export class OnboardingWelcome extends LitElement {
       for (const key of ["connectionReturn", "status", "error", "connectedAccountId"]) clean.searchParams.delete(key);
       history.replaceState(history.state, "", clean);
     } else if (
+      !returning &&
       !this.setupOnly &&
       this.animateWelcome &&
       globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches === false
@@ -120,7 +168,9 @@ export class OnboardingWelcome extends LitElement {
   }
   private drawPicker(): void {
     const target = this.querySelector<HTMLElement>(".welcome-picker");
-    const connected = this.preview ? previewConnections(this.previewUser()) : [];
+    const connected = this.preview
+      ? previewConnections(this.previewUser())
+      : this.connections.map((account) => account.toolkit);
     if (target && !this.error && !this.loading)
       mountConnectionPicker(
         target,
@@ -132,6 +182,56 @@ export class OnboardingWelcome extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this.controller?.abort();
+    this.connectionsController?.abort();
+    window.removeEventListener("focus", this.refreshConnections);
+    document.removeEventListener("visibilitychange", this.refreshConnections);
+  }
+  private async loadConnections(): Promise<void> {
+    this.connectionsController?.abort();
+    const controller = (this.connectionsController = new AbortController());
+    this.connectionError = "";
+    try {
+      const accounts: Array<{ id: string; toolkit: string }> = [];
+      const seen = new Set<string>();
+      let cursor = "";
+      do {
+        if (seen.has(cursor) || seen.size >= 100) throw new Error("Could not finish checking connected apps.");
+        seen.add(cursor);
+        const response = await fetch(`${this.base}api/composio/connections?${new URLSearchParams({ cursor })}`, {
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok || !Array.isArray(result.items))
+          throw new Error("Could not check connected apps. Please try again.");
+        accounts.push(...result.items);
+        cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
+      } while (cursor);
+      if (!this.isConnected || controller.signal.aborted) return;
+      this.connections = accounts;
+      if (this.realReturn) {
+        const attempt = this.realReturn;
+        const verified = accounts.some(
+          (account) => account.id === attempt.accountId && account.toolkit === attempt.service.id,
+        );
+        if (verified && (!this.returnAccount || this.returnAccount === attempt.accountId))
+          this.connectionOutcome = "success";
+        else this.connectionOutcome = this.returnError === "access_denied" ? "cancelled" : "failed";
+        clearConnectionAttempt(this.previewUser());
+        if (this.connectionOutcome === "success") {
+          completeConnectionReturn(this.previewUser(), attempt.state);
+          this.realReturn = null;
+        }
+      }
+      await this.updateComplete;
+      this.drawPicker();
+    } catch (error) {
+      if (controller.signal.aborted || !this.isConnected) return;
+      this.connections = [];
+      this.connectionOutcome = "";
+      this.connectionError = error instanceof Error ? error.message : "Could not check connected apps.";
+      await this.updateComplete;
+      this.drawPicker();
+    }
   }
   private async loadCatalog(): Promise<void> {
     this.controller?.abort();
@@ -167,9 +267,14 @@ export class OnboardingWelcome extends LitElement {
     this.loading = false;
     await this.updateComplete;
     this.drawPicker();
-    if (this.returned) {
-      const scroller = this.closest(".chat-scroll");
-      if (scroller) scroller.scrollTop = this.returned.scrollTop;
+    const restoreTop = this.returned?.scrollTop ?? this.restoreScrollTop;
+    if (restoreTop !== null && restoreTop !== undefined) {
+      await this.updateComplete;
+      requestAnimationFrame(() => {
+        const scroller = this.closest(".chat-scroll");
+        if (scroller && this.isConnected) scroller.scrollTop = restoreTop;
+        this.restoreScrollTop = null;
+      });
     }
   }
   private async authorize(service: ConnectionService): Promise<void> {
@@ -181,13 +286,29 @@ export class OnboardingWelcome extends LitElement {
     this.authorizing = service.name;
     this.authorizationError = "";
     try {
+      const state = crypto.randomUUID();
+      const attempt: ConnectionAttempt = {
+        state,
+        user: this.previewUser(),
+        service: { id: service.id, name: service.name },
+        accountId: "",
+        widget: this.returnKey,
+        expiresAt: Date.now() + 20 * 60_000,
+        path: location.pathname,
+        picker: { ...this.pickerState },
+        scrollTop: this.closest(".chat-scroll")?.scrollTop ?? 0,
+      };
+      saveConnectionAttempt(attempt);
       const response = await fetch(`${this.base}api/composio/authorize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toolkit: service.id }),
+        body: JSON.stringify({ toolkit: service.id, returnTo: location.pathname + location.search, state }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message ?? "Could not open authorization. Please try again.");
+      if (typeof result.accountId !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(result.accountId))
+        throw new Error("Could not start authorization. Please try again.");
+      saveConnectionAttempt({ ...attempt, accountId: result.accountId });
       window.location.assign(result.url);
     } catch (error) {
       this.authorizationError =
@@ -227,8 +348,12 @@ export class OnboardingWelcome extends LitElement {
     const name = this.me?.displayName?.trim().split(/\s+/)[0];
     const cohort = this.me?.welcomeCohort;
     const serviceName = this.retryService?.name ?? "App";
-    const connected = this.preview ? previewConnections(this.previewUser()) : [];
-    const connectedServices = this.services.filter((service) => connected.includes(service.id));
+    const connected = this.preview
+      ? previewConnections(this.previewUser())
+      : this.connections.map((account) => account.toolkit);
+    const connectedServices = [...new Set(connected)].map(
+      (id) => this.services.find((service) => service.id === id) ?? { id, name: id },
+    );
     const outcome = {
       "": { title: "", detail: "" },
       checking: {
@@ -246,7 +371,7 @@ export class OnboardingWelcome extends LitElement {
       expired: { title: "This connection attempt has expired", detail: "Choose an app below to start again." },
       failed: {
         title: `Couldn’t connect ${serviceName}`,
-        detail: "The provider couldn’t finish authorization. Your other connections are unchanged.",
+        detail: "We couldn’t confirm an active connection yet. Try checking again, or restart authorization.",
       },
     }[this.connectionOutcome];
     return html`<section class="welcome-content">
@@ -324,6 +449,8 @@ export class OnboardingWelcome extends LitElement {
                     </div>`
                   : nothing
               }
+              ${this.connectionError ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
+              ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
               <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
               ${
                 connectedServices.length

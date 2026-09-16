@@ -1,4 +1,5 @@
 import { appEditSlug } from "../src/app-edit.ts";
+import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1155,13 +1156,34 @@ const apiRoutes: readonly WebRoute[] = [
       ),
   },
   {
+    method: "GET",
+    path: "/api/composio/connections",
+    handle: async (c) => {
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/composio/connections?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
+      );
+    },
+  },
+  {
     method: "POST",
     path: "/api/composio/authorize",
     handle: async (c) => {
-      const body = await readJson<{ toolkit?: unknown }>(c.req, c.res, false);
+      const body = await readJson<{ toolkit?: unknown; returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
       if (!body) return;
       c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/authorize", JSON.stringify({ toolkit: body.toolkit }));
+      const callbackUrl = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      if (!callbackUrl && (body.returnTo !== undefined || body.state !== undefined)) {
+        return json(c.res, 400, { error: "invalid_return_url" });
+      }
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/composio/authorize",
+        JSON.stringify({ toolkit: body.toolkit, ...(callbackUrl ? { callbackUrl } : {}) }),
+      );
     },
   },
   {
@@ -1232,6 +1254,16 @@ const apiRoutes: readonly WebRoute[] = [
         uploadFileName(url),
       );
     },
+  },
+  {
+    method: "GET",
+    path: "/api/resources/search",
+    handle: (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/resources/search?principalId=${encodeURIComponent(c.user)}&q=${encodeURIComponent((c.url.searchParams.get("q") ?? "").slice(0, 500))}`,
+      ),
   },
   {
     method: "GET",

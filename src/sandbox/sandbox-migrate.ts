@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
 import { supportsBlobStaging, type Sandbox, type SandboxHandle } from "./sandbox.ts";
+import { posixJoin } from "./exec-file-ops.ts";
 
 export function translateScript(toHome: string, fromHome: string): string {
   const H = shq(toHome);
@@ -42,22 +43,27 @@ export interface PackedHome {
   sourceFiles: number;
 }
 
+const HOME_TAR_PREFIX = ".home-";
+
 export async function packHome(
   fromSandbox: Sandbox,
   fromHandle: SandboxHandle,
   fromHome: string,
   timeoutMs: number,
 ): Promise<PackedHome> {
-  const uid = randomUUID();
-  const tarPath = `/tmp/.home-${uid}.tgz`;
+  const tarRel = `${HOME_TAR_PREFIX}${randomUUID()}.tgz`;
+  const tarPath = posixJoin(fromHandle.rootDir, tarRel);
   const H = shq(fromHome);
+  const P = shq(tarPath);
   const packed = await fromSandbox.run(
     fromHandle,
-    `cd ${H} && tar czf ${tarPath} . 2>/dev/null; rc=$?; [ "$rc" -le 1 ] || exit "$rc"; sha256sum ${tarPath} | cut -d' ' -f1 && wc -c < ${tarPath} && find . -type f | wc -l`,
+    `cd ${H} && tar czf ${P} --exclude=${shq(`./${posix.relative(fromHome, fromHandle.rootDir)}/${HOME_TAR_PREFIX}*.tgz`)} . 2>/dev/null; rc=$?; [ "$rc" -le 1 ] || exit "$rc"; sha256sum ${P} | cut -d' ' -f1 && wc -c < ${P} && find . -type f ! -name ${shq(`${HOME_TAR_PREFIX}*.tgz`)} | wc -l`,
     { timeoutMs },
   );
-  if (packed.code !== 0)
+  if (packed.code !== 0) {
+    await fromSandbox.run(fromHandle, `rm -f ${P}`, { timeoutMs: 30_000 }).catch(() => {});
     throw new Error(`packHome: source tar failed (${packed.code}): ${(packed.stderr || packed.stdout).slice(0, 200)}`);
+  }
   const [shaLine = "", sizeLine = "", filesLine = ""] = packed.stdout.trim().split("\n");
   const sha = shaLine.trim();
   const bytes = Number.parseInt(sizeLine.trim(), 10);
@@ -65,7 +71,7 @@ export async function packHome(
   if (!/^[0-9a-f]{64}$/.test(sha) || !Number.isFinite(bytes) || !Number.isFinite(sourceFiles)) {
     throw new Error(`packHome: unreadable source manifest: ${packed.stdout.slice(0, 200)}`);
   }
-  return { tarPath, tarRel: posix.relative(fromHandle.rootDir, tarPath), sha, bytes, sourceFiles };
+  return { tarPath, tarRel, sha, bytes, sourceFiles };
 }
 
 export interface CopyHomeArgs {
@@ -82,47 +88,46 @@ export async function copyHome(args: CopyHomeArgs): Promise<CopyHomeResult> {
   const { fromSandbox, fromHandle, fromHome, toSandbox, toHandle, toHome } = args;
   const timeoutMs = (args.timeoutSec ?? 900) * 1000;
   const T = shq(toHome);
-  const {
-    tarPath,
-    tarRel: fromRel,
-    sha,
-    bytes,
-    sourceFiles,
-  } = await packHome(fromSandbox, fromHandle, fromHome, timeoutMs);
-  const toRel = posix.relative(toHandle.rootDir, tarPath);
-
-  if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
-    const stageOpts = { timeoutSec: timeoutMs / 1000 };
-    const blobId = await fromSandbox.stageOut(fromHandle, fromRel, stageOpts);
-    await toSandbox.stageIn(toHandle, toRel, blobId, stageOpts);
-  } else {
-    const tarBytes = await fromSandbox.readFileBytes(fromHandle, fromRel);
-    if (!tarBytes) throw new Error("copyHome: source tar vanished before read");
-    await toSandbox.writeFileBytes(toHandle, toRel, tarBytes);
+  const { tarPath, tarRel, sha, bytes, sourceFiles } = await packHome(fromSandbox, fromHandle, fromHome, timeoutMs);
+  const toTarPath = posixJoin(toHandle.rootDir, tarRel);
+  try {
+    return await transferHome();
+  } finally {
+    await Promise.all([
+      fromSandbox.run(fromHandle, `rm -f ${shq(tarPath)}`, { timeoutMs: 30_000 }).catch(() => {}),
+      toSandbox.run(toHandle, `rm -f ${shq(toTarPath)}`, { timeoutMs: 30_000 }).catch(() => {}),
+    ]);
   }
 
-  const extracted = await toSandbox.run(
-    toHandle,
-    `dsha=$(sha256sum ${tarPath} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${tarPath} 2>/dev/null && find . -type f | wc -l`,
-    { timeoutMs },
-  );
-  if (extracted.code !== 0) {
-    throw new Error(
-      `copyHome: dest verify/extract failed (${extracted.code}): ${(extracted.stderr || extracted.stdout).slice(0, 200)}`,
+  async function transferHome(): Promise<CopyHomeResult> {
+    if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
+      const stageOpts = { timeoutSec: timeoutMs / 1000 };
+      const blobId = await fromSandbox.stageOut(fromHandle, tarRel, stageOpts);
+      await toSandbox.stageIn(toHandle, tarRel, blobId, stageOpts);
+    } else {
+      const tarBytes = await fromSandbox.readFileBytes(fromHandle, tarRel);
+      if (!tarBytes) throw new Error("copyHome: source tar vanished before read");
+      await toSandbox.writeFileBytes(toHandle, tarRel, tarBytes);
+    }
+
+    const extracted = await toSandbox.run(
+      toHandle,
+      `dsha=$(sha256sum ${shq(toTarPath)} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${shq(toTarPath)} 2>/dev/null && find . -type f ! -name ${shq(`${HOME_TAR_PREFIX}*.tgz`)} | wc -l`,
+      { timeoutMs },
     );
+    if (extracted.code !== 0) {
+      throw new Error(
+        `copyHome: dest verify/extract failed (${extracted.code}): ${(extracted.stderr || extracted.stdout).slice(0, 200)}`,
+      );
+    }
+    const destFiles = Number.parseInt(extracted.stdout.trim().split("\n").pop() ?? "", 10);
+
+    if (fromHome !== toHome) {
+      const t = await toSandbox.run(toHandle, translateScript(toHome, fromHome), { timeoutMs: 120_000 });
+      if (t.code !== 0)
+        throw new Error(`copyHome: translation failed (${t.code}): ${(t.stderr || t.stdout).slice(0, 200)}`);
+    }
+
+    return { bytes, sha, sourceFiles, destFiles };
   }
-  const destFiles = Number.parseInt(extracted.stdout.trim().split("\n").pop() ?? "", 10);
-
-  if (fromHome !== toHome) {
-    const t = await toSandbox.run(toHandle, translateScript(toHome, fromHome), { timeoutMs: 120_000 });
-    if (t.code !== 0)
-      throw new Error(`copyHome: translation failed (${t.code}): ${(t.stderr || t.stdout).slice(0, 200)}`);
-  }
-
-  await Promise.all([
-    fromSandbox.run(fromHandle, `rm -f ${tarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
-    toSandbox.run(toHandle, `rm -f ${tarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
-  ]);
-
-  return { bytes, sha, sourceFiles, destFiles };
 }

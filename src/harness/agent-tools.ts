@@ -940,9 +940,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const read = defineTool({
     name: "read",
     label: "read",
-    description: "Read a file from the workspace (scope, then global). Returns its contents.",
+    description:
+      "Read published skill sources at skill://<name>/<path> without a sandbox, or workspace files (scope, then global). Returns contents.",
     parameters: Type.Object({
-      path: Type.String({ description: "Relative path within the workspace." }),
+      path: Type.String({ description: "Published skill URI or relative path within the workspace." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;

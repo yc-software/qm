@@ -21,16 +21,10 @@ Write the directive directly, without a code fence or quotation. The web UI rend
 
 ## SDK
 
-Install the SDK in a workspace tool directory, not the harness:
-
-```sh
-npm install --prefix .tools/composio --no-save --ignore-scripts @composio/core@0.18.1
-```
-
-Run Node snippets from `.tools/composio` with the credential supplied to that command. Start with:
+Sprites and Modal provision the pinned SDK before commands run. Use the preinstalled bundle directly; do not install npm packages or inspect the environment first. Supply the credential to the command as usual:
 
 ```js
-import { Composio } from "@composio/core";
+const { Composio } = await import(`${process.env.HOME}/.qm/composio/current/sdk.cjs`);
 const composio = new Composio({
   apiKey: process.env.COMPOSIO_API_KEY,
   allowTracking: false,
@@ -43,7 +37,9 @@ client.timeout = 30_000;
 client.logLevel = "off";
 ```
 
-Read the installed SDK types or [official docs](https://docs.composio.dev) when needed. Do not invent tool names or schemas, or guess existing user IDs or auth-config IDs. The snippets below are separate operations to compose for the task, not a script to run blindly.
+On other sandbox backends without this bundle, install `@composio/core@0.18.1` once into `.tools/composio` with `npm install --prefix .tools/composio --no-save --ignore-scripts @composio/core@0.18.1`, run from that directory, and import `@composio/core`.
+
+Read [official docs](https://docs.composio.dev) when needed. Do not invent tool names or schemas, or guess existing user IDs or auth-config IDs. The snippets below are separate operations to compose for the task, not a script to run blindly.
 
 ## Workflow
 

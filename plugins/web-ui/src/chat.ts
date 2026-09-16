@@ -1,4 +1,5 @@
 import { appEditSlug } from "./app-edit";
+import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
 import { setupContent } from "./setup-widget";
 import { isWelcomeConversation } from "./welcome-session";
@@ -211,6 +212,8 @@ export function createChatSurface(
     ctx.composer.state.error = message;
   });
   const transcriptViewport = createTranscriptViewport();
+  let preserveConnectionScroll = isConnectionReturn();
+  let connectionReturnMessageCount: number | null = null;
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
@@ -1297,6 +1300,10 @@ export function createChatSurface(
     if (!agent || agent !== chatState.agent || !chatState.host || appState.currentView !== "chats") return;
     transcriptViewport.beforeRender();
     const currentMessages = visibleMessages(agent);
+    if (preserveConnectionScroll) {
+      connectionReturnMessageCount ??= currentMessages.length;
+      if (connectionReturnMessageCount !== currentMessages.length) preserveConnectionScroll = false;
+    }
     const messages = chatState.inheritedExpanded
       ? [...chatState.inheritedMessages, ...currentMessages]
       : currentMessages;
@@ -1317,7 +1324,7 @@ export function createChatSurface(
     }
     const tier = ctx.density();
     const glanceTier = tier === "card" || tier === "strip" ? tier : null;
-    const emptyChat = !messages.length && !chatState.forkSession;
+    const emptyChat = !messages.length && (showWelcome || !chatState.forkSession);
     render(
       html`
         <div
@@ -1343,7 +1350,7 @@ export function createChatSurface(
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
-              ${emptyChat && !isNewUser && !editingApp ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+              ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
           </section>
@@ -1763,16 +1770,18 @@ export function createChatSurface(
 
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const parts: TemplateResult[] = [];
-    for (const chunk of message.content) {
+    for (const [chunkIndex, chunk] of message.content.entries()) {
       if (chunk.type === "text") {
-        for (const part of setupContent(assistantDisplayText(chunk.text))) {
+        for (const [partIndex, part] of setupContent(assistantDisplayText(chunk.text)).entries()) {
           if (part.type !== "text") {
+            if (!(message as AssistantWork).persisted) continue;
             parts.push(
               html`<qm-onboarding-welcome
                 .me=${appState.me}
                 .base=${withBase("")}
                 .adminBase=${ADMIN_BASE}
                 .widget=${part.type === "slack" ? "slack" : "apps"}
+                .returnKey=${`reply:${message.timestamp}:${chunkIndex}:${partIndex}`}
                 .setupOnly=${true}
                 .animateWelcome=${false}
               ></qm-onboarding-welcome>`,
@@ -2716,7 +2725,7 @@ export function createChatSurface(
   }
 
   function scrollTranscript(force = false): void {
-    if (ctx.container()?.querySelector(".empty-chat qm-onboarding-welcome")) {
+    if (preserveConnectionScroll || ctx.container()?.querySelector(".empty-chat qm-onboarding-welcome")) {
       transcriptViewport.sync(null);
       return;
     }

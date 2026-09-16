@@ -37,6 +37,7 @@ function fixture() {
     let text = "";
     const url = new URL(path, "http://localhost");
     const res = {
+      setHeader() {},
       writeHead(code: number) {
         status = code;
       },
@@ -136,10 +137,13 @@ test("authorization binds the session to the authenticated actor, ignoring suppl
   for (const link of ["https://connect.composio.dev/link/lk_test", "https://app.composio.dev/link/lt_test"]) {
     const f = fixture();
     await f.own();
-    f.replies.push({ session_id: "trs_test" }, { redirect_url: link, secret: "hidden" });
+    f.replies.push(
+      { session_id: "trs_test" },
+      { redirect_url: link, connected_account_id: "ca_test", secret: "hidden" },
+    );
     const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", user_id: "bob", principalId: "bob" });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.data, { url: link });
+    assert.deepEqual(r.data, { url: link, accountId: "ca_test" });
     const payload = JSON.parse(String(f.calls[0]!.init?.body));
     assert.equal(payload.user_id, composioUserId(orgId(), "alice"));
     assert.deepEqual(payload.toolkits, { enable: ["gmail"] });
@@ -160,7 +164,7 @@ test("invalid toolkits and unsafe authorization destinations are rejected", asyn
     "http://connect.composio.dev/link/lk_test",
     "https://connect.composio.dev/other",
   ]) {
-    f.replies.push({ session_id: "trs_test" }, { redirect_url });
+    f.replies.push({ session_id: "trs_test" }, { redirect_url, connected_account_id: "ca_test" });
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 502);
   }
 });
@@ -175,4 +179,61 @@ test("upstream errors are redacted and identity is stable per organization and p
   assert.notEqual(composioUserId("a", "alice"), composioUserId("b", "alice"));
   assert.notEqual(composioUserId("a", "alice"), composioUserId("a", "bob"));
   assert.deepEqual((await f.invoke("/v1/composio/identity")).data, { userId: composioUserId(orgId(), "alice") });
+});
+
+test("authorization supplies the callback and account binding without accepting unsafe callback schemes", async () => {
+  const f = fixture();
+  await f.own();
+  for (const callbackUrl of ["javascript:alert(1)", "http://evil.example/", "https://user:password@example.com/"]) {
+    assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl })).status, 400);
+  }
+  assert.equal(f.calls.length, 0);
+  const callbackUrl = "https://qm.example/s/chat?composioReturn=nonce";
+  f.replies.push(
+    { session_id: "trs_test" },
+    { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
+  );
+  const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl });
+  assert.equal(r.data.accountId, "ca_test");
+  assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
+});
+
+test("connections return only this actor's active accounts and strip credentials", async () => {
+  const f = fixture();
+  await f.own();
+  const owned = {
+    id: "ca_gmail",
+    user_id: composioUserId(orgId(), "alice"),
+    status: "ACTIVE",
+    toolkit: { slug: "gmail" },
+    data: { token: "secret-token" },
+  };
+  f.replies.push({
+    items: [
+      owned,
+      { ...owned, id: "ca_other", user_id: composioUserId(orgId(), "bob") },
+      { ...owned, status: "INITIATED" },
+      { ...owned, is_disabled: true },
+    ],
+    next_cursor: "next-page",
+  });
+  const r = await f.invoke("/v1/composio/connections?user_ids=bob&cursor=page-1");
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data, { items: [{ id: "ca_gmail", toolkit: "gmail" }], nextCursor: "next-page" });
+  const q = new URL(f.calls[0]!.url).searchParams;
+  assert.equal(q.get("user_ids"), composioUserId(orgId(), "alice"));
+  assert.equal(q.get("statuses"), "ACTIVE");
+  assert.equal(q.get("cursor"), "page-1");
+  assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
+});
+
+test("connections require credential access and fail visibly on upstream errors", async () => {
+  const f = fixture();
+  assert.equal((await f.invoke("/v1/composio/connections", undefined, null)).status, 401);
+  assert.equal((await f.invoke("/v1/composio/connections")).status, 403);
+  await f.own();
+  f.replies.push(new Error("private-key"));
+  const r = await f.invoke("/v1/composio/connections");
+  assert.equal(r.status, 502);
+  assert.doesNotMatch(r.text, /private-key/);
 });

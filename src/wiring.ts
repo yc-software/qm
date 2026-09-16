@@ -1,8 +1,10 @@
+import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunText, type RunStreamEvent } from "./runs/run-stream-events.ts";
+import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
@@ -778,6 +780,7 @@ export function buildApp(
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
+      connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -856,6 +859,7 @@ export function buildApp(
       ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
+      connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
@@ -1777,6 +1781,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),

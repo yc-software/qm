@@ -22,7 +22,7 @@ interface Sim {
 }
 
 async function simSession(threadRef = "dm:projection-test"): Promise<Sim> {
-  const store = createMemorySessionStore({ now: () => CLOCK });
+  const store = { ...createMemorySessionStore({ now: () => CLOCK }), getTranscriptEntries: async () => [] };
   const session = await store.getOrCreateByThread(threadRef, "dm", scope);
   const { lease } = await store.acquireLease(session.id);
   assert.ok(lease);
@@ -335,6 +335,37 @@ test("overheard import and delivery note project to their entry shapes", async (
     entrySeq: imported.seq,
     meta: {
       overheard: true,
+      bareText: overheard.text,
+      ts: overheard.ts,
+      author: overheard.name,
+      entryCreatedAt: imported.createdAt,
+    },
+  });
+  await simTurn(sim, {
+    input: "yes, restart it",
+    reply: "Restarted.",
+    deliveryFiles: [{ name: "log.txt", mimetype: "text/plain", sizeBytes: 42, artifactId: "art_1" }],
+  });
+  await assertParity(sim);
+});
+
+test("agent-authored overheard import and delivery note project to their entry shapes", async () => {
+  const sim = await simSession();
+  const overheard: OverheardEntryPayload = {
+    overheard: true,
+    sourceRole: "agent",
+    ts: "1720000000.000050",
+    text: "Shall I restart the worker?",
+  };
+  const imported = await sim.store.append(sim.lease, { type: "user", payload: overheard, scopeLabel: scope });
+  await sim.store.appendTape(sim.lease, {
+    kind: "message",
+    payload: { role: "user", content: [{ type: "text", text: renderOverheard(overheard) }], timestamp: CLOCK },
+    scopeLabel: scope,
+    entrySeq: imported.seq,
+    meta: {
+      overheard: true,
+      sourceRole: "agent",
       bareText: overheard.text,
       ts: overheard.ts,
       author: overheard.name,

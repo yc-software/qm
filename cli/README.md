@@ -77,6 +77,16 @@ configuration only, so it prints that timestamp as the matching data restore
 point (`aws rds restore-db-instance-to-point-in-time`);
 `aws.predeployDbSnapshot: false` opts out.
 
+Batch operators can set `QM_DEPLOY_PROGRESS_FILE` to a new absolute file path and
+`QM_DEPLOY_PROGRESS_TOKEN` to a unique attempt identifier for candidate `up --yes`.
+After all forward service updates have been submitted, the CLI atomically creates
+a private JSON receipt with `phase: "monitoring"`, `token`, `orgId`, and `targets`
+(the selected workload-to-task-definition mapping). It then continues health
+checks, manifest recording, and rollback under the deployment lease. This receipt
+only permits the batch runner to release a submission slot; the CLI exit status
+still determines success. Use a fresh path and token for every attempt. Missing
+receipts must keep the submission slot occupied until the CLI exits.
+
 `sandbox build` is a local validation build of the sandbox layer image. At runtime
 sandboxes boot their platform's stock image; tools and skills arrive through the
 deployment-layer sync, which every ordinary `up` performs.

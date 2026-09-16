@@ -201,7 +201,7 @@ test("a channel thread reply's edit reaches the thread session via the sub root"
   assert.equal(marks[0]!.name, "Josh");
 });
 
-test("when the tape is not contiguous the marker entry still lands but the tape stays untouched", async () => {
+test("when model tape is not contiguous the revision is mirrored without advancing model coverage", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread(`dm:${DM}`, "dm", SCOPE, undefined, "slack");
   const { lease } = await sessions.acquireLease(session.id, "turn");
@@ -211,7 +211,13 @@ test("when the tape is not contiguous the marker entry still lands but the tape 
   await recordMessageRevisions(sessions, [edit()]);
 
   assert.equal(revisions(await sessions.getEntries(session.id)).length, 1);
-  assert.equal((await sessions.getTape(session.id)).length, 0);
+  assert.deepEqual(await sessions.getTranscriptEntries(session.id), await sessions.getEntries(session.id));
+  assert.equal(await sessions.tapeCoverage(session.id), -1);
+  assert.ok(
+    (await sessions.getTape(session.id)).every(
+      (row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry",
+    ),
+  );
 });
 
 test("the marker renders into model context on the entries-replay path", () => {
@@ -428,4 +434,27 @@ test("an edit made before the message's own turn is still caught through the tri
   assert.equal(slackTsToMs("1700000000.123456"), 1700000000123);
   assert.equal(slackTsToMs("t1"), undefined);
   await sessions.releaseLease(lease!);
+});
+
+test("imported agent posts receive attributed edits and deletions without creating assistant actions", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await seedSession(sessions, `dm:${DM}`, "dm", [
+    { overheard: true, sourceRole: "agent", text: "Shall I restart it?", ts: "100.1" },
+  ]);
+  await recordMessageRevisions(sessions, [edit({ self: true, text: "Shall I restart the worker?" })]);
+  await recordMessageRevisions(sessions, [del({ self: true })]);
+  const entries = await sessions.getEntries(session.id);
+  const marks = revisions(entries);
+  assert.deepEqual(
+    marks.map((m) => [m.action, m.sourceRole]),
+    [
+      ["edited", "agent"],
+      ["deleted", "agent"],
+    ],
+  );
+  assert.match(renderMessageRevision(marks[0]!), /from="agent"/);
+  assert.equal(
+    reconstructMessagesFromHistory(entries).some((m) => m.role === "assistant"),
+    false,
+  );
 });

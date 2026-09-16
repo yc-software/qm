@@ -122,6 +122,25 @@ async function authorize(ctx: ApiCtx): Promise<void> {
   const toolkit = (ctx.body as { toolkit?: unknown } | null)?.toolkit;
   if (typeof toolkit !== "string" || !/^[a-z0-9_-]{1,100}$/.test(toolkit))
     return sendJson(ctx.res, 400, { error: "invalid_toolkit" });
+  const callbackUrl = (ctx.body as { callbackUrl?: unknown }).callbackUrl;
+  if (callbackUrl !== undefined) {
+    try {
+      if (typeof callbackUrl !== "string" || callbackUrl.length > 4096) throw new Error("Invalid callback");
+      const callback = new URL(callbackUrl);
+      if (
+        callback.username ||
+        callback.password ||
+        callback.hash ||
+        !(
+          callback.protocol === "https:" ||
+          (callback.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(callback.hostname))
+        )
+      )
+        throw new Error("Invalid callback");
+    } catch {
+      return sendJson(ctx.res, 400, { error: "invalid_callback" });
+    }
+  }
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: composioUserId(orgId(), access.principal),
@@ -133,7 +152,10 @@ async function authorize(ctx: ApiCtx): Promise<void> {
       throw new Error("Invalid session");
     const link = await request(ctx, access.key, `/tool_router/session/${encodeURIComponent(session.session_id)}/link`, {
       toolkit,
+      ...(callbackUrl ? { callback_url: callbackUrl } : {}),
     });
+    if (typeof link.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(link.connected_account_id))
+      throw new Error("Invalid account");
     const url = new URL(String(link.redirect_url));
     if (
       !(
@@ -150,11 +172,49 @@ async function authorize(ctx: ApiCtx): Promise<void> {
       resource: toolkit,
       scopeLabel: scopeId("personal", access.principal),
     });
-    return sendJson(ctx.res, 200, { url: url.href });
+    return sendJson(ctx.res, 200, { url: url.href, accountId: link.connected_account_id });
   } catch {
     return sendJson(ctx.res, 502, {
       error: "composio_authorization_failed",
       message: "Could not start authorization. Please try again.",
+    });
+  }
+}
+
+async function connections(ctx: ApiCtx): Promise<void> {
+  const access = await credential(ctx);
+  if (!access) return;
+  const cursor = ctx.url.searchParams.get("cursor") ?? "";
+  if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
+  const userId = composioUserId(orgId(), access.principal);
+  const query = new URLSearchParams({ user_ids: userId, statuses: "ACTIVE", limit: "100" });
+  if (cursor) query.set("cursor", cursor);
+  try {
+    const data = await request(ctx, access.key, `/connected_accounts?${query}`);
+    if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
+    const items = data.items.flatMap((item) => {
+      if (
+        !item ||
+        item.user_id !== userId ||
+        item.status !== "ACTIVE" ||
+        item.is_disabled === true ||
+        typeof item.id !== "string" ||
+        !/^ca_[a-zA-Z0-9_-]+$/.test(item.id) ||
+        typeof item.toolkit?.slug !== "string" ||
+        !/^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug)
+      )
+        return [];
+      return [{ id: item.id, toolkit: item.toolkit.slug }];
+    });
+    ctx.res.setHeader("Cache-Control", "no-store");
+    return sendJson(ctx.res, 200, {
+      items,
+      nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+    });
+  } catch {
+    return sendJson(ctx.res, 502, {
+      error: "composio_unavailable",
+      message: "Could not check connected apps. Please try again.",
     });
   }
 }
@@ -167,6 +227,7 @@ async function identity(ctx: ApiCtx): Promise<void> {
 }
 
 export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/composio/connections", auth: "source", handle: connections },
   { method: "GET", path: "/v1/composio/toolkits", auth: "source", handle: catalog },
   { method: "POST", path: "/v1/composio/authorize", auth: "source", handle: authorize },
   { method: "GET", path: "/v1/composio/identity", auth: "either", handle: identity },

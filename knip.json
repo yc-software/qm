@@ -31,7 +31,8 @@
         "scripts/migrate-principals-to-email.mjs",
         "scripts/mine-slack-scenarios.ts",
         "scripts/skills-materialize-smoke.ts",
-        "scripts/slack-user-token.ts"
+        "scripts/slack-user-token.ts",
+        "docs/qa/resource-search-demo.mjs"
       ]
     },
     "cli": {
@@ -59,6 +60,9 @@
         "hljs-real-sql",
         "hljs-real-markdown"
       ]
+    },
+    "deploy/connector-sdk": {
+      "ignoreDependencies": ["@composio/core"]
     }
   }
 }

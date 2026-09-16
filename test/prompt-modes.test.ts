@@ -288,7 +288,7 @@ test("shared-core platform guidance reaches both the DM and the spine prompt", a
     assert.match(prompt, /## Auth/);
     assert.match(prompt, /## Using skills/);
     assert.match(prompt, /Compose task rules with one authorized access skill/);
-    assert.match(prompt, /prefer `skills\/composio\/SKILL.md`/);
+    assert.match(prompt, /prefer `skill:\/\/composio\/SKILL.md`/);
     assert.match(prompt, /Never switch credentials to evade denial/);
     assert.doesNotMatch(prompt, /## Scheduling & self-configuration/);
   }

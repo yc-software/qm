@@ -3,9 +3,19 @@ import https from "node:https";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lookup, resolveCname } from "node:dns/promises";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   acquireAwsLease as acquireLease,
   awsText,
@@ -739,7 +749,12 @@ export async function awsMigrateCandidate(config: QmConfig, configDir: string, c
   });
 }
 
-async function runAwsCandidateMigration(config: QmConfig, coreImage: string, label: string): Promise<void> {
+async function runAwsCandidateMigration(
+  config: QmConfig,
+  coreImage: string,
+  label: string,
+  existingTaskDefinition?: string,
+): Promise<void> {
   const aws = requireAws(config);
   const spec = aws.services.core;
   if (!spec) throw new CliError("AWS migrations require the core workload");
@@ -763,13 +778,17 @@ async function runAwsCandidateMigration(config: QmConfig, coreImage: string, lab
   const temp = mkdtempSync(join(tmpdir(), "qm-migration-task-"));
   let taskDefinition: string | undefined;
   try {
-    const definitionPath = join(temp, "core.json");
-    const definition = renderTaskDefinition(config, "core", coreImage, secretArns(config));
-    const container = definition.containerDefinitions.find((candidate) => candidate.name === "core");
-    if (!container) throw new CliError("AWS migration task definition has no core container");
-    delete container.healthCheck;
-    writeFileSync(definitionPath, JSON.stringify(definition));
-    taskDefinition = registerTaskDefinition(config, definitionPath);
+    if (existingTaskDefinition) {
+      taskDefinition = existingTaskDefinition;
+    } else {
+      const definitionPath = join(temp, "core.json");
+      const definition = renderTaskDefinition(config, "core", coreImage, secretArns(config));
+      const container = definition.containerDefinitions.find((candidate) => candidate.name === "core");
+      if (!container) throw new CliError("AWS migration task definition has no core container");
+      delete container.healthCheck;
+      writeFileSync(definitionPath, JSON.stringify(definition));
+      taskDefinition = registerTaskDefinition(config, definitionPath);
+    }
     header(`qm migrate — ${config.orgId} (AWS candidate ${label})`);
     const started = awsJson<{
       tasks?: Array<{ taskArn?: string }>;
@@ -816,7 +835,7 @@ async function runAwsCandidateMigration(config: QmConfig, coreImage: string, lab
     }
     ok(`candidate ${label} migrations applied`);
   } finally {
-    if (taskDefinition) {
+    if (taskDefinition && !existingTaskDefinition) {
       try {
         awsText(aws, ["ecs", "deregister-task-definition", "--task-definition", taskDefinition]);
       } catch (error) {
@@ -1719,6 +1738,7 @@ async function applyServiceTargets(
     waitForCompensationDrain?: boolean;
     timeoutMs?: number;
     webBeforePortal?: boolean;
+    onSubmitted?: () => void;
   } = {},
 ): Promise<void> {
   const aws = requireAws(config);
@@ -1762,6 +1782,7 @@ async function applyServiceTargets(
       changed.push(workload);
       awsText(aws, args);
     }
+    options.onSubmitted?.();
     await awaitServiceTargets(
       config,
       Object.fromEntries(
@@ -1959,7 +1980,43 @@ function confirmDbRestorePointCovered(config: QmConfig, restorePoint: string): v
   }
 }
 
+function deploymentProgress(
+  config: QmConfig,
+  opts: AwsUpOpts,
+): ((targets: Record<string, string>) => void) | undefined {
+  const file = process.env.QM_DEPLOY_PROGRESS_FILE;
+  const token = process.env.QM_DEPLOY_PROGRESS_TOKEN;
+  if (file === undefined && token === undefined) return undefined;
+  if (!file || !token || !isAbsolute(file) || !opts.candidate || !opts.yes || opts.dryRun || opts.buildOnly) {
+    throw new CliError(
+      "deployment progress requires an absolute QM_DEPLOY_PROGRESS_FILE, QM_DEPLOY_PROGRESS_TOKEN, and candidate up --yes",
+    );
+  }
+  if (existsSync(file)) throw new CliError("deployment progress file must not already exist");
+  if (!statSync(dirname(file)).isDirectory()) throw new CliError("deployment progress parent must be a directory");
+  accessSync(dirname(file), constants.W_OK);
+  return (targets) => {
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify({ phase: "monitoring", token, orgId: config.orgId, targets }), {
+        flag: "wx",
+        mode: 0o600,
+      });
+      linkSync(temporary, file);
+    } catch (error) {
+      warn(`could not publish deployment progress: ${errMessage(error)}`);
+    } finally {
+      try {
+        rmSync(temporary, { force: true });
+      } catch (error) {
+        warn(`could not remove deployment progress temporary file: ${errMessage(error)}`);
+      }
+    }
+  };
+}
+
 export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpts = {}): Promise<void> {
+  const reportProgress = deploymentProgress(config, opts);
   const topology = awsTopology(config, _configDir);
   const { aws } = topology;
   if (new URL(config.publicUrl).protocol !== "https:") {
@@ -2154,10 +2211,6 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     if (aws.predeployDbSnapshot === false)
       note("pre-deploy database restore point: disabled (aws.predeployDbSnapshot)");
     else dbRestorePoint = assertPredeployDbRestorePoint(config);
-    if (candidate?.images.core && services.includes("core")) {
-      await runAwsCandidateMigration(config, candidate.images.core, candidate.label);
-      migratedCandidate = true;
-    }
     if (current?.layer) {
       desiredLayer = current.layer;
     } else {
@@ -2228,6 +2281,10 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       const taskDefinition = registerTaskDefinition(config, file);
       targets[item.service] = taskDefinition;
     }
+    if (candidate?.images.core && services.includes("core")) {
+      await runAwsCandidateMigration(config, candidate.images.core, candidate.label, targets.core!);
+      migratedCandidate = true;
+    }
     const rolloutTargets = Object.fromEntries(
       services
         .filter(
@@ -2244,9 +2301,11 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         Object.fromEntries(
           Object.keys(rolloutTargets).map((service) => [service, workloadDesiredCount(config, service)]),
         ),
-        { webBeforePortal: true },
+        { webBeforePortal: true, onSubmitted: reportProgress ? () => reportProgress(targets) : undefined },
       );
       applied = true;
+    } else {
+      reportProgress?.(targets);
     }
     await awaitServiceTargets(
       config,

@@ -11882,3 +11882,30 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
     justify-content: flex-start;
   }
 }
+
+.conversation-error {
+  margin: auto;
+  padding: 48px 24px;
+  max-width: 480px;
+  text-align: center;
+}
+.conversation-error-code {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.conversation-error h1 {
+  outline: none;
+  margin: 12px 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+.conversation-error p {
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+.conversation-error-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}

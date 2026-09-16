@@ -1,178 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
-import { createServer } from "vite";
-
-interface Harness {
-  requests: string[];
-  releaseSessions: () => void;
-  releaseTranscript: () => void;
-  releaseApprovals: () => void;
-  sessionsReady: () => Promise<void>;
-  boot: () => Promise<void>;
-  appState: { currentView: string };
-  sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
-  visibleConversation: () => { state: { sessionId: string | null; threadRef: string | null } };
-  mainText: () => string;
-  close: () => Promise<void>;
-}
-
-interface HarnessOptions {
-  path: string;
-  transcriptStatus?: number;
-  transcriptFailures?: number;
-  holdTranscript?: boolean;
-  holdApprovals?: boolean;
-  listSessions?: unknown[];
-}
-
-const SESSION = {
-  id: "sess-deep",
-  threadRef: "web:tester:deep",
-  scopeId: "personal:tester",
-  title: "Deep linked chat",
-};
-
-async function harness(opts: HarnessOptions): Promise<Harness> {
-  const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: `http://localhost${opts.path}` });
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const realSetTimeout = globalThis.setTimeout;
-  const realSetInterval = globalThis.setInterval;
-  const requests: string[] = [];
-  const inFlight = new Set<Promise<Response>>();
-  let releaseSessions = (): void => {};
-  let releaseTranscript = (): void => {};
-  let releaseApprovals = (): void => {};
-  const approvalsHeld = new Promise<void>((resolve) => (releaseApprovals = resolve));
-  const sessionsHeld = new Promise<void>((resolve) => (releaseSessions = resolve));
-  const transcriptHeld = new Promise<void>((resolve) => (releaseTranscript = resolve));
-  let failuresLeft = opts.transcriptFailures ?? (opts.transcriptStatus ? Number.POSITIVE_INFINITY : 0);
-  const respond = async (input: RequestInfo | URL): Promise<Response> => {
-    const path = String(input);
-    requests.push(path);
-    if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [] });
-    if (path.startsWith("/api/runtime-config")) {
-      return Response.json({
-        scopeId: "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
-        modelCatalog: {},
-        orgDefault: { harnessId: "pi", modelId: "m", revision: 1 },
-        scopeOverride: null,
-        effective: { harnessId: "pi", modelId: "m" },
-        upgradeAvailable: false,
-      });
-    }
-    if (path.startsWith("/api/ui-state")) return Response.json({ value: null, updatedAt: 0 });
-    if (path.startsWith("/api/sessions/") && path.includes("/approvals")) {
-      if (opts.holdApprovals) await approvalsHeld;
-      return Response.json({ approvals: [] });
-    }
-    if (path.startsWith(`/api/sessions/${SESSION.id}`)) {
-      if (opts.holdTranscript) await transcriptHeld;
-      if (failuresLeft > 0) {
-        failuresLeft--;
-        return Response.json({ error: "not_found" }, { status: opts.transcriptStatus ?? 500 });
-      }
-      return Response.json({ session: SESSION, entries: [] });
-    }
-    if (path === "/api/sessions") {
-      await sessionsHeld;
-      return Response.json({ sessions: opts.listSessions ?? [] });
-    }
-    return Response.json({ contexts: [], items: [], crons: [] });
-  };
-
-  const globals = {
-    fetch: (input: RequestInfo | URL): Promise<Response> => {
-      const answer = respond(input);
-      inFlight.add(answer);
-      void answer.finally(() => inFlight.delete(answer)).catch(() => {});
-      return answer;
-    },
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    PointerEvent: dom.window.PointerEvent,
-    MouseEvent: dom.window.MouseEvent,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    cancelAnimationFrame: clearTimeout,
-    EventSource: undefined,
-    ResizeObserver: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-    setTimeout: ((...args: Parameters<typeof setTimeout>) => {
-      const id = realSetTimeout(...args);
-      timers.add(id);
-      return id;
-    }) as typeof setTimeout,
-    setInterval: ((...args: Parameters<typeof setInterval>) => {
-      const id = realSetInterval(...args);
-      timers.add(id);
-      return id;
-    }) as typeof setInterval,
-    requestAnimationFrame: (callback: FrameRequestCallback) => {
-      const id = realSetTimeout(() => callback(Date.now()), 0);
-      timers.add(id);
-      return id as unknown as number;
-    },
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
-  const shell = await vite.ssrLoadModule("/src/shell.ts");
-  const sessions = await vite.ssrLoadModule("/src/sessions.ts");
-  const conversations = await vite.ssrLoadModule("/src/conversations.ts");
-  return {
-    requests,
-    releaseSessions,
-    releaseTranscript,
-    releaseApprovals,
-    sessionsReady: sessions.sessionsReady as () => Promise<void>,
-    boot: shell.boot as () => Promise<void>,
-    appState: shell.appState as Harness["appState"],
-    sessionsState: sessions.sessionsState as Harness["sessionsState"],
-    visibleConversation: () =>
-      conversations
-        .allConversations()
-        .find((conv: { state: { host: HTMLElement | null } }) => conv.state.host?.isConnected) ??
-      conversations.mainConversation(),
-    mainText: () => dom.window.document.querySelector(".main")?.textContent ?? "",
-    close: async () => {
-      releaseSessions();
-      releaseTranscript();
-      releaseApprovals();
-      for (let drain = 0; drain < 5 && inFlight.size; drain++) {
-        await Promise.allSettled(inFlight);
-        await new Promise((resolve) => realSetTimeout(resolve, 0));
-      }
-      await vite.close();
-      dom.window.close();
-      for (const id of timers) clearTimeout(id);
-      for (const [key, descriptor] of descriptors) {
-        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-        else delete (globalThis as Record<string, unknown>)[key];
-      }
-    },
-  };
-}
+import { harness, SESSION, type Harness } from "./deep-link-boot-fixture.ts";
 
 test("a share link paints its conversation from the transcript, without waiting for the session list", async () => {
   const h = await harness({ path: "/s/sess-deep" });
@@ -219,7 +47,12 @@ test("a share link whose transcript 404s falls back to the session list", async 
     await booted;
     assert.equal(h.sessionsState.loaded, true, "the fallback waits for the list");
     assert.equal(h.visibleConversation().state.sessionId, null, "no conversation is mounted");
-    assert.match(h.mainText(), /wasn't found, or you don't have access to it/);
+    assert.match(h.mainText(), /Conversation not found/);
+    assert.match(h.mainText(), /404/);
+    assert.match(h.mainText(), /Back to chats/);
+    assert.equal(location.pathname, "/s/sess-deep");
+    assert.equal(document.querySelector("textarea"), null);
+    assert.equal(document.activeElement?.id, "conversation-error-title");
   } finally {
     await h.close();
   }
@@ -328,6 +161,69 @@ test("a view deep link still waits for the list and never fetches a transcript",
     assert.equal(h.appState.currentView, "crons");
     assert.equal(h.sessionsState.loaded, true);
     assert.equal(h.requests.filter((p) => p.startsWith(`/api/sessions/${SESSION.id}`)).length, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a server failure shows a retry page rather than a missing conversation", async () => {
+  const h = await harness({ path: "/s/sess-deep", transcriptStatus: 503 });
+  try {
+    const booted = h.boot();
+    h.releaseSessions();
+    await booted;
+    assert.match(h.mainText(), /Couldn't load conversation/);
+    assert.match(h.mainText(), /Try again/);
+    assert.doesNotMatch(h.mainText(), /404/);
+    assert.equal(location.pathname, "/s/sess-deep");
+  } finally {
+    await h.close();
+  }
+});
+
+test("a missing share link keeps its error page instead of restoring the saved canvas", async () => {
+  const h = await harness({ path: "/s/sess-deep", transcriptStatus: 404, savedCanvas: true });
+  try {
+    const booted = h.boot();
+    h.releaseSessions();
+    await booted;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.match(h.mainText(), /Conversation not found/);
+    assert.equal(location.pathname, "/s/sess-deep");
+    assert.equal(document.querySelector(".dockview-theme-light"), null);
+    assert.equal(document.querySelector("textarea"), null);
+  } finally {
+    await h.close();
+  }
+});
+
+async function waitForText(h: Harness, text: RegExp): Promise<void> {
+  for (let i = 0; i < 100 && !text.test(h.mainText()); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.match(h.mainText(), text);
+}
+
+test("saved empty welcome stays an empty chat and doesn't show another starter heading", async () => {
+  const h = await harness({ path: "/s/sess-deep", welcome: true });
+  try {
+    await h.boot();
+    await waitForText(h, /Connect your apps/);
+    assert.ok(document.querySelector(".empty-chat qm-onboarding-welcome"));
+    assert.equal(document.querySelector(".chat-cta"), null);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a failed connection refresh removes previously verified badges", async () => {
+  const h = await harness({ path: "/s/sess-deep", welcome: true });
+  try {
+    h.setConnections([{ id: "ca_test", toolkit: "gmail" }]);
+    await h.boot();
+    await waitForText(h, /Gmail connected/);
+    h.setConnections([], 503);
+    window.dispatchEvent(new Event("focus"));
+    await waitForText(h, /Could not check connected apps/);
+    assert.doesNotMatch(h.mainText(), /Gmail connected/);
   } finally {
     await h.close();
   }

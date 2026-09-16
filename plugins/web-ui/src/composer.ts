@@ -1646,7 +1646,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         return;
       }
       pendingComposerFocus = false;
-      ta.focus();
+      ta.focus({ preventScroll: true });
       ta.setSelectionRange(ta.value.length, ta.value.length);
     });
   }

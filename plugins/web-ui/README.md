@@ -279,7 +279,7 @@ Open `http://localhost:8138/?connectionDemo=1` on the local dev instance. This l
 
 Session storage retains the account-scoped attempt for twenty minutes, picker query, expanded state, scroll position, and simulated connections. Returning skips the welcome animation, verifies the simulated result, clears callback parameters, and restores the picker. Reset clears the preview's simulated connections. No provider authorization, tokens, or actual connected accounts are changed by this mode.
 
-This is an interaction prototype, not the production callback implementation. Production must pass Composio's `callback_url`, bind the attempt to the authenticated user and account, and verify account ownership and ACTIVE status with Composio before showing connected. The existing real authorization route still does not provide that callback.
+Real authorization supplies a callback URL on the configured public origin and returns to the same conversation. A twenty-minute, user-bound session-storage attempt retains the account ID, originating widget, search, expanded state, and scroll position. The server lists only the authenticated actor’s active connected accounts; the browser verifies the expected account before showing success and removes callback parameters. Connected apps are refreshed on page load and window focus. Returning skips the welcome animation. Reply widgets become available after the reply is persisted. The loopback preview remains a separate simulation and does not connect real accounts.
 
 The welcome uses the organization's configured branding `orgName`, falling back to “your company” when it is unavailable.
 

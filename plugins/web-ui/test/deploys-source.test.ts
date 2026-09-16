@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { stripTypeScriptTypes } from "node:module";
+import { createContext, runInContext } from "node:vm";
+import { deploymentListRefreshCanRedraw, type DeploymentView } from "../src/deploy-view.ts";
+import {
+  withDeploymentListNotice,
+  withDeploymentDetailNotice,
+  withoutDeploymentDetailNotice,
+} from "../src/deploy-notices.ts";
+import { deepLinkPath } from "../src/deep-link.ts";
 
 const source = readFileSync(new URL("../src/deploys.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
@@ -97,13 +106,109 @@ test("list refreshes cannot clear detail-scoped errors", () => {
   assert.doesNotMatch(source, /deployDetailNotice|deployListNotice/);
 });
 
-test("the initial list refresh leaves an opened detail and its loading state untouched", () => {
-  const source = readFileSync(new URL("../src/deploys.ts", import.meta.url), "utf8");
-  assert.match(
-    source,
-    /await refreshDeployments\(\);\s+if \(seq !== appState\.viewRenderSeq \|\| appState\.currentView !== "deploys"\) return;\s+if \(deploymentListRefreshCanRedraw\(activeDeploy\?\.id\)\) drawDeploysPage\(\);/,
-  );
+function renderHarness(requestedId: string | null = null) {
+  const requests: Array<{ path: string; resolve: (response: unknown) => void }> = [];
+  const frames: Array<{ view: "list" | "detail"; id?: string; loading?: boolean }> = [];
+  const context = createContext({
+    appState: { currentView: "deploys", viewRenderSeq: 1 },
+    pendingDeployId: requestedId,
+    archiveCandidate: null,
+    restoreArchiveFocus: false,
+    scopedSession: { active: null },
+    contextsState: { selected: null },
+    deployScope: null,
+    deployList: [],
+    deployLoading: false,
+    deployNotices: { list: "", detail: null },
+    activeDeploy: null,
+    editingDeploy: null,
+    deployDraft: "",
+    deployRefreshSeq: 0,
+    setDeployBackgroundInert() {},
+    async ensureContexts() {},
+    withDeploymentListNotice,
+    withDeploymentDetailNotice,
+    withoutDeploymentDetailNotice,
+    deploymentListRefreshCanRedraw,
+    deepLinkPath,
+    UI_BASE: "",
+    history: { replaceState() {} },
+    errMessage: (error: Error) => error.message,
+    drawDeploysPage() {
+      frames.push({ view: "list" });
+    },
+    drawDeployDetail(deployment: DeploymentView, loading = false) {
+      frames.push({ view: "detail", id: deployment.id, loading });
+    },
+    api: (path: string) => new Promise((resolve) => requests.push({ path, resolve })),
+  });
+  const open = source.slice(source.indexOf("async function openDeploy("), source.indexOf("function drawDeployDetail("));
+  const refreshAndRender = source
+    .slice(source.indexOf("async function refreshDeployments("))
+    .replace("export async function", "async function");
+  runInContext(stripTypeScriptTypes(open + refreshAndRender), context);
+  return {
+    context,
+    requests,
+    frames,
+    render: () => runInContext("renderDeploys()", context) as Promise<void>,
+    open: () => runInContext('openDeploy({id: "opened-app"})', context) as Promise<void>,
+  };
+}
+
+test("the initial list refresh redraws the list when no detail was opened", async () => {
+  const h = renderHarness();
+  const rendering = h.render();
+  await new Promise((resolve) => setImmediate(resolve));
+  h.requests[0]!.resolve({ deployments: [{ id: "app" }] });
+  await rendering;
+  assert.deepEqual(h.frames, [{ view: "list" }, { view: "list" }]);
 });
+
+test("the initial list refresh leaves an opened detail and its loading state untouched", async () => {
+  const h = renderHarness();
+  const rendering = h.render();
+  await new Promise((resolve) => setImmediate(resolve));
+  const opening = h.open();
+  assert.equal(h.requests[0]!.path, "/api/deployments");
+  assert.equal(h.requests[1]!.path, "/api/deployments/opened-app");
+  h.requests[0]!.resolve({ deployments: [] });
+  await rendering;
+  assert.deepEqual(h.frames, [{ view: "list" }, { view: "detail", id: "opened-app", loading: true }]);
+  h.requests[1]!.resolve({ deployment: { id: "opened-app" } });
+  await opening;
+  assert.deepEqual(h.frames.at(-1), { view: "detail", id: "opened-app", loading: false });
+});
+
+for (const listed of [false, true]) {
+  test(`app deep links load details when the requested app is ${listed ? "in" : "absent from"} the list`, async () => {
+    const h = renderHarness("linked-app");
+    const rendering = h.render();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(h.context.pendingDeployId, null);
+    h.requests[0]!.resolve({ deployments: listed ? [{ id: "linked-app", displayName: "Linked app" }] : [] });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(h.requests[1]!.path, "/api/deployments/linked-app");
+    assert.deepEqual(h.frames.at(-1), { view: "detail", id: "linked-app", loading: true });
+    h.requests[1]!.resolve({ deployment: { id: "linked-app" } });
+    await rendering;
+    assert.deepEqual(h.frames.at(-1), { view: "detail", id: "linked-app", loading: false });
+  });
+}
+
+for (const supersede of ["view", "render"] as const) {
+  test(`a pending app deep link cannot open after another ${supersede}`, async () => {
+    const h = renderHarness("linked-app");
+    const rendering = h.render();
+    await new Promise((resolve) => setImmediate(resolve));
+    if (supersede === "view") h.context.appState.currentView = "skills";
+    else h.context.appState.viewRenderSeq++;
+    h.requests[0]!.resolve({ deployments: [{ id: "linked-app" }] });
+    await rendering;
+    assert.equal(h.requests.length, 1);
+    assert.deepEqual(h.frames, [{ view: "list" }]);
+  });
+}
 
 test("the empty Yours tab does not imply the account has no deployments", () => {
   const source = readFileSync(new URL("../src/deploys.ts", import.meta.url), "utf8");

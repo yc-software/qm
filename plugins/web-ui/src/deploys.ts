@@ -36,6 +36,7 @@ import {
   type DeploymentView,
 } from "./deploy-view";
 import { tip } from "./tooltip";
+import { deepLinkPath, UI_BASE } from "./deep-link";
 
 const DEPLOY_TABS: Array<{ value: DeploymentTab; label: string }> = [
   { value: "yours", label: "Yours" },
@@ -227,11 +228,18 @@ function drawDeploysPage(): void {
   );
 }
 
+let pendingDeployId: string | null = null;
+
+export function openDeployById(id: string): void {
+  pendingDeployId = id;
+}
+
 async function openDeploy(d: DeploymentView): Promise<void> {
   editingDeploy = null;
   deployDraft = "";
   deployNotices = withoutDeploymentDetailNotice(deployNotices);
   activeDeploy = d;
+  history.replaceState(null, "", deepLinkPath(UI_BASE, "deploys", null, null, d.id));
   drawDeployDetail(d, true);
   try {
     const response = await api<{ deployment?: DeploymentView }>(`/api/deployments/${encodeURIComponent(d.id)}`);
@@ -355,6 +363,7 @@ function returnToDeploysList(): void {
   deployDraft = "";
   deployNotices = withoutDeploymentDetailNotice(deployNotices);
   activeDeploy = null;
+  history.replaceState(null, "", deepLinkPath(UI_BASE, "deploys", null));
   drawDeploysPage();
 }
 
@@ -670,6 +679,8 @@ async function refreshDeployments(): Promise<"updated" | "failed" | "superseded"
 
 export async function renderDeploys(): Promise<void> {
   if (appState.currentView !== "deploys") return;
+  const requestedId = pendingDeployId;
+  pendingDeployId = null;
   archiveCandidate = null;
   restoreArchiveFocus = false;
   setDeployBackgroundInert(false);
@@ -689,5 +700,7 @@ export async function renderDeploys(): Promise<void> {
   drawDeploysPage();
   await refreshDeployments();
   if (seq !== appState.viewRenderSeq || appState.currentView !== "deploys") return;
-  if (deploymentListRefreshCanRedraw(activeDeploy?.id)) drawDeploysPage();
+  if (requestedId) {
+    await openDeploy(deployList.find((d) => d.id === requestedId) ?? { id: requestedId });
+  } else if (deploymentListRefreshCanRedraw(activeDeploy?.id)) drawDeploysPage();
 }

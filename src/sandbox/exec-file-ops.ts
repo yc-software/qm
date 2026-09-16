@@ -8,21 +8,27 @@ import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token
 import { CAPABILITY_HEADER } from "../api/contract.ts";
 
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import type {
-  AgentComputerExportArea,
-  AgentComputerExportEntry,
-  AgentComputerExportOptions,
-  Sandbox,
-  SandboxHandle,
-  StageOptions,
+import {
+  hasParentPathSegment,
+  type AgentComputerExportArea,
+  type AgentComputerExportEntry,
+  type AgentComputerExportOptions,
+  type Sandbox,
+  type SandboxHandle,
+  type StageOptions,
 } from "./sandbox.ts";
 
 const posixDirname = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf("/"))) || "/";
 
 const BLOB_TRANSFER_TTL_MS = 2 * 60_000;
 
+function workspaceRel(rel: string): string {
+  if (hasParentPathSegment(rel)) throw new Error(`${rel} must stay inside the workspace — no .. path segments`);
+  return rel.replace(/^\/+/, "");
+}
+
 export function posixJoin(base: string, rel: string): string {
-  const clean = rel.replace(/^\/+/, "");
+  const clean = workspaceRel(rel);
   return clean ? `${base.replace(/\/+$/, "")}/${clean}` : base;
 }
 
@@ -62,7 +68,7 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
     },
 
     async listDir(handle, relDir): Promise<string[]> {
-      const rel = relDir.replace(/^\/+/, "") || ".";
+      const rel = workspaceRel(relDir) || ".";
       const r = await exec(
         handle.id,
         `cd ${shq(handle.rootDir)} 2>/dev/null && find ${shq(rel)} -type f 2>/dev/null`,
@@ -78,10 +84,9 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
     ...(combineRemoveAndList
       ? {
           async removeDirAndList(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]> {
-            const remove = removeRelDir.replace(/^\/+/, "");
-            const abs = posixJoin(handle.rootDir, remove);
-            const prep = remove && abs !== handle.rootDir ? `rm -rf ${shq(abs)} || exit $?; ` : "";
-            const rel = listRelDir.replace(/^\/+/, "") || ".";
+            const remove = workspaceRel(removeRelDir);
+            const prep = remove ? `rm -rf ${shq(posixJoin(handle.rootDir, remove))} || exit $?; ` : "";
+            const rel = workspaceRel(listRelDir) || ".";
             const r = await exec(
               handle.id,
               `${prep}listing=$(cd ${shq(handle.rootDir)} 2>/dev/null && find ${shq(rel)} -type f 2>/dev/null) && printf '%s\\n' "$listing"; exit 0`,
@@ -96,11 +101,9 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
         }
       : {}),
     async removeDir(handle, relDir): Promise<void> {
-      const rel = relDir.replace(/^\/+/, "");
+      const rel = workspaceRel(relDir);
       if (!rel) return;
-      const abs = posixJoin(handle.rootDir, rel);
-      if (abs === handle.rootDir) return;
-      const r = await exec(handle.id, `rm -rf ${shq(abs)}`, 60);
+      const r = await exec(handle.id, `rm -rf ${shq(posixJoin(handle.rootDir, rel))}`, 60);
       if (r.code !== 0) throw new Error(`${label} removeDir ${relDir} failed: ${r.stderr}`);
     },
   };

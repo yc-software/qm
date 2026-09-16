@@ -81,11 +81,16 @@ export async function assessRenderImport(
   if (latest < 0) return { action: "skip", reason: "empty" };
   const coverage = await store.tapeCoverage(sessionId);
   const rows = await store.getTape(sessionId);
+  const entries = await store.getEntries(sessionId);
   if (!opts?.force && coverage >= latest) {
     const projection = projectTapeEntries(sessionId, rows);
-    if (projection && projection.coveredSeq >= latest) return { action: "skip", reason: "covered" };
+    if (
+      projection &&
+      projection.coveredSeq >= latest &&
+      classifyDivergences(entries, projection.entries, { coarse: false }).real.length === 0
+    )
+      return { action: "skip", reason: "covered" };
   }
-  const entries = await store.getEntries(sessionId);
   if (entries.length > RENDER_IMPORT_MAX_ENTRIES) return { action: "skip", reason: "oversize" };
   if (entries.some((e, i) => e.seq !== i)) return { action: "skip", reason: "gapped" };
   const needsFoldImport = coverage < latest || lastImportLacksScopes(rows);
@@ -171,11 +176,10 @@ function toolPayloadCompatible(entryPayload: unknown, projectedPayload: unknown)
   if (!isObj(entryPayload) || !isObj(projectedPayload)) {
     return canonicalJson(entryPayload) === canonicalJson(projectedPayload);
   }
+  if ((entryPayload.isError === true) !== (projectedPayload.isError === true)) return false;
+  if (Object.keys(entryPayload).some((key) => !(key in projectedPayload))) return false;
   return Object.keys(projectedPayload).every(
-    (k) =>
-      !(k in entryPayload) ||
-      canonicalJson(entryPayload[k]) === canonicalJson(projectedPayload[k]) ||
-      (k === "isError" && entryPayload.isError === true && projectedPayload.isError === false),
+    (k) => !(k in entryPayload) || canonicalJson(entryPayload[k]) === canonicalJson(projectedPayload[k]),
   );
 }
 
@@ -194,7 +198,7 @@ function taintCleared(entry: SessionEntry, projected: SessionEntry): boolean {
 }
 
 function matchKey(entry: SessionEntry): string {
-  return toolIdentity(entry) ?? `${entry.type}:${entry.scopeLabel}:${canonicalJson(entry.payload)}`;
+  return `${entry.scopeLabel}:${toolIdentity(entry) ?? `${entry.type}:${canonicalJson(entry.payload)}`}`;
 }
 
 export function classifyDivergences(
@@ -219,7 +223,8 @@ export function classifyDivergences(
     segmentOf.set(e.seq, segment);
     const p = projectedBySeq.get(e.seq);
     if (!p) {
-      if (opts.coarse) benign["coarse-gap"]++;
+      if (opts.coarse && (e.type === "tool_call" || e.type === "tool_result" || e.type === "thinking"))
+        benign["coarse-gap"]++;
       else real.push({ seq: e.seq, field: "missing-row", entry: e, projected: undefined });
       continue;
     }
@@ -340,8 +345,8 @@ export async function limitedSessionParity(
   const snapshotLatest = entries.length ? entries[entries.length - 1]!.seq : -1;
   if (covered < snapshotLatest) return { status: "fallback" };
   const served = servedRead.filter((e) => e.seq <= snapshotLatest);
-  const floor = served[0]?.seq ?? Number.MAX_SAFE_INTEGER;
-  const expected = entries.filter((e) => e.seq >= floor && e.seq <= covered);
+  if (servedRead.some((e) => e.seq > snapshotLatest)) return { status: "fallback" };
+  const expected = entries.filter((e) => e.seq <= covered).slice(-limit);
   return {
     status: "projected",
     report: classifyDivergences(expected, served, { coarse: coarseTape(rows) }),

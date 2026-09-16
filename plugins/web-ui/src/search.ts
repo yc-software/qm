@@ -6,6 +6,9 @@ import { recencyGroup } from "./session-list";
 import { searchGroup } from "./search-group";
 import { slackWireToPlain, stripSlackDirectives } from "./slack-text";
 import { openSession, refreshSessions, sessionsState, sessionTitle } from "./sessions";
+import { destinations } from "./browse";
+import { UI_BASE } from "./deep-link";
+import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
 import { icon } from "./ui";
 
 interface ChatSearchHit {
@@ -30,9 +33,14 @@ const searchState = {
   open: false,
   query: "",
   hits: [] as ChatSearchHit[],
+  resources: [] as ResourceHit[],
+  resourceFailures: [] as string[],
+  resourcesLoading: false,
+  resourcesLimited: false,
   failed: false,
   loading: false,
   sel: 0,
+  selectionMoved: false,
 };
 
 let host: HTMLDivElement | null = null;
@@ -58,6 +66,11 @@ export function openChatSearch(): void {
   searchState.loading = false;
   searchState.failed = false;
   searchState.sel = 0;
+  searchState.selectionMoved = false;
+  searchState.resources = [];
+  searchState.resourceFailures = [];
+  searchState.resourcesLimited = false;
+  searchState.resourcesLoading = false;
   draw();
   requestAnimationFrame(() => host?.querySelector<HTMLInputElement>(".chat-search-input")?.focus());
 }
@@ -86,8 +99,18 @@ function draw(): void {
   render(searchState.open ? paletteTpl() : nothing, ensureHost());
 }
 
+function resourceHits(): ResourceHit[] {
+  const shortcuts = destinations().map((d) => ({ title: d.label, description: d.blurb, group: "Go to", href: d.href }));
+  return [...matchResources(shortcuts, searchState.query), ...searchState.resources];
+}
+
+function openResource(hit: ResourceHit): void {
+  closeChatSearch();
+  location.assign(hit.href);
+}
+
 function rowCount(): number {
-  return searchState.hits.length + (askRowShown() ? 1 : 0);
+  return resourceHits().length + searchState.hits.length + (askRowShown() ? 1 : 0);
 }
 
 function askRowShown(): boolean {
@@ -101,12 +124,17 @@ function clampSel(): void {
 function onQueryInput(e: InputEvent): void {
   searchState.query = (e.currentTarget as HTMLInputElement).value;
   searchState.sel = 0;
+  searchState.selectionMoved = false;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   fetchSeq++;
   inflight?.abort();
   inflight = null;
   searchState.hits = [];
+  searchState.resources = [];
+  searchState.resourceFailures = [];
+  searchState.resourcesLimited = false;
+  searchState.resourcesLoading = false;
   searchState.failed = false;
   const q = searchState.query.trim();
   if (q.length < MIN_QUERY_LEN) {
@@ -115,6 +143,7 @@ function onQueryInput(e: InputEvent): void {
     return;
   }
   searchState.loading = true;
+  searchState.resourcesLoading = true;
   draw();
   debounceTimer = setTimeout(() => void runSearch(q), DEBOUNCE_MS);
 }
@@ -124,10 +153,15 @@ async function runSearch(q: string): Promise<void> {
   const ctl = new AbortController();
   inflight = ctl;
   const seq = ++fetchSeq;
+  void runResourceSearch(q, ctl, seq);
   try {
     const r = await api<{ hits: ChatSearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctl.signal });
     if (seq !== fetchSeq || !searchState.open) return;
-    searchState.hits = groupHitsBySession(r.hits ?? []);
+    const hits = groupHitsBySession(r.hits ?? []);
+    if (searchState.selectionMoved && searchState.sel === resourceHits().length + searchState.hits.length) {
+      searchState.sel += hits.length - searchState.hits.length;
+    }
+    searchState.hits = hits;
     searchState.failed = false;
   } catch {
     if (seq !== fetchSeq || ctl.signal.aborted) return;
@@ -135,6 +169,32 @@ async function runSearch(q: string): Promise<void> {
     searchState.failed = true;
   }
   searchState.loading = false;
+  clampSel();
+  draw();
+}
+
+async function runResourceSearch(q: string, ctl: AbortController, seq: number): Promise<void> {
+  try {
+    const response = await api<ResourceSearchResponse>(`/api/resources/search?q=${encodeURIComponent(q)}`, {
+      signal: ctl.signal,
+    });
+    if (seq !== fetchSeq || !searchState.open) return;
+    const result = resourceResults(response, UI_BASE);
+    const resourceCount = resourceHits().length;
+    if (
+      searchState.sel >= resourceCount &&
+      (searchState.selectionMoved || searchState.sel < resourceCount + searchState.hits.length)
+    ) {
+      searchState.sel += result.hits.length - searchState.resources.length;
+    }
+    searchState.resources = result.hits;
+    searchState.resourcesLimited = Boolean(response.limited?.length);
+    searchState.resourceFailures = result.failed;
+  } catch {
+    if (seq !== fetchSeq || ctl.signal.aborted) return;
+    searchState.resourceFailures = ["resources"];
+  }
+  searchState.resourcesLoading = false;
   clampSel();
   draw();
 }
@@ -165,6 +225,7 @@ function onPaletteKeydown(e: KeyboardEvent): void {
     e.preventDefault();
     const count = rowCount();
     if (!count) return;
+    searchState.selectionMoved = true;
     searchState.sel = (searchState.sel + (e.key === "ArrowDown" ? 1 : count - 1)) % count;
     draw();
     scrollSelectedIntoView();
@@ -173,10 +234,18 @@ function onPaletteKeydown(e: KeyboardEvent): void {
   if (e.key === "Enter") {
     e.preventDefault();
     if (e.metaKey || e.ctrlKey) return void askQm();
+    const resources = resourceHits();
+    const resource = resources[searchState.sel];
+    if (resource) return openResource(resource);
     if (searchState.loading) return;
-    const hit = searchState.hits[searchState.sel];
+    const hit = searchState.hits[searchState.sel - resources.length];
     if (hit) return void openHit(hit);
-    if (askRowShown() && searchState.sel === searchState.hits.length) return void askQm();
+    if (
+      !searchState.resourcesLoading &&
+      askRowShown() &&
+      searchState.sel === resources.length + searchState.hits.length
+    )
+      return void askQm();
   }
 }
 
@@ -203,7 +272,7 @@ function askQm(): void {
   const conv = startNewChat();
   void conv?.state.agent?.prompt(
     userSendMessage(
-      `Find my previous session based on the following search query, give me a link when you've identified it: ${q}`,
+      `Find the chat, skill, cron, app, or other resource matching this search query and give me a link: ${q}`,
     ),
   );
 }
@@ -232,7 +301,8 @@ function hitTitle(hit: ChatSearchHit): string {
 function resultRows(): TemplateResult[] {
   const rows: TemplateResult[] = [];
   let lastSession: string | null = null;
-  searchState.hits.forEach((hit, i) => {
+  searchState.hits.forEach((hit, index) => {
+    const i = resourceHits().length + index;
     if (hit.sessionId !== lastSession) {
       lastSession = hit.sessionId;
       rows.push(searchGroup(hitTitle(hit), Boolean(hit.archived), recencyGroup(hit.createdAt)));
@@ -244,6 +314,7 @@ function resultRows(): TemplateResult[] {
         @click=${() => void openHit(hit)}
         @pointermove=${() => {
           if (searchState.sel !== i) {
+            searchState.selectionMoved = true;
             searchState.sel = i;
             draw();
           }
@@ -265,8 +336,37 @@ function resultRows(): TemplateResult[] {
   return rows;
 }
 
+function resourceRows(): TemplateResult[] {
+  let group = "";
+  return resourceHits().flatMap((hit, i) => {
+    const heading = group !== hit.group ? [searchGroup(hit.group, false, "")] : [];
+    group = hit.group;
+    return [
+      ...heading,
+      html`<button
+        type="button"
+        class="chat-search-row ${i === searchState.sel ? "selected" : ""}"
+        @click=${() => openResource(hit)}
+        @pointermove=${() => {
+          if (searchState.sel !== i) {
+            searchState.selectionMoved = true;
+            searchState.sel = i;
+            draw();
+          }
+        }}
+      >
+        <span class="chat-search-who">${icon(Search, 14)}</span>
+        <span class="chat-search-text"
+          ><span class="chat-search-snippet">${highlight(hit.title)}</span>
+          <span class="chat-search-meta chat-search-snippet">${highlight(hit.description)}</span></span
+        >
+      </button>`,
+    ];
+  });
+}
+
 function askRow(): TemplateResult {
-  const i = searchState.hits.length;
+  const i = resourceHits().length + searchState.hits.length;
   return html`
     <button
       type="button"
@@ -274,6 +374,7 @@ function askRow(): TemplateResult {
       @click=${() => askQm()}
       @pointermove=${() => {
         if (searchState.sel !== i) {
+          searchState.selectionMoved = true;
           searchState.sel = i;
           draw();
         }
@@ -282,7 +383,7 @@ function askRow(): TemplateResult {
       <span class="chat-search-who ask">+</span>
       <span class="chat-search-text">
         <span class="chat-search-snippet">Ask QM to find it: <b dir="auto">“${searchState.query.trim()}”</b></span>
-        <span class="chat-search-meta">starts a new chat where QM hunts down the matching session and links it</span>
+        <span class="chat-search-meta">starts a new chat where QM finds the matching resource and links it</span>
       </span>
       <span class="chat-search-kbd">${isMac ? "⌘" : "Ctrl"}${icon(CornerDownLeft, 11)}</span>
     </button>
@@ -298,8 +399,10 @@ function paletteTpl(): TemplateResult {
     body = html`<div class="chat-search-empty">Searching…</div>`;
   } else if (searchState.failed) {
     body = html`<div class="chat-search-empty chat-search-failed">Search failed. Try again.</div>`;
+  } else if (resourceHits().length || searchState.resourcesLoading) {
+    body = html`${resultRows()}`;
   } else if (!searchState.hits.length) {
-    body = html`<div class="chat-search-empty">No messages match “${q}”.</div>`;
+    body = html`<div class="chat-search-empty">No results match “${q}”.</div>`;
   } else {
     body = html`${resultRows()}`;
   }
@@ -310,13 +413,13 @@ function paletteTpl(): TemplateResult {
         if (e.target === e.currentTarget) closeChatSearch();
       }}
     >
-      <div class="chat-search-palette" role="dialog" aria-label="Search your chats" @keydown=${onPaletteKeydown}>
+      <div class="chat-search-palette" role="dialog" aria-label="Search QM" @keydown=${onPaletteKeydown}>
         <div class="chat-search-inputrow">
           ${icon(Search, 16)}
           <input
             class="chat-search-input"
             type="text"
-            placeholder="Search your chats…"
+            placeholder="Search chats, skills, crons, apps…"
             autocomplete="off"
             spellcheck="false"
             .value=${searchState.query}
@@ -325,11 +428,17 @@ function paletteTpl(): TemplateResult {
           <span class="chat-search-kbd">esc</span>
           <button class="chat-search-cancel" type="button" @click=${closeChatSearch}>Cancel</button>
         </div>
-        <div class="chat-search-results">${body}</div>
+        <div class="chat-search-results">
+          ${resourceRows()}
+          ${searchState.resourcesLoading ? html`<div class="chat-search-empty">Loading resources…</div>` : nothing}
+          ${searchState.resourceFailures.length ? html`<div class="chat-search-empty chat-search-failed">Could not search: ${searchState.resourceFailures.join(", ")}. Try searching again.</div>` : nothing}
+          ${searchState.resourcesLimited ? html`<div class="chat-search-empty">Refine your search to see more resource matches.</div>` : nothing}
+          ${body}
+        </div>
         ${askRowShown() ? html`<div class="chat-search-askbar">${askRow()}</div>` : nothing}
         <div class="chat-search-foot">
           <span><span class="chat-search-kbd">↑↓</span> navigate</span>
-          <span><span class="chat-search-kbd">↵</span> open chat</span>
+          <span><span class="chat-search-kbd">↵</span> open</span>
           <span><span class="chat-search-kbd">${isMac ? "⌘↵" : "Ctrl+↵"}</span> ask QM in a new chat</span>
         </div>
       </div>

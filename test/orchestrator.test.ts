@@ -1872,14 +1872,15 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
   assert.equal(r1.status, "ok");
   assert.match(r1.reply ?? "", /Alice@100\.001: I posted a cat photo \[cat\.jpg\]/);
   assert.match(r1.reply ?? "", /Bob@100\.003: love it/);
-  assert.doesNotMatch(r1.reply ?? "", /nice cat/);
+  assert.match(r1.reply ?? "", /nice cat/);
 
   const s1 = await app.getSession(r1.sessionId!);
   const ov1 = overheardEntries(s1!.entries);
   assert.deepEqual(
     ov1.map((e) => (e.payload as { ts: string }).ts),
-    ["100.001", "100.003"],
+    ["100.001", "100.002", "100.003"],
   );
+  assert.equal((ov1[1]!.payload as { sourceRole: string }).sourceRole, "agent");
   assert.equal((ov1[0]!.payload as { name: string }).name, "Alice");
   assert.deepEqual((ov1[0]!.payload as { files: string[] }).files, ["cat.jpg"]);
 
@@ -1887,6 +1888,7 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
     channel("!overheard", {
       overheard: [
         { ts: "100.001", role: "user", name: "Alice", text: "I posted a cat photo", files: ["cat.jpg"] },
+        { ts: "100.002", role: "self", text: "nice cat" },
         { ts: "100.003", role: "user", name: "Bob", text: "love it" },
         { ts: "100.004", role: "user", name: "Carol", text: "me too" },
       ],
@@ -1900,7 +1902,7 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
   const ov2 = overheardEntries(s2!.entries);
   assert.deepEqual(
     ov2.map((e) => (e.payload as { ts: string }).ts),
-    ["100.001", "100.003", "100.004"],
+    ["100.001", "100.002", "100.003", "100.004"],
     "append-only: each message recorded exactly once",
   );
 });

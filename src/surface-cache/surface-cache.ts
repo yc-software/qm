@@ -325,7 +325,6 @@ export function createPostgresSurfaceCache(
       const conds = [
         "org_id = $1",
         "container = $2",
-        "self = FALSE",
         "((edited_at > 0 AND edited_at >= $3) OR (deleted_at > 0 AND deleted_at >= $3))",
       ];
       const args: unknown[] = [orgId, container, since];
@@ -595,7 +594,7 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
 
     async revisedSince(container, since, o = {}) {
       return [...containerMsgs(container).values()]
-        .filter((m) => !m.self && revisedAt(m) > 0 && revisedAt(m) >= since)
+        .filter((m) => revisedAt(m) > 0 && revisedAt(m) >= since)
         .filter((m) => !o.thread || m.sub === o.thread || m.ts === o.thread)
         .sort((a, b) => revisedAt(b) - revisedAt(a) || compareTs(b, a))
         .slice(0, REVISION_SCAN_LIMIT);

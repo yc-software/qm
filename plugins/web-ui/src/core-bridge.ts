@@ -414,6 +414,7 @@ export interface ApprovalDecision {
   scope?: "once" | "session" | "always";
 }
 export type AssistantWork = AssistantMessage & {
+  persisted?: boolean;
   work?: WorkBlock;
   deliveredFiles?: DeliveredFile[];
   retryableSend?: boolean;
@@ -1684,6 +1685,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       }
     }
     const msg: AssistantWork = {
+      persisted: true,
       role: "assistant",
       content: [{ type: "text", text }],
       api: model?.api ?? "unknown",

@@ -42,6 +42,8 @@ import {
   sessionCategory,
   sessionOrigin,
   userMessagePreview,
+  tapeTranscriptEntryRecord,
+  transcriptEntryFromTape,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -247,7 +249,16 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         scopeLabel: entry.scopeLabel as ScopeId,
         createdAt: now(),
       };
+      const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
       log.push(full);
+      const tapeLog = tape.get(lease.sessionId) ?? [];
+      tapeLog.push({
+        ...mirrored,
+        sessionId: lease.sessionId,
+        seq: tapeLog.length,
+        createdAt: now(),
+      });
+      tape.set(lease.sessionId, tapeLog);
       const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
       if (text?.trim()) {
         const index = searchIndex.get(full.sessionId) ?? [];
@@ -263,6 +274,19 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since);
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
+    },
+
+    async getTranscriptEntries(sessionId, opts?: GetEntriesOptions) {
+      const projected = new Map<number, SessionEntry>();
+      for (const row of tape.get(sessionId) ?? []) {
+        const entry = transcriptEntryFromTape(row);
+        if (entry) projected.set(entry.seq, entry);
+      }
+      const filtered = [...projected.values()]
+        .filter((entry) => entry.seq >= (opts?.sinceSeq ?? 0))
+        .sort((a, b) => a.seq - b.seq);
+      if (opts?.limit === 0) return [];
+      return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
     },
 
     async getContextWindow(sessionId) {
@@ -284,7 +308,16 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!entry.payload || typeof entry.payload !== "object") continue;
         const payload = { ...(entry.payload as Record<string, unknown>) };
         delete payload.securityTainted;
+        if (!("securityTainted" in (entry.payload as object))) continue;
         entry.payload = payload;
+        const tapeLog = tape.get(sessionId) ?? [];
+        tapeLog.push({
+          ...structuredClone(tapeTranscriptEntryRecord(entry)),
+          sessionId,
+          seq: tapeLog.length,
+          createdAt: now(),
+        });
+        tape.set(sessionId, tapeLog);
       }
       return true;
     },

@@ -42,6 +42,7 @@ import {
   stableOriginPattern,
   threadRefCronIdExpr,
   userMessagePreview,
+  tapeTranscriptEntryRecord,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -124,6 +125,7 @@ function rowToTape(r: Record<string, unknown>): TapeRecord {
     ...(r.change_time != null ? { changeTime: r.change_time as string } : {}),
     ...(r.hidden != null ? { hidden: Boolean(r.hidden) } : {}),
     ...(r.overheard != null ? { overheard: Boolean(r.overheard) } : {}),
+    ...(r.source_role === "agent" ? { sourceRole: "agent" as const } : {}),
     ...(r.author != null ? { author: r.author as string } : {}),
     ...(r.attachments != null ? { attachments: JSON.parse(r.attachments as string) as unknown[] } : {}),
     ...(r.display != null ? { display: r.display as string } : {}),
@@ -155,7 +157,7 @@ function rowToParticipantWindow(r: Record<string, unknown>): ParticipantWindow {
   };
 }
 
-function rowToEntry(r: Record<string, unknown>): SessionEntry {
+export function rowToEntry(r: Record<string, unknown>): SessionEntry {
   return {
     sessionId: r.session_id as string,
     seq: Number(r.seq),
@@ -526,6 +528,32 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT (session_id, seq) DO NOTHING`,
         ],
       },
+      {
+        id: "sessions/store/0016-tape-source-role",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS source_role TEXT`,
+        ],
+      },
+      {
+        id: "sessions/store/0017-transcript-entries",
+        statements: [
+          `CREATE INDEX IF NOT EXISTS session_tape_transcript_entries
+           ON session_tape(session_id, entry_seq DESC, seq DESC)
+           WHERE kind = 'annotation' AND safe_json(payload)->>'event' = 'transcript_entry'`,
+          `CREATE OR REPLACE VIEW session_transcript_entries AS
+           SELECT DISTINCT ON (session_id, entry_seq)
+             session_id, entry_seq AS seq,
+             (safe_json(payload)->'entry'->>'parentSeq')::int AS parent_seq,
+             safe_json(payload)->'entry'->>'type' AS type,
+             (safe_json(payload)->'entry'->'payload')::text AS payload,
+             scope_label,
+             (safe_json(payload)->'entry'->>'at')::bigint AS created_at
+           FROM session_tape t
+           WHERE kind = 'annotation' AND safe_json(payload)->>'event' = 'transcript_entry'
+           ORDER BY t.session_id, t.entry_seq DESC, t.seq DESC`,
+        ],
+      },
     ],
     [
       {
@@ -579,8 +607,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const stored = jsonbSafeStringify(rec.payload ?? null);
     const createdAt = now();
     await client.query(
-      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, attachments, display, security_tainted, entry_created_at, entry_seq, covers_entry_seq, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, attachments, display, security_tainted, entry_created_at, entry_seq, covers_entry_seq, created_at, source_role)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
       [
         sessionId,
         seq,
@@ -601,6 +629,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         rec.entrySeq ?? null,
         rec.coversEntrySeq ?? null,
         createdAt,
+        rec.meta?.sourceRole ?? null,
       ],
     );
     return { ...rec, payload: JSON.parse(stored), sessionId, seq, createdAt };
@@ -754,6 +783,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
           [full.sessionId, full.seq, full.parentSeq, full.type, stored, full.scopeLabel, full.createdAt],
         );
+        await insertTapeRow(client, full.sessionId, tapeTranscriptEntryRecord(full));
         await client.query(
           `UPDATE sessions
               SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
@@ -777,13 +807,28 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async clearSecurityTaint(sessionId) {
-      const updated = await q(
-        "UPDATE session_entries SET payload = (payload::jsonb - 'securityTainted')::text " +
-          "WHERE session_id = $1 AND payload LIKE '%\"securityTainted\"%' RETURNING 1",
-        [sessionId],
+      return withPgTransaction(await pool(), async (client) => {
+        await lockSession(client, sessionId);
+        const updated = await client.query(
+          "UPDATE session_entries SET payload = (payload::jsonb - 'securityTainted')::text " +
+            "WHERE session_id = $1 AND jsonb_typeof(payload::jsonb) = 'object' AND payload::jsonb ? 'securityTainted' RETURNING *",
+          [sessionId],
+        );
+        for (const row of updated.rows) {
+          await insertTapeRow(client, sessionId, tapeTranscriptEntryRecord(rowToEntry(row)));
+        }
+        if (updated.rows.length > 0) return true;
+        return (await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).rows.length === 1;
+      });
+    },
+
+    async getTranscriptEntries(sessionId, opts?: GetEntriesOptions) {
+      const rows = await q(
+        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq DESC" +
+          (opts?.limit === undefined ? "" : " LIMIT $3"),
+        [sessionId, opts?.sinceSeq ?? 0, ...(opts?.limit === undefined ? [] : [opts.limit])],
       );
-      if (updated.length > 0) return true;
-      return (await q("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).length === 1;
+      return rows.map(rowToEntry).reverse();
     },
 
     async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {

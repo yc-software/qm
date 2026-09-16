@@ -322,3 +322,81 @@ test("shared-app shadow compares equal pages while mirror reads retain stored hi
   assert.equal(comparison.mirrorMessagesOutsideLiveWindow, 0);
   assert.equal(comparison.mirrorHasMore, true);
 });
+
+test("thread history keeps file references and authors but only current files are turn attachments", async () => {
+  const serializer = createConversationSerializer({
+    ids,
+    directory,
+    externalParticipantsEnabled: async () => false,
+    readHistory: async () => ({
+      hasMore: false,
+      raw: [
+        { ts: "1000.000001", user: "U1", text: "Review the notes", files: [{ id: "FOLD", name: "old-notes.txt" }] },
+        {
+          ts: "1000.000002",
+          thread_ts: "1000.000001",
+          user: "UBOT",
+          bot_id: "BBOT",
+          text: "Shall I summarize those notes?",
+        },
+      ],
+    }),
+  });
+  const { view } = await serializer.serializeSlackConversation(
+    {},
+    {
+      kind: "channel",
+      channel: "C1",
+      threadTs: "1000.000001",
+      ts: "1000.000003",
+      rawText: "yes",
+      userId: "U2",
+      files: [{ id: "FCURRENT", name: "current.txt" }],
+    },
+    { audience: [] },
+  );
+  assert.deepEqual(view.files, [{ name: "current.txt" }]);
+  const rendered = renderConversationView(view);
+  assert.equal(rendered.overheard[0]?.name, "U1");
+  assert.deepEqual(rendered.overheard[0]?.files, ["old-notes.txt"]);
+  assert.equal(rendered.overheard[1]?.role, "self");
+  assert.match(rendered.overheard[1]!.text, /Shall I summarize/);
+});
+
+test("automatic context keeps the thread parent and recent exchange but excludes old channel chatter", async () => {
+  const raw = [
+    { ts: "1.000000", user: "U1", text: "ancient unrelated message" },
+    { ts: "100000.000000", user: "U1", text: "thread parent" },
+    ...Array.from({ length: 50 }, (_, i) => ({
+      ts: `${100001 + i}.000000`,
+      user: "U2",
+      thread_ts: "100000.000000",
+      text: `reply ${i}`,
+    })),
+  ];
+  const serializer = createConversationSerializer({
+    ids,
+    directory,
+    externalParticipantsEnabled: async () => false,
+    readHistory: async () => ({ raw, hasMore: false }),
+  });
+  const { view } = await serializer.serializeSlackConversation(
+    {},
+    {
+      kind: "channel",
+      channel: "C1",
+      ts: "100060.000000",
+      rawText: "go",
+      userId: "U1",
+      files: [],
+    },
+    { audience: [] },
+  );
+  assert.equal(view.messages.length, serializer.recentMessageWindow + 1);
+  assert.equal(view.messages[0]?.text, "thread parent");
+  assert.equal(view.messages.at(-2)?.text, "reply 49");
+  assert.equal(
+    view.messages.some((m) => m.text === "ancient unrelated message" || m.text === "reply 0"),
+    false,
+  );
+});

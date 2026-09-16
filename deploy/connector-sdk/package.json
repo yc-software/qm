@@ -1,0 +1,11 @@
+{
+  "name": "qm-connector-sdk",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@composio/core": "0.18.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

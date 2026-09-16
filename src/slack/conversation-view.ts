@@ -9,7 +9,6 @@ import {
   type SlackFile,
   MAX_RECENT_MESSAGES,
   MAX_TOP_LEVEL_CONTEXT_AGE_S,
-  collectEarlierThreadFiles,
   decodeSlackEntities,
   isOversize,
   recentWindow,
@@ -59,7 +58,7 @@ export interface ConversationSerializer {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView; earlierFiles: SlackFile[] }>;
+  ): Promise<{ view: ConversationView }>;
   recentMessageWindow: number;
 }
 
@@ -173,7 +172,7 @@ export function createConversationSerializer(deps: {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView; earlierFiles: SlackFile[] }> {
+  ): Promise<{ view: ConversationView }> {
     const empty: ConversationView = {
       channel: { kind: ctx.kind ?? inc.kind },
       members: [],
@@ -182,8 +181,7 @@ export function createConversationSerializer(deps: {
       files: [],
       omittedFiles: [],
     };
-    if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled()))
-      return { view: empty, earlierFiles: [] };
+    if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
 
     const nameById = new Map<string, string>();
     for (const a of ctx.audience) {
@@ -210,13 +208,6 @@ export function createConversationSerializer(deps: {
       RECENT_MESSAGE_WINDOW,
       inc.threadTs ? undefined : { triggerTs: inc.ts, maxAgeSeconds: MAX_TOP_LEVEL_CONTEXT_AGE_S },
     );
-    const earlierFiles = collectEarlierThreadFiles(raw, {
-      triggerTs: inc.ts,
-      botUserId: ids.botUserId,
-      ownBotId: ids.ownBotId,
-      have: inc.files,
-      inThread: Boolean(inc.threadTs),
-    });
 
     const members =
       ctx.audience.length > 0 && ctx.audience.length <= MEMBERS_SHOW_MAX
@@ -250,9 +241,8 @@ export function createConversationSerializer(deps: {
       here = { kind: "top-level" };
     }
 
-    const allFiles = [...inc.files, ...earlierFiles];
-    const files = allFiles.filter((f) => !isOversize(f)).map((f) => ({ name: slackFileName(f) }));
-    const omittedFiles = allFiles
+    const files = inc.files.filter((f) => !isOversize(f)).map((f) => ({ name: slackFileName(f) }));
+    const omittedFiles = inc.files
       .filter((f) => isOversize(f))
       .map((f) => ({ name: slackFileName(f), reason: "too-big" as const }));
 
@@ -270,7 +260,7 @@ export function createConversationSerializer(deps: {
       nameById,
       ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };
-    return { view, earlierFiles };
+    return { view };
   }
 
   return { shapeRecentMessages, serializeSlackConversation, recentMessageWindow: RECENT_MESSAGE_WINDOW };

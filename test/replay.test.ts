@@ -361,7 +361,7 @@ test("a message answered as a trigger is NOT re-imported as overheard next turn 
   );
 });
 
-test("selectOverheardToImport keeps every not-yet-imported message, in order, dropping the bot's own", () => {
+test("selectOverheardToImport keeps every not-yet-imported message, in order, retaining agent authorship", () => {
   const incoming: OverheardMessage[] = [
     { ts: "100.001", role: "user", name: "Alice", text: "already imported" },
     { ts: "100.005", role: "user", name: "Bob", text: "fresh from bob" },
@@ -371,10 +371,12 @@ test("selectOverheardToImport keeps every not-yet-imported message, in order, dr
   const picked = selectOverheardToImport(incoming, new Set(["100.001", "100.003"]));
   assert.deepEqual(
     picked.map((p) => p.ts),
-    ["100.005", "100.006"],
+    ["100.004", "100.005", "100.006"],
   );
-  assert.equal(picked[0]!.name, "Bob");
-  assert.equal(picked[1]!.name, "Carol");
+  assert.equal(picked[0]!.sourceRole, "agent");
+  assert.match(renderOverheard(picked[0]!), /from="agent"/);
+  assert.equal(picked[1]!.name, "Bob");
+  assert.equal(picked[2]!.name, "Carol");
   assert.ok(picked.every((p) => p.overheard === true));
 });
 
@@ -515,4 +517,19 @@ test("reconstructMessagesFromHistory replays the environment note the user messa
   assert.deepEqual(user!.content, [
     { type: "text", text: "what's on today?\n\n<environment>\nIt is Monday 9am\n</environment>" },
   ]);
+});
+
+test("overheard reconciliation deduplicates IDs within a batch but preserves identical text at different IDs", () => {
+  const incoming: OverheardMessage[] = [
+    { ts: "100.001", role: "self", text: "Shall I proceed?" },
+    { ts: "100.001", role: "self", text: "Shall I proceed?" },
+    { ts: "100.002", role: "user", name: "Alex", text: "yes" },
+    { ts: "100.003", role: "user", name: "Blair", text: "yes" },
+  ];
+  const picked = selectOverheardToImport(incoming, new Set());
+  assert.deepEqual(
+    picked.map((p) => p.ts),
+    ["100.001", "100.002", "100.003"],
+  );
+  assert.deepEqual(selectOverheardToImport(incoming, new Set(picked.map((p) => p.ts))), []);
 });

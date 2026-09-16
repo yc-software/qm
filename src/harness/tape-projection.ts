@@ -8,7 +8,6 @@ import { assistantDroppedAtReplay } from "./tape-fold.ts";
 import { textFromContent, thinkingBlocksFromContent } from "./pi-harness.ts";
 import { swallow } from "../util/errors.ts";
 
-const UNSERVABLE_MEMO_CAP = 10_000;
 const SUFFIX_ROW_CAP_MIN = 100;
 const SUFFIX_ROW_CAP_MAX = 5_000;
 
@@ -126,6 +125,7 @@ function userDraft(row: TapeRecord, isTrigger: boolean): DraftEntry | null {
       type: "user",
       payload: {
         overheard: true,
+        ...(meta.sourceRole ? { sourceRole: meta.sourceRole } : {}),
         ...(meta.ts ? { ts: meta.ts } : {}),
         ...(meta.changeTime ? { changeTime: meta.changeTime } : {}),
         ...(meta.author ? { name: meta.author } : {}),
@@ -201,7 +201,11 @@ export function projectTapeEntries(
   tapeRows: readonly TapeRecord[],
   opts?: { anchored?: boolean },
 ): TapeProjection | null {
-  const sliced = renderableTapeSlice(tapeRows);
+  const sliced = renderableTapeSlice(
+    tapeRows.filter(
+      (row) => row.kind !== "annotation" || (row.payload as { event?: unknown } | null)?.event !== "transcript_entry",
+    ),
+  );
   let rows = sliced;
   let base = -1;
   if (opts?.anchored) {
@@ -393,7 +397,8 @@ export function projectTapeEntries(
 type TranscriptStore = Pick<
   SessionStore,
   "getEntries" | "visibleEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
->;
+> &
+  Partial<Pick<SessionStore, "getTranscriptEntries">>;
 
 interface TranscriptRead {
   entries: SessionEntry[];
@@ -405,19 +410,6 @@ export interface TranscriptSource {
   forViewer(sessionId: string, principalId: string, opts?: { limit?: number }): Promise<TranscriptRead>;
 }
 
-function createUnservableMemo() {
-  const ids = new Set<string>();
-  return {
-    has: (sessionId: string): boolean => ids.has(sessionId),
-    remember(sessionId: string): void {
-      if (ids.size >= UNSERVABLE_MEMO_CAP) ids.clear();
-      ids.add(sessionId);
-    },
-  };
-}
-
-const unservableTapes = createUnservableMemo();
-
 interface ProjectedRead {
   entries: SessionEntry[];
   anchored: boolean;
@@ -426,10 +418,16 @@ interface ProjectedRead {
 
 export function createTranscriptSource(sessions: TranscriptStore): TranscriptSource {
   const projected = async (sessionId: string, limit?: number): Promise<ProjectedRead | null> => {
-    if (unservableTapes.has(sessionId)) return null;
     try {
       const latest = await sessions.latestEntrySeq(sessionId);
       if (latest < 0) return { entries: [], anchored: false, base: -1 };
+      if (sessions.getTranscriptEntries) {
+        const entries = await sessions.getTranscriptEntries(sessionId, limit === undefined ? undefined : { limit });
+        const first = limit === undefined ? 0 : Math.max(0, latest - limit + 1);
+        if (entries.length === latest - first + 1 && entries.every((entry, i) => entry.seq === first + i)) {
+          return { entries, anchored: first > 0, base: first - 1 };
+        }
+      }
       let rows: TapeRecord[];
       let anchored = false;
       if (limit !== undefined) {
@@ -440,7 +438,6 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
         rows = await sessions.getTape(sessionId);
       }
       if (!anchored && tapeHasRenderBlockers(rows)) {
-        unservableTapes.remember(sessionId);
         return null;
       }
       const projection = projectTapeEntries(sessionId, rows, { anchored });

@@ -13,7 +13,7 @@ interface SlackMessageBlock {
   message?: ForwardedMessage;
 }
 
-export interface SlackMessageAttachment extends ForwardedMessage {
+interface SlackMessageAttachment extends ForwardedMessage {
   fallback?: string;
   author_name?: string;
   author_subname?: string;

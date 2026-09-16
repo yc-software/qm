@@ -854,6 +854,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 entrySeq: imported.seq,
                 meta: {
                   overheard: true,
+                  ...(overheard.sourceRole ? { sourceRole: overheard.sourceRole } : {}),
                   bareText: overheard.text,
                   ts: overheard.ts,
                   ...(overheard.name ? { author: overheard.name } : {}),
@@ -1603,6 +1604,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionResource,
         provisionOwnerAuth,
         ensureSkillTree,
+        readSkill,
         provisionForReach,
         reclaimBox,
         provisionPending,
@@ -2159,6 +2161,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           ...(scopedCommand ? { scopedCommand } : {}),
           ensureSkillTree,
+          readSkill,
           ...(reachAvailable
             ? {
                 reach: {
@@ -2442,7 +2445,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if (!input.envelopeWrapped && input.overheard?.length) {
+        if ((!input.envelopeWrapped || humanTurn) && input.overheard?.length) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
@@ -2476,6 +2479,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 entrySeq: imported.seq,
                 meta: {
                   overheard: true,
+                  ...(p.sourceRole ? { sourceRole: p.sourceRole } : {}),
                   bareText: p.text,
                   ts: p.ts,
                   ...(p.changeTime ? { changeTime: p.changeTime } : {}),
@@ -2622,7 +2626,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume })
           : baseText;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
-        const sessionUsedTools = visibleHistory.some((e) => e.type === "tool_call");
+        const sessionUsedTools = visibleHistory.some(
+          (e) =>
+            e.type === "tool_call" &&
+            !(
+              e.payload !== null &&
+              typeof e.payload === "object" &&
+              "tool" in e.payload &&
+              e.payload.tool === "read" &&
+              "path" in e.payload &&
+              typeof e.payload.path === "string" &&
+              e.payload.path.startsWith("skill://")
+            ),
+        );
         if (
           !strictReadOnly &&
           deps.eagerProvision &&

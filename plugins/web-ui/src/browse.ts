@@ -21,7 +21,7 @@ const browseState = { open: false, sel: 0 };
 
 let host: HTMLDivElement | null = null;
 
-function destinations(): Destination[] {
+export function destinations(): Destination[] {
   const to = (view: View, glyph: IconNode, label: string, blurb: string): Destination => ({
     view,
     href: deepLinkPath(UI_BASE, view, null),

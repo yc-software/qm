@@ -16,9 +16,11 @@ export interface MessageRevisionPayload {
   ts: string;
   text?: string;
   name?: string;
+  sourceRole?: "agent";
 }
 
 interface MessageRevisionSource {
+  self?: boolean;
   ts: string;
   deleted?: boolean;
   text?: string;
@@ -44,6 +46,7 @@ export function messageRevision(e: Pick<SessionEntry, "type" | "payload">): Mess
 export function renderMessageRevision(p: MessageRevisionPayload): string {
   const attrs = [
     `id="${xmlAttrEscape(p.ts)}"`,
+    ...(p.sourceRole ? [`from="${p.sourceRole}"`] : []),
     ...(p.name?.trim() ? [`author="${xmlAttrEscape(p.name.trim())}"`] : []),
     ...(isoFromTs(p.ts) ? [`sent-at="${isoFromTs(p.ts)}"`] : []),
   ].join(" ");
@@ -53,7 +56,7 @@ export function renderMessageRevision(p: MessageRevisionPayload): string {
 }
 
 function isRevisionEvent(e: IngestEvent): boolean {
-  return !e.self && Boolean(e.ts) && (e.deleted === true || e.editedAt !== undefined);
+  return Boolean(e.ts) && (e.deleted === true || e.editedAt !== undefined);
 }
 
 export function hasRevisionEvents(events: readonly IngestEvent[]): boolean {
@@ -63,6 +66,7 @@ export function hasRevisionEvents(events: readonly IngestEvent[]): boolean {
 interface OriginalMessage {
   text: string;
   name?: string;
+  sourceRole?: "agent";
 }
 
 function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMessage | null {
@@ -73,6 +77,7 @@ function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMes
       ts?: unknown;
       text?: unknown;
       name?: unknown;
+      sourceRole?: unknown;
       hidden?: unknown;
       securityTainted?: unknown;
     } | null;
@@ -80,6 +85,7 @@ function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMes
     if (p.hidden === true || p.securityTainted === true) return null;
     found = {
       text: typeof p.text === "string" ? p.text : "",
+      ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
       ...(typeof p.name === "string" && p.name.trim() ? { name: p.name.trim() } : {}),
     };
   }
@@ -91,13 +97,16 @@ function revisionToRecord(
   source: MessageRevisionSource,
 ): MessageRevisionPayload | null {
   const original = findOriginal(entries, source.ts);
-  if (!original) return null;
+  if (!original || (source.self && original.sourceRole !== "agent")) return null;
   let last: MessageRevisionPayload | null = null;
   for (const e of entries) {
     const r = messageRevision(e);
     if (r && r.ts === source.ts) last = r;
   }
-  const named = original.name ? { name: original.name } : {};
+  const named = {
+    ...(original.name ? { name: original.name } : {}),
+    ...(original.sourceRole ? { sourceRole: original.sourceRole } : {}),
+  };
   if (source.deleted) {
     if (last?.action === "deleted") return null;
     return { kind: "message_revision", action: "deleted", ts: source.ts, ...named };

@@ -214,7 +214,7 @@ test("a projection that fabricates timing the entry lacks is a real mismatch", (
   assert.equal(real.length, 1);
 });
 
-test("a curated error flag the tape never carried is the tool-payload benign class", () => {
+test("a curated error flag missing from tape blocks retirement", () => {
   const entry = entryAt(3, "tool_result", {
     tool: "read",
     found: false,
@@ -229,8 +229,8 @@ test("a curated error flag the tape never carried is the tool-payload benign cla
     result: "[no such file: x.md]",
   });
   const { real, benign } = classifyDivergences([entry], [projected], { coarse: false });
-  assert.equal(real.length, 0);
-  assert.equal(benign["tool-payload"], 1);
+  assert.equal(real.length, 1);
+  assert.equal(benign["tool-payload"], 0);
 });
 
 test("a projection inventing an error flag the entry lacks stays a real mismatch", () => {
@@ -395,7 +395,11 @@ test("a tainted uncovered session is refused without a coverage claim", async ()
   const entries = await sim.store.getEntries(sim.session.id);
   const outcome = await appendRenderImport(sim.store, sim.lease, entries, scope, true);
   assert.equal(outcome, "unservable-fold");
-  assert.equal((await sim.store.getTape(sim.session.id)).length, 0);
+  assert.ok(
+    (await sim.store.getTape(sim.session.id)).every(
+      (row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry",
+    ),
+  );
   assert.equal(await sim.store.tapeCoverage(sim.session.id), -1);
 });
 
@@ -470,7 +474,7 @@ test("classifier: identical transcripts report nothing", () => {
   assert.deepEqual(report.benign, emptyBenignCounts());
 });
 
-test("classifier: tool payload extras are benign; shared-field corruption is real", () => {
+test("classifier: projected tool extras are benign; lost fields and corruption are real", () => {
   const entries = [
     entryAt(0, "user", { text: "go" }),
     entryAt(1, "tool_call", { tool: "execute", callId: "c1", command: "ls", chars: 120, ok: true }),
@@ -479,8 +483,14 @@ test("classifier: tool payload extras are benign; shared-field corruption is rea
   ];
   const extras = [
     entries[0]!,
-    { ...entries[1]!, payload: { command: "ls", tool: "execute", callId: "c1", text: "retained-arg" } },
-    { ...entries[2]!, payload: { tool: "execute", callId: "c1", isError: false, result: "a.txt\nb.txt" } },
+    {
+      ...entries[1]!,
+      payload: { command: "ls", tool: "execute", callId: "c1", chars: 120, ok: true, text: "retained-arg" },
+    },
+    {
+      ...entries[2]!,
+      payload: { tool: "execute", callId: "c1", isError: false, result: "a.txt\nb.txt", files: 2, extra: true },
+    },
     entries[3]!,
   ];
   const benignReport = classifyDivergences(entries, extras, { coarse: false });
@@ -676,7 +686,78 @@ test("limitedSessionParity exercises the bounded read path and detects fallback"
   const staleRows = await sim.store.getTape(sim.session.id);
   await simLiveTurn(sim, { input: "one more thing", ts: "1720000000.000300", reply: "Done." });
   const raced = await limitedSessionParity(sim.store, sim.session.id, staleEntries, staleRows, 3);
-  assert.equal(raced.status, "projected");
-  assert.ok(raced.status === "projected");
-  assert.deepEqual(raced.report.real, [], "a turn landing between the snapshot and the serving read is not a mismatch");
+  assert.deepEqual(raced, { status: "fallback" });
+});
+
+test("classifier rejects changed tool scopes, lost results, and cleared errors", () => {
+  const entry = entryAt(0, "tool_result", { tool: "execute", callId: "c1", result: "failed", isError: true });
+  for (const projected of [
+    { ...entry, scopeLabel: "org:public" as ScopeId },
+    { ...entry, payload: { tool: "execute", callId: "c1", isError: true } },
+    { ...entry, payload: { ...(entry.payload as object), isError: false } },
+  ]) {
+    assert.equal(classifyDivergences([entry], [projected], { coarse: false }).real.length, 1);
+  }
+});
+
+test("coarse transcripts must retain user, assistant and system rows", () => {
+  for (const type of ["user", "assistant", "system"] as const) {
+    assert.equal(classifyDivergences([entryAt(0, type, { text: "retain" })], [], { coarse: true }).real.length, 1);
+  }
+});
+
+test("a covered tape with lost payload is repaired without a forced import", async () => {
+  const sim = await preCutoverSession();
+  await importSession(sim);
+  const entries = await sim.store.getEntries(sim.session.id);
+  const changed = entries.map((entry) =>
+    entry.type === "assistant"
+      ? { ...entry, payload: { ...(entry.payload as object), durableDetail: "must survive retirement" } }
+      : entry,
+  );
+  const plan = await assessRenderImport(
+    {
+      latestEntrySeq: (id) => sim.store.latestEntrySeq(id),
+      tapeCoverage: (id) => sim.store.tapeCoverage(id),
+      getTape: (id) => sim.store.getTape(id),
+      getEntries: async () => changed,
+    },
+    sim.session.id,
+  );
+  assert.equal(plan.action, "import");
+  assert.ok(plan.action === "import");
+  assert.equal(plan.needsFoldImport, false);
+  await appendRenderImport(sim.store, sim.lease, plan.entries, scope, plan.needsFoldImport);
+  const parity = sessionParity(sim.session.id, changed, await sim.store.getTape(sim.session.id));
+  assert.ok(parity.status === "compared");
+  assert.deepEqual(parity.report.real, []);
+});
+
+test("an absent error flag cannot become a projected failure", () => {
+  const entry = entryAt(0, "tool_result", { tool: "execute", callId: "c1", result: "ok" });
+  const projected = { ...entry, payload: { ...(entry.payload as object), isError: true } };
+  assert.equal(classifyDivergences([entry], [projected], { coarse: false }).real.length, 1);
+});
+
+test("limited parity rejects an empty served suffix even when coverage is complete", async () => {
+  const sim = await preCutoverSession();
+  await importSession(sim);
+  const entries = await sim.store.getEntries(sim.session.id);
+  const rows = await sim.store.getTape(sim.session.id);
+  const result = await limitedSessionParity(
+    {
+      getEntries: (id, opts) => sim.store.getEntries(id, opts),
+      visibleEntries: (id, principal) => sim.store.visibleEntries(id, principal),
+      getTape: (id, opts) => sim.store.getTape(id, opts),
+      latestEntrySeq: async () => -1,
+      participantWindowsOf: (id) => sim.store.participantWindowsOf(id),
+    },
+    sim.session.id,
+    entries,
+    rows,
+    3,
+  );
+  assert.ok(result.status === "projected");
+  assert.equal(result.report.real.length, 3);
+  assert.ok(result.report.real.every((row) => row.field === "missing-row"));
 });

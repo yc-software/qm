@@ -1,3 +1,4 @@
+import { captureConnectionReturn } from "./connection-return";
 import { openModelConnectManager, renderModelConnectGate } from "./model-connect";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -25,6 +26,7 @@ import {
 } from "lucide";
 import {
   api,
+  ApiError,
   setSigninRequiredHandler,
   type SigninRequired,
   fetchRuntimeConfig,
@@ -45,7 +47,6 @@ import { clearAllDrafts, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, UI_BASE } from "./deep-link";
 import {
   adoptRemoteSplit,
-  canvasToast,
   beginPaneKindDrag,
   drawCanvas,
   endPaneDrag,
@@ -82,7 +83,7 @@ import { openChatSearch } from "./search";
 import { closeBrowse, openBrowse } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
-import { renderDeploys } from "./deploys";
+import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
 import {
   inboxOpenCount,
@@ -799,6 +800,32 @@ export function showMainEmpty(text: string): void {
     );
 }
 
+function showConversationError(unavailable: boolean): void {
+  showMainEmpty("");
+  if (!appState.mainEl) return;
+  render(
+    html`
+      <section class="conversation-error" aria-labelledby="conversation-error-title">
+        <span class="conversation-error-code">${unavailable ? "Connection problem" : "404"}</span>
+        <h1 id="conversation-error-title" tabindex="-1">
+          ${unavailable ? "Couldn't load conversation" : "Conversation not found"}
+        </h1>
+        <p>
+          ${unavailable ? "Something went wrong loading this conversation. Please try again." : "This conversation may have been deleted, or you may be signed into an account that doesn’t have access."}
+        </p>
+        <div class="conversation-error-actions">
+          <a class="btn" href=${withBase("/")}>Back to chats</a>
+          ${unavailable ? html`<button class="btn" @click=${() => location.reload()}>Try again</button>` : nothing}
+        </div>
+      </section>
+    `,
+    appState.mainEl,
+  );
+  appState.mainEl.querySelector<HTMLElement>("h1")?.focus();
+  renderList();
+  document.title = `${unavailable ? "Couldn't load conversation" : "Conversation not found"} · ${brandName()}`;
+}
+
 function toggleSidebar(): void {
   setSidebarOpen(!sidebarOpen);
 }
@@ -954,6 +981,7 @@ export async function bootSafely(): Promise<void> {
 }
 
 export async function boot(): Promise<void> {
+  captureConnectionReturn(location.href);
   const params = new URLSearchParams(location.search);
   const {
     view: wanted,
@@ -963,7 +991,13 @@ export async function boot(): Promise<void> {
   document.body.classList.toggle("app-edit-embed", wanted === "app-edit" && params.get("embed") === "1");
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
-  const entriesPrefetch = linkedId ? fetchTranscript(linkedId, { tailTurns: TAIL_TURNS }).catch(() => null) : null;
+  let transcriptUnavailable = false;
+  const loadLinkedTranscript = (id: string) =>
+    fetchTranscript(id, { tailTurns: TAIL_TURNS }).catch((error: unknown) => {
+      transcriptUnavailable = !(error instanceof ApiError && (error.status === 404 || error.status === 403));
+      return null;
+    });
+  const entriesPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
   const approvalsPrefetch = linkedId ? fetchSessionApprovals(linkedId) : null;
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
@@ -1020,7 +1054,7 @@ export async function boot(): Promise<void> {
   const sessions = refreshSessions({ showLoading: true });
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
-    const transcript = entriesPrefetch ?? fetchTranscript(wantedSession, { tailTurns: TAIL_TURNS }).catch(() => null);
+    const transcript = entriesPrefetch ?? loadLinkedTranscript(wantedSession);
     const linked = (await transcript)?.session;
     if (linked) {
       exitSplitIfActive();
@@ -1035,12 +1069,8 @@ export async function boot(): Promise<void> {
       exitSplitIfActive();
       revealSessionSurface(match);
       await openSession(match);
-    } else if (mountRestoredCanvas()) {
-      canvasToast("That conversation wasn't found, or you don't have access to it.");
-      syncUrlFromState();
     } else {
-      showMainEmpty("That conversation wasn't found, or you don't have access to it.");
-      renderList();
+      showConversationError(transcriptUnavailable);
     }
     return;
   }
@@ -1068,6 +1098,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
+    if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);
     if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
     if (wanted === "inbox" && wantedItem) openInboxItemById(wantedItem);

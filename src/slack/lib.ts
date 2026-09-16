@@ -57,8 +57,6 @@ export {
   hydrateSlackFiles,
   MAX_ATTACHMENT_BYTES,
   isOversize,
-  type ThreadMessage,
-  collectEarlierThreadFiles,
   isTrustedSlackHost,
   attachmentFromBytes,
   MAX_ATTACHMENTS_PER_TURN,

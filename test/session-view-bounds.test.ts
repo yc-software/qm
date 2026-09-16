@@ -52,6 +52,17 @@ test("a tailTurns view is bounded yet reports the same earlierEntries as the ful
   }
 });
 
+function withoutCanonicalTranscript(sessions: SessionStore) {
+  const getTape = sessions.getTape.bind(sessions);
+  sessions.getTranscriptEntries = async () => [];
+  sessions.getTape = async (sessionId, opts) => {
+    const rows = (await getTape(sessionId)).filter(
+      (row) => (row.payload as { event?: string }).event !== "transcript_entry" && row.seq > (opts?.sinceSeq ?? -1),
+    );
+    return opts?.limit === undefined ? rows : rows.slice(-opts.limit);
+  };
+}
+
 async function coarseForeignSession(sessions: SessionStore, turns = 1) {
   const scope = scopeId("personal", "U1");
   const session = await sessions.getOrCreateByThread("web:U1:coarse-pins", "dm", scope, undefined, "web");
@@ -103,6 +114,7 @@ test("bounded earlierEntries on a coarse foreign session counts renderable entri
   const built = freshApp();
   built.runtime.start();
   try {
+    withoutCanonicalTranscript(built.sessions);
     const { session } = await coarseForeignSession(built.sessions, 30);
     const full = (await built.app.getSession(session.id))!;
     assert.equal(full.earlierEntries ?? 0, 0, "the unbounded read reports nothing earlier");
@@ -133,6 +145,7 @@ test("pins on entries a coarse projection drops still resolve through the target
   const built = freshApp();
   built.runtime.start();
   try {
+    withoutCanonicalTranscript(built.sessions);
     const { session, narration } = await coarseForeignSession(built.sessions);
     const view = (await built.app.getSessionForViewer(session.id, "U1"))!;
     assert.deepEqual(
@@ -149,6 +162,25 @@ test("pins on entries a coarse projection drops still resolve through the target
     assert.equal((fetched?.entry.payload as { text?: string })?.text, "queue narration detail");
     const stranger = await built.app.getSessionEntryForViewer(session.id, "stranger", narration.seq);
     assert.equal(stranger, null, "the targeted fallback stays tenure-gated");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("canonical transcripts retain foreign harness tool detail and exact bounded counts", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const { session, narration } = await coarseForeignSession(built.sessions, 30);
+    const full = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 9999 }))!;
+    assert.deepEqual(full.entries, await built.sessions.getEntries(session.id));
+    assert.equal(full.entries.length, 150);
+    const bounded = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 1 }))!;
+    assert.deepEqual(bounded.entries, full.entries.slice(-5));
+    assert.equal(bounded.earlierEntries, 145);
+    const pinned = await built.app.pinConversationItem("web:U1:coarse-pins", "U1", { entrySeq: narration.seq });
+    assert.ok("pin" in pinned && pinned.pin);
+    assert.equal(pinned.pin.preview, "queue narration detail");
   } finally {
     await built.runtime.stop();
   }

@@ -428,8 +428,9 @@ test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets 
   await s.adoptHomeSnapshot!(scope, blobId);
 
   const b = await s.provision(layers);
-  assert.equal(await s.readFile(b, "../migrated.txt"), "came from e2b\n", "hydrates from the adopted snapshot");
-  assert.equal(await s.readFile(b, "../old.txt"), null, "the pre-adopt sandbox was discarded, not reused");
+  const migrated = await s.run(b, "cat ~/migrated.txt");
+  assert.equal(migrated.stdout, "came from e2b\n", "hydrates from the adopted snapshot");
+  assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
 });
 
 test("persistHomeSnapshot writes the live home to the snapshot store on demand", async () => {
@@ -509,11 +510,13 @@ test("homes larger than the file chunk size snapshot and hydrate through chunked
   const h = await s.provision(layers);
   const big = Buffer.alloc(50 * 1024 + 7);
   for (let i = 0; i < big.length; i++) big[i] = (i * 31) % 256;
-  await s.writeFileBytes(h, "../big.bin", big);
+  await s.writeFileBytes(h, "big.bin", big);
+  await s.run(h, "mv ~/workspace/big.bin ~/big.bin");
   await s.teardown(h);
   fake.terminate(h.id);
   const b = await s.provision(layers);
-  const back = await s.readFileBytes(b, "../big.bin");
+  await s.run(b, "cp ~/big.bin ~/workspace/big.bin");
+  const back = await s.readFileBytes(b, "big.bin");
   assert.ok(back && Buffer.from(back).equals(big), "chunked snapshot + hydrate round-trips the exact bytes");
 });
 

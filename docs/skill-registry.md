@@ -70,3 +70,20 @@ commit.
 
 The skills are governed store records, visible and auditable on the admin Skills page, rather than
 ungoverned files on each box.
+
+## Reading published skills
+
+The skill index advertises `skill://<name>/SKILL.md` for the agent's `read` tool.
+These read-only references resolve the currently visible, screened published skill
+without creating or waking a sandbox. Relative manifest files can be read at
+`skill://<name>/<relative-path>`. Unavailable skills and invalid paths return no file.
+
+Shell commands still use `skills/<name>/...`. Filesystem reads and commands referencing a
+skill materialize its assets when needed, including pack files under the path named
+in the skill body. Ordinary filesystem reads and writes
+retain their existing behavior, including local edits; they are distinct from the
+published source. Publish changes through the skill API to update that source.
+
+Command detection uses literal skill paths. Before executing a command that constructs
+its asset paths dynamically, read the needed file at its `skills/...` filesystem path
+to materialize it.
