@@ -11,6 +11,8 @@ import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keycha
 import { listPageTpl } from "./list-page";
 
 interface ConnectorProvider {
+  label?: string;
+  description?: string;
   connected?: boolean;
   needsReconnect?: boolean;
   refreshError?: string;
@@ -384,7 +386,7 @@ export function clearConnectorNotice(): void {
 }
 
 export function noteConnectorResult(provider: string, status: string): void {
-  const name = CONNECTOR_LABELS[provider]?.name ?? provider;
+  const name = connectorProviders[provider]?.label ?? CONNECTOR_LABELS[provider]?.name ?? provider;
   connectorNotice = status === "connected" ? `${name}: connected.` : `${name}: connection failed.`;
 }
 
@@ -399,7 +401,10 @@ function drawConnectors(): void {
   const loading = accountsLoading || keysLoadingFresh;
   const entries = Object.entries(connectorProviders);
   const connectorCards = entries.map(([id, p]) => {
-    const meta = CONNECTOR_LABELS[id] ?? { name: id, hosts: "" };
+    const meta = {
+      name: p.label ?? CONNECTOR_LABELS[id]?.name ?? id,
+      hosts: p.description ?? CONNECTOR_LABELS[id]?.hosts ?? "",
+    };
     const connected = Boolean(p.connected);
     const needsReconnect = Boolean(p.needsReconnect);
     const available = Boolean(p.available);
@@ -767,7 +772,7 @@ async function revokeConnector(provider: string): Promise<void> {
     : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Disconnect ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
+    title: `Disconnect ${connectorProviders[provider]?.label ?? CONNECTOR_LABELS[provider]?.name ?? provider}?`,
     body: `${impact} Automations using this account may stop working.`.trim(),
     action: "Disconnect account",
     run: async () => {

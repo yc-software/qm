@@ -1,6 +1,6 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
-import { PROVIDERS, type OAuthClientResolver } from "../connectors/oauth.ts";
+import { PROVIDERS, type OAuthProviderConfig, type OAuthClientResolver } from "../connectors/oauth.ts";
 
 interface ConnectorStatusEntry {
   connected: boolean;
@@ -76,9 +76,10 @@ export async function refreshConnectorStatus(
   tokens: ConnectorTokenStore,
   principalId: string,
   now: number,
+  catalog: Record<string, OAuthProviderConfig> = PROVIDERS,
 ): Promise<ConnectorStatusRecord> {
   const providers: Record<string, ConnectorStatusEntry> = {};
-  for (const [name, provider] of Object.entries(PROVIDERS)) {
+  for (const [name, provider] of Object.entries(catalog)) {
     let entry: ConnectorStatusEntry = { connected: false };
     for (const host of provider.hosts) {
       const statuses = await Promise.all(
@@ -102,13 +103,17 @@ const PROVIDER_LABELS: Record<string, string> = {
   dropbox: "Dropbox",
 };
 
-export function connectorLabel(name: string): string {
+export function connectorLabel(name: string, catalog: Record<string, OAuthProviderConfig> = PROVIDERS): string {
+  if (catalog[name]?.label) return catalog[name]!.label!;
   return PROVIDER_LABELS[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-export async function configuredConnectorProviders(resolveClient: OAuthClientResolver): Promise<string[]> {
+export async function configuredConnectorProviders(
+  resolveClient: OAuthClientResolver,
+  catalog: Record<string, OAuthProviderConfig> = PROVIDERS,
+): Promise<string[]> {
   const configured = await Promise.all(
-    Object.keys(PROVIDERS).map(async (provider) => {
+    Object.keys(catalog).map(async (provider) => {
       try {
         await resolveClient(provider, {});
         return provider;

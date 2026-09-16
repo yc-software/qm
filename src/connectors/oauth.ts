@@ -1,3 +1,4 @@
+import type { OAuthProviderSource } from "./custom-oauth.ts";
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
@@ -38,6 +39,9 @@ type OAuthExchangeAdapter = (
 type OAuthRefreshAdapter = (args: OAuthAdapterArgs & { token: OAuthToken }) => Promise<OAuthToken>;
 
 export interface OAuthProviderConfig {
+  label?: string;
+  description?: string;
+  clientAuth?: "body" | "basic";
   hosts: string[];
   authUrl: string;
   tokenUrl: string;
@@ -64,7 +68,8 @@ export type FetchLike = (
   json(): Promise<unknown>;
 }>;
 
-const realFetch: FetchLike = (url, init) => fetch(url, init);
+const realFetch: FetchLike = (url, init) =>
+  fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(30_000) });
 
 function parseScopes(raw: unknown): string[] | undefined {
   if (Array.isArray(raw)) return raw.map(String);
@@ -150,7 +155,7 @@ function makeTokenAdapters(opts: {
   };
 }
 
-const { exchange: defaultExchange, refresh: defaultRefresh } = makeTokenAdapters({});
+const { exchange: defaultExchange } = makeTokenAdapters({});
 
 const googleExchange: OAuthExchangeAdapter = async (args) => {
   const { client, accountType } = args;
@@ -454,9 +459,12 @@ export interface ResolvedClient {
 
 export type OAuthClientResolver = (provider: string, ctx: { accountType?: AccountType }) => Promise<ResolvedClient>;
 
-export function createSecretClientResolver(secrets: SecretSource = createEnvSecretSource()): OAuthClientResolver {
+export function createSecretClientResolver(
+  secrets: SecretSource = createEnvSecretSource(),
+  providers: OAuthProviderSource = () => PROVIDERS,
+): OAuthClientResolver {
   return async (providerName) => {
-    const p = PROVIDERS[providerName];
+    const p = providers()[providerName];
     if (!p) throw new Error(`unknown OAuth provider: ${providerName}`);
     const [id, secret, hostedDomain] = await Promise.all([
       secrets.get(p.clientIdEnv),
@@ -544,9 +552,10 @@ export function authorizeUrl(
     client: ResolvedClient;
     accountType?: AccountType;
     codeChallenge?: string;
+    providers?: Record<string, OAuthProviderConfig>;
   },
 ): string {
-  const p = PROVIDERS[provider];
+  const p = (opts.providers ?? PROVIDERS)[provider];
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
   const accountType = opts.accountType ?? "default";
   const scopes = scopesFor(p, opts.client);
@@ -576,11 +585,12 @@ export async function exchangeCode(
     now?: number;
     accountType?: AccountType;
     codeVerifier?: string;
+    providers?: Record<string, OAuthProviderConfig>;
   },
 ): Promise<{ hosts: string[]; token: OAuthToken }> {
-  const p = PROVIDERS[provider];
+  const p = (opts.providers ?? PROVIDERS)[provider];
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
-  const adapter = p.exchange ?? defaultExchange;
+  const adapter = p.exchange ?? makeTokenAdapters({ clientAuth: p.clientAuth, rejectErrorBody: true }).exchange;
   return adapter({
     provider: p,
     client: opts.client,
@@ -593,8 +603,11 @@ export async function exchangeCode(
   });
 }
 
-function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
-  for (const [name, config] of Object.entries(PROVIDERS)) {
+function providerForHost(
+  host: string,
+  providers: Record<string, OAuthProviderConfig>,
+): { name: string; config: OAuthProviderConfig } | null {
+  for (const [name, config] of Object.entries(providers)) {
     if (config.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return { name, config };
   }
   return null;
@@ -602,17 +615,19 @@ function providerForHost(host: string): { name: string; config: OAuthProviderCon
 
 export function makeRefresh(opts: {
   resolveClient: OAuthClientResolver;
+  providers?: OAuthProviderSource;
   fetchImpl?: FetchLike;
   now?: () => number;
 }): OAuthRefresh {
   return async (host, token, ctx) => {
-    const match = providerForHost(host);
+    const match = providerForHost(host, opts.providers?.() ?? PROVIDERS);
     if (!match) throw new Error(`cannot refresh ${host} (unknown provider)`);
     if (match.config.refresh === null) throw new Error(`${match.name} tokens do not refresh — reconnect`);
     if (!token.refreshToken) throw new Error(`cannot refresh ${host} (no refresh token)`);
     const accountType = (ctx?.accountType ?? token.accountType) as AccountType | undefined;
     const client = await opts.resolveClient(match.name, accountType ? { accountType } : {});
-    const adapter = match.config.refresh ?? defaultRefresh;
+    const adapter =
+      match.config.refresh ?? makeTokenAdapters({ clientAuth: match.config.clientAuth, rejectErrorBody: true }).refresh;
     const fresh = await adapter({
       provider: match.config,
       client,

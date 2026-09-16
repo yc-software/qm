@@ -1,3 +1,4 @@
+import { parseOAuthConnector } from "../connectors/custom-oauth.ts";
 import { createHash } from "node:crypto";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -39,6 +40,7 @@ export interface DeploymentLayerBundle {
   contract: 1;
   tools: DeploymentLayerFile[];
   skills: DeploymentLayerFile[];
+  connectors?: DeploymentLayerFile[];
 }
 
 export interface StoredDeploymentLayer {
@@ -109,7 +111,7 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
   if (input.contract !== 1 || !Array.isArray(input.tools) || !Array.isArray(input.skills)) {
     throw new Error("deployment layer requires contract: 1, tools[], and skills[]");
   }
-  const normalize = (kind: "tools" | "skills", files: DeploymentLayerFile[]): DeploymentLayerFile[] => {
+  const normalize = (kind: "tools" | "skills" | "connectors", files: DeploymentLayerFile[]): DeploymentLayerFile[] => {
     const seen = new Set<string>();
     return files
       .map((file) => {
@@ -135,7 +137,14 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
       })
       .sort(pathOrder);
   };
-  return { contract: 1, tools: normalize("tools", input.tools), skills: normalize("skills", input.skills) };
+  if (input.connectors !== undefined && !Array.isArray(input.connectors))
+    throw new Error("connectors must be an array");
+  return {
+    contract: 1,
+    tools: normalize("tools", input.tools),
+    skills: normalize("skills", input.skills),
+    ...(input.connectors?.length ? { connectors: normalize("connectors", input.connectors) } : {}),
+  };
 }
 
 function toolDescriptors(files: DeploymentLayerFile[]): { tools: ToolDescriptor[]; installFiles: LayerInstallFile[] } {
@@ -258,7 +267,12 @@ function validateBundle(
   const bundle = normalizedBundle(input);
   const { tools, installFiles } = toolDescriptors(bundle.tools);
   const manifests = skillManifests(bundle.skills);
-  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles) };
+  const connectors = (bundle.connectors ?? []).map((file) => {
+    const connector = parseOAuthConnector(file.content);
+    if (file.path !== `connectors/${connector.id}.json`) throw new Error("connector path must match its id");
+    return connector;
+  });
+  return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles, connectors) };
 }
 
 export function createDeploymentLayerStore(opts: {

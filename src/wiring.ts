@@ -1,5 +1,6 @@
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
+import { oauthProvidersFor, type OAuthProviderSource } from "./connectors/custom-oauth.ts";
 import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunText, type RunStreamEvent } from "./runs/run-stream-events.ts";
@@ -426,6 +427,7 @@ export interface BuiltApp {
   connectorTokens: ConnectorTokenStore;
   slackInstallation: SlackInstallationStore;
   resolveClient: OAuthClientResolver;
+  oauthProviders: OAuthProviderSource;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
@@ -634,6 +636,7 @@ export function buildApp(
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
+  const oauthProviders = () => oauthProvidersFor(deploymentLayer.oauthConnectors);
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const credentialTools = deploymentLayer.credentialTools;
   const brokeredTools = deploymentLayer.brokeredTools;
@@ -1023,6 +1026,7 @@ export function buildApp(
     reader: configStore,
     orgScopeId: (o) => scopeId("org", o),
     secrets: secretSource,
+    providers: oauthProviders,
   });
   const keychainKeyMaterial = config.connectorSecretKey;
   const legacyCredentialKey =
@@ -1039,7 +1043,7 @@ export function buildApp(
     asks: artifactMap<KeychainAsk>("keychain_asks"),
     key: credentialKey,
     refreshConnector: (() => {
-      const base = makeRefresh({ resolveClient });
+      const base = makeRefresh({ resolveClient, providers: oauthProviders });
       // AI subscription logins ride the same connector-refresh machinery:
       // the keychain calls this single-flight when a token is stale.
       return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
@@ -2223,6 +2227,7 @@ export function buildApp(
     connectorTokens,
     slackInstallation,
     resolveClient,
+    oauthProviders,
     consentLinks,
     oauthFlows,
     secretDrops,
@@ -2338,6 +2343,7 @@ export function serverDeps(
     ...(config.slackEventsPort ? { slackEventsPort: config.slackEventsPort } : {}),
     ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
     resolveClient: built.resolveClient,
+    oauthProviders: built.oauthProviders,
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
     secretDrops: built.secretDrops,

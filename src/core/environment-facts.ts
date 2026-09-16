@@ -1,3 +1,4 @@
+import { PROVIDERS, type OAuthProviderConfig } from "../connectors/oauth.ts";
 import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
 import type { ResidentAuthConnector, ScopeLivenessRecord } from "../credentials/resident-auth.ts";
 import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
@@ -67,13 +68,19 @@ export function renderConnectedAppsBlock(
   record: ConnectorStatusRecord | null,
   availableProviders: readonly string[] = [],
   connectionsUrl?: string,
+  providers: Record<string, OAuthProviderConfig> = PROVIDERS,
 ): string {
   const allowed = new Set(availableProviders);
   const entries = Object.entries(record?.providers ?? {}).filter(([name]) => allowed.has(name));
-  const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
+  const connected = entries
+    .filter(([, e]) => e.connected && !e.needsReconnect)
+    .map(([name]) => connectorLabel(name, providers));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
-    .map(([name, e]) => `${connectorLabel(name)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
+    .map(
+      ([name, e]) =>
+        `${connectorLabel(name, providers)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`,
+    );
   const lines = [
     "## Connected apps",
     "This list covers direct OAuth only; it does not describe app access through separately authorized credentials. Use the matching access skill for those, respecting explicit app restrictions and account permissions.",
@@ -86,7 +93,7 @@ export function renderConnectedAppsBlock(
   const available = availableProviders.filter((name) => !connectedNames.has(name));
   if (available.length) {
     lines.push(
-      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
+      `Available to connect: ${available.map((name) => connectorLabel(name, providers)).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
     );
   } else {
     lines.push("Only offer direct OAuth consent links for the admin-configured list below.");

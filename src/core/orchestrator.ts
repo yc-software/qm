@@ -65,7 +65,7 @@ import {
   refreshConnectorStatus,
 } from "../credentials/connector-status.ts";
 import { renderComputerBlock, renderConnectedAppsBlock } from "./environment-facts.ts";
-import { PROVIDERS } from "../connectors/oauth.ts";
+import { oauthProvidersFor } from "../connectors/custom-oauth.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -231,7 +231,6 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
-const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
@@ -1030,9 +1029,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       await deps.skillsReady;
       const configuredProviders = deps.resolveConnectorClient
-        ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
-            swallowAs("orchestrator: configured connector providers", []),
-          )
+        ? await configuredConnectorProviders(
+            deps.resolveConnectorClient,
+            oauthProvidersFor(deps.deploymentLayer?.oauthConnectors),
+          ).catch(swallowAs("orchestrator: configured connector providers", []))
         : [];
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (): Promise<SkillResolution[]> => {
@@ -1326,7 +1326,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       if (!strictReadOnly && deps.connectorTokens && conversation.kind === "dm") {
-        for (const host of CONNECTOR_HOSTS) {
+        for (const host of Object.values(oauthProvidersFor(deps.deploymentLayer?.oauthConnectors)).flatMap(
+          (p) => p.hosts,
+        )) {
           const token =
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
@@ -1919,14 +1921,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           try {
             status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
             if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-              status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
+              status = await refreshConnectorStatus(
+                deps.connectorTokens,
+                actor.id,
+                Date.now(),
+                oauthProvidersFor(deps.deploymentLayer?.oauthConnectors),
+              );
               await deps.connectorStatusCache.put(status);
             }
           } catch (e) {
             swallow("orchestrator: connected-app status", e);
           }
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
-          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
+          systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl, oauthProvidersFor(deps.deploymentLayer?.oauthConnectors))}`;
         }
         const stableSystemBytes = systemPrompt.length;
         if (swarmBinding)

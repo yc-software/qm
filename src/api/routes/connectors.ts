@@ -43,9 +43,16 @@ async function resumeOAuthFlow(deps: ServerDeps, secret: string | undefined, par
   return openOAuthState(param, { secret: oauthStateSecret(deps, secret), maxAgeMs: OAUTH_STATE_MAX_AGE_MS });
 }
 
+export function providersFor(deps: ServerDeps) {
+  return deps.oauthProviders?.() ?? PROVIDERS;
+}
+
 export function resolverFor(deps: ServerDeps): OAuthClientResolver {
   return (
-    deps.resolveClient ?? createSecretClientResolver(deps.oauthEnv ? createEnvSecretSource(deps.oauthEnv) : undefined)
+    deps.resolveClient ??
+    createSecretClientResolver(deps.oauthEnv ? createEnvSecretSource(deps.oauthEnv) : undefined, () =>
+      providersFor(deps),
+    )
   );
 }
 
@@ -99,7 +106,7 @@ function latestRefreshFailure(
 
 async function connectorProviderStatus(deps: ServerDeps, principalId: string): Promise<Record<string, unknown>> {
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([name, provider]) => {
+    Object.entries(providersFor(deps)).map(async ([name, provider]) => {
       const [hosts, configured] = await Promise.all([
         Promise.all(
           provider.hosts.map(async (host) => {
@@ -127,6 +134,8 @@ async function connectorProviderStatus(deps: ServerDeps, principalId: string): P
           configured,
           available: configured,
           consentMode: provider.consentMode,
+          label: provider.label,
+          description: provider.description,
         },
       ] as const;
     }),
@@ -161,6 +170,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
     const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
       client,
+      providers: providersFor(deps),
       fetchImpl: deps.oauthFetch,
       accountType,
       ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
@@ -191,7 +201,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
 }
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
-  const p = PROVIDERS[provider];
+  const p = providersFor(deps)[provider];
   if (!p || !deps.connectorTokens) return false;
   for (const host of p.hosts) {
     for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES) {
@@ -216,7 +226,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
   }
   const rec = peeked.rec;
   if (rec.orgId !== undefined && rec.orgId !== configOrgId()) return sendJson(res, 200, { status: "invalid" });
-  if (!PROVIDERS[rec.provider]) return sendJson(res, 200, { status: "invalid" });
+  if (!providersFor(deps)[rec.provider]) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
     audit(deps, {
@@ -241,7 +251,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       });
     }
     const returnTo = safeReturnTo(url.searchParams.get("returnTo")) ?? rec.returnTo;
-    const codeVerifier = PROVIDERS[rec.provider]?.pkce ? generateCodeVerifier() : undefined;
+    const codeVerifier = providersFor(deps)[rec.provider]?.pkce ? generateCodeVerifier() : undefined;
     const state = await beginOAuthFlow(deps, secret, {
       provider: rec.provider,
       principalId: rec.principalId,
@@ -257,6 +267,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       redirectUri: rec.redirectUri,
       state,
       client,
+      providers: providersFor(deps),
       accountType: rec.accountType,
       ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
     });
@@ -285,7 +296,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     intendedPrincipalId?: unknown;
   };
   const provider = typeof b.provider === "string" ? b.provider : "";
-  if (!PROVIDERS[provider])
+  if (!providersFor(deps)[provider])
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${provider}` });
   const accountType = parseAccountType(typeof b.accountType === "string" ? b.accountType : null);
   const base = deps.publicUrl ? deps.publicUrl.replace(/\/$/, "") : "";
@@ -356,7 +367,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
   const oauthRoute = parseOAuthRoute(pathname)!;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const provider = PROVIDERS[oauthRoute.provider];
+  const provider = providersFor(deps)[oauthRoute.provider];
   if (!provider)
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
   const principalId = url.searchParams.get("principalId") ?? "";
@@ -389,6 +400,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       redirectUri,
       state,
       client,
+      providers: providersFor(deps),
       accountType,
       ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
     });
@@ -444,7 +456,7 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and provider or host required" });
   }
   if (providerName) {
-    const provider = PROVIDERS[providerName];
+    const provider = providersFor(deps)[providerName];
     if (!provider)
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
     for (const h of provider.hosts)
@@ -484,8 +496,10 @@ async function setToken(ctx: ApiCtx): Promise<void> {
 async function catalog(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([name, p]) => ({
+    Object.entries(providersFor(deps)).map(async ([name, p]) => ({
       provider: name,
+      label: p.label,
+      description: p.description,
       hosts: p.hosts,
       scopes: p.scopes,
       consentMode: p.consentMode,
