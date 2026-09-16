@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Rocket } from "lucide";
+import { ArrowUpLeft, Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Rocket } from "lucide";
 import { api } from "./core-bridge";
 import { closeFormMenus, icon, toggleFormMenu } from "./ui";
 import { tip } from "./tooltip";
@@ -90,6 +90,7 @@ export interface SessionTopbarOpts {
   title: string;
   activeTool?: SessionTool | null;
   toolCount?: ((tool: SessionTool) => number | null) | null;
+  parent?: { title: string; onClick: () => void } | null;
   fork?: { title: string; onClick?: (() => void) | null } | null;
   onTitle?: (() => void) | null;
   onCrumb?: (() => void) | null;
@@ -165,6 +166,20 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
   };
   return html`
     <header class="chat-topbar session-topbar">
+      ${
+        o.parent
+          ? html`<button
+                class="session-parent-link"
+                type="button"
+                aria-label=${`Back to parent: ${o.parent.title}`}
+                ${tip(`Back to ${o.parent.title}`)}
+                @click=${o.parent.onClick}
+              >
+                ${icon(ArrowUpLeft, 15)}<span>${o.parent.title}</span>
+              </button>
+              <span class="session-crumb-sep" aria-hidden="true">/</span>`
+          : nothing
+      }
       ${
         o.onTitle
           ? html`<button class="session-heading as-link" type="button" ${tip("Back to this chat")} @click=${o.onTitle}>

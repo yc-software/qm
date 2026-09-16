@@ -2,6 +2,15 @@ import { postCallText, postResultOk } from "./surface-post.ts";
 import type { PendingApproval, ToolActivity, WorkBlock } from "./core-bridge.ts";
 
 export interface ToolPayload {
+  sessionId?: string;
+  title?: string;
+  task?: string;
+  target?: string;
+  delivered?: string;
+  interrupt?: boolean;
+  status?: string;
+  children?: number;
+
   tool?: string;
   command?: string;
   path?: string;

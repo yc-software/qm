@@ -159,3 +159,34 @@ test("without control/controlClaims wired, every control method returns CONTROL_
   assert.deepEqual(await ctx.webhookList(), CONTROL_UNAVAILABLE);
   assert.deepEqual(ctx.soulRead(), CONTROL_UNAVAILABLE);
 });
+
+test("concurrent session calls retain distinct ledger receipts", async () => {
+  const { ledger } = memoryLedger();
+  const ctx = ctxFor({
+    ledger,
+    runId: "parallel-session-calls",
+    attempt: 1,
+    sessionSyscalls: {
+      async open(input) {
+        await Promise.resolve();
+        return { ok: true, sessionId: input.task, title: input.task, liveRunsRemaining: 8 };
+      },
+      async write() {
+        return { ok: false, message: "unused" };
+      },
+      async read() {
+        return { ok: true, mode: "children", children: [] };
+      },
+    },
+  });
+  const results = await Promise.all([
+    ctx.sessionSyscalls!.open({ task: "first" }),
+    ctx.sessionSyscalls!.open({ task: "second" }),
+  ]);
+  const first = await ledger.begin("parallel-session-calls", 1, 0);
+  const second = await ledger.begin("parallel-session-calls", 1, 1);
+  assert.equal(first.cached, true);
+  assert.equal(second.cached, true);
+  assert.deepEqual(JSON.parse(first.output!), results[0]);
+  assert.deepEqual(JSON.parse(second.output!), results[1]);
+});

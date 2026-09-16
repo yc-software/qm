@@ -95,11 +95,8 @@ export function ensureDeliveryStream(): void {
       } else {
         void refreshSessions({ silent: true });
       }
-      // A run can start server-side for an open conversation without this tab asking
-      // for it (a steer replayed as a fresh turn after its run ended, a cron wake, a
-      // message from another surface). Attach the open view instead of waiting for a
-      // visibilitychange, so the new turn — and its triggering message — show up live.
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
+      else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => void refreshSessions({ silent: true }),
     (event) => inboxItemHandler?.(event),

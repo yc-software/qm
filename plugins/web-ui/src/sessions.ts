@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Clock3,
   Cog,
+  CornerLeftUp,
   EllipsisVertical,
   Folder,
   Hash,
@@ -34,6 +35,8 @@ import {
   fetchSessionApprovals,
   fetchTranscript,
   currentEarlierCount,
+  detachSession,
+  adoptSession,
   inheritedTranscript,
   isContinuable,
   entriesToMessages,
@@ -52,6 +55,7 @@ import {
   activityOf,
   chatBrowseStatusMatches,
   bumpActivity,
+  childrenByParent,
   groupProjectSessions,
   recencyGroup,
   recentProjectSeeds,
@@ -59,6 +63,7 @@ import {
   rowIndicators,
   splitPinned,
   withPendingSession,
+  withoutNestedChildren,
   withoutUnsentPending,
   type RecentItem,
   type ChatBrowseStatus,
@@ -94,6 +99,7 @@ import {
   openBackgroundInCanvas,
   beginSessionDrag,
   endPaneDrag,
+  canvasToast,
   notifyPanesChanged,
   drawCanvas,
   closeSessionSurfaces,
@@ -209,10 +215,27 @@ function recentItemActivity(item: RecentItem): number {
   return context?.lastActivityAt ?? context?.project?.createdAt ?? context?.project?.updatedAt ?? 0;
 }
 
+let subagentChildren: Map<string, CoreSession[]> = new Map();
+
 function recentItemsFor(sessions: readonly CoreSession[]): RecentItem[] {
-  return groupProjectSessions(sessions, projectSeedsForRecents()).sort(
+  return groupProjectSessions(withoutNestedChildren(sessions, subagentChildren), projectSeedsForRecents()).sort(
     (a, b) => recentItemActivity(b) - recentItemActivity(a),
   );
+}
+
+function sessionRowWithChildren(s: CoreSession, projectChild = false): TemplateResult {
+  const children = subagentChildren.get(s.id) ?? [];
+  if (!children.length) return sessionRow(s, projectChild);
+  return html`
+    ${sessionRow(s, projectChild)}
+    <div class="recent-project-children subagent-children">
+      ${repeat(
+        children,
+        (child) => child.threadRef,
+        (child) => sessionRowWithChildren(child, true),
+      )}
+    </div>
+  `;
 }
 
 function loadRecentContexts(force = false): void {
@@ -235,6 +258,7 @@ function listWhen(ms: number): string {
 export function surfaceOf(s: CoreSession): string {
   if (s.threadRef.startsWith("web:")) return "web";
   if (s.threadRef.startsWith("dm:") || s.threadRef.startsWith("ch:")) return "slack";
+  if (s.threadRef.startsWith("agent:main:subagent:") && s.surface) return s.surface;
   return "core";
 }
 
@@ -321,12 +345,17 @@ export function renderList(): void {
   const visible = visibleSessions();
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
-  const { pinned, rest } = splitPinned(active);
+  subagentChildren = childrenByParent(visible);
+  const { pinned, rest } = splitPinned(withoutNestedChildren(active, subagentChildren));
   const activeItems = recentItemsFor(rest);
-  const archivedItems: RecentItem[] = archived.map((session) => ({ kind: "session", session }));
+  const archivedItems: RecentItem[] = withoutNestedChildren(archived, subagentChildren).map((session) => ({
+    kind: "session",
+    session,
+  }));
   armMidnightRefresh();
   render(
     html`
+      ${detachDropZone()}
       ${
         pinned.length
           ? html`
@@ -334,7 +363,7 @@ export function renderList(): void {
               ${repeat(
                 pinned,
                 (session) => session.threadRef,
-                (session) => sessionRow(session),
+                (session) => sessionRowWithChildren(session),
               )}
             `
           : nothing
@@ -382,7 +411,7 @@ function newChatHint(name: string): string {
 }
 
 function recentItem(item: RecentItem): TemplateResult {
-  if (item.kind === "session") return sessionRow(item.session);
+  if (item.kind === "session") return sessionRowWithChildren(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
   let glyph: IconNode | null = Folder;
   if (item.groupKind === "personal") glyph = null;
@@ -445,7 +474,7 @@ function recentItem(item: RecentItem): TemplateResult {
         ${repeat(
           item.sessions,
           (session) => session.threadRef,
-          (session) => sessionRow(session, true),
+          (session) => sessionRowWithChildren(session, true),
         )}
       </div>
     </section>
@@ -884,6 +913,20 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   return html`
     <div
       data-session-id=${saved ? s.id : nothing}
+      @dragover=${(e: DragEvent) => {
+        if (draggingChildId && draggingChildId !== s.id && saved) {
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        }
+      }}
+      @drop=${(e: DragEvent) => {
+        const id = draggingChildId;
+        if (!id || id === s.id || !saved) return;
+        e.preventDefault();
+        e.stopPropagation();
+        endSessionDrag();
+        void moveSessionUnder(id, s.id);
+      }}
       class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${projectChild ? "project-child" : ""} ${s.color ? "colored" : ""}"
       style=${s.color ? `--session-color:${s.color}` : nothing}
     >
@@ -895,7 +938,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         aria-keyshortcuts="Space Shift+Space Control+Space Meta+Space"
         draggable=${saved ? "true" : "false"}
         @dragstart=${(e: DragEvent) => onSessionDragStart(e, s)}
-        @dragend=${() => endPaneDrag()}
+        @dragend=${() => endSessionDrag()}
         @mousedown=${(e: MouseEvent) => {
           if (saved && e.shiftKey) e.preventDefault();
         }}
@@ -987,6 +1030,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   `;
 }
 
+let draggingChildId: string | null = null;
+
 function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   if (!s.id) {
     e.preventDefault();
@@ -994,7 +1039,74 @@ function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   }
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  draggingChildId = s.threadRef.startsWith("agent:main:subagent:") ? s.id : null;
+  appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
   beginSessionDrag(s);
+}
+
+function endSessionDrag(): void {
+  draggingChildId = null;
+  appState.listEl?.classList.remove("detach-drop-target");
+  appState.listEl?.querySelector(".detach-drop-zone")?.classList.remove("over");
+  endPaneDrag();
+}
+
+async function moveSessionUnder(id: string, parentId: string | null): Promise<void> {
+  sessionsState.openMenuId = null;
+  endSessionDrag();
+  try {
+    if (parentId) await adoptSession(id, parentId);
+    else await detachSession(id);
+    await refreshSessions({ silent: true });
+    for (const conversation of allConversations()) conversation.redraw();
+  } catch (error) {
+    canvasToast(errMessage(error));
+    renderList();
+  }
+}
+
+function parentChoices(session: CoreSession): CoreSession[] {
+  const descendants = new Set([session.id]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const child of sessionsState.list) {
+      if (child.parentSessionId && descendants.has(child.parentSessionId) && !descendants.has(child.id)) {
+        descendants.add(child.id);
+        changed = true;
+      }
+    }
+  }
+  return sessionsState.list.filter(
+    (candidate) => candidate.scopeId === session.scopeId && !descendants.has(candidate.id),
+  );
+}
+
+function detachDropZone(): TemplateResult {
+  return html`<div
+    class="detach-drop-zone"
+    @dragenter=${(e: DragEvent) => {
+      if (!draggingChildId) return;
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).classList.add("over");
+    }}
+    @dragover=${(e: DragEvent) => {
+      if (!draggingChildId) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    }}
+    @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("over")}
+    @drop=${(e: DragEvent) => {
+      const id = draggingChildId;
+      (e.currentTarget as HTMLElement).classList.remove("over");
+      if (!id) return;
+      e.preventDefault();
+      endSessionDrag();
+      void moveSessionUnder(id, null);
+    }}
+  >
+    ${icon(CornerLeftUp, 13)}<span>Drop here to move out of its parent</span>
+  </div>`;
 }
 
 const placeSessionMenu = (el?: Element): void => {
@@ -1038,6 +1150,24 @@ function sessionMenuPopover(s: CoreSession): TemplateResult {
       <button class="session-menu-option" type="button" role="menuitem" @click=${() => setArchived(s, !archived)}>
         ${archived ? icon(ArchiveRestore, 15) : icon(Archive, 15)}<span>${archived ? "Unarchive" : "Archive"}</span>
       </button>
+      ${
+        s.threadRef.startsWith("agent:main:subagent:")
+          ? html` <div class="session-menu-parent">
+              ${menuSelect({
+                ariaLabel: "Parent session",
+                value: s.parentSessionId ?? "",
+                onSelect: (value) => void moveSessionUnder(s.id, value || null),
+                options: [
+                  { value: "", label: "No parent" },
+                  ...parentChoices(s).map((parent) => ({
+                    value: parent.id,
+                    label: parent.title || "Untitled session",
+                  })),
+                ],
+              })}
+            </div>`
+          : nothing
+      }
       ${sessionColorRow(s)}
     </div>
   `;

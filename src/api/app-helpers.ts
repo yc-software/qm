@@ -1,3 +1,4 @@
+import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
   PendingApprovalRecord,
@@ -590,6 +591,61 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
     if (!deps.signals) return [];
     const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
+    const completed = await deps.runs.get(runId);
+    if (completed && isSubagentThreadRef(completed.sessionId)) {
+      for (const { id, signal } of await deps.signals.pending(runId)) {
+        if (signal.kind === "abort" || !signal.text?.trim()) {
+          await deps.signals.acknowledge(runId, id);
+          continue;
+        }
+        let replayRunId: string | undefined;
+        const dedupKey = `session-signal:${runId}:${id}`;
+        if (signal.sessionRequest) {
+          const { run } = await deps.runs.enqueue({
+            sessionId: completed.sessionId,
+            request: signal.sessionRequest,
+            dedupKey,
+            maxAttempts: deps.maxAttempts,
+          });
+          replayRunId = run.id;
+        } else if (signal.request) {
+          const { approval: _ap, redeliveryKey: _redeliveryKey, ...base } = signal.request;
+          const prior = completed.request;
+          const inheritedOptions = {
+            ...(base.model === undefined && prior.model !== undefined ? { model: prior.model } : {}),
+            ...(base.harness === undefined && prior.harness !== undefined ? { harness: prior.harness } : {}),
+            ...(base.thinkingLevel === undefined && prior.thinkingLevel !== undefined
+              ? { thinkingLevel: prior.thinkingLevel }
+              : {}),
+            ...(base.fastMode === undefined && prior.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
+            ...(base.timezone === undefined && prior.timezone !== undefined ? { timezone: prior.timezone } : {}),
+          };
+          const replayed = await app.turn(
+            { ...base, ...inheritedOptions, async: true, idempotencyKey: dedupKey },
+            { signalDedupKey: dedupKey },
+          );
+          replayRunId = replayed.runId;
+          if (!replayRunId && replayed.status !== "refused") continue;
+        } else {
+          const {
+            approval: _approval,
+            attachments: _attachments,
+            displayText: _display,
+            ...request
+          } = completed.request;
+          const { run } = await deps.runs.enqueue({
+            sessionId: completed.sessionId,
+            request: { ...request, text: signal.text, origin: { kind: "automation", screenData: signal.text } },
+            dedupKey,
+            maxAttempts: deps.maxAttempts,
+          });
+          replayRunId = run.id;
+        }
+        await deps.signals.acknowledge(runId, id);
+        drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
+      }
+      return drained;
+    }
     for (const signal of await deps.signals.takePending(runId)) {
       if (signal.kind === "abort") continue;
       let replayRunId: string | undefined;
@@ -663,6 +719,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     currentResourceScopesForViewer,
     canUseContext,
     principalCanAccessCurrentScope,
+    principalCanWriteScope,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,

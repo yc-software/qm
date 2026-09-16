@@ -97,6 +97,20 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return [...new Set(ids)];
     },
 
+    async pending(runId) {
+      const { rows } = await q(
+        "SELECT id, kind, text, payload FROM run_signals WHERE run_id=$1 AND consumed_at IS NULL ORDER BY id",
+        [runId],
+      );
+      return rows.map((row) => ({ id: String(row.id), signal: toSignals([row])[0]! }));
+    },
+    async acknowledge(runId, id) {
+      await q("UPDATE run_signals SET consumed_at=$3 WHERE run_id=$1 AND id=$2 AND consumed_at IS NULL", [
+        runId,
+        id,
+        Date.now(),
+      ]);
+    },
     async takePending(runId) {
       const { rows } = await q(
         `UPDATE run_signals SET consumed_at=$2

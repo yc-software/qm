@@ -67,6 +67,21 @@ export interface Conversation {
 
 export type SessionType = "dm" | "channel" | "group";
 
+export interface SpawnMeta {
+  openFingerprint?: string;
+  scopeVersion?: string;
+  sessionParticipantIds?: readonly string[];
+  surface: string;
+  conversation: Conversation;
+  actor: Principal;
+  deliveryTarget?: string;
+  timezone?: string;
+  readOnly?: boolean;
+  model?: string;
+  harness?: string;
+  thinkingLevel?: string;
+}
+
 export interface Session {
   id: string;
   type: SessionType;
@@ -81,6 +96,8 @@ export interface Session {
   color?: string;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
+  parentSessionId?: string;
+  spawnMeta?: SpawnMeta;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;
@@ -570,6 +587,9 @@ export type TurnOrigin =
   | { kind: "direct" };
 
 export interface TurnRequest {
+  sessionSenderId?: string;
+  privateSessionMessage?: true;
+  sessionMessageDepth?: number;
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;

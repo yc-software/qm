@@ -448,3 +448,23 @@ test("pg store: hasDedupeKey answers for keys already recorded", { skip }, async
     await store.close?.();
   }
 });
+
+for (const backend of ["memory", "postgres"] as const) {
+  test(
+    `${backend}: orphan signals survive inspection until explicitly acknowledged`,
+    { skip: backend === "postgres" ? skip : false },
+    async () => {
+      const store = backend === "memory" ? createMemoryRunSignalStore() : createPostgresRunSignalStore(URL!);
+      const runId = `receipt-${crypto.randomUUID()}`;
+      await store.send(runId, { kind: "steer", text: "retry me" });
+      const [receipt] = await store.pending(runId);
+      assert.ok(receipt);
+      assert.deepEqual(await store.pending(runId), [receipt]);
+      await store.acknowledge("another-run", receipt.id);
+      assert.equal((await store.pending(runId)).length, 1);
+      await store.acknowledge(runId, receipt.id);
+      assert.deepEqual(await store.pending(runId), []);
+      await store.close?.();
+    },
+  );
+}

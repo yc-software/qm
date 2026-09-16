@@ -79,6 +79,8 @@ export function rowToSession(r: Record<string, unknown>): Session {
           forkBoundarySeq: Number(r.fork_boundary_seq),
         }
       : {}),
+    ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
+    ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
   };
 }
 
@@ -554,6 +556,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ORDER BY t.session_id, t.entry_seq DESC, t.seq DESC`,
         ],
       },
+      {
+        id: "sessions/store/0017-subagent-parentage",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parent_session_id TEXT`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS spawn_meta TEXT`,
+          `CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id
+             ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL`,
+        ],
+      },
     ],
     [
       {
@@ -698,6 +710,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4 WHERE id = $1",
         [sessionId, provenance.forkedFrom.sessionId, provenance.forkedFrom.title ?? null, provenance.forkBoundarySeq],
       );
+    },
+
+    async setParentSession(sessionId, parentSessionId): Promise<void> {
+      await q("UPDATE sessions SET parent_session_id = $2 WHERE id = $1", [sessionId, parentSessionId]);
+    },
+
+    async setSpawnMeta(sessionId, meta): Promise<void> {
+      await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);
+    },
+
+    async childrenOf(parentSessionId): Promise<Session[]> {
+      const rows = await q("SELECT * FROM sessions WHERE parent_session_id = $1 ORDER BY created_at", [
+        parentSessionId,
+      ]);
+      return rows.map(rowToSession);
     },
 
     async acquireLease(sessionId, holder): Promise<LeaseAttempt> {

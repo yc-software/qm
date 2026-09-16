@@ -19,6 +19,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const ledger = new Map<string, string>();
   const events = new EventEmitter();
   events.setMaxListeners(0);
+  const returned = new Set<string>();
   const terminalListeners: Array<(run: Run) => void> = [];
 
   function sessionUnavailable(sessionId: string, now: number): boolean {
@@ -146,6 +147,33 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return true;
     },
 
+    async latestForThread(threadRef, opts) {
+      return (
+        [...runs.values()]
+          .reverse()
+          .filter(
+            (run) =>
+              run.sessionId === threadRef && !(opts?.excludePrivateMessages && run.request.privateSessionMessage),
+          )
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .at(0) ?? null
+      );
+    },
+    async pendingReturns(limit = 100, afterId = "") {
+      return [...runs.values()]
+        .filter(
+          (run) =>
+            isTerminal(run.status) &&
+            !returned.has(run.id) &&
+            run.id > afterId &&
+            run.sessionId.startsWith("agent:main:subagent:"),
+        )
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .slice(0, limit);
+    },
+    async markReturned(runId) {
+      returned.add(runId);
+    },
     onTerminal(listener) {
       terminalListeners.push(listener);
     },
@@ -159,10 +187,12 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     },
 
     async activeForThread(sessionId) {
+      const inFlight = [...runs.values()].filter((r) => r.sessionId === sessionId && !isTerminal(r.status));
       return (
-        [...runs.values()]
-          .filter((r) => r.sessionId === sessionId && !isTerminal(r.status))
-          .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null
+        inFlight.sort((a, b) => {
+          if ((a.status === "running") !== (b.status === "running")) return a.status === "running" ? -1 : 1;
+          return a.createdAt - b.createdAt;
+        })[0] ?? null
       );
     },
 

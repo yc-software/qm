@@ -20,6 +20,7 @@ import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../re
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
 import type { SessionStore } from "../../sessions/session-store.ts";
+import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import type { Sandbox } from "../../sandbox/sandbox.ts";
@@ -85,6 +86,8 @@ export interface OrchestratorInput extends Omit<
   | "liveActor"
 > {
   surface?: string;
+  privateSessionMessage?: true;
+  sessionMessageDepth?: number;
   actor: Principal;
   conversation: Conversation;
   origin: TurnOrigin;
@@ -116,6 +119,7 @@ export interface OrchestratorDeps {
   resolveBaseModelId?: () => string | undefined;
   sessionTapeMode?: "shadow" | "serve";
   sessions: SessionStore;
+  sessionSyscalls?: SessionSyscallsFactory;
   workspace: WorkspaceStore;
   files: FileArtifactStore;
   sandbox: Sandbox;

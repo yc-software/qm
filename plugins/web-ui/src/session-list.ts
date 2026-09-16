@@ -21,6 +21,36 @@ export function activityOf(s: CoreSession): number {
 
 export type ChatBrowseStatus = "active" | "waiting" | "archived";
 
+export function childrenByParent(sessions: readonly CoreSession[]): Map<string, CoreSession[]> {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const map = new Map<string, CoreSession[]>();
+  for (const s of sessions) {
+    if (!s.parentSessionId || s.pinned) continue;
+    const parent = byId.get(s.parentSessionId);
+    if (!parent || Boolean(parent.archived) !== Boolean(s.archived)) continue;
+    const seen = new Set([s.id]);
+    let ancestor: CoreSession | undefined = parent;
+    while (ancestor && !seen.has(ancestor.id)) {
+      seen.add(ancestor.id);
+      ancestor = ancestor.parentSessionId ? byId.get(ancestor.parentSessionId) : undefined;
+    }
+    if (ancestor) continue;
+    const list = map.get(s.parentSessionId) ?? [];
+    list.push(s);
+    map.set(s.parentSessionId, list);
+  }
+  for (const list of map.values()) list.sort((a, b) => activityOf(a) - activityOf(b));
+  return map;
+}
+
+export function withoutNestedChildren(
+  sessions: readonly CoreSession[],
+  nested: Map<string, CoreSession[]>,
+): CoreSession[] {
+  const nestedIds = new Set([...nested.values()].flat().map((s) => s.id));
+  return sessions.filter((s) => !nestedIds.has(s.id));
+}
+
 export function splitPinned<T extends Pick<CoreSession, "pinned">>(sessions: readonly T[]): { pinned: T[]; rest: T[] } {
   const pinned: T[] = [];
   const rest: T[] = [];

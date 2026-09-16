@@ -30,6 +30,12 @@ import {
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { GapPhase, GapWork } from "../sessions/session-store.ts";
+import type {
+  SessionOpenInput,
+  SessionReadInput,
+  SessionSyscalls,
+  SessionWriteInput,
+} from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createNullLedger, type ToolLedger } from "../runs/tool-ledger.ts";
 import type {
@@ -182,6 +188,7 @@ export type AttachFiles = (files: readonly string[]) => Promise<AttachResult>;
 export interface ToolContext extends SurfaceToolDeps {
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
+  sessionSyscalls?: SessionSyscalls;
   commandCredentialHandles?: readonly string[];
   credentialExecServices?: readonly { service: string; binary: string }[];
   credentialExec?(
@@ -491,6 +498,7 @@ export interface ToolContextDeps {
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
+  sessionSyscalls?: SessionSyscalls;
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -518,13 +526,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   }
 
   async function once<T>(produce: () => Promise<T>, shouldCache: (r: T) => boolean = () => true): Promise<T> {
-    callIndex += 1;
+    const index = ++callIndex;
     if (runId === undefined) return produce();
-    const prior = await timed("tool_ledger", () => ledger.begin(runId, attempt, callIndex));
+    const prior = await timed("tool_ledger", () => ledger.begin(runId, attempt, index));
     if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
     const result = await produce();
     if (shouldCache(result))
-      await timed("tool_ledger", () => ledger.record(runId, attempt, callIndex, JSON.stringify(result ?? null)));
+      await timed("tool_ledger", () => ledger.record(runId, attempt, index, JSON.stringify(result ?? null)));
     return result;
   }
 
@@ -1103,6 +1111,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }),
       );
     },
+
+    ...(deps.sessionSyscalls
+      ? {
+          sessionSyscalls: {
+            open: (input: SessionOpenInput) => once(() => deps.sessionSyscalls!.open(input)),
+            write: (input: SessionWriteInput) => once(() => deps.sessionSyscalls!.write(input)),
+            read: (input: SessionReadInput) => deps.sessionSyscalls!.read(input),
+          },
+        }
+      : {}),
 
     async history(q: string, limit?: number): Promise<string[]> {
       if (!deps.sessionHistory) return [];

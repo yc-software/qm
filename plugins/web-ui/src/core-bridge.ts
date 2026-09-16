@@ -140,6 +140,8 @@ export interface CoreSession {
   crons?: number;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
+  parentSessionId?: string;
+  surface?: string;
 }
 
 export function inheritedTranscript(
@@ -355,6 +357,17 @@ export async function fetchEntry(sessionId: string, seq: number): Promise<Sessio
 export async function regenerateTitle(id: string): Promise<{ title: string | null }> {
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
+
+export async function adoptSession(id: string, parentSessionId: string): Promise<{ adopted: true }> {
+  return api<{ adopted: true }>(`/api/sessions/${encodeURIComponent(id)}/adopt`, {
+    method: "POST",
+    body: JSON.stringify({ parentSessionId }),
+  });
+}
+
+export async function detachSession(id: string): Promise<{ detached: true }> {
+  return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
+}
 export interface SessionEntry {
   type:
     | "user"
@@ -476,7 +489,11 @@ export function continuableMessages(messages: AgentMessage[]): { messages: Agent
   return { messages: kept.length ? kept : [resumeAnchor()], popped };
 }
 
+export const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
+
 export function isContinuable(s: Pick<CoreSession, "threadRef" | "scopeId">, user: string): boolean {
+  if (s.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
+    return s.scopeId === `personal:${user}` || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
   if (!s.threadRef.startsWith("web:")) return false;
   return s.threadRef.startsWith(`web:${user}:`) || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
 }
@@ -1587,6 +1604,31 @@ interface HistoryUserMessage {
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
+  subagentMail?: SubagentMailRef;
+}
+
+export interface SubagentMailRef {
+  sessionId: string;
+  title: string;
+  kind: string;
+}
+
+const SUBAGENT_MAIL_RE = /^<wake reason="subagent" name="([^"]*)" sessionId="([^"]*)" kind="([^"]*)"/;
+
+function xmlAttrUnescape(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+export function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
+  const text = (payload as { text?: unknown } | null)?.text;
+  if (typeof text !== "string") return undefined;
+  const m = SUBAGENT_MAIL_RE.exec(text);
+  if (!m) return undefined;
+  return { title: xmlAttrUnescape(m[1]!), sessionId: m[2]!, kind: m[3]! };
 }
 
 export interface HistorySystemNote {
@@ -1771,10 +1813,12 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       const atts = payload?.attachments ?? [];
       const userText = userEntryText(e.payload) ?? text;
       if (text || atts.length) {
+        const mail = subagentMailOf(e.payload);
         const msg: HistoryUserMessage = {
           role: "user",
           content: userText,
           timestamp: e.createdAt,
+          ...(mail ? { subagentMail: mail } : {}),
           ...(payload?.steered ? { steered: true } : {}),
           ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
           ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),

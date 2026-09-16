@@ -8,6 +8,13 @@ import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
+import {
+  createSessionSyscalls,
+  deliverSubagentMail,
+  sessionTreeRoot,
+  sessionTreeRunCount,
+  SUBAGENT_TREE_RUN_CAP,
+} from "./sessions/session-syscalls.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
@@ -285,7 +292,7 @@ import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
-import { isTerminal, type RunStore } from "./runs/run-store.ts";
+import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createWorker, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
@@ -1292,7 +1299,33 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
-  const runs: RunStore = runStore.runs;
+  const runs: RunStore = {
+    ...runStore.runs,
+    async enqueue(input) {
+      const enqueue = async () => {
+        const known = await sessions.getByThread(input.sessionId);
+        if (
+          known &&
+          !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
+          (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
+            SUBAGENT_TREE_RUN_CAP
+        )
+          throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
+        const participants = known ? await sessions.participantsOf(known.id) : [];
+        const result = await runStore.runs.enqueue(input);
+        if (!result.deduped)
+          sessionStateBus.emit({
+            threadRef: input.sessionId,
+            ...(known ? { sessionId: known.id } : {}),
+            state: "working",
+            at: result.run.createdAt,
+            participants: participants.length ? participants : [input.request.actor.id],
+          });
+        return result;
+      };
+      return advisoryLock.withLock("session-run-admission", enqueue);
+    },
+  };
   const swarmStoreKind = config.databaseUrl ? "postgres" : "memory";
   const swarms =
     config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
@@ -1590,7 +1623,40 @@ export function buildApp(
     }
     return broker;
   };
+  const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
+    const scope = resolution.scopeFor(request.conversation, request.actor);
+    if (!(await canWriteScope(request.actor.id, scope))) throw new Error("session actor no longer has scope access");
+    const ref = request.conversation.channelRef;
+    if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
+    const version = await projects.version(ref);
+    const audience = await currentScopeMembers(resolution.scopeFor(request.conversation, request.actor));
+    if (!version || !audience?.some((p) => p.id === request.actor.id))
+      throw new Error("session owner is no longer a member of this project");
+    return {
+      ...request,
+      scopeVersion: version,
+      sessionParticipantIds: audience.map((p) => p.id),
+      conversation: { ...request.conversation, audience, publishMembers: audience },
+    };
+  };
+  const sessionSyscalls = createSessionSyscalls({
+    sessions,
+    runs,
+    signals: runSignals,
+    maxAttempts,
+    advisoryLock,
+    prepareRequest: prepareSessionRequest,
+    authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
+    async validateRuntime(input, scope) {
+      await resolveRuntimeChoiceDurable(configStore, runtimeOrgScope, scope, fallback, {
+        ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
+        ...(input.model ? { modelId: input.model } : {}),
+        ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
+      });
+    },
+  });
   const orchestratorDeps: OrchestratorDeps = {
+    sessionSyscalls,
     refreshModels,
     identity,
     resolution,
@@ -1911,11 +1977,38 @@ export function buildApp(
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
+  const returnSessionRun = (run: Run) =>
+    advisoryLock.withLock("session-tree-admission", async () => {
+      await deliverSubagentMail({ sessions, runs, maxAttempts, prepareRequest: prepareSessionRequest }, run);
+      await runs.markReturned(run.id);
+    });
+  runs.onTerminal((run) => {
+    if (run.sessionId.startsWith("agent:main:subagent:"))
+      void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
+  });
+  const sweepSessionReturns = async () => {
+    let afterId: string | undefined;
+    for (;;) {
+      const batch = await runs.pendingReturns(100, afterId);
+      if (!batch.length) return;
+      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
+      afterId = batch.at(-1)!.id;
+    }
+  };
+  const sessionReturnSweeper = createSweeper(
+    () =>
+      advisoryLock.tryWithLock
+        ? advisoryLock.tryWithLock("session-return-sweep", sweepSessionReturns)
+        : advisoryLock.withLock("session-return-sweep", sweepSessionReturns),
+    1_000,
+    { label: "session-returns", immediate: true },
+  );
   const orphanedSignalSweeper = createSweeper(
     async () => {
       for (const runId of await runSignals.pendingRunIds()) {
         const run = await runs.get(runId);
-        if (!run || isTerminal(run.status)) await app.replayOrphanedRunSignals(runId);
+        if (!run || isTerminal(run.status))
+          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
       }
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
@@ -2173,6 +2266,7 @@ export function buildApp(
       wakeSweep.start();
       swarms?.start();
       orphanedSignalSweeper.start();
+      sessionReturnSweeper.start();
       drain.start();
     },
     async releaseInFlightRuns() {
@@ -2192,6 +2286,7 @@ export function buildApp(
       wakeSweep.stop();
       swarms?.stop();
       orphanedSignalSweeper.stop();
+      sessionReturnSweeper.stop();
       await Promise.all(workers.map((w) => w.stop(config.shutdownDrainMs))).catch(
         swallowAs("wiring: worker drain failed", undefined),
       );

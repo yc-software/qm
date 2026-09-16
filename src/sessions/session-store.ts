@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { EntryType, ScopeId, Session, SessionEntry, SessionType } from "../types.ts";
+import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import { sleep } from "../util/async.ts";
 
 export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
@@ -695,6 +695,9 @@ export interface SessionStore {
   get(sessionId: string): Promise<Session | null>;
 
   updateTitle(sessionId: string, title: string): Promise<void>;
+  setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
+  setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
+  childrenOf(parentSessionId: string): Promise<Session[]>;
   updateForkProvenance(
     sessionId: string,
     provenance: { forkedFrom: { sessionId: string; title?: string | null }; forkBoundarySeq: number },

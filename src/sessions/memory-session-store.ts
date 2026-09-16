@@ -165,6 +165,24 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (s) Object.assign(s, provenance);
     },
 
+    async setParentSession(sessionId, parentSessionId) {
+      const s = sessions.get(sessionId);
+      if (!s) return;
+      if (parentSessionId === null) delete s.parentSessionId;
+      else s.parentSessionId = parentSessionId;
+    },
+
+    async setSpawnMeta(sessionId, meta) {
+      const s = sessions.get(sessionId);
+      if (s) s.spawnMeta = meta;
+    },
+
+    async childrenOf(parentSessionId) {
+      return [...sessions.values()]
+        .filter((s) => s.parentSessionId === parentSessionId)
+        .sort((a, b) => a.createdAt - b.createdAt);
+    },
+
     async acquireLease(sessionId, holder): Promise<LeaseAttempt> {
       if (!sessions.has(sessionId)) return { lease: null };
       const held = leases.get(sessionId);

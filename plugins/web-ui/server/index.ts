@@ -36,6 +36,7 @@ import {
   portFromEnv,
 } from "../../chassis/src/env.ts";
 
+const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 const PORT = portFromEnv(8096);
 const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
@@ -309,7 +310,11 @@ function resolveWebConversation(
   scope: string | undefined,
   channelName: string | undefined,
 ): { conversation: WebConversation } | { error: string; message: string } {
-  if (!threadRef.startsWith(`web:${user}:`) && !(scope?.startsWith("channel:") || scope?.startsWith("group:"))) {
+  if (
+    !threadRef.startsWith(`web:${user}:`) &&
+    !threadRef.startsWith(SUBAGENT_THREAD_PREFIX) &&
+    !(scope?.startsWith("channel:") || scope?.startsWith("group:"))
+  ) {
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   }
   const conversation = conversationForScope(user, threadRef, scope, channelName);
@@ -1698,6 +1703,35 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/sessions/:id/adopt",
+    handle: async (c) => {
+      const p = await readJson<{ parentSessionId?: unknown }>(c.req, c.res);
+      if (!p) return;
+      if (typeof p.parentSessionId !== "string") return json(c.res, 400, { error: "bad_request" });
+      return relayCore(
+        c.res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/adopt`,
+        JSON.stringify({ principalId: c.user, parentSessionId: p.parentSessionId }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/detach",
+    handle: async (c) => {
+      const { res, user } = c;
+      const id = c.params.id!;
+      return relayCore(
+        res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(id)}/detach`,
+        JSON.stringify({ principalId: user }),
+      );
+    },
+  },
+  {
+    method: "POST",
     path: "/api/sessions/:id/fork",
     handle: async (c) => {
       const { req, res, user } = c;
@@ -2189,7 +2223,11 @@ const apiRoutes: readonly WebRoute[] = [
               : {}),
           };
         }
-        if (typeof p.threadRef === "string" && p.threadRef.startsWith("web:")) threadRef = p.threadRef;
+        if (
+          typeof p.threadRef === "string" &&
+          (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
+        )
+          threadRef = p.threadRef;
         if (typeof p.scopeId === "string" && p.scopeId) scope = p.scopeId;
         if (typeof p.channelName === "string" && p.channelName.trim()) channelName = p.channelName.trim().slice(0, 200);
         if (typeof p.model === "string" && p.model) model = p.model;
@@ -2271,7 +2309,8 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, url, user } = c;
       const threadRef = url.searchParams.get("threadRef") ?? "";
-      if (!threadRef.startsWith("web:")) return json(res, 404, { error: "not_found" });
+      if (!threadRef.startsWith("web:") && !threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
+        return json(res, 404, { error: "not_found" });
       let queued: Array<{ runId: string; text: string; hasAttachments?: boolean }> = [];
       let durableRunId: string | null = null;
       const durable = await coreFetch("GET", `/v1/runs?threadRef=${encodeURIComponent(threadRef)}`);
@@ -2330,7 +2369,11 @@ const apiRoutes: readonly WebRoute[] = [
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
       const text = typeof p.text === "string" ? p.text : undefined;
-      const threadRef = typeof p.threadRef === "string" && p.threadRef.startsWith("web:") ? p.threadRef : "";
+      const threadRef =
+        typeof p.threadRef === "string" &&
+        (p.threadRef.startsWith("web:") || p.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
+          ? p.threadRef
+          : "";
       let steerFields: { request: ReturnType<typeof webTurnBase> } | undefined;
       if (kind === "steer" && text !== undefined && threadRef) {
         const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;

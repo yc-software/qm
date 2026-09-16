@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activityOf,
+  childrenByParent,
+  withoutNestedChildren,
   applySessionState,
   isAbandonedNewChat,
   shouldStartProactiveOpener,
@@ -515,4 +517,32 @@ test("first personal chat opens proactively even when background suggestions alr
   assert.equal(shouldStartProactiveOpener({ ...first, sessionId: "existing" }), false);
   assert.equal(shouldStartProactiveOpener({ ...first, scopeId: "channel:C123" }), false);
   assert.equal(shouldStartProactiveOpener({ ...first, messageCount: 1 }), false);
+});
+
+test("subagents nest below pinned parents while pinned children remain independently reachable", () => {
+  const parent = { ...saved("parent", "web:alice:parent"), pinned: true };
+  const child = { ...saved("child", "agent:main:subagent:child"), parentSessionId: parent.id };
+  const pinnedChild = {
+    ...saved("pinned-child", "agent:main:subagent:pinned"),
+    parentSessionId: parent.id,
+    pinned: true,
+  };
+  const all = [parent, child, pinnedChild];
+  const tree = childrenByParent(all);
+  assert.deepEqual(
+    tree.get(parent.id)?.map((row) => row.id),
+    [child.id],
+  );
+  assert.deepEqual(
+    withoutNestedChildren(all, tree).map((row) => row.id),
+    [parent.id, pinnedChild.id],
+  );
+});
+
+test("orphaned and cyclic parent pointers cannot hide sidebar sessions", () => {
+  const first = { ...saved("a", "web:alice:a"), parentSessionId: "b" };
+  const second = { ...saved("b", "web:alice:b"), parentSessionId: "a" };
+  const orphan = { ...saved("c", "web:alice:c"), parentSessionId: "missing" };
+  const all = [first, second, orphan];
+  assert.deepEqual(withoutNestedChildren(all, childrenByParent(all)), all);
 });

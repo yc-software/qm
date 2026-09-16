@@ -2430,3 +2430,48 @@ test("pg transcript migration refuses gapped legacy history", { skip }, async ()
     await client.end();
   }
 });
+
+test("pg terminal returns survive reopening the run store", { skip }, async () => {
+  const first = createPostgresRunStore(URL!);
+  const { run } = await first.runs.enqueue({
+    sessionId: `agent:main:subagent:${randomUUID()}`,
+    request: turn("return result"),
+  });
+  const claimed = await first.runs.claimById(run.id, "return-worker", 30_000);
+  await first.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await first.close();
+  const second = createPostgresRunStore(URL!);
+  assert.ok((await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+  assert.ok(!(await second.runs.pendingReturns(1000, run.id)).some((pending) => pending.id === run.id));
+  await second.runs.markReturned(run.id);
+  assert.ok(!(await second.runs.pendingReturns(1000)).some((pending) => pending.id === run.id));
+  await second.close();
+});
+
+test("pg child parentage and spawn metadata survive reopening", { skip }, async () => {
+  const first = createPostgresSessionStore(URL!);
+  const ownerScope = scopeId("personal", `parentage-${randomUUID()}`);
+  const parent = await first.getOrCreateByThread(`parent-${randomUUID()}`, "dm", ownerScope);
+  const child = await first.getOrCreateByThread(`agent:main:subagent:${randomUUID()}`, "dm", ownerScope);
+  const meta = {
+    surface: "web",
+    actor: { id: "tester", type: "internal" as const },
+    conversation: {
+      kind: "dm" as const,
+      threadRef: parent.threadRef,
+      audience: [{ id: "tester", type: "internal" as const }],
+    },
+    readOnly: true,
+  };
+  await first.setParentSession(child.id, parent.id);
+  await first.setSpawnMeta(child.id, meta);
+  const reopened = createPostgresSessionStore(URL!);
+  assert.equal((await reopened.get(child.id))?.parentSessionId, parent.id);
+  assert.deepEqual((await reopened.get(child.id))?.spawnMeta, meta);
+  assert.deepEqual(
+    (await reopened.childrenOf(parent.id)).map((session) => session.id),
+    [child.id],
+  );
+  await reopened.setParentSession(child.id, null);
+  assert.equal((await reopened.get(child.id))?.parentSessionId, undefined);
+});

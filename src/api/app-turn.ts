@@ -1,3 +1,4 @@
+import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
@@ -77,7 +78,7 @@ export function createTurnMethods(
   } = h;
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
   return {
-    async turn(req: TurnRequest): Promise<TurnResult> {
+    async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const startedAt = performance.now();
       await deps.refreshModels?.();
       await deps.identity.refresh();
@@ -129,6 +130,17 @@ export function createTurnMethods(
         sessionParticipantIds = [actor.id];
       }
 
+
+      if (isSubagentThreadRef(req.conversation.threadRef)) {
+        const target = await deps.sessions.getByThread(req.conversation.threadRef);
+        if (
+          !target?.spawnMeta ||
+          target.scopeId !== conversationScope(req.conversation, actor.id) ||
+          !(await deps.sessions.getForParticipant(target.id, actor.id)) ||
+          !(await h.principalCanWriteScope(actor.id, target.scopeId))
+        )
+          return { status: "refused", reason: "you cannot continue that subagent session" };
+      }
       const orgRuntimeScope = scopeId("org", orgIdOf());
       const turnRuntimeScope =
         req.conversation.kind === "dm"
@@ -256,10 +268,20 @@ export function createTurnMethods(
         ...(publishMembers ? { publishMembers } : {}),
       };
 
-      const origin = resolveTurnOrigin(req);
+      const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
+      const sameApprovedMessage =
+        approvedRequest?.text === req.text &&
+        approvedRequest.actor.externalId === req.actor.externalId &&
+        approvedRequest.conversation.threadRef === req.conversation.threadRef;
+      let privateRequest = req.privateSessionMessage ? req : undefined;
+      if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
+      const origin = resolveTurnOrigin(privateRequest ?? req);
 
       const input = {
         surface: req.surface,
+        ...(sameApprovedMessage && approvedRequest?.sessionSenderId
+          ? { sessionSenderId: approvedRequest.sessionSenderId }
+          : {}),
         ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
         ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
         actor,
@@ -279,6 +301,13 @@ export function createTurnMethods(
         ...(!individualAuth && req.model ? { model: req.model } : {}),
         ...turnModelOptions(req),
         ...(req.readOnly ? { readOnly: true } : {}),
+        ...(privateRequest
+          ? {
+              privateSessionMessage: true as const,
+              sessionMessageDepth: privateRequest.sessionMessageDepth,
+              readOnly: true,
+            }
+          : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.botActor ? { botActor: true } : {}),
@@ -347,6 +376,8 @@ export function createTurnMethods(
           projectVersion === undefined ? req.idempotencyKey : `${req.idempotencyKey}:project-${projectVersion}`;
         if (req.approval) dedupKey = `${dedupKey}:approval:${req.approval.requestId}:${req.approval.approved}`;
       }
+
+      if (replay) dedupKey = replay.signalDedupKey;
 
       if (origin.kind === "human" && !req.approval) deps.reaperPoke?.();
 
@@ -485,8 +516,6 @@ export function createTurnMethods(
         }
       }
 
-      const known = await deps.sessions.getByThread(conversation.threadRef);
-      const participants = known ? await deps.sessions.participantsOf(known.id) : [];
       const enqueue = () =>
         deps.runs.enqueue({
           sessionId: conversation.threadRef,
@@ -504,15 +533,6 @@ export function createTurnMethods(
         enqueueMs: Math.round(performance.now() - enqueueStartedAt),
       });
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
-      if (!deduped) {
-        deps.sessionStateBus?.emit({
-          threadRef: conversation.threadRef,
-          ...(known ? { sessionId: known.id } : {}),
-          state: "working",
-          at: Date.now(),
-          participants: participants.length ? participants : [req.actor.externalId],
-        });
-      }
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
       if (spineRouted) deps.engaged?.engage(conversation.threadRef);
       if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);

@@ -340,7 +340,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
   };
 }
 
-const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime"]);
+const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "session"]);
 
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
@@ -1337,6 +1337,164 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ? hits.map((h) => `- ${h}`).join("\n")
             : `[nothing in this conversation's transcript matches "${params.query}"]`,
         ),
+      );
+    },
+  });
+
+  const sessionTool = defineTool({
+    name: "session",
+    label: "session",
+    description:
+      "Delegate work to subagent sessions and manage them. A subagent is a separate durable conversation " +
+      "that works in parallel while you stay responsive; when one of its turns ends, its final message is " +
+      "delivered to its current parent automatically (none while detached) — never wait or poll for results. " +
+      "`open` starts one: give `task` the FULL instruction (it sees none of this conversation), give each " +
+      "subagent a disjoint slice of work, and don't delegate the step your very next action depends on. " +
+      "It returns a receipt {sessionId, title} immediately, never the result. " +
+      "`read` with no target lists your subagents with live status; with `target` (sessionId or title) it " +
+      "shows that session's recent transcript, read-only — use this to answer \"how's X going?\" without " +
+      "disturbing the work. " +
+      "`write` sends a sender-stamped message to an accessible session in the same scope. Ordinary conversations receive a separate private, read-only turn, without external delivery. Private turns can read and reply through this tool, but cannot open children or interrupt work. Reply chains are bounded; reply only when useful. For subagents, it queues " +
+      "a separate screened turn — subagents stay re-taskable after they finish. " +
+      "`write` with interrupt:true aborts its current run (it stays re-taskable).",
+    parameters: Type.Object({
+      action: Type.Union([Type.Literal("open"), Type.Literal("write"), Type.Literal("read")]),
+      requestId: Type.Optional(
+        Type.String({ description: "open: stable request key to reuse when retrying the same delegation." }),
+      ),
+      task: Type.Optional(
+        Type.String({ description: "open: the complete standalone instruction the subagent works from." }),
+      ),
+      name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
+      readOnly: Type.Optional(Type.Boolean({ description: "open: subagent may not change anything." })),
+      model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
+      harness: Type.Optional(Type.String({ description: "open: harness override." })),
+      thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
+      target: Type.Optional(
+        Type.String({ description: "write/read: accessible sessionId or child title (read: omit to list children)." }),
+      ),
+      text: Type.Optional(Type.String({ description: "write: the message to deliver." })),
+      interrupt: Type.Optional(Type.Boolean({ description: "write: abort the target's current run instead." })),
+      limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
+    }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      const syscalls = tc?.sessionSyscalls;
+      const p = params as {
+        action: "open" | "write" | "read";
+        requestId?: string;
+        harness?: string;
+        thinkingLevel?: string;
+        task?: string;
+        name?: string;
+        readOnly?: boolean;
+        model?: string;
+        target?: string;
+        text?: string;
+        interrupt?: boolean;
+        limit?: number;
+      };
+      await recordCall(callId, {
+        tool: "session",
+        action: p.action,
+        ...(p.task ? { task: p.task } : {}),
+        ...(p.name ? { name: p.name } : {}),
+        ...(p.target ? { target: p.target } : {}),
+        ...(p.text ? { text: p.text } : {}),
+        ...(p.interrupt ? { interrupt: true } : {}),
+      });
+      if (!syscalls) {
+        return recordResult(
+          callId,
+          { tool: "session", action: p.action, error: "unavailable" },
+          text("[error] subagent sessions aren't available on this turn."),
+          true,
+        );
+      }
+      if (p.action === "open") {
+        const result = await syscalls.open({
+          requestId: p.requestId ?? callId,
+          task: p.task ?? "",
+          ...(p.harness ? { harness: p.harness } : {}),
+          ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
+          ...(p.name ? { name: p.name } : {}),
+          ...(p.readOnly !== undefined ? { readOnly: p.readOnly } : {}),
+          ...(p.model ? { model: p.model } : {}),
+        });
+        if (!result.ok) {
+          return recordResult(
+            callId,
+            { tool: "session", action: "open", error: result.message },
+            text(`[error] ${result.message}`),
+            true,
+          );
+        }
+        return recordResult(
+          callId,
+          { tool: "session", action: "open", sessionId: result.sessionId, title: result.title },
+          text(
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now; its result will arrive at its current parent when its turn ends — do not wait for it. ${result.liveRunsRemaining} of its run slots remain.`,
+          ),
+        );
+      }
+      if (p.action === "write") {
+        const result = await syscalls.write({
+          target: p.target ?? "",
+          ...(p.text ? { text: p.text } : {}),
+          ...(p.interrupt ? { interrupt: true } : {}),
+        });
+        if (!result.ok) {
+          return recordResult(
+            callId,
+            { tool: "session", action: "write", error: result.message },
+            text(`[error] ${result.message}`),
+            true,
+          );
+        }
+        const verbs = {
+          steered: "steered into its running turn",
+          queued_turn: "queued as a new turn",
+          interrupted: "sent an interrupt request — it stays re-taskable",
+        } as const;
+        const verb = verbs[result.delivered];
+        return recordResult(
+          callId,
+          {
+            tool: "session",
+            action: "write",
+            sessionId: result.sessionId,
+            title: result.title,
+            delivered: result.delivered,
+          },
+          text(`Message to "${result.title}" ${verb}.`),
+        );
+      }
+      const result = await syscalls.read({
+        ...(p.target ? { target: p.target } : {}),
+        ...(p.limit !== undefined ? { limit: p.limit } : {}),
+      });
+      if (!result.ok) {
+        return recordResult(
+          callId,
+          { tool: "session", action: "read", error: result.message },
+          text(`[error] ${result.message}`),
+          true,
+        );
+      }
+      if (result.mode === "children") {
+        const lines = result.children.map(
+          (c) => `- ${c.title} (${c.sessionId}) — ${c.status}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
+        );
+        return recordResult(
+          callId,
+          { tool: "session", action: "read", children: result.children.length },
+          text(lines.length ? lines.join("\n") : "[no subagent sessions opened from this conversation]"),
+        );
+      }
+      return recordResult(
+        callId,
+        { tool: "session", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
+        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
       );
     },
   });
@@ -3630,6 +3788,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     memory,
     history,
     ...(!opts?.sandboxResources ? [background] : []),
+    sessionTool,
     sandbox,
     registerLogin,
     ...(controlTools ? [cron, webhook, share] : []),

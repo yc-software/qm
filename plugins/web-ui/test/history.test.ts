@@ -362,6 +362,28 @@ test("tool entries are folded into the following assistant reply's work block", 
   );
 });
 
+test("a subagent mail entry carries a structured ref so the transcript can render a chip", () => {
+  const envelope = [
+    '<wake reason="subagent" name="Poet &quot;one&quot;" sessionId="child-1" kind="final_answer" at="2026-09-03T00:00:00.000Z">',
+    '  <why>Your subagent session "Poet one" finished a turn and sent back its result.</why>',
+    "  <content>the poem</content>",
+    "</wake>",
+  ].join("\n");
+  const entries: SessionEntry[] = [
+    {
+      type: "user",
+      payload: { text: envelope, display: "[subagent Poet one: final answer]" },
+      createdAt: 100,
+    },
+    { type: "assistant", payload: { text: "here it is" }, createdAt: 110 },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  const mail = (msgs[0] as { subagentMail?: { sessionId: string; title: string; kind: string } }).subagentMail;
+  assert.deepEqual(mail, { sessionId: "child-1", title: 'Poet "one"', kind: "final_answer" });
+  const plain = entriesToMessages([{ type: "user", payload: { text: "hi" }, createdAt: 100 }], MODEL);
+  assert.equal((plain[0] as { subagentMail?: unknown }).subagentMail, undefined);
+});
+
 test("a hidden proactive-opener user entry never renders, but its assistant greeting does", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "open the conversation", hidden: true }, createdAt: 100 },

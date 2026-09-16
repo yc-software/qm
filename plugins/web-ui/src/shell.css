@@ -479,6 +479,46 @@ a.chat-row-open {
 .recent-project-children[hidden] {
   display: none;
 }
+.subagent-children {
+  margin-left: 13px;
+  border-left: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  padding-left: 4px;
+}
+#sidebar-body.detach-drop-target {
+  position: relative;
+}
+.detach-drop-zone {
+  display: none;
+}
+#sidebar-body.detach-drop-target .detach-drop-zone {
+  position: absolute;
+  bottom: 6px;
+  left: 4px;
+  right: 4px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 4px 4px;
+  padding: 8px 10px;
+  border: 1.5px dashed var(--border, rgba(128, 128, 128, 0.55));
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+#sidebar-body.detach-drop-target .detach-drop-zone.over {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--foreground) 45%, var(--border));
+  color: var(--foreground);
+  background: var(--muted);
+}
+#sidebar-body.detach-drop-target .detach-drop-zone * {
+  pointer-events: none;
+}
 .recent-project-children .session,
 .archived-children .session {
   padding-left: 6px;
@@ -1652,6 +1692,50 @@ a.chat-row-open {
 }
 .system-note-text {
   font-style: italic;
+}
+
+.subagent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.3;
+  vertical-align: middle;
+}
+.subagent-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-chip .icon {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+button.subagent-chip {
+  cursor: pointer;
+}
+button.subagent-chip:hover {
+  border-color: color-mix(in srgb, var(--foreground) 30%, var(--border));
+  color: var(--foreground);
+}
+
+.subagent-mail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+.subagent-mail-note {
+  font-size: 13px;
+  color: var(--muted-foreground);
 }
 
 /* The hover footer (timestamp + copy/fork) sits in its row's reserved bottom lane: out of flow,
@@ -11728,4 +11812,57 @@ h3.ambient-field-label {
   justify-content: center;
   gap: 12px;
   margin-top: 24px;
+}
+
+.session-menu-parent {
+  padding: 6px 8px;
+}
+.session-menu-parent select {
+  max-width: 220px;
+}
+
+.session-parent-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 35%;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.session-parent-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-parent-link .icon {
+  flex: none;
+}
+.session-parent-link:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.session-parent-link:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+}
+.assistant-row:has(.subagent-chip) .work-said {
+  margin: 6px 0;
+}
+.assistant-row:has(.subagent-chip) .work-head {
+  font-size: 13px;
+}
+.subagent-mail-row .subagent-chip {
+  padding: 2px 8px;
+  font-size: 12px;
+  background: transparent;
+}
+.subagent-mail-row + .assistant-row {
+  margin-bottom: 8px;
 }

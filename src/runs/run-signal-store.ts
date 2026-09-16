@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { TurnRequest } from "../types.ts";
 
 export type RunSignalKind = "abort" | "steer";
@@ -8,11 +10,14 @@ export interface RunSignal {
   ts?: string;
   request?: TurnRequest;
   dedupeKey?: string;
+  sessionRequest?: OrchestratorInput;
 }
 
 export interface RunSignalStore {
   send(runId: string, signal: RunSignal): Promise<boolean>;
   hasDedupeKey(dedupeKey: string): Promise<boolean>;
+  pending(runId: string): Promise<Array<{ id: string; signal: RunSignal }>>;
+  acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;
   takeLive(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
@@ -26,6 +31,7 @@ const MAX_MEMORY_DEDUPE_KEYS = 10_000;
 
 export function createMemoryRunSignalStore(): RunSignalStore {
   const pending = new Map<string, RunSignal[]>();
+  const receipts = new WeakMap<RunSignal, string>();
   const authors = new Map<string, Array<{ at: number; author: string }>>();
   const listeners = new Map<string, Set<() => void>>();
   const dedupeKeys = new Set<string>();
@@ -37,6 +43,8 @@ export function createMemoryRunSignalStore(): RunSignalStore {
         if (dedupeKeys.size > MAX_MEMORY_DEDUPE_KEYS) dedupeKeys.delete(dedupeKeys.values().next().value!);
       }
       const list = pending.get(runId) ?? [];
+      signal = { ...signal };
+      receipts.set(signal, randomUUID());
       list.push(signal);
       pending.set(runId, list);
       const author = signal.kind === "steer" ? signal.request?.actor?.externalId : undefined;
@@ -49,6 +57,14 @@ export function createMemoryRunSignalStore(): RunSignalStore {
     },
     async steerAuthors(runId) {
       return [...new Set((authors.get(runId) ?? []).map((a) => a.author))];
+    },
+    async pending(runId) {
+      return (pending.get(runId) ?? []).map((signal) => ({ id: receipts.get(signal)!, signal }));
+    },
+    async acknowledge(runId, id) {
+      const remaining = (pending.get(runId) ?? []).filter((signal) => receipts.get(signal) !== id);
+      if (remaining.length) pending.set(runId, remaining);
+      else pending.delete(runId);
     },
     async takePending(runId) {
       const list = pending.get(runId) ?? [];

@@ -364,3 +364,10 @@ test("run result delivery identifies the exact source session for shared attachm
   assert.equal(delivery?.provenance.sourceSessionId, "source-session");
   assert.equal(delivery?.provenance.sourceAssistantEntrySeq, 7);
 });
+
+test("private session turns cannot deliver even with a stale destination", () => {
+  assert.equal(
+    runResultDelivery(run({ request: { ...turn("private", "C9:171.001"), privateSessionMessage: true } })),
+    null,
+  );
+});

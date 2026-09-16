@@ -254,7 +254,10 @@ test("a FAILED (parked) run still settles from durable truth: leftover blocking 
   const leased = await built.runs.claimById(run.id, "w1", 30_000);
   assert.ok(leased);
   await built.runs.fail(run.id, leased!.leaseToken!, "kaboom", { retry: false });
-  assert.ok(await waitFor(() => statesFor(got, thread).length > 0), "terminal emitted a settle");
+  assert.ok(
+    await waitFor(() => statesFor(got, thread).some((state) => state !== "working")),
+    "terminal emitted a settle",
+  );
   const settle = got.find((e) => e.threadRef === thread && e.state !== "working");
   assert.equal(settle?.state, "awaiting_approval", "the undecided blocking approval keeps the session awaiting");
   assert.equal(settle?.sessionId, uuid, "the frame carries the durable session UUID, not the threadRef");

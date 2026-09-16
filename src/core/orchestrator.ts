@@ -1,4 +1,5 @@
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
+import { createCanWriteScope } from "../resolution/scope-membership.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import { shq } from "../util/shell.ts";
@@ -535,6 +536,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!deps.identity.isInternal(actor)) {
         return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
       }
+      const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
+        ? await deps.sessions.getByThread(conversation.threadRef)
+        : null;
+      if (conversation.threadRef.startsWith("agent:main:subagent:")) {
+        const canWrite = createCanWriteScope({
+          managedGroups: deps.managedGroups
+            ? {
+                recognizes: (ref) => deps.managedGroups!.recognizes(ref),
+                members: (ref) => deps.managedGroups!.members(ref),
+                membership: async (ref, id) => (await deps.managedGroups!.members(ref))?.includes(id),
+              }
+            : undefined,
+          directory: deps.directory,
+          identity: deps.identity,
+        });
+        if (
+          !delegatedSession?.spawnMeta ||
+          delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
+          !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
+          !(await canWrite(actor.id, delegatedSession.scopeId))
+        )
+          return { status: "refused", reason: "subagent session access is no longer current" };
+      }
       const managedGroupRef =
         conversation.kind === "group" &&
         conversation.channelRef &&
@@ -733,6 +757,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
           ]
         : [];
+      const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;
+      const verifiedSessionMessage = Boolean(
+        sessionSender &&
+        automatedTurn &&
+        sessionSender.scopeId === scopeId &&
+        (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
+      );
       const screenPayload = screenInbound
         ? securityScreenPayload({
             ...input,
@@ -740,6 +771,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             overheard: [],
             externalPromptData,
             verifiedSwarm: Boolean(input.swarm && swarmBinding),
+            verifiedSessionMessage,
           })
         : null;
       let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
@@ -937,7 +969,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ],
         };
       }
-      const strictReadOnly = input.readOnly === true;
+      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
+      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const useMemory = input.skipMemory !== true;
       const environmentId = await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
@@ -1000,6 +1033,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const sharedCore = applyPromptVars(SHARED_CORE_MD, { botName, botHandle, orgName });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}\n\n${renderSecurityPolicyPrompt(securityPolicy)}`;
+      if (input.privateSessionMessage)
+        systemPrompt +=
+          "\n\nThis is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.";
       const sharingPrompt = renderSharingPosturePrompt(actor, sharingSources);
       if (sharingPrompt) systemPrompt += `\n\n${sharingPrompt}`;
       const scopeProfile = supportsScopeProfile(deps.sandbox)
@@ -2323,6 +2359,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
+          ...(deps.sessionSyscalls
+            ? {
+                sessionSyscalls: deps.sessionSyscalls.forTurn({
+                  session,
+                  scopeId: scopeId as ScopeId,
+                  orgScopeId: resolution.orgScopeId,
+                  request: { ...input, readOnly: strictReadOnly },
+                }),
+              }
+            : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           ...(strictReadOnly || !deps.keychain
             ? {}

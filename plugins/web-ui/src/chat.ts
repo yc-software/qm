@@ -16,6 +16,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import {
   Activity,
   Ban,
+  Bot,
   Brain,
   Check,
   ChevronDown,
@@ -84,6 +85,7 @@ import {
   type SessionBackgroundOutput,
   type SessionBackgroundView,
   type SessionEntry,
+  type SubagentMailRef,
   type ToolActivity,
   type TurnOptions,
   userMessagesBefore,
@@ -287,6 +289,19 @@ export function createChatSurface(
       ctx.composer.state.error = error;
     },
   });
+
+  async function openSessionById(sourceId: string): Promise<void> {
+    try {
+      const listed = sessionsState.list.find((session) => session.id === sourceId);
+      const page = await transcriptFetcher(sourceId, { tailTurns: TAIL_TURNS });
+      const source = listed ?? page.session;
+      if (!source) throw new Error("missing session");
+      await sessionOpener(source, Promise.resolve(page));
+    } catch {
+      ctx.composer.state.error = "Couldn't open that session.";
+      redrawTranscript();
+    }
+  }
 
   let ctaThreadRef: string | null | undefined;
   let ctaText = CHAT_CTAS[0]!;
@@ -1394,7 +1409,10 @@ export function createChatSurface(
         ? s.id === chatState.sessionId
         : Boolean(chatState.threadRef) && s.threadRef === chatState.threadRef,
     );
-    const title = session?.title?.trim() ?? "";
+    const currentSession = session ?? chatState.forkSession;
+    const parentId = currentSession?.parentSessionId;
+    const parent = parentId ? sessionsState.list.find((row) => row.id === parentId) : undefined;
+    const title = currentSession?.title?.trim() ?? "";
     const crumb = scope && !scope.startsWith("personal:") ? scopeTitle(scope, chatState.contextName) : null;
     const forkedFrom =
       chatState.forkSession && chatState.sessionId === chatState.forkSession.id
@@ -1404,6 +1422,9 @@ export function createChatSurface(
       sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,
+      parent: parentId
+        ? { title: parent?.title?.trim() || "Parent session", onClick: () => void openSessionById(parentId) }
+        : null,
       fork: forkedFrom
         ? {
             title: forkedFrom.title?.trim() || "another conversation",
@@ -1524,6 +1545,16 @@ export function createChatSurface(
     if (hidden.opener || hidden.resumeAnchor) return nothing;
     const role = (message as { role?: string }).role;
     if (role === "user" || role === "user-with-attachments") {
+      const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
+      if (mail) {
+        return html`
+          <article class="message-row subagent-mail-row" data-index=${index}>
+            ${subagentChip(mail.title, mail.sessionId)}
+            <span class="subagent-mail-note">${SUBAGENT_MAIL_NOTES[mail.kind] ?? mail.kind.replace(/_/g, " ")}</span>
+          </article>
+        `;
+      }
+
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
       const steered = Boolean((message as { steered?: boolean }).steered);
@@ -2426,6 +2457,67 @@ export function createChatSurface(
       .join(" ");
   }
 
+  const SESSION_ACTION_LABELS: Record<string, { active: string; done: string; attempted: string }> = {
+    open: { active: "Opening subagent", done: "Opened subagent", attempted: "Tried opening subagent" },
+    write: { active: "Messaging subagent", done: "Messaged subagent", attempted: "Tried messaging subagent" },
+    interrupt: {
+      active: "Interrupting subagent",
+      done: "Interrupted subagent",
+      attempted: "Tried interrupting subagent",
+    },
+    read: { active: "Checking subagents", done: "Checked subagents", attempted: "Tried checking subagents" },
+  };
+
+  const SUBAGENT_MAIL_NOTES: Record<string, string> = {
+    final_answer: "finished",
+    no_reply: "finished without a reply",
+    awaiting_input: "needs an approval",
+    errored: "failed",
+    refused: "was refused",
+  };
+
+  function subagentChip(title: string, sessionId?: string): TemplateResult {
+    const inner = html`${icon(Bot, 13)}<span dir="auto">${title}</span>`;
+    if (!sessionId) return html`<span class="subagent-chip">${inner}</span>`;
+    return html`<button
+      class="subagent-chip"
+      type="button"
+      title="Open subagent session"
+      @click=${(e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void openSessionById(sessionId);
+      }}
+    >
+      ${inner}
+    </button>`;
+  }
+
+  function sessionToolView(
+    call: ToolPayload,
+    result: ToolPayload,
+  ): { action: string; chipTitle?: string; sessionId?: string; detail: string } {
+    const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
+    const sessionId = result.sessionId;
+    let chipTitle = result.title ?? call.name ?? call.target;
+    let detail = "";
+    if (action === "open" && !chipTitle && call.task) chipTitle = firstLine(call.task, 48);
+    if (action === "write") {
+      const verbs: Record<string, string> = {
+        steered: "steered",
+        queued_turn: "queued a turn",
+        interrupted: "interrupted",
+      };
+      detail = result.delivered ? (verbs[result.delivered] ?? result.delivered) : "";
+    } else if (action === "read") {
+      if (result.children !== undefined) {
+        chipTitle = undefined;
+        detail = `${result.children} subagent${result.children === 1 ? "" : "s"}`;
+      } else if (result.status) detail = result.status;
+    }
+    return { action, ...(chipTitle ? { chipTitle } : {}), ...(sessionId ? { sessionId } : {}), detail };
+  }
+
   function firstLine(s: string, max?: number): string {
     const line = s.split("\n")[0] ?? "";
     return max !== undefined && line.length > max ? `${line.slice(0, max - 1)}…` : line;
@@ -2561,6 +2653,24 @@ export function createChatSurface(
     const meta = knownMeta ?? UNKNOWN_TOOL;
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
+    if (tool === "session") {
+      const view = sessionToolView(call, result);
+      const labels = SESSION_ACTION_LABELS[view.action] ?? UNKNOWN_TOOL;
+      let sessionLabel = labels.attempted;
+      if (kind === "running") sessionLabel = stale ? `${labels.active} (interrupted)` : labels.active;
+      else if (kind === "ok") sessionLabel = labels.done;
+      const sessionWhy = kind === "failed" ? firstLine(result.error ?? result.reason ?? "", 90) : "";
+      const sessionAttempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
+      const sessionDetail = [view.detail, sessionWhy, sessionAttempts].filter(Boolean).join(" · ");
+      return html`<div class="tool-row tool-${kind} tool-session">
+        <span class="tool-icon">${icon(Bot, 15)}</span>
+        <span class="tool-label"
+          >${sessionLabel}${view.chipTitle ? html` ${subagentChip(view.chipTitle, view.sessionId)}` : nothing}${
+            sessionDetail ? html` <span class="tool-detail">${sessionDetail}</span>` : nothing
+          }</span
+        >
+      </div>`;
+    }
     let label = knownMeta ? meta.attempted : `Tried ${name}`;
     if (kind === "approval") label = "Approval needed";
     else if (kind === "running") {

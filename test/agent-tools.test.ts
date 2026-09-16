@@ -1409,7 +1409,7 @@ test("the surface tool is NAMED after its surface — a telegram surface produce
   assert.equal(posted.ok, true);
 });
 
-test("readOnly assembles ONLY observational tools — no execute/background/write/publish/control", () => {
+test("readOnly exposes observation and constrained session coordination without execution tools", () => {
   const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
   const full = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true });
   const readOnly = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true, readOnly: true });
@@ -1418,7 +1418,7 @@ test("readOnly assembles ONLY observational tools — no execute/background/writ
   for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime"]);
+  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "session"]);
   for (const t of ["execute", "background", "read", "write", "publish", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }

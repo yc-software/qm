@@ -3,6 +3,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import {
   Archive,
+  ArrowUpLeft,
   Binoculars,
   Box,
   Brain,
@@ -791,7 +792,7 @@ function computeHeaderSignature(): string {
   return (dockApi?.panels ?? [])
     .map(
       (p) =>
-        `${p.id}|${paneSession(p)?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}`,
+        `${p.id}|${paneSession(p)?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${paneSession(p)?.parentSessionId ?? ""}|${sessionsState.list.find((row) => row.id === paneSession(p)?.parentSessionId)?.title ?? ""}`,
     )
     .join("~");
 }
@@ -1054,9 +1055,30 @@ class PaneContent implements IContentRenderer {
   }
 }
 
-function sessionActions(sessionId: string, inTab: boolean): TemplateResult {
+function sessionActions(sessionId: string, inTab: boolean, panelId: string): TemplateResult {
   const cls = inTab ? "split-tab-close" : "split-group-session-action";
-  return html`<button
+  const parentId = sessionsState.list.find((row) => row.id === sessionId)?.parentSessionId;
+  const parent = parentId ? sessionsState.list.find((row) => row.id === parentId) : undefined;
+  return html`${
+      parent
+        ? html`<button
+            type="button"
+            class="icon-btn subtle ${cls}"
+            aria-label=${`Back to parent: ${sessionTitle(parent)}`}
+            ${tip(`Back to ${sessionTitle(parent)}`)}
+            @pointerdown=${(e: Event) => {
+              if (inTab) e.stopPropagation();
+            }}
+            @click=${(e: Event) => {
+              if (inTab) e.stopPropagation();
+              focusPane(panelId);
+              void openSession(parent);
+            }}
+          >
+            ${icon(ArrowUpLeft, 13)}
+          </button>`
+        : nothing
+    }<button
       type="button"
       class="icon-btn subtle ${cls} split-tab-share"
       ${tip("Share conversation")}
@@ -1176,7 +1198,7 @@ class PaneTab implements ITabRenderer {
         ${
           this.inStrip
             ? html`<span class="split-tab-actions">
-                ${sessionId ? sessionActions(sessionId, true) : nothing}
+                ${sessionId ? sessionActions(sessionId, true, panel.id) : nothing}
                 <button
                   class="icon-btn subtle split-tab-close"
                   type="button"
@@ -1395,7 +1417,7 @@ class GroupActions implements IHeaderActionsRenderer {
           </button>
           ${menu}
         </span>
-        ${sessionId ? sessionActions(sessionId, false) : nothing}
+        ${sessionId ? sessionActions(sessionId, false, panel!.id) : nothing}
         ${buttons.map(
           (b) =>
             html`<button

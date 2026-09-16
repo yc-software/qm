@@ -110,6 +110,13 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `ALTER TABLE runs ADD COLUMN IF NOT EXISTS retry_after BIGINT NOT NULL DEFAULT 0`,
         ],
       },
+      {
+        id: "runs/store/0004-subagent-returns",
+        statements: [
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS returned_at BIGINT`,
+          `CREATE INDEX IF NOT EXISTS idx_runs_pending_child_returns ON runs(id) WHERE status IN ('done','failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%'`,
+        ],
+      },
     ],
     [
       {
@@ -367,6 +374,25 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rowCount > 0;
     },
 
+    async latestForThread(threadRef, opts) {
+      const { rows } = await q(
+        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
+        [threadRef, Boolean(opts?.excludePrivateMessages)],
+      );
+      return rows[0] ? rowToRun(rows[0]) : null;
+    },
+    async pendingReturns(limit = 100, afterId = "") {
+      const { rows } = await q(
+        `SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
+         AND session_id LIKE 'agent:main:subagent:%'
+         AND id > $2 ORDER BY id LIMIT $1`,
+        [limit, afterId],
+      );
+      return rows.map(rowToRun);
+    },
+    async markReturned(runId) {
+      await q("UPDATE runs SET returned_at = $2 WHERE id = $1 AND status IN ('done','failed')", [runId, Date.now()]);
+    },
     onTerminal(listener): void {
       terminalListeners.push(listener);
     },
@@ -375,7 +401,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async activeForThread(sessionId: string): Promise<Run | null> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, created_at ASC, seq ASC LIMIT 1",
         [sessionId],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
