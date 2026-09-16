@@ -292,3 +292,24 @@ test("a rollback startup with incomplete cleanup also blocks relinquishment", as
   cleanupAllowed = true;
   await runtime.stop();
 });
+
+test("a controlled inactive Slack runtime cannot open a socket through configuration reconciliation", async () => {
+  let starts = 0;
+  const runtime = createSlackRuntimeReconciler({
+    startPaused: true,
+    load: async () => ({ version: "installed", config: {} }),
+    startPlugin: async () => {
+      starts++;
+      return { stop: async () => {} };
+    },
+  });
+  await runtime.reconcile();
+  await runtime.reconcile();
+  assert.equal(starts, 0);
+  runtime.start();
+  await runtime.reconcile();
+  assert.equal(starts, 1);
+  await runtime.stop();
+  await runtime.reconcile();
+  assert.equal(starts, 1);
+});

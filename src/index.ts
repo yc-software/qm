@@ -89,6 +89,7 @@ if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
 }
 
 const slackRuntime = createSlackRuntimeReconciler({
+  startPaused: Boolean(config.backgroundDeploymentId),
   load: async () => {
     const status = await built.slackInstallation.status();
     const stored = await built.slackInstallation.get();
@@ -117,6 +118,7 @@ if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) slackRuntime
 
 const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((account) =>
   createSlackRuntimeReconciler({
+    startPaused: Boolean(config.backgroundDeploymentId),
     load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
     startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
     onError: (error) =>
