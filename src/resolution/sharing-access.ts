@@ -28,7 +28,7 @@ export async function sharingSourcesForTurn(input: SharingSourcesInput): Promise
   if (
     input.posture !== "open" ||
     input.actor.type !== "internal" ||
-    input.origin.kind !== "human" ||
+    (input.origin.kind !== "human" && !(input.origin.kind === "ambient" && input.origin.live === true)) ||
     !input.trustedLiveHuman ||
     !input.config ||
     !input.isCurrentSharedScopeMember

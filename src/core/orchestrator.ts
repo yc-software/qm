@@ -982,7 +982,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audience: conversation.audience,
         acl: deps.acl,
         origin: input.origin,
-        trustedLiveHuman: liveTurn,
+        trustedLiveHuman: liveAuthorTurn,
         targetScope: scopeId,
         config: deps.config,
         sessions: deps.sessions,
@@ -1302,7 +1302,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const quarantinedServices = credentialServices.filter((service) => cutoverModeOf(service) === "ephemeral_only");
       const credentialCutoverServices = credentialServices.filter((service) => cutoverModeOf(service) !== "legacy");
       const openSpeakerKeychain =
-        liveTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
+        liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const isolateOwnerKeychain =
         openSpeakerKeychain ||
         (deps.sharedOwnerAuthIsolation === true &&

@@ -84,6 +84,10 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.doesNotMatch(await b.turn("!sysprompt", true), /OWN_MEMORY_U2|open-personal-U2/);
   assert.match(await b.turn("!read shared/open-personal-U1/notes.txt", true, "U2"), /no file/);
   assert.equal(await b.turn("!read shared/open-personal-U2/notes.txt", true, "U2"), "BOB_PAYLOAD");
+  assert.equal(
+    await b.turn("!read shared/open-personal-U2/notes.txt", true, "U2", { origin: { kind: "ambient", live: true } }),
+    "BOB_PAYLOAD",
+  );
   await b.config.setSharingPosture("personal:U1", "isolated");
   await b.workspace.write("personal:U1", "notes.txt", "NEW_PRIVATE_PAYLOAD");
   assert.match(await b.turn("!read shared/open-personal-U1/notes.txt", true), /no file/);
@@ -418,23 +422,35 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",os.getenv("AGENT_API_TOKEN","unset"),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   assert.equal(await b.turn(`!owner ${probe}`, true), "npm_U1|gmail_U1|file_U1|unset|isolated");
   assert.equal(await b.turn(`!owner ${probe}`, true, "U2"), "npm_U2|gmail_U2|file_U2|unset|isolated");
+  for (const id of ["U1", "U2", "U1"]) {
+    assert.equal(
+      await b.turn(`!owner ${probe}`, true, id, { origin: { kind: "ambient", live: true } }),
+      `npm_${id}|gmail_${id}|file_${id}|unset|isolated`,
+    );
+  }
+  const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
+  assert.match(ambientPrompt, /U2[^\n]*npm[^\n]*no grant needed/);
+  assert.match(ambientPrompt, /U1[^\n]*npm[^\n]*no grant for this conversation/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   await b.directory.replaceGroups([
     { groupId: "G1", principalId: "U1" },
     { groupId: "G1", principalId: "U2" },
   ]);
-  assert.equal(
-    await b.turn(`!owner ${probe}`, true, "U1", {
-      conversation: {
-        kind: "group",
-        channelRef: "G1",
-        threadRef: "G1:open-keychain",
-        audience: [{ externalId: "U1" }, { externalId: "U2" }],
-        publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
-      },
-    }),
-    "npm_U1|gmail_U1|file_U1|unset|isolated",
-  );
+  for (const origin of [{ kind: "human" }, { kind: "ambient", live: true }] as const) {
+    assert.equal(
+      await b.turn(`!owner ${probe}`, true, "U1", {
+        origin,
+        conversation: {
+          kind: "group",
+          channelRef: "G1",
+          threadRef: "G1:open-keychain",
+          audience: [{ externalId: "U1" }, { externalId: "U2" }],
+          publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
+        },
+      }),
+      "npm_U1|gmail_U1|file_U1|unset|isolated",
+    );
+  }
   assert.deepEqual(await b.keychain.grantsForScope("group:G1"), []);
   assert.deepEqual(await b.keychain.grantsForScope("channel:C1"), []);
   assert.ok((await b.auditLog.events()).some((event) => event.action === "keychain.open_speaker_use"));
@@ -458,15 +474,20 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     });
   await b.config.setSharingPosture("personal:U1", "isolated");
   await assert.rejects(denied(), /owner-auth box is not available/);
+  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
   await b.config.setSharingPosture("personal:U1", "open");
   await b.config.setSharingPosture("channel:C1", "isolated");
   await assert.rejects(denied(), /owner-auth box is not available/);
+  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
   await b.config.setSharingPosture("channel:C1", "open");
   await b.config.setSharingPosture("org:default-org", "isolated");
   await assert.rejects(denied(), /owner-auth box is not available/);
+  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
   await b.config.setSharingPosture("org:default-org", "open");
   await assert.rejects(denied({ kind: "automation" }), /owner-auth box is not available/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
+  await assert.rejects(denied({ kind: "ambient" }), /owner-auth box is not available/);
+  await assert.rejects(denied({ kind: "ambient", live: false }), /owner-auth box is not available/);
   await b.remove("U1");
   await assert.rejects(denied(), /owner-auth box is not available/);
+  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
 });
