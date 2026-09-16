@@ -90,7 +90,19 @@ test("More ideas opens a fresh personal web chat and sends the examples once", a
     assert.match(String(turns[0]!.text), /fundraising dashboard/);
     assert.match(String(turns[0]!.text), /Skip onboarding/);
     assert.match(String(turns[0]!.text), /yc tool/);
-    assert.doesNotMatch(String(turns[0]!.text), /YC application|historical context/);
+    assert.match(String(turns[0]!.text), /When available and authorized, read company\.get/);
+    assert.match(String(turns[0]!.text), /company\.goals for dated goals and progress/);
+    assert.match(String(turns[0]!.text), /read get_yc_application.*when available and authorized/);
+    assert.match(String(turns[0]!.text), /another company or a draft.*verify it matches my current company/);
+    assert.match(
+      String(turns[0]!.text),
+      /Prefer my recent statements and dated current goals over old application answers/,
+    );
+    assert.match(
+      String(turns[0]!.text),
+      /do not treat historical answers as current facts or assume the company profile was recently updated/,
+    );
+    assert.match(String(turns[0]!.text), /if tools or records are unavailable, continue with what you know/);
   } finally {
     releaseRuntime();
     Date.now = realNow;
