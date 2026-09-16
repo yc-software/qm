@@ -130,7 +130,6 @@ export function createTurnMethods(
         sessionParticipantIds = [actor.id];
       }
 
-
       if (isSubagentThreadRef(req.conversation.threadRef)) {
         const target = await deps.sessions.getByThread(req.conversation.threadRef);
         if (
