@@ -1,6 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, Pencil, RotateCcw, X } from "lucide";
+import { Archive, Check, Copy, ExternalLink, RotateCcw, X } from "lucide";
 import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, icon, relTime } from "./ui";
@@ -267,7 +267,6 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           </div>
           <div class="actions">
             ${running && d.webUrl ? html`<a class="btn primary" href=${withBase(d.webUrl)} target="_blank" rel="noreferrer">Open app ${icon(ExternalLink, 14)}</a>` : nothing}
-            ${running && canManage(d) ? html`<button class="btn" type="button" @click=${(event: Event) => void openLiveEdit(d, event.currentTarget as HTMLButtonElement)}>${icon(Pencil, 14)}<span>Edit live</span></button>` : nothing}
             ${d.webUrl ? html`<button class="btn" type="button" @click=${(event: Event) => void copyText(new URL(withBase(d.webUrl!), window.location.href).href, event.currentTarget as HTMLButtonElement)}>${icon(Copy, 14)}<span>Copy URL</span></button>` : nothing}
           </div>
         </div>
@@ -699,21 +698,6 @@ function undoToast(toast: { deployment: DeploymentView; text: string; undo?: boo
       ${icon(X, 14)}
     </button>
   </div>`;
-}
-
-async function openLiveEdit(d: DeploymentView, button: HTMLButtonElement): Promise<void> {
-  const tab = window.open("about:blank", "_blank");
-  try {
-    const r = await api<{ url?: string }>(`/api/deployments/${encodeURIComponent(d.id)}/owner-url`);
-    if (!r.url) throw new Error("no live URL for this app");
-    if (tab) tab.location.href = r.url;
-    else window.open(r.url, "_blank");
-  } catch (error) {
-    tab?.close();
-    deployNotices = withDeploymentDetailNotice(deployNotices, d.id, errMessage(error, "Could not open live editing."));
-    drawDeployDetail(activeDeploy ?? d);
-    button.blur();
-  }
 }
 
 async function refreshDeployments(): Promise<"updated" | "failed" | "superseded"> {

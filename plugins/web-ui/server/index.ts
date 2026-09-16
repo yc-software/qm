@@ -1950,20 +1950,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/deployments/:id/owner-url",
-    handle: async (c) => {
-      const { res, user } = c;
-      const id = c.params.id!;
-      if (!id || id.includes("/")) return json(res, 404, { error: "not_found" });
-      return relayCore(
-        res,
-        "GET",
-        `/v1/deployments/${encodeURIComponent(id)}/owner-url?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
     path: "/api/deployments",
     handle: async (c) => {
       const { res, user } = c;

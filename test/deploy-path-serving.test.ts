@@ -168,16 +168,3 @@ test("without a subdomain configuration /d/ document navigations proxy in place"
     await f.close();
   }
 });
-
-test("owner-url without a subdomain configuration explains the /d/ path and the enabling env var", async () => {
-  const f = await fixture({});
-  try {
-    const r = await httpGet(f.port, "/v1/deployments/mysite/owner-url?principalId=alice@example.com", {});
-    assert.equal(r.status, 503);
-    const { message } = JSON.parse(r.body) as { message: string };
-    assert.match(message, /\/d\/mysite\//);
-    assert.match(message, /DEPLOY_APPS_DOMAIN/);
-  } finally {
-    await f.close();
-  }
-});

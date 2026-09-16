@@ -5,35 +5,6 @@ export function viewerIdentityKey(secret: string, deploymentId: string): string 
   return createHmac("sha256", secret).update(`viewer:${deploymentId}`).digest("base64url");
 }
 
-export interface DeployOwnerSession {
-  kind: "dpl-owner";
-  slug: string;
-  sub: string;
-  version: 1;
-  exp: number;
-}
-
-export function mintDeployOwnerToken(
-  secret: string,
-  session: Omit<DeployOwnerSession, "kind" | "version">,
-): Promise<string> {
-  return mintSignedPayload({ ...session, kind: "dpl-owner", version: 1 } satisfies DeployOwnerSession, secret);
-}
-
-export async function verifyDeployOwnerToken(
-  secret: string,
-  token: string,
-  slug: string,
-  now = Date.now(),
-): Promise<DeployOwnerSession | null> {
-  const session = (await verifySignedPayload(token, secret)) as DeployOwnerSession | null;
-  if (!session || session.kind !== "dpl-owner" || session.version !== 1) return null;
-  if (typeof session.slug !== "string" || session.slug !== slug) return null;
-  if (typeof session.sub !== "string" || !session.sub) return null;
-  if (typeof session.exp !== "number" || now >= session.exp) return null;
-  return session;
-}
-
 export interface DeployGitAccess {
   deploymentId: string;
   permission: "read" | "write";

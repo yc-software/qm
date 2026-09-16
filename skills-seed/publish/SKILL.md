@@ -55,6 +55,30 @@ publish({ renameFrom: "s-1176-p-5050", name: "status-board" })
 
 `publish` returns `{ id, name, version, url, dataDir? }` — give the user the `url` (`/d/<name>/`).
 
+## App bar and editing
+
+On a configured app subdomain, signed-in people who can manage the app automatically
+see a slim top bar. Chat opens a resizable editing conversation beside the app. Normal
+app links and refreshes keep editing available for the signed-in session; viewers with
+read-only access see the app alone.
+
+The bar follows the app document's title and its body's computed background, text
+color, and font, including theme changes. To tune it, set these optional CSS properties
+on `:root` or `body` in the app. Keep text and background legible together:
+
+```css
+:root {
+  --qm-bar-background: #f7f4ed;
+  --qm-bar-color: #34332f;
+  --qm-bar-accent: #94633b;
+  --qm-bar-font-family: Georgia, serif;
+}
+```
+
+These styles travel with the published source and its versions. They affect presentation
+only; the bar's Chat, update, and hide controls keep their behavior. The drawer preserves
+the conversation when the app reloads after a publish.
+
 ## Durable data — where app state must live
 
 The app's disk is **reset from source on every relaunch**, with one exception: when the
