@@ -1902,6 +1902,55 @@ function adoptMissingWorkloads(
   return true;
 }
 
+function unchangedWebRouting(
+  config: QmConfig,
+  manifest: DeploymentManifest | undefined,
+  desired: Array<{ service: string; task: EcsTaskDefinition }>,
+): boolean {
+  if (!manifest) return false;
+  const workloads = ["web-ui", "portal"];
+  if (workloads.some((workload) => !desired.some((item) => item.service === workload))) return false;
+  try {
+    const states = describedServices(config, workloads);
+    for (const workload of workloads) {
+      const count = manifest.counts?.[workload];
+      const definition = manifest.tasks[workload];
+      if (!definition || !count || count !== workloadDesiredCount(config, workload)) return false;
+      stableWorkloadCapacity(config, workload, states.get(workload)!, definition, count);
+      const prior = awsJson<{ taskDefinition?: Record<string, unknown> }>(requireAws(config), [
+        "ecs",
+        "describe-task-definition",
+        "--task-definition",
+        definition,
+      ]).taskDefinition;
+      const next = desired.find((item) => item.service === workload)!.task;
+      const keys = workload === "portal" ? ["WEB_UI_UPSTREAM", "ADMIN_UPSTREAM"] : ["ADMIN_ENABLED"];
+      const settings = (task: Record<string, unknown> | undefined): string[] | undefined => {
+        const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
+        const matches = containers?.filter((container) => container.name === workload);
+        if (matches?.length !== 1) return undefined;
+        const container = matches[0]!;
+        const secrets = (container.secrets ?? []) as Array<{ name: string }>;
+        const environment = (container.environment ?? []) as Array<{ name: string; value: string }>;
+        const values: string[] = [];
+        for (const key of keys) {
+          const entries = environment.filter((entry) => entry.name === key);
+          if (secrets.some((entry) => entry.name === key) || entries.length !== 1 || !entries[0]!.value)
+            return undefined;
+          values.push(entries[0]!.value);
+        }
+        return values;
+      };
+      const previous = settings(prior);
+      const upcoming = settings(next as unknown as Record<string, unknown>);
+      if (!previous || !upcoming || canonicalJson(previous) !== canonicalJson(upcoming)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function applyServiceTargets(
   config: QmConfig,
   targets: Record<string, string>,
@@ -2503,7 +2552,10 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         Object.fromEntries(
           Object.keys(rolloutTargets).map((service) => [service, workloadDesiredCount(config, service)]),
         ),
-        { webBeforePortal: true, onSubmitted: reportProgress ? () => reportProgress(targets) : undefined },
+        {
+          webBeforePortal: !unchangedWebRouting(config, current, desired),
+          onSubmitted: reportProgress ? () => reportProgress(targets) : undefined,
+        },
       );
       applied = true;
     } else {
@@ -3087,6 +3139,87 @@ export interface AwsBackgroundWorkCapacity {
   workloads: Record<string, { taskDefinition: string; deploymentId: string; desiredCount: number; taskArns: string[] }>;
 }
 
+function stableWorkloadCapacity(
+  config: QmConfig,
+  workload: string,
+  state: EcsServiceState,
+  taskDefinition: string,
+  desiredCount: number | undefined,
+): AwsBackgroundWorkCapacity["workloads"][string] {
+  const aws = requireAws(config);
+  const primary = state.deployments?.filter((deployment) => deployment.status === "PRIMARY") ?? [];
+  const deployment = primary[0];
+  if (
+    typeof desiredCount !== "number" ||
+    !Number.isSafeInteger(desiredCount) ||
+    desiredCount < 0 ||
+    state.status !== "ACTIVE" ||
+    state.taskDefinition !== taskDefinition ||
+    state.desiredCount !== desiredCount ||
+    state.runningCount !== desiredCount ||
+    state.pendingCount !== 0 ||
+    primary.length !== 1 ||
+    !deployment?.id ||
+    deployment.taskDefinition !== taskDefinition ||
+    deployment.runningCount !== desiredCount ||
+    state.deployments?.some((item) => item.pendingCount !== 0 || (item !== deployment && item.runningCount !== 0)) ||
+    (state.deploymentConfiguration?.strategy === "BLUE_GREEN"
+      ? nativeBlueGreenStatus(config, workload, taskDefinition) !== "SUCCESSFUL"
+      : deployment.rolloutState !== "COMPLETED")
+  )
+    throw new CliError(`${workload} has not reached stable deployment capacity`);
+  const listed = new Set<string>();
+  for (const desiredStatus of ["RUNNING", "STOPPED"]) {
+    const response = awsJson<{ taskArns?: string[] }>(aws, [
+      "ecs",
+      "list-tasks",
+      "--cluster",
+      aws.cluster,
+      "--service-name",
+      aws.services[workload]!.ecsService,
+      "--desired-status",
+      desiredStatus,
+    ]);
+    if (!Array.isArray(response.taskArns) || response.taskArns.some((arn) => typeof arn !== "string" || !arn))
+      throw new CliError(`${workload} task inventory is unavailable`);
+    for (const arn of response.taskArns) listed.add(arn);
+  }
+  const live: string[] = [];
+  for (const batch of chunks([...listed], 100)) {
+    const response = awsJson<{
+      tasks?: Array<{
+        taskArn?: string;
+        taskDefinitionArn?: string;
+        lastStatus?: string;
+        desiredStatus?: string;
+        healthStatus?: string;
+      }>;
+      failures?: unknown[];
+    }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", ...batch]);
+    if (
+      response.failures?.length ||
+      !Array.isArray(response.tasks) ||
+      response.tasks.length !== batch.length ||
+      new Set(response.tasks.map((task) => task.taskArn)).size !== batch.length ||
+      response.tasks.some((task) => !task.taskArn || !batch.includes(task.taskArn))
+    )
+      throw new CliError(`${workload} capacity requires complete task inventory`);
+    for (const task of response.tasks) {
+      if (task.lastStatus === "STOPPED") continue;
+      if (
+        task.lastStatus !== "RUNNING" ||
+        task.desiredStatus !== "RUNNING" ||
+        task.taskDefinitionArn !== taskDefinition ||
+        (task.healthStatus !== "HEALTHY" && (isServiceName(workload) || task.healthStatus !== "UNKNOWN"))
+      )
+        throw new CliError(`${workload} still has a pending, unhealthy, or retiring task`);
+      live.push(task.taskArn!);
+    }
+  }
+  if (live.length !== desiredCount) throw new CliError(`${workload} does not have its exact stable task cohort`);
+  return { taskDefinition, deploymentId: deployment.id, desiredCount, taskArns: live.sort() };
+}
+
 export async function awsBackgroundWorkCapacity(
   config: QmConfig,
   configDir: string,
@@ -3126,80 +3259,13 @@ export async function awsBackgroundWorkCapacity(
     workloads: {},
   };
   for (const workload of [...workloads].sort()) {
-    const state = states.get(workload)!;
-    const taskDefinition = cohort.manifest.tasks[workload]!;
-    const desiredCount = cohort.manifest.counts?.[workload];
-    const primary = state.deployments?.filter((deployment) => deployment.status === "PRIMARY") ?? [];
-    const deployment = primary[0];
-    if (
-      typeof desiredCount !== "number" ||
-      !Number.isSafeInteger(desiredCount) ||
-      desiredCount < 0 ||
-      state.status !== "ACTIVE" ||
-      state.taskDefinition !== taskDefinition ||
-      state.desiredCount !== desiredCount ||
-      state.runningCount !== desiredCount ||
-      state.pendingCount !== 0 ||
-      primary.length !== 1 ||
-      !deployment?.id ||
-      deployment.taskDefinition !== taskDefinition ||
-      deployment.runningCount !== desiredCount ||
-      state.deployments?.some((item) => item.pendingCount !== 0 || (item !== deployment && item.runningCount !== 0)) ||
-      (state.deploymentConfiguration?.strategy === "BLUE_GREEN"
-        ? nativeBlueGreenStatus(config, workload, taskDefinition) !== "SUCCESSFUL"
-        : deployment.rolloutState !== "COMPLETED")
-    )
-      throw new CliError(`${workload} has not reached stable deployment capacity`);
-    const listed = new Set<string>();
-    for (const desiredStatus of ["RUNNING", "STOPPED"]) {
-      const response = awsJson<{ taskArns?: string[] }>(aws, [
-        "ecs",
-        "list-tasks",
-        "--cluster",
-        aws.cluster,
-        "--service-name",
-        aws.services[workload]!.ecsService,
-        "--desired-status",
-        desiredStatus,
-      ]);
-      if (!Array.isArray(response.taskArns) || response.taskArns.some((arn) => typeof arn !== "string" || !arn))
-        throw new CliError(`${workload} task inventory is unavailable`);
-      for (const arn of response.taskArns) listed.add(arn);
-    }
-    const live: string[] = [];
-    for (const batch of chunks([...listed], 100)) {
-      const response = awsJson<{
-        tasks?: Array<{
-          taskArn?: string;
-          taskDefinitionArn?: string;
-          lastStatus?: string;
-          desiredStatus?: string;
-          healthStatus?: string;
-        }>;
-        failures?: unknown[];
-      }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", ...batch]);
-      if (
-        response.failures?.length ||
-        !Array.isArray(response.tasks) ||
-        response.tasks.length !== batch.length ||
-        new Set(response.tasks.map((task) => task.taskArn)).size !== batch.length ||
-        response.tasks.some((task) => !task.taskArn || !batch.includes(task.taskArn))
-      )
-        throw new CliError(`${workload} capacity requires complete task inventory`);
-      for (const task of response.tasks) {
-        if (task.lastStatus === "STOPPED") continue;
-        if (
-          task.lastStatus !== "RUNNING" ||
-          task.desiredStatus !== "RUNNING" ||
-          task.taskDefinitionArn !== taskDefinition ||
-          (task.healthStatus !== "HEALTHY" && (isServiceName(workload) || task.healthStatus !== "UNKNOWN"))
-        )
-          throw new CliError(`${workload} still has a pending, unhealthy, or retiring task`);
-        live.push(task.taskArn!);
-      }
-    }
-    if (live.length !== desiredCount) throw new CliError(`${workload} does not have its exact stable task cohort`);
-    proof.workloads[workload] = { taskDefinition, deploymentId: deployment.id, desiredCount, taskArns: live.sort() };
+    proof.workloads[workload] = stableWorkloadCapacity(
+      config,
+      workload,
+      states.get(workload)!,
+      cohort.manifest.tasks[workload]!,
+      cohort.manifest.counts?.[workload],
+    );
   }
   if (canonicalJson(proof.workloads.core?.taskArns) !== canonicalJson([...cohort.taskArns].sort()))
     throw new CliError("core task cohort changed while checking capacity");

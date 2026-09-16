@@ -383,7 +383,7 @@ else if (a.includes("ecs describe-services")) {
           { id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: service.desiredCount, failedTasks: 1 },
           { id: "old-protected", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: 1, failedTasks: 0 },
         ]
-      : ${JSON.stringify(opts.rolloutFailed ?? false)}
+      : (${JSON.stringify(opts.rolloutFailed ?? false)} || s.failedTaskDefinition === service.taskDefinition)
         ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "FAILED", runningCount: 0, failedTasks: 1 }]
       : ${JSON.stringify(opts.primaryFailedTasks ?? false)} || transientlyFailing
         ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: 0, failedTasks: 1 }]
@@ -427,6 +427,8 @@ else if (a.includes("ecs get-task-protection")) {
   const requested = args.slice(args.indexOf("--tasks") + 1).filter(arg => arg.startsWith("arn:"));
   console.log(JSON.stringify(s.protectionResponse || {protectedTasks: requested.map(taskArn => ({taskArn, protectionEnabled:false})), failures:[]}));
 }
+else if (a.includes("ecs list-tasks") && s.taskInventory?.[after("--service-name")]) console.log(JSON.stringify({ taskArns: after("--desired-status") === "STOPPED" ? [] : s.taskInventory[after("--service-name")].map(task => task.taskArn) }));
+else if (a.includes("ecs describe-tasks") && Object.values(s.taskInventory || {}).flat().some(task => args.includes(task.taskArn))) console.log(JSON.stringify({ tasks: Object.values(s.taskInventory).flat().filter(task => args.includes(task.taskArn)), failures: [] }));
 else if (a.includes("ecs list-tasks")) console.log(JSON.stringify({ taskArns: process.env.AWS_FAKE_NO_RUNNING_TASK ? [] : [...(process.env.AWS_FAKE_LARGE_ROLLOUT ? Array.from({ length: 100 }, (_, i) => "arn:aws:ecs:us-west-2:123456789012:task/old-core-" + i) : []), "arn:aws:ecs:us-west-2:123456789012:task/live-core"] }));
 else if (a.includes("ecs describe-tasks") && s.stoppedTasks?.[after("--tasks")]) console.log(JSON.stringify({tasks: [s.stoppedTasks[after("--tasks")]], failures: []}));
 else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) console.log(JSON.stringify({ tasks: [] }));
@@ -456,6 +458,7 @@ else if (a.includes("ecs update-service")) {
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--task-definition")) service.taskDefinition = after("--task-definition");
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--desired-count")) service.desiredCount = Number(after("--desired-count"));
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)}) service.deploymentId = "ecs-svc/" + name + "-" + (++s.revision);
+  if (s.failNextWebRollout && service.workload === "web-ui") { s.failedTaskDefinition = service.taskDefinition; s.failNextWebRollout = false; }
   s.updated = true;
   s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
   s.blueGreenPolls = 0;
@@ -6084,3 +6087,82 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] as const) {
+  test(`AWS web routing transition gate: ${mode}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-web-routing-"));
+    writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+    chmodSync(join(dir, "docker"), 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${dir}:${priorPath}`;
+    const fake = statefulAws(dir, config, {}, { drainPolls: 4 });
+    try {
+      await awsUp(config, dir, { yes: true });
+      const baseline = JSON.parse(readFileSync(fake.state, "utf8"));
+      baseline.drainPolls = 0;
+      baseline.taskInventory = {};
+      for (const workload of ["web-ui", "portal"]) {
+        const service = baseline.services[`acme-${workload}`];
+        const task = baseline.definitions[service.taskDefinition];
+        task.containerDefinitions[0].image = task.containerDefinitions[0].image.replace(
+          /sha256:[a-f0-9]+/,
+          `sha256:${"b".repeat(64)}`,
+        );
+        baseline.taskInventory[`acme-${workload}`] = Array.from({ length: service.desiredCount }, (_, index) => ({
+          taskArn: `arn:aws:ecs:us-west-2:123456789012:task/${workload}-${index}`,
+          taskDefinitionArn: service.taskDefinition,
+          desiredStatus: "RUNNING",
+          lastStatus: "RUNNING",
+          healthStatus: "HEALTHY",
+        }));
+      }
+      const portal = baseline.definitions[baseline.services["acme-portal"].taskDefinition].containerDefinitions[0];
+      if (mode === "migration")
+        portal.environment.find((entry: { name: string }) => entry.name === "ADMIN_UPSTREAM").value =
+          "http://admin.acme.local:8080";
+      if (mode === "missing")
+        portal.environment = portal.environment.filter((entry: { name: string }) => entry.name !== "ADMIN_UPSTREAM");
+      if (mode === "unstable") baseline.taskInventory["acme-web-ui"][0].desiredStatus = "STOPPED";
+      if (mode === "failure") baseline.failNextWebRollout = true;
+      writeFileSync(fake.state, JSON.stringify(baseline));
+      writeFileSync(fake.log, "");
+      if (mode === "failure")
+        await assert.rejects(() => awsUp(config, dir, { yes: true }), /PRIMARY rollout is FAILED/);
+      else await awsUp(config, dir, { yes: true });
+      const calls = readFileSync(fake.log, "utf8").trim().split("\n");
+      const webUpdate = calls.findIndex(
+        (line) => line.includes("ecs update-service") && line.includes("--service acme-web-ui"),
+      );
+      const portalUpdate = calls.findIndex(
+        (line) => line.includes("ecs update-service") && line.includes("--service acme-portal"),
+      );
+      assert.ok(webUpdate >= 0 && portalUpdate > webUpdate);
+      const between = calls.slice(webUpdate + 1, portalUpdate).filter((line) => line.includes("ecs describe-services"));
+      if (mode === "unchanged" || mode === "failure")
+        assert.equal(between.length, 0, "both workloads submit before rollout polling");
+      else assert.ok(between.length >= 5, "uncertain routing waits for full old web retirement");
+      if (mode === "failure") {
+        const after = JSON.parse(readFileSync(fake.state, "utf8"));
+        for (const workload of ["web-ui", "portal"]) {
+          assert.equal(
+            after.services[`acme-${workload}`].taskDefinition,
+            baseline.services[`acme-${workload}`].taskDefinition,
+          );
+          assert.equal(
+            calls.filter((line) => line.includes("ecs update-service") && line.includes(`--service acme-${workload}`))
+              .length,
+            2,
+          );
+        }
+        assert.equal(
+          after.dynamo["deployment/current"].manifestId.S,
+          baseline.dynamo["deployment/current"].manifestId.S,
+        );
+      }
+    } finally {
+      process.env.PATH = priorPath;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
