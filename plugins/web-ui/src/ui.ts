@@ -381,16 +381,19 @@ function placeMenuPopover(menu: HTMLElement): void {
   const margin = 8;
   menu.style.transform = "";
   menu.classList.remove("drop-up");
+  const dialog = menu.closest("dialog")?.getBoundingClientRect();
+  const left = Math.max(0, dialog?.left ?? 0) + margin;
+  const right = Math.min(window.innerWidth, dialog?.right ?? window.innerWidth) - margin;
+  const top = Math.max(0, dialog?.top ?? 0) + margin;
+  const bottom = Math.min(window.innerHeight, dialog?.bottom ?? window.innerHeight) - margin;
   const rect = menu.getBoundingClientRect();
-  const overflowRight = rect.right - (window.innerWidth - margin);
-  const overflowLeft = margin - rect.left;
+  const overflowRight = rect.right - right;
+  const overflowLeft = left - rect.left;
   if (overflowRight > 0)
-    menu.style.transform = `translateX(${-Math.min(overflowRight, Math.max(0, rect.left - margin))}px)`;
-  else if (overflowLeft > 0)
-    menu.style.transform = `translateX(${Math.min(overflowLeft, window.innerWidth - margin - rect.right)}px)`;
+    menu.style.transform = `translateX(${-Math.min(overflowRight, Math.max(0, rect.left - left))}px)`;
+  else if (overflowLeft > 0) menu.style.transform = `translateX(${Math.min(overflowLeft, right - rect.right)}px)`;
   const anchorTop = menu.parentElement?.getBoundingClientRect().top ?? rect.top;
-  if (rect.bottom > window.innerHeight - margin && anchorTop - rect.height - margin >= margin)
-    menu.classList.add("drop-up");
+  if (rect.bottom > bottom && anchorTop - rect.height - margin >= top) menu.classList.add("drop-up");
 }
 
 export function toggleFormMenu(e: Event): void {

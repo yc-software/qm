@@ -368,3 +368,27 @@ test("app shell: normal sign-in keeps editing available beyond the old five-minu
     await f.close();
   }
 });
+
+test("app shell: bare escape renders frame-denying apps at top level without forwarding the shell parameter", async () => {
+  const f = await widgetFixture((req, res) => {
+    res.writeHead(200, {
+      "content-type": "text/html",
+      "x-frame-options": "DENY",
+      "content-security-policy": "frame-ancestors 'none'",
+    });
+    res.end(`APP ${req.url}`);
+  });
+  try {
+    const page = await httpGet(f.port, "/?__qm_no_shell=1&filter=recent", {
+      Host: HOST,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      "sec-fetch-dest": "document",
+    });
+    assert.equal(page.status, 200);
+    assert.equal(page.body, "APP /?filter=recent");
+    assert.equal(page.headers["x-frame-options"], "DENY");
+    assert.equal(page.headers["content-security-policy"], "frame-ancestors 'none'");
+  } finally {
+    await f.close();
+  }
+});

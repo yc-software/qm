@@ -60,10 +60,6 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
   aside.open { display: flex; }
   aside .drag { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
   #chat { border: 0; flex: 1; width: 100%; height: 100%; }
-  #peek { position: fixed; top: 8px; right: 8px; z-index: 10; display: none; cursor: pointer;
-    border: 1px solid var(--border); background: color-mix(in srgb, var(--background) 88%, transparent);
-    color: var(--muted-foreground); border-radius: 999px; padding: 3px 11px;
-    font-family: var(--app-font); font-size: 12px; }
   button:focus-visible, .drag:focus-visible { outline: 2px solid var(--foreground); outline-offset: -2px; }
   @media (max-width: 640px) {
     aside { min-width: 0; width: min(100vw, 420px); max-width: 100vw; }
@@ -71,9 +67,7 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
     aside.open { flex: 1; }
     .drag { display: none; }
   }
-  #peek:hover { color: var(--foreground); }
   body.bare header, body.bare aside { display: none; }
-  body.bare #peek { display: block; }
 </style>
 </head>
 <body>
@@ -83,13 +77,12 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
   <span class="grow"></span>
   <button type="button" class="upd" id="upd">Updated &#8635; Reload</button>
   <button type="button" class="chat-btn" id="chat-toggle" aria-expanded="false" aria-controls="panel"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H8l-5 3V4a1 1 0 0 1 1-1Z"/></svg><span>Chat</span></button>
-  <button type="button" class="hide-btn" id="hide" title="Hide bar" aria-label="Hide bar">&#10005;</button>
+  <button type="button" class="hide-btn" id="hide" title="Open app without bar" aria-label="Open app without bar">&#10005;</button>
 </header>
 <main>
   <iframe id="app" src="${path}" title="${slug}"></iframe>
   <aside id="panel"><div class="drag" id="drag" role="separator" tabindex="0" aria-label="Resize chat" aria-orientation="vertical"></div><iframe id="chat" title="Chat about ${slug}"></iframe></aside>
 </main>
-<button type="button" id="peek">${slug} &#9662;</button>
 <script>
 (() => {
   if (window.top !== window.self) { document.body.className = "bare"; return; }
@@ -102,7 +95,6 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
   const toggle = document.getElementById("chat-toggle");
   const upd = document.getElementById("upd");
   const verEl = document.getElementById("ver");
-  const peek = document.getElementById("peek");
   const hide = document.getElementById("hide");
   const drag = document.getElementById("drag");
   const openKey = "qmChat:" + slug;
@@ -138,8 +130,11 @@ export function appShellHtml(opts: { slug: string; name?: string; portalUrl: str
     event.preventDefault();
     panel.style.width = Math.max(320, panel.offsetWidth + (event.key === "ArrowLeft" ? 20 : -20)) + "px";
   });
-  hide.addEventListener("click", () => { document.body.className = "bare"; });
-  peek.addEventListener("click", () => { document.body.className = ""; });
+  hide.addEventListener("click", () => {
+    const target = new URL(location.href);
+    target.searchParams.set("__qm_no_shell", "1");
+    location.assign(target.href);
+  });
 
   const defaultName = document.getElementById("name").textContent;
   let lastHref = null;

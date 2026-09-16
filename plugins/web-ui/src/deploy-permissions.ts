@@ -63,7 +63,6 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       searched = false;
       searchSequence++;
       matches = [];
-      matches = matches.filter((person) => !grantees.some((grant) => grant.scope === `personal:${person.principalId}`));
     } catch (e) {
       error = errMessage(e, "Could not update permissions.");
     } finally {
@@ -148,25 +147,25 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                           aria-label="Cancel selection"
                           ?disabled=${busy}
                           @click=${() => {
-                        selected = null;
-                        draw();
-                      }}
+                            selected = null;
+                            draw();
+                          }}
                         >
                           ${icon(X, 14)}
                         </button>
                         <div class="permission-invite-actions">
                           ${permissionMenu(access, "New person's access", (value) => {
-                        access = value;
-                        draw();
-                      })}<button
+                            access = value;
+                            draw();
+                          })}<button
                             class="btn primary"
                             ?disabled=${busy}
                             @click=${() => {
-                          if (selected) {
-                            names.set(`personal:${selected.principalId}`, selected.displayName);
-                            void change(`personal:${selected.principalId}`, access);
-                          }
-                        }}
+                              if (selected) {
+                                names.set(`personal:${selected.principalId}`, selected.displayName);
+                                void change(`personal:${selected.principalId}`, access);
+                              }
+                            }}
                           >
                             Add
                           </button>
@@ -174,10 +173,10 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                       </div>`
                     : html`<form
                         @submit=${(event: SubmitEvent) => {
-                      event.preventDefault();
-                      clearTimeout(timer);
-                      void search();
-                    }}
+                          event.preventDefault();
+                          clearTimeout(timer);
+                          void search();
+                        }}
                       >
                         <div class="project-member-search-row">
                           ${icon(Search, 16)}<input
@@ -190,20 +189,20 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                             .value=${live(query)}
                             ?disabled=${busy}
                             @input=${(event: Event) => {
-                          query = (event.currentTarget as HTMLInputElement).value;
-                          searchSequence++;
-                          matches = [];
-                          searched = false;
-                          clearTimeout(timer);
-                          timer = setTimeout(() => void search(), 200);
-                        }}
+                              query = (event.currentTarget as HTMLInputElement).value;
+                              searchSequence++;
+                              matches = [];
+                              searched = false;
+                              clearTimeout(timer);
+                              timer = setTimeout(() => void search(), 200);
+                            }}
                           />
                         </div>
                         ${peopleResults(matches, busy, (person) => {
-                      selected = person;
-                      closeFormMenus();
-                      draw();
-                    })}
+                          selected = person;
+                          closeFormMenus();
+                          draw();
+                        })}
                         ${searching ? html`<p class="permission-note" role="status">Searching…</p>` : nothing}
                         ${!searching && searched && !matches.length ? html`<p class="permission-note">No additional people found.</p>` : nothing}
                       </form>`

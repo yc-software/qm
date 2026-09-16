@@ -829,10 +829,12 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     return true;
   }
+  const bareApp = url.searchParams.get("__qm_no_shell") === "1";
+  url.searchParams.delete("__qm_no_shell");
   const isTopDocument = String(req.headers["sec-fetch-dest"] ?? "") === "document";
   const isShellRequest = pathname.startsWith(APP_SHELL_PATH_PREFIX);
   const canManage = await app.canManageDeployment(slug, sub);
-  if (ctx.method === "GET" && (isTopDocument || isShellRequest) && canManage) {
+  if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage) {
     if (signInAttempted) {
       cleanUrlRedirect();
       return true;

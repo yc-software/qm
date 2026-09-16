@@ -11739,7 +11739,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .deployment-permissions-dialog {
   width: min(440px, calc(100vw - 32px));
   padding: 24px;
-  overflow: visible;
 }
 .deployment-permissions-dialog .project-dialog-head {
   margin-bottom: 20px;
@@ -11856,6 +11855,10 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .deployment-permissions-dialog .permission-invite .menu-popover {
   inset: calc(100% + 6px) auto auto 0 !important;
+}
+.deployment-permissions-dialog .permission-control .menu-popover.drop-up {
+  top: auto !important;
+  bottom: calc(100% + 6px) !important;
 }
 
 .deploy-access-line + .deploy-detail-section {
