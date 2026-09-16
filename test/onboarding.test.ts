@@ -74,7 +74,7 @@ test("a new personal DM gets the high-priority pending onboarding prompt", async
   assert.match(sys.reply ?? "", /## Pending Onboarding/);
   assert.match(sys.reply ?? "", /high-priority setup task/);
   assert.match(sys.reply ?? "", /no reason to skip it/);
-  assert.match(sys.reply ?? "", /skills\/onboarding\/SKILL\.md/);
+  assert.match(sys.reply ?? "", /skill:\/\/onboarding\/SKILL\.md/);
 });
 
 test("completed or dismissed onboarding markers suppress the pending prompt", async () => {

@@ -17,7 +17,7 @@ organization's **house style**: if the deployment installs a `*-design` skill (l
 it only when the user names a different brand or asks for a one-off exploration.
 
 If the user wants a _known brand's_ look (Stripe, Linear, Vercel, Notion…), read
-`skills/popular-web-designs/SKILL.md` for the visual vocabulary and let this skill drive
+`skill://popular-web-designs/SKILL.md` for the visual vocabulary and let this skill drive
 the process.
 
 ## The playbook
@@ -36,7 +36,7 @@ anything externally facing or high-fidelity. Two adjustments for this runtime:
 
 You have a real computer, not a hosted design canvas. Build the artifact as files in your
 workspace, verify it locally, and when it should outlive the turn ship it with the
-`publish` skill (`skills/publish/SKILL.md`).
+`publish` skill (`skill://publish/SKILL.md`).
 
 - **`write` / `read` / `execute`** — author files, install deps, run build steps.
 - **`background`** — run a dev server (`PORT=8080 node server.js`) so you can look at it.

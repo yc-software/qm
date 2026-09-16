@@ -71,9 +71,9 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
 
-const SKILL_SKILLMD_RE = /^(?:\.\/)?skills\/([^/]+)\/SKILL\.md$/;
+const SKILL_FILE_RE = /^(?:\.\/)?skills\/([^/]+)\/.+$/;
 function skillTreeDirFor(path: string): string | null {
-  const m = SKILL_SKILLMD_RE.exec(path);
+  const m = SKILL_FILE_RE.exec(path);
   return m ? m[1]! : null;
 }
 
@@ -143,7 +143,7 @@ export class CommandDenied extends Error {
   }
 }
 
-interface ReadResult {
+export interface ReadResult {
   content: string | null;
   sourceScopeId: ScopeId | null;
   shared?: true;
@@ -432,6 +432,7 @@ export interface ToolContextDeps {
   provisionOwnerAuth?: () => Promise<SandboxHandle>;
   ownerAuthCommand?: (command: string) => string;
   scopedCommand?: (command: string) => string;
+  readSkill?: (path: string) => Promise<ReadResult>;
   ensureSkillTree?: (skillDir: string, sandboxId?: string) => Promise<void>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
@@ -811,6 +812,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async read(path: string, signal?: AbortSignal): Promise<ReadResult> {
       signal?.throwIfAborted();
+      if (path.startsWith("skill://"))
+        return deps.readSkill ? withAbort(() => deps.readSkill!(path), signal) : { content: null, sourceScopeId: null };
       if (path === MEMORY_FILE && deps.memory && deps.memoryScopeId) {
         if (!deps.memoryAccess?.read.includes(deps.memoryScopeId)) {
           throw new Error("memory recall is not enabled for this conversation; use the `memory` tool when enabled");
@@ -878,6 +881,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async write(path: string, data?: string, share?: ShareDirective[]): Promise<WriteResult> {
+      if (path.startsWith("skill://"))
+        throw new Error("Published skill sources are read-only; edit skills through the skill API.");
       const wantShare = share !== undefined && share.length > 0;
       if (data === undefined && !wantShare) {
         throw new Error("write needs `data` to save content, `share` to grant access, or both");

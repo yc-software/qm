@@ -30,7 +30,7 @@ have not named one, use your deployment's house-style skill (a `*-design` skill 
 1. Pick a design from the catalog below
 2. Read it: `read skills/popular-web-designs/templates/<site>.md`
 3. Use the design tokens and component specs when generating HTML
-4. Build with `write`, then serve the result with the `publish` skill (`skills/publish/SKILL.md`)
+4. Build with `write`, then serve the result with the `publish` skill (`skill://publish/SKILL.md`)
 
 Each template includes an **Implementation Notes** block at the top with:
 

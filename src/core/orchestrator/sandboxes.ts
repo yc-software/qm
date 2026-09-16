@@ -10,8 +10,11 @@ import {
 import type { DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { expandServiceAliases } from "../../credentials/resident-paths.ts";
 import { shq } from "../../util/shell.ts";
-import { createSkillMaterializer, safeSkillDirName } from "../../skills/materialize.ts";
-import type { SkillResolution } from "../../skills/skill-store.ts";
+import { createSkillMaterializer, renderSkillBody, safeSkillDirName } from "../../skills/materialize.ts";
+import { safeSkillFilePath, type SkillResolution } from "../../skills/skill-store.ts";
+import { isSafeSkillName } from "../../skills/skill-name.ts";
+import { isSkillMaterializationControlPath } from "../../skills/materialization-paths.ts";
+import type { ReadResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
@@ -300,19 +303,35 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.handle = handle;
     return handle;
   };
+  const readSkill = async (path: string): Promise<ReadResult> => {
+    const missing = { content: null, sourceScopeId: null };
+    const match = /^skill:\/\/([^/]+)\/(.+)$/.exec(path);
+    if (!match || !isSafeSkillName(match[1]!)) return missing;
+    const [, name, file] = match;
+    try {
+      if (safeSkillFilePath(file!) !== file || isSkillMaterializationControlPath(`skills/${name}/${file}`))
+        return missing;
+    } catch {
+      return missing;
+    }
+    const resolution = (await visibleSkillsForTurn()).find((r) => r.skill?.manifest.name === name);
+    if (!resolution?.skill) return missing;
+    const content =
+      file === "SKILL.md"
+        ? renderSkillBody(resolution)
+        : resolution.skill.manifest.files?.find((f) => f.path === file)?.content;
+    if (content === undefined) return missing;
+    if (deps.skills)
+      void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
+    return { content, sourceScopeId: resolution.skill.scopeId };
+  };
   const laidTrees = new Set<string>();
-  const visibleSkillByDir = new Map<string, SkillResolution>();
-  for (const r of visibleSkills) {
-    if (r.skill) visibleSkillByDir.set(safeSkillDirName(r.skill.manifest.name), r);
-  }
-  const ensureSkillTree = async (skillDir: string, sandboxId?: string): Promise<void> => {
+  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
+    const skillDir = safeSkillDirName(r.skill!.manifest.name);
     const treeKey = `${sandboxId ?? "default"}:${skillDir}`;
     if (laidTrees.has(treeKey)) return;
-    const r = visibleSkillByDir.get(skillDir);
-    if (!r) return;
     const start = Date.now();
     try {
-      const handle = sandboxId ? await provisionResource(sandboxId) : await provision();
       await skillMaterializer.materializeTree(deps.sandbox, handle, r, [], async () => {
         const latest = (await visibleSkillsForTurn()).find(
           (candidate) => candidate.skill && safeSkillDirName(candidate.skill.manifest.name) === skillDir,
@@ -335,6 +354,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       });
     } finally {
       emitGapWork("skills_materialize", start, Date.now());
+    }
+  };
+  const ensureSkillTree = async (skillDir: string, sandboxId?: string): Promise<void> => {
+    const current = await visibleSkillsForTurn();
+    const requested = current.filter(
+      (r) => r.skill && (skillDir === ".packs" ? r.skill.pack : r.skill.manifest.name === skillDir),
+    );
+    if (!requested.length) return;
+    const handle = sandboxId ? await provisionResource(sandboxId) : await provision();
+    for (const r of requested) {
+      await materializeSkillTree(handle, r, sandboxId);
     }
   };
   const provisionResource = (id: string): Promise<SandboxHandle> => {
@@ -634,6 +664,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionResource,
     provisionOwnerAuth,
     ensureSkillTree,
+    readSkill,
     provisionForReach,
     reclaimBox,
     provisionPending: () => provisionInFlight !== null,

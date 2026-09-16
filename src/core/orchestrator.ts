@@ -1604,6 +1604,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionResource,
         provisionOwnerAuth,
         ensureSkillTree,
+        readSkill,
         provisionForReach,
         reclaimBox,
         provisionPending,
@@ -2160,6 +2161,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           ...(scopedCommand ? { scopedCommand } : {}),
           ensureSkillTree,
+          readSkill,
           ...(reachAvailable
             ? {
                 reach: {
@@ -2624,7 +2626,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? resumeNote({ backgroundJobs: !!backgroundBroker, workRecorded: !!resume })
           : baseText;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
-        const sessionUsedTools = visibleHistory.some((e) => e.type === "tool_call");
+        const sessionUsedTools = visibleHistory.some(
+          (e) =>
+            e.type === "tool_call" &&
+            !(
+              e.payload !== null &&
+              typeof e.payload === "object" &&
+              "tool" in e.payload &&
+              e.payload.tool === "read" &&
+              "path" in e.payload &&
+              typeof e.payload.path === "string" &&
+              e.payload.path.startsWith("skill://")
+            ),
+        );
         if (
           !strictReadOnly &&
           deps.eagerProvision &&
