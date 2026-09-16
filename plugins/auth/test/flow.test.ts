@@ -757,7 +757,14 @@ test("trusted sign-in is available throughout the email flow only when configure
       const page = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
       const html = await page.text();
       assert.equal(html.includes('href="/auth/trusted/login"'), Boolean(trustedSignInLabel));
-      if (trustedSignInLabel) assert.match(html, /Sign in with Company SSO/);
+      if (trustedSignInLabel) {
+        assert.match(html, /Sign in with Company SSO/);
+        assert.ok(html.indexOf('href="/auth/trusted/login"') < html.indexOf("<form"));
+        assert.match(html, /class="btn alternative" type="submit"/);
+        assert.doesNotMatch(html, /autofocus/);
+      } else {
+        assert.match(html, /required autofocus/);
+      }
       const request = hiddenRequestToken(html);
       for (const email of ["invalid", "admin@example.com"]) {
         const response = await fetch(`${h.base}/authorize`, form({ request, email }));
