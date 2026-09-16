@@ -18,7 +18,6 @@ async function localIo(t: TestContext) {
   const bin = join(home, "bin");
   await mkdir(bin);
   if (process.platform === "darwin") {
-    await symlink((await exec("which", ["gmv"])).stdout.trim(), join(bin, "mv"));
     await symlink((await exec("which", ["gsha256sum"])).stdout.trim(), join(bin, "sha256sum"));
   }
   let writes = 0;

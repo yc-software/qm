@@ -48,7 +48,8 @@ export async function installConnectorSdk(
   const link = `${root}/.link-${nonce}`;
   const baked = "/opt/qm/composio";
   const probe = (dir: string) => `printf '%s\\n' ${shq(`${bundle.sha}  ${dir}/sdk.cjs`)} | sha256sum -c --status`;
-  const activate = (dir: string) => `ln -s ${shq(dir)} ${shq(link)} && mv -Tf ${shq(link)} ${shq(current)}`;
+  const activate = (dir: string) =>
+    `node -e ${shq(`const fs = require('node:fs'); fs.symlinkSync(${JSON.stringify(dir)}, ${JSON.stringify(link)}); fs.renameSync(${JSON.stringify(link)}, ${JSON.stringify(current)});`)}`;
   const result = await io.exec(
     `mkdir -p ${shq(root)} && { if ${probe(current)}; then exit 0; fi; if ${probe(baked)}; then ${activate(baked)}; elif ${probe(target)}; then ${activate(target)}; else exit 44; fi; }`,
     60,

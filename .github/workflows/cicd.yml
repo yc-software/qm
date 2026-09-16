@@ -175,6 +175,8 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install
         run: npm ci
+      - name: Build connector SDK
+        run: npm run build:connector-sdk
       - name: Postgres-backed tests (durability + cross-process)
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
