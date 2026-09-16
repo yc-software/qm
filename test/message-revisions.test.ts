@@ -429,3 +429,26 @@ test("an edit made before the message's own turn is still caught through the tri
   assert.equal(slackTsToMs("t1"), undefined);
   await sessions.releaseLease(lease!);
 });
+
+test("imported agent posts receive attributed edits and deletions without creating assistant actions", async () => {
+  const sessions = createMemorySessionStore();
+  const session = await seedSession(sessions, `dm:${DM}`, "dm", [
+    { overheard: true, sourceRole: "agent", text: "Shall I restart it?", ts: "100.1" },
+  ]);
+  await recordMessageRevisions(sessions, [edit({ self: true, text: "Shall I restart the worker?" })]);
+  await recordMessageRevisions(sessions, [del({ self: true })]);
+  const entries = await sessions.getEntries(session.id);
+  const marks = revisions(entries);
+  assert.deepEqual(
+    marks.map((m) => [m.action, m.sourceRole]),
+    [
+      ["edited", "agent"],
+      ["deleted", "agent"],
+    ],
+  );
+  assert.match(renderMessageRevision(marks[0]!), /from="agent"/);
+  assert.equal(
+    reconstructMessagesFromHistory(entries).some((m) => m.role === "assistant"),
+    false,
+  );
+});

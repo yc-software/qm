@@ -854,6 +854,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 entrySeq: imported.seq,
                 meta: {
                   overheard: true,
+                  ...(overheard.sourceRole ? { sourceRole: overheard.sourceRole } : {}),
                   bareText: overheard.text,
                   ts: overheard.ts,
                   ...(overheard.name ? { author: overheard.name } : {}),
@@ -2442,7 +2443,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if (!input.envelopeWrapped && input.overheard?.length) {
+        if ((!input.envelopeWrapped || humanTurn) && input.overheard?.length) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
@@ -2476,6 +2477,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 entrySeq: imported.seq,
                 meta: {
                   overheard: true,
+                  ...(p.sourceRole ? { sourceRole: p.sourceRole } : {}),
                   bareText: p.text,
                   ts: p.ts,
                   ...(p.changeTime ? { changeTime: p.changeTime } : {}),

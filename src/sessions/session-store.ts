@@ -217,6 +217,7 @@ export interface TapeMeta {
   changeTime?: string;
   hidden?: boolean;
   overheard?: boolean;
+  sourceRole?: "agent";
   author?: string;
   attachments?: unknown[];
   display?: string;

@@ -16,6 +16,7 @@ export interface SeededMessage {
 
 export interface OverheardEntryPayload {
   overheard: true;
+  sourceRole?: "agent";
   ts: string;
   changeTime?: string;
   name?: string;
@@ -53,12 +54,15 @@ export function selectOverheardToImport(
       return 0;
     });
   const out: OverheardEntryPayload[] = [];
+  const seen = new Set(imported);
   for (const m of fresh) {
-    if (m.role === "self") continue;
+    if (seen.has(m.ts!)) continue;
     const text = String(m.text ?? "").trim();
     if (!text && !m.files?.length) continue;
+    seen.add(m.ts!);
     out.push({
       overheard: true,
+      ...(m.role === "self" ? { sourceRole: "agent" as const } : {}),
       ts: m.ts,
       ...(m.name ? { name: m.name } : {}),
       text,
@@ -74,7 +78,7 @@ export function renderOverheard(p: OverheardEntryPayload): string {
   return messageTag(
     {
       overheard: true,
-      from: "human",
+      from: p.sourceRole ?? "human",
       ...(p.ts ? { id: p.ts, sentAt: isoFromTs(p.ts) } : {}),
       ...(p.name?.trim() ? { author: p.name.trim() } : {}),
       ...(p.mentions && Object.keys(p.mentions).length ? { mentions: p.mentions } : {}),
@@ -331,7 +335,7 @@ export function replayPreamble(history: SessionEntry[]): string {
     else if (overheard) {
       if (overheard.text.trim() || overheard.files?.length) {
         lines.push(
-          `Overheard (${overheard.name?.trim() || "someone"}): ${overheard.text}${overheard.files?.length ? ` (files: ${overheard.files.join(", ")})` : ""}`,
+          `Overheard (${overheard.sourceRole === "agent" ? "agent" : overheard.name?.trim() || "someone"}): ${overheard.text}${overheard.files?.length ? ` (files: ${overheard.files.join(", ")})` : ""}`,
         );
       }
     } else if (e.type === "user" && textOf(e)) lines.push(`User: ${textOf(e)}`);

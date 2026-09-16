@@ -124,6 +124,7 @@ function rowToTape(r: Record<string, unknown>): TapeRecord {
     ...(r.change_time != null ? { changeTime: r.change_time as string } : {}),
     ...(r.hidden != null ? { hidden: Boolean(r.hidden) } : {}),
     ...(r.overheard != null ? { overheard: Boolean(r.overheard) } : {}),
+    ...(r.source_role === "agent" ? { sourceRole: "agent" as const } : {}),
     ...(r.author != null ? { author: r.author as string } : {}),
     ...(r.attachments != null ? { attachments: JSON.parse(r.attachments as string) as unknown[] } : {}),
     ...(r.display != null ? { display: r.display as string } : {}),
@@ -526,6 +527,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT (session_id, seq) DO NOTHING`,
         ],
       },
+      {
+        id: "sessions/store/0016-tape-source-role",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS source_role TEXT`,
+        ],
+      },
     ],
     [
       {
@@ -579,8 +587,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const stored = jsonbSafeStringify(rec.payload ?? null);
     const createdAt = now();
     await client.query(
-      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, attachments, display, security_tainted, entry_created_at, entry_seq, covers_entry_seq, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, bare_text, ts, change_time, hidden, overheard, author, attachments, display, security_tainted, entry_created_at, entry_seq, covers_entry_seq, created_at, source_role)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
       [
         sessionId,
         seq,
@@ -601,6 +609,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         rec.entrySeq ?? null,
         rec.coversEntrySeq ?? null,
         createdAt,
+        rec.meta?.sourceRole ?? null,
       ],
     );
     return { ...rec, payload: JSON.parse(stored), sessionId, seq, createdAt };

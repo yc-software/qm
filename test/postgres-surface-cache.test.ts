@@ -252,7 +252,7 @@ test("pg surface-cache: revisedSince returns edits and deletions after the water
   }
 });
 
-test("pg surface-cache: revisedSince skips self edits and scopes to a thread", { skip }, async () => {
+test("pg surface-cache: revisedSince includes self edits and scopes to a thread", { skip }, async () => {
   const cache = createPostgresSurfaceCache(URL!);
   const container = `Cthr-${Date.now()}`;
   try {
@@ -270,7 +270,7 @@ test("pg surface-cache: revisedSince skips self edits and scopes to a thread", {
     ]);
     assert.deepEqual(
       (await cache.revisedSince(container, 0)).map((m) => m.ts),
-      ["2.0", "1.5", "1.0"],
+      ["2.5", "2.0", "1.5", "1.0"],
     );
     assert.deepEqual(
       (await cache.revisedSince(container, 0, { thread: "1.0" })).map((m) => m.ts),

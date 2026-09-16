@@ -377,10 +377,11 @@ test("pg latestEntrySeq, participant windows, and tape meta attachments round-tr
     payload: { role: "user", content: [{ type: "text", text: "one" }] },
     scopeLabel: scope,
     entrySeq: 0,
-    meta: { bareText: "one", attachments },
+    meta: { bareText: "one", attachments, sourceRole: "agent" },
   });
   const rows = await s.getTape(session.id);
   assert.deepEqual(rows[0]!.meta?.attachments, attachments);
+  assert.equal(rows[0]!.meta?.sourceRole, "agent");
 });
 
 test("pg participant tenure remains exact when every event shares a timestamp", { skip }, async () => {

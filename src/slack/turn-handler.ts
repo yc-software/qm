@@ -431,7 +431,6 @@ export function createTurnHandler(deps: {
     let overheard: OverheardMessage[] | undefined;
     let detectContext: string | undefined;
     let detectOpener: string | undefined;
-    let earlierFiles: SlackFile[] = [];
     if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
       const serialize = () =>
         serializer.serializeSlackConversation(client, inc, {
@@ -450,7 +449,6 @@ export function createTurnHandler(deps: {
             serialize,
           )
         : await serialize();
-      earlierFiles = serialized.earlierFiles;
       const rendered = renderConversationView(serialized.view);
       if (rendered.header) conversationHeader = rendered.header;
       if (rendered.priorTurns.length) priorTurns = rendered.priorTurns;
@@ -461,13 +459,10 @@ export function createTurnHandler(deps: {
     }
 
     const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
-    const inboundFiles = await hydrateSlackFiles(
-      earlierFiles.length ? [...ownFiles, ...earlierFiles] : ownFiles,
-      async (id) => {
-        const response = await client.files.info({ file: id });
-        return response?.file as SlackFile | undefined;
-      },
-    );
+    const inboundFiles = await hydrateSlackFiles(ownFiles, async (id) => {
+      const response = await client.files.info({ file: id });
+      return response?.file as SlackFile | undefined;
+    });
     const resolveFileAuthor = async (userId: string | undefined): Promise<string | undefined> =>
       userId ? (await classifyUserCached(client, userId)).actor.displayName : undefined;
     const { attachments, issues } = await processInboundFiles(

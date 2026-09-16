@@ -126,6 +126,7 @@ function userDraft(row: TapeRecord, isTrigger: boolean): DraftEntry | null {
       type: "user",
       payload: {
         overheard: true,
+        ...(meta.sourceRole ? { sourceRole: meta.sourceRole } : {}),
         ...(meta.ts ? { ts: meta.ts } : {}),
         ...(meta.changeTime ? { changeTime: meta.changeTime } : {}),
         ...(meta.author ? { name: meta.author } : {}),

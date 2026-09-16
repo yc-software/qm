@@ -6,7 +6,6 @@ import {
   isTrustedSlackHost,
   downloadSlackFile,
   processInboundFiles,
-  collectEarlierThreadFiles,
   uploadAttachments,
   uploadFailureNote,
   MAX_ATTACHMENT_BYTES,
@@ -176,51 +175,6 @@ test("processInboundFiles caps the number of files per turn", async () => {
   assert.ok(r.issues.some((i) => /too many files/.test(i)));
 });
 
-test("collectEarlierThreadFiles returns earlier files, recent-first, deduped and filtered", () => {
-  const messages = [
-    { ts: "1", user: "U1", files: [{ id: "Fa", name: "old.png" }] },
-    { ts: "2", user: "BOT", bot_id: "B1", files: [{ id: "Fbot", name: "bot-made.png" }] },
-    {
-      ts: "3",
-      user: "U2",
-      files: [
-        { id: "Fb", name: "graph.png" },
-        { id: "Fdup", name: "dup.png" },
-      ],
-    },
-    { ts: "4", user: "U1", files: [{ id: "Fdup", name: "dup.png" }] },
-    { ts: "5", user: "U1", files: [{ id: "Ftrigger", name: "current.png" }] },
-  ];
-  const out = collectEarlierThreadFiles(messages, {
-    triggerTs: "5",
-    botUserId: "BOT",
-    ownBotId: "B1",
-    have: [{ id: "Ftrigger", name: "current.png" }],
-    inThread: true,
-  });
-  assert.deepEqual(
-    out.map((f) => f.id),
-    ["Fdup", "Fb", "Fa"],
-  );
-});
-
-test("collectEarlierThreadFiles stamps each file with its poster, preserving an explicit file.user", () => {
-  const messages = [
-    { ts: "1", user: "U1", files: [{ id: "Fa", name: "a.png" }] },
-    { ts: "2", user: "U2", files: [{ id: "Fb", name: "b.png", user: "Uexplicit" }] },
-  ];
-  const out = collectEarlierThreadFiles(messages, {
-    triggerTs: "9",
-    botUserId: "BOT",
-    ownBotId: "",
-    have: [],
-    inThread: true,
-  });
-  const userById = Object.fromEntries(out.map((f) => [f.id, f.user]));
-  assert.equal(userById["Fa"], "U1");
-  assert.equal(userById["Fb"], "Uexplicit");
-});
-
 test("processInboundFiles attributes each file via resolveAuthor(file.user)", async () => {
   const r = await processInboundFiles(
     [{ name: "x.png", user: "Utay" }],
@@ -230,34 +184,6 @@ test("processInboundFiles attributes each file via resolveAuthor(file.user)", as
   );
   assert.equal(r.attachments.length, 1);
   assert.equal(r.attachments[0]!.author, "taylor");
-});
-
-test("collectEarlierThreadFiles returns nothing when only the trigger has files", () => {
-  const messages = [{ ts: "9", user: "U1", files: [{ id: "Fx", name: "x.png" }] }];
-  const out = collectEarlierThreadFiles(messages, {
-    triggerTs: "9",
-    botUserId: "BOT",
-    ownBotId: "",
-    have: [{ id: "Fx" }],
-    inThread: true,
-  });
-  assert.equal(out.length, 0);
-});
-
-test("collectEarlierThreadFiles ignores channel backscroll for a top-level trigger", () => {
-  const messages = [
-    { ts: "1", user: "U1", files: [{ id: "Fold1", name: "screenshot1.png" }] },
-    { ts: "2", user: "U2", files: [{ id: "Fold2", name: "logo.png" }] },
-    { ts: "3", user: "U3", files: [{ id: "Ftrigger", name: "trigger.png" }] },
-  ];
-  const out = collectEarlierThreadFiles(messages, {
-    triggerTs: "3",
-    botUserId: "BOT",
-    ownBotId: "",
-    have: [],
-    inThread: false,
-  });
-  assert.equal(out.length, 0);
 });
 
 const noArtifacts = async (): Promise<Buffer> => {

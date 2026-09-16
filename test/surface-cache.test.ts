@@ -342,7 +342,7 @@ test("revisedSince returns messages edited or deleted after the watermark, stamp
   );
 });
 
-test("revisedSince skips the bot's own edits and can be scoped to one thread", async () => {
+test("revisedSince includes the bot's own edits and can be scoped to one thread", async () => {
   const cache = createMemorySurfaceCache();
   await cache.ingest([
     { container: "Ct", ts: "1.0", text: "root", createdAt: 1 },
@@ -358,7 +358,7 @@ test("revisedSince skips the bot's own edits and can be scoped to one thread", a
   ]);
   assert.deepEqual(
     (await cache.revisedSince("Ct", 0)).map((m) => m.ts),
-    ["2.0", "1.5", "1.0"],
+    ["2.5", "2.0", "1.5", "1.0"],
   );
   assert.deepEqual(
     (await cache.revisedSince("Ct", 0, { thread: "1.0" })).map((m) => m.ts),
@@ -366,7 +366,7 @@ test("revisedSince skips the bot's own edits and can be scoped to one thread", a
   );
   assert.deepEqual(
     (await cache.revisedSince("Ct", 0, { thread: "2.0" })).map((m) => m.ts),
-    ["2.0"],
+    ["2.5", "2.0"],
   );
 });
 

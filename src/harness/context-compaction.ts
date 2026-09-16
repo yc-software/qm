@@ -135,6 +135,7 @@ export function compactTranscript(history: SessionEntry[]): string {
     const op = entry.payload as {
       text?: string;
       overheard?: unknown;
+      sourceRole?: unknown;
       name?: unknown;
       files?: unknown;
       isError?: unknown;
@@ -144,7 +145,7 @@ export function compactTranscript(history: SessionEntry[]): string {
     const ovFiles = ov && Array.isArray(op?.files) ? (op!.files as unknown[]).map(String).filter(Boolean) : [];
     const author = entry.type === "user" && typeof op?.name === "string" && op.name ? op.name : null;
     const label = ov
-      ? `overheard#${entry.seq}${stamp} (${author ?? "someone"})`
+      ? `overheard#${entry.seq}${stamp} (${op?.sourceRole === "agent" ? "agent" : (author ?? "someone")})`
       : `${entry.type}#${entry.seq}${stamp}${author ? ` (${author})` : ""}`;
     if (text) push(`${label}: ${text}${ovFiles.length ? ` (files: ${ovFiles.join(", ")})` : ""}`);
     else if (ov && ovFiles.length) push(`${label}: (shared file) (files: ${ovFiles.join(", ")})`);
