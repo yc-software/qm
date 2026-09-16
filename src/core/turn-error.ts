@@ -1,3 +1,5 @@
+import { headSlice } from "../util/text.ts";
+
 export class NonRetryableTurnError extends Error {
   constructor(message: string) {
     super(message);
@@ -8,7 +10,7 @@ export class NonRetryableTurnError extends Error {
 export class TitleRejected extends Error {
   readonly rule: string;
   constructor(rule: string, sample: string) {
-    super(`${rule}: ${JSON.stringify(sample.slice(0, 80))}`);
+    super(`${rule}: ${JSON.stringify(headSlice(sample, 80))}`);
     this.name = "TitleRejected";
     this.rule = rule;
   }

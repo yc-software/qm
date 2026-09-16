@@ -344,7 +344,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     } catch (e) {
       deps.errors?.record({
         category: "session_title",
-        code: e instanceof TitleRejected ? "rejected" : "generation_failed",
+        code: e instanceof TitleRejected ? `rejected_${e.rule}` : "generation_failed",
         message: errMessage(e),
         scopeLabel: scopeId,
         sessionId,

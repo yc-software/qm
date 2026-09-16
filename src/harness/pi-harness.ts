@@ -350,7 +350,6 @@ export const TITLE_GENERATION_PROMPT = [
   "If the conversation has no discernible topic, output exactly: NONE",
 ].join("\n");
 
-/** Frame the transcript as quoted data and restate the ask, so small title models don't reply to it. */
 export function titleUserPrompt(transcript: string): string {
   return [
     "<transcript>",
@@ -424,8 +423,7 @@ const APPROVAL_SUMMARY_PROMPT = [
 
 const MAX_TITLE_CHARS = 60;
 
-export function sanitizeTitle(out: string | undefined): string | undefined {
-  if (!out) return undefined;
+export function sanitizeTitle(out = ""): string {
   let t = (out.trim().split("\n")[0] ?? "").trim();
   if (!t) throw new TitleRejected("empty", out);
   if (/^none$/i.test(t)) throw new TitleRejected("none", out);
