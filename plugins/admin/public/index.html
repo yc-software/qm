@@ -6,39 +6,7 @@
     <title>QM Admin</title>
     <meta name="brand-self-label" content="QM" />
     <style>
-      :root:where([data-admin-variant="original"]) {
-        color-scheme: light;
-        --bg: #fbfbfa;
-        --surface: #ffffff;
-        --subtle: #f4f5f4;
-        --sidebar-active: oklch(0.97 0 0);
-        --text: #18181b;
-        --muted: #667085;
-        --border: #e4e7ec;
-        --ink: #101828;
-        --danger: #b42318;
-        --ok: #16723a;
-        --warn: #b54708;
-        --warn-text: #7a2e0e;
-        --warn-strong: #6b280c;
-        --warn-border: #fde68a;
-        --warn-surface: #fffbeb;
-        --cta: oklch(0.27 0.062 250);
-        --cta-hover: oklch(0.33 0.07 250);
-        --cta-foreground: oklch(0.99 0 0);
-        --trigger: #6b5cf0;
-        --radius: 8px;
-        --brand-font: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-        --brand-mark: none;
-        --header-h: 56px;
-        --header-safe-top: env(safe-area-inset-top);
-        --header-total-h: calc(var(--header-h) + var(--header-safe-top));
-        --sidebar-w: 280px;
-        --shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
-        --maxw: 1180px;
-        --readw: 900px;
-      }
-      :root:where([data-admin-variant="1"]) {
+      :root {
         color-scheme: light;
         --bg: #ffffff;
         --surface: #ffffff;
@@ -122,22 +90,7 @@
         margin: 0 auto;
         padding: 0 24px 72px;
       }
-      :where(html[data-admin-variant="original"]) header.top {
-        position: sticky;
-        top: 0;
-        z-index: 40;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        min-height: var(--header-total-h);
-        max-width: none;
-        margin: 0;
-        padding: var(--header-safe-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
-        border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-        background: color-mix(in srgb, var(--bg) 94%, var(--subtle));
-      }
-      :where(html[data-admin-variant="1"]) header.top {
+      header.top {
         position: sticky;
         top: 0;
         z-index: 40;
@@ -224,7 +177,7 @@
         line-height: 1;
       }
       .header-home,
-      :where(html[data-admin-variant="1"]) #app-view #main #shellbar .back {
+      #app-view #main #shellbar .back {
         display: inline-flex;
         align-items: center;
         flex: 0 0 auto;
@@ -245,11 +198,11 @@
         white-space: nowrap;
       }
       .header-home:hover,
-      :where(html[data-admin-variant="1"]) #app-view #main #shellbar .back:hover {
+      #app-view #main #shellbar .back:hover {
         color: var(--text);
       }
       .header-home:focus-visible,
-      :where(html[data-admin-variant="1"]) #app-view #main #shellbar .back:focus-visible {
+      #app-view #main #shellbar .back:focus-visible {
         outline: 2px solid var(--text);
         outline-offset: 4px;
         border-radius: 2px;
@@ -441,11 +394,7 @@
         min-width: 0;
         padding: 28px 28px 40px;
       }
-      :where(html[data-admin-variant="original"]) .admin-inner {
-        width: min(var(--maxw), 100%);
-        margin: 0 auto;
-      }
-      :where(html[data-admin-variant="1"]) .admin-inner {
+      .admin-inner {
         width: 100%;
         margin: 0;
       }
@@ -576,26 +525,7 @@
       nav.tabs::-webkit-scrollbar {
         display: none;
       }
-      :where(html[data-admin-variant="original"]) .tab {
-        display: flex;
-        align-items: center;
-        width: 100%;
-        border: none;
-        background: none;
-        padding: 6px 11px 6px 38px;
-        color: var(--muted);
-        border-radius: var(--radius);
-        cursor: pointer;
-        font: inherit;
-        font-size: 14px;
-        font-weight: 400;
-        white-space: nowrap;
-        text-align: left;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        flex: 0 0 auto;
-      }
-      :where(html[data-admin-variant="1"]) .tab {
+      .tab {
         display: flex;
         align-items: center;
         width: 100%;
@@ -618,13 +548,7 @@
         color: var(--text);
         background: color-mix(in srgb, var(--text) 4%, transparent);
       }
-      :where(html[data-admin-variant="original"]) .tab.active {
-        color: var(--text);
-        background: color-mix(in srgb, var(--text) 4%, transparent);
-        box-shadow: none;
-        font-weight: 500;
-      }
-      :where(html[data-admin-variant="1"]) .tab.active {
+      .tab.active {
         color: var(--text);
         background: color-mix(in srgb, var(--text) 2.5%, transparent);
         box-shadow: none;
@@ -641,25 +565,14 @@
       .tab-top {
         font-weight: 400;
       }
-      :where(html[data-admin-variant="original"]) .tab-section {
-        flex: 0 0 auto;
-        padding: 12px 11px 6px 9px;
-        color: var(--muted);
-        font-size: 11px;
-        font-weight: 400;
-      }
-      :where(html[data-admin-variant="original"]) nav.tabs .tab-section {
-        margin-top: 8px;
-        border-top: 1px solid var(--border);
-      }
-      :where(html[data-admin-variant="1"]) .tab-section {
+      .tab-section {
         flex: 0 0 auto;
         padding: 12px 6px 6px 19px;
         color: var(--muted);
         font-size: 12.5px;
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"]) nav.tabs .tab-section {
+      nav.tabs .tab-section {
         margin-top: 8px;
         border-top: 1px solid var(--border);
       }
@@ -667,13 +580,7 @@
         margin-top: 0;
         border-top: 0;
       }
-      :where(html[data-admin-variant="original"]) nav.tabs .tab:last-child {
-        margin-top: auto;
-        padding-top: 12px;
-        border-top: 1px solid var(--border);
-        border-radius: 0;
-      }
-      :where(html[data-admin-variant="1"]) nav.tabs .tab:last-child {
+      nav.tabs .tab:last-child {
         margin-top: 0;
         padding-top: 5px;
         border-top: 0;
@@ -768,7 +675,7 @@
         margin: 0 0 6px;
       }
       input[type="text"],
-      :where(html[data-admin-variant="1"]) input[type="url"],
+      input[type="url"],
       input[type="email"],
       input[type="date"],
       input:not([type]),
@@ -920,9 +827,6 @@
       .primary:hover {
         background: var(--cta-hover);
         border-color: var(--cta-hover);
-      }
-      :where(html[data-admin-variant="original"]) button.dirty::after {
-        content: " *";
       }
       .link {
         border: none;
@@ -1166,7 +1070,7 @@
         border-color: rgba(22, 114, 58, 0.35);
         background: rgba(22, 114, 58, 0.07);
       }
-      :where(html[data-admin-variant="1"]) .badge.ok {
+      .badge.ok {
         display: inline-flex;
         align-items: center;
         padding: 2px 8px;
@@ -3246,14 +3150,7 @@
       .admin-app .dd-item.active {
         background: var(--subtle);
       }
-      :where(html[data-admin-variant="original"]) .admin-app .dd-item.sel {
-        font-weight: 600;
-      }
-      :where(html[data-admin-variant="original"]) .admin-app .dd-item.sel::after {
-        content: " ✓";
-        color: var(--accent, #4a7dff);
-      }
-      :where(html[data-admin-variant="1"]) .admin-app .dd-item.sel {
+      .admin-app .dd-item.sel {
         background: var(--subtle);
         font-weight: 400;
       }
@@ -3756,10 +3653,7 @@
         background: var(--warn-surface);
         font-size: 12px;
       }
-      :where(html[data-admin-variant="original"]) .governance-view .shellbar {
-        display: none;
-      }
-      :where(html[data-admin-variant="1"]) .governance-view .shellbar {
+      .governance-view .shellbar {
         display: flex;
       }
       .governance-capability {
@@ -4276,23 +4170,7 @@
           padding: 0 2px;
         }
       }
-      :root:where([data-admin-variant="original"]) {
-        --subtle: #eeeeea;
-        --text: #1c1c1a;
-        --muted: #6f6f68;
-        --ink: #1c1c1a;
-        --danger: #b91c1c;
-        --ok: #1a7f37;
-        --warn: #b45309;
-        --bg: #fbfbfa;
-        --border: #e4e7ec;
-        --radius: 8px;
-        --header-h: 56px;
-        --sidebar-w: 280px;
-        --shadow: 0 1px 2px rgba(20, 20, 10, 0.04), 0 0 0 1px rgba(20, 20, 10, 0.02);
-        --maxw: 980px;
-      }
-      :root:where([data-admin-variant="1"]) {
+      :root {
         --subtle: #f5f5f5;
         --text: #171717;
         --muted: #737373;
@@ -4318,16 +4196,7 @@
           Arial,
           sans-serif;
       }
-      :where(html[data-admin-variant="original"]) header.top {
-        justify-content: space-between;
-        gap: 16px;
-        min-height: var(--header-total-h);
-        margin-left: var(--sidebar-w);
-        padding: var(--header-safe-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
-        border-bottom-color: color-mix(in srgb, var(--border) 68%, transparent);
-        background: color-mix(in srgb, var(--bg) 94%, var(--subtle));
-      }
-      :where(html[data-admin-variant="1"]) header.top {
+      header.top {
         justify-content: space-between;
         gap: 16px;
         min-height: var(--header-total-h);
@@ -4353,13 +4222,13 @@
         background: color-mix(in srgb, var(--subtle) 42%, var(--bg));
       }
       @media (min-width: 901px) {
-        :where(html[data-admin-variant="1"]) .admin-sidebar .tab {
+        .admin-sidebar .tab {
           width: calc(100% - 13px);
           margin-left: 13px;
           line-height: 21px;
           transition: background 0.12s ease;
         }
-        :where(html[data-admin-variant="1"]) .admin-sidebar nav.tabs {
+        .admin-sidebar nav.tabs {
           padding-right: 6px;
         }
       }
@@ -4415,15 +4284,7 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      :where(html[data-admin-variant="original"]) .tab {
-        min-height: 0;
-        padding: 6px 11px 6px 38px;
-        border-radius: var(--radius);
-        color: var(--muted);
-        font-size: 14px;
-        font-weight: 400;
-      }
-      :where(html[data-admin-variant="1"]) .tab {
+      .tab {
         min-height: 0;
         padding: 5px 5px 5px 6px;
         border-radius: var(--radius);
@@ -4435,34 +4296,17 @@
         color: var(--text);
         background: color-mix(in srgb, var(--text) 4%, transparent);
       }
-      :where(html[data-admin-variant="original"]) .tab.active {
-        color: var(--text);
-        background: color-mix(in srgb, var(--text) 4%, transparent);
-        box-shadow: none;
-        font-weight: 500;
-      }
-      :where(html[data-admin-variant="original"]) .tab-top {
-        color: var(--muted);
-        font-weight: 400;
-      }
-      :where(html[data-admin-variant="original"]) .tab-section {
-        padding: 12px 11px 6px 9px;
-        color: var(--muted);
-        font-size: 11px;
-        font-weight: 400;
-        letter-spacing: 0;
-      }
-      :where(html[data-admin-variant="1"]) .tab.active {
+      .tab.active {
         color: var(--text);
         background: color-mix(in srgb, var(--text) 2.5%, transparent);
         box-shadow: none;
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"]) .tab-top {
+      .tab-top {
         color: var(--text);
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"]) .tab-section {
+      .tab-section {
         padding: 12px 6px 6px 19px;
         color: var(--muted);
         font-size: 12.5px;
@@ -4477,11 +4321,7 @@
       nav.tabs::-webkit-scrollbar {
         display: none;
       }
-      :where(html[data-admin-variant="original"]) nav.tabs .tab-section {
-        margin-top: 8px;
-        border-top: 1px solid var(--border);
-      }
-      :where(html[data-admin-variant="1"]) nav.tabs .tab-section {
+      nav.tabs .tab-section {
         margin-top: 8px;
         border-top: 1px solid var(--border);
       }
@@ -4489,13 +4329,7 @@
         margin-top: 0;
         border-top: 0;
       }
-      :where(html[data-admin-variant="original"]) nav.tabs .tab:last-child {
-        margin-top: auto;
-        padding-top: 12px;
-        border-top: 1px solid var(--border);
-        border-radius: 0;
-      }
-      :where(html[data-admin-variant="1"]) nav.tabs .tab:last-child {
+      nav.tabs .tab:last-child {
         margin-top: 0;
         padding-top: 5px;
         border-top: 0;
@@ -4507,52 +4341,48 @@
         max-width: none;
         padding: 28px 28px 40px;
       }
-      :where(html[data-admin-variant="original"]) .admin-inner {
-        width: min(var(--maxw), 100%);
-        margin: 0 auto;
-      }
-      :where(html[data-admin-variant="1"]) .admin-main .shellbar {
+      .admin-main .shellbar {
         position: static;
         min-height: 32px;
         margin-bottom: 8px;
         padding: 0;
       }
-      :where(html[data-admin-variant="1"]) .admin-main .shell-title {
+      .admin-main .shell-title {
         font-size: 22px;
         font-weight: 600;
         letter-spacing: -0.025em;
       }
-      :where(html[data-admin-variant="1"]) .admin-main input[type="text"],
-      :where(html[data-admin-variant="1"]) .admin-main input[type="url"],
-      :where(html[data-admin-variant="1"]) .admin-main textarea,
-      :where(html[data-admin-variant="1"]) .admin-main select,
-      :where(html[data-admin-variant="1"]) .admin-main .dd > button {
+      .admin-main input[type="text"],
+      .admin-main input[type="url"],
+      .admin-main textarea,
+      .admin-main select,
+      .admin-main .dd > button {
         background: transparent;
         border-color: var(--border);
         border-radius: 10px;
         box-shadow: none;
       }
-      :where(html[data-admin-variant="1"]) .admin-main label,
-      :where(html[data-admin-variant="1"]) .admin-main .hint,
-      :where(html[data-admin-variant="1"]) .admin-main .viewlink,
-      :where(html[data-admin-variant="1"]) .admin-main input,
-      :where(html[data-admin-variant="1"]) .admin-main textarea,
-      :where(html[data-admin-variant="1"]) .admin-main .dd > button {
+      .admin-main label,
+      .admin-main .hint,
+      .admin-main .viewlink,
+      .admin-main input,
+      .admin-main textarea,
+      .admin-main .dd > button {
         font-size: 13px;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) .admin-main label,
-      :where(html[data-admin-variant="1"]) .admin-main .hint,
-      :where(html[data-admin-variant="1"]) .admin-main .viewlink {
+      .admin-main label,
+      .admin-main .hint,
+      .admin-main .viewlink {
         color: var(--muted);
       }
-      :where(html[data-admin-variant="1"]) .admin-main label {
+      .admin-main label {
         margin-bottom: 4px;
       }
-      :where(html[data-admin-variant="1"]) .admin-main section.card:not(.setting-row) {
+      .admin-main section.card:not(.setting-row) {
         box-shadow: none;
       }
-      :where(html[data-admin-variant="1"]) .admin-inner {
+      .admin-inner {
         width: 100%;
         margin: 0;
       }
@@ -4572,20 +4402,8 @@
         background: transparent;
         box-shadow: none;
       }
-      :where(html[data-admin-variant="original"]) #view-governance section.card,
-      :where(html[data-admin-variant="original"]) #view-governance section.card.setting-row {
-        display: block;
-        min-height: 0;
-        margin: 0;
-        padding: 16px 12px;
-        border: 0;
-        border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
-        border-radius: 0;
-        background: transparent;
-        box-shadow: none;
-      }
-      :where(html[data-admin-variant="1"]) #view-governance section.card,
-      :where(html[data-admin-variant="1"]) #view-governance section.card.setting-row {
+      #view-governance section.card,
+      #view-governance section.card.setting-row {
         display: block;
         min-height: 0;
         margin: 0;
@@ -4625,27 +4443,14 @@
         flex-basis: 100%;
         order: 3;
       }
-      :where(html[data-admin-variant="original"]) #view-governance .card > .head h2,
-      :where(html[data-admin-variant="original"]) #view-governance .setting-row > .head h2 {
-        margin: 0;
-        font-size: 14px;
-        font-weight: 600;
-      }
-      :where(html[data-admin-variant="original"]) #view-governance .card > .head p,
-      :where(html[data-admin-variant="original"]) #view-governance .setting-row > .head p {
-        margin: 2px 0 8px;
-        color: var(--muted);
-        font-size: 12.5px;
-        line-height: 1.5;
-      }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .head h2,
-      :where(html[data-admin-variant="1"]) #view-governance .setting-row > .head h2 {
+      #view-governance .card > .head h2,
+      #view-governance .setting-row > .head h2 {
         margin: 0;
         font-size: 14px;
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .head p,
-      :where(html[data-admin-variant="1"]) #view-governance .setting-row > .head p {
+      #view-governance .card > .head p,
+      #view-governance .setting-row > .head p {
         margin: 4px 0 8px;
         color: var(--muted);
         font-size: 13px;
@@ -4683,9 +4488,6 @@
         font-size: 12.5px;
         font-weight: 500;
       }
-      :where(html[data-admin-variant="original"]) #view-governance [data-save]:disabled {
-        display: none;
-      }
       #view-governance .parity-subsection {
         padding: 4px 0;
         border: 0;
@@ -4703,36 +4505,14 @@
       #card-external-slack > .head p {
         display: none;
       }
-      :where(html[data-admin-variant="original"]) .choice-stack {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        max-width: 640px;
-        margin-top: 8px;
-      }
-      :where(html[data-admin-variant="original"]) .posture-choice {
-        display: flex;
-        align-items: flex-start;
-        gap: 8px;
-        margin: 0;
-        padding: 8px 10px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        color: var(--text);
-        cursor: pointer;
-      }
-      :where(html[data-admin-variant="original"]) .posture-choice:has(input:checked) {
-        border-color: var(--border);
-        background: var(--subtle);
-      }
-      :where(html[data-admin-variant="1"]) .choice-stack {
+      .choice-stack {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
         max-width: none;
         margin-top: 6px;
       }
-      :where(html[data-admin-variant="1"]) .posture-choice {
+      .posture-choice {
         display: flex;
         align-items: flex-start;
         gap: 8px;
@@ -4745,18 +4525,18 @@
         line-height: 1.4;
         transition: background 120ms ease;
       }
-      :where(html[data-admin-variant="1"]) .posture-choice:hover {
+      .posture-choice:hover {
         background: color-mix(in srgb, var(--text) 6%, transparent);
       }
-      :where(html[data-admin-variant="1"]) .posture-choice:focus-within {
+      .posture-choice:focus-within {
         outline: 2px solid var(--muted);
         outline-offset: 1px;
       }
-      :where(html[data-admin-variant="1"]) .posture-choice:has(input:checked) {
+      .posture-choice:has(input:checked) {
         border-color: transparent;
         background: color-mix(in srgb, var(--text) 4%, transparent);
       }
-      :where(html[data-admin-variant="1"]) .posture-choice:has(input:checked):hover {
+      .posture-choice:has(input:checked):hover {
         background: color-mix(in srgb, var(--text) 8%, transparent);
       }
       .posture-choice input {
@@ -4767,123 +4547,105 @@
       .posture-choice small {
         display: block;
       }
-      :where(html[data-admin-variant="original"]) .posture-choice strong {
-        font-size: 13px;
-        font-weight: 600;
-      }
-      :where(html[data-admin-variant="original"]) .posture-choice small {
-        margin-top: 2px;
-        color: var(--muted);
-        font-size: 11.5px;
-        font-weight: 400;
-        line-height: 1.4;
-      }
-      :where(html[data-admin-variant="1"]) .posture-choice strong {
+      .posture-choice strong {
         color: var(--text);
         font-size: 13px;
         font-weight: 600;
       }
-      :where(html[data-admin-variant="1"]) .posture-choice small {
+      .posture-choice small {
         margin-top: 0;
         color: var(--muted);
         font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) #card-security-posture .choice-stack {
+      #card-security-posture .choice-stack {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 8px;
         max-width: none;
       }
-      :where(html[data-admin-variant="1"]) #card-security-posture .posture-choice,
-      :where(html[data-admin-variant="1"]) #card-sharing-posture .posture-choice,
-      :where(html[data-admin-variant="1"]) #card-external-slack .posture-choice {
+      #card-security-posture .posture-choice,
+      #card-sharing-posture .posture-choice,
+      #card-external-slack .posture-choice {
         padding: 14px 16px;
         border-color: var(--border);
         background: transparent;
       }
-      :where(html[data-admin-variant="1"]) #card-security-posture .posture-choice:has(input:checked),
-      :where(html[data-admin-variant="1"]) #card-sharing-posture .posture-choice:has(input:checked),
-      :where(html[data-admin-variant="1"]) #card-external-slack .posture-choice:has(input:checked) {
+      #card-security-posture .posture-choice:has(input:checked),
+      #card-sharing-posture .posture-choice:has(input:checked),
+      #card-external-slack .posture-choice:has(input:checked) {
         border-color: var(--muted);
         background: transparent;
       }
-      :where(html[data-admin-variant="1"]) #card-security-posture .posture-choice:hover,
-      :where(html[data-admin-variant="1"]) #card-sharing-posture .posture-choice:hover,
-      :where(html[data-admin-variant="1"]) #card-external-slack .posture-choice:hover {
+      #card-security-posture .posture-choice:hover,
+      #card-sharing-posture .posture-choice:hover,
+      #card-external-slack .posture-choice:hover {
         background: color-mix(in srgb, var(--text) 2%, transparent);
       }
       @media (max-width: 1100px) {
-        :where(html[data-admin-variant="1"]) #card-security-posture .choice-stack {
+        #card-security-posture .choice-stack {
           grid-template-columns: 1fr;
           gap: 4px;
         }
-        :where(html[data-admin-variant="1"]) #card-security-posture .posture-choice > span {
+        #card-security-posture .posture-choice > span {
           display: flex;
           flex-wrap: wrap;
           column-gap: 8px;
         }
       }
-      :where(html[data-admin-variant="1"]) #view-governance .governance-field-grid {
+      #view-governance .governance-field-grid {
         display: grid;
         grid-template-columns: 1fr;
         gap: 12px;
         max-width: 720px;
       }
-      :where(html[data-admin-variant="1"]) .governance-field-grid .dd,
-      :where(html[data-admin-variant="1"]) .governance-field-grid select {
+      .governance-field-grid .dd,
+      .governance-field-grid select {
         width: 100%;
       }
-      :where(html[data-admin-variant="1"]) .governance-prompt {
+      .governance-prompt {
         margin-top: 12px;
         border-top: 1px solid var(--border);
       }
-      :where(html[data-admin-variant="1"]) #auto-flagger-rubric {
+      #auto-flagger-rubric {
         width: 100%;
         min-height: 140px;
         max-height: 360px;
         resize: vertical;
       }
-      :where(html[data-admin-variant="1"]) .governance-secondary-actions {
+      .governance-secondary-actions {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
         gap: 8px;
         margin-top: 8px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot:has([data-save]),
-      :where(html[data-admin-variant="1"])
-        #view-governance
-        :is(.card, .parity-subsection)
-        > .foot:has(#governance-org-ambient-save) {
+      #view-governance :is(.card, .parity-subsection) > .foot:has([data-save]),
+      #view-governance :is(.card, .parity-subsection) > .foot:has(#governance-org-ambient-save) {
         min-height: 32px;
         margin-top: 12px;
         gap: 10px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot [data-save],
-      :where(html[data-admin-variant="1"])
-        #view-governance
-        :is(.card, .parity-subsection)
-        > .foot
-        #governance-org-ambient-save,
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot #sc-save {
+      #view-governance :is(.card, .parity-subsection) > .foot [data-save],
+      #view-governance :is(.card, .parity-subsection) > .foot #governance-org-ambient-save,
+      #view-governance :is(.card, .parity-subsection) > .foot #sc-save {
         flex: 0 0 auto;
         min-width: 76px;
         min-height: 32px;
         margin: 0;
       }
       @media (max-width: 600px) {
-        :where(html[data-admin-variant="1"]) .choice-stack {
+        .choice-stack {
           grid-template-columns: 1fr;
         }
-        :where(html[data-admin-variant="1"]) #view-governance .governance-field-grid {
+        #view-governance .governance-field-grid {
           grid-template-columns: 1fr;
           gap: 8px;
         }
       }
-      :where(html[data-admin-variant="1"])
-        body:is(
+
+      body:is(
           [data-subview="governance"],
           [data-subview="models"],
           [data-subview="credentials"],
@@ -4893,50 +4655,46 @@
         .shell-title {
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) #view-governance {
+      #view-governance {
         color: var(--text);
         font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) #view-governance label,
-      :where(html[data-admin-variant="1"]) #view-governance input,
-      :where(html[data-admin-variant="1"]) #view-governance textarea,
-      :where(html[data-admin-variant="1"]) #view-governance select,
-      :where(html[data-admin-variant="1"]) #view-governance .dd > button,
-      :where(html[data-admin-variant="1"]) #view-governance .posture-choice {
+      #view-governance label,
+      #view-governance input,
+      #view-governance textarea,
+      #view-governance select,
+      #view-governance .dd > button,
+      #view-governance .posture-choice {
         color: var(--text);
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .head h2,
-      :where(html[data-admin-variant="1"]) #view-governance .posture-choice strong,
-      :where(html[data-admin-variant="1"]) #view-governance summary,
-      :where(html[data-admin-variant="1"]) #view-governance button {
+      #view-governance .card > .head h2,
+      #view-governance .posture-choice strong,
+      #view-governance summary,
+      #view-governance button {
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .head p,
-      :where(html[data-admin-variant="1"]) #view-governance .body p,
-      :where(html[data-admin-variant="1"]) #view-governance .hint,
-      :where(html[data-admin-variant="1"]) #view-governance .posture-choice small,
-      :where(html[data-admin-variant="1"]) #view-governance .viewlink,
-      :where(html[data-admin-variant="1"]) #view-governance summary span {
+      #view-governance .card > .head p,
+      #view-governance .body p,
+      #view-governance .hint,
+      #view-governance .posture-choice small,
+      #view-governance .viewlink,
+      #view-governance summary span {
         color: var(--muted);
         font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) #view-governance p strong,
-      :where(html[data-admin-variant="1"]) #view-governance p b {
+      #view-governance p strong,
+      #view-governance p b {
         color: inherit;
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot [data-save]:disabled,
-      :where(html[data-admin-variant="1"])
-        #view-governance
-        :is(.card, .parity-subsection)
-        > .foot
-        #governance-org-ambient-save:disabled,
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot #sc-save:disabled {
+      #view-governance :is(.card, .parity-subsection) > .foot [data-save]:disabled,
+      #view-governance :is(.card, .parity-subsection) > .foot #governance-org-ambient-save:disabled,
+      #view-governance :is(.card, .parity-subsection) > .foot #sc-save:disabled {
         color: color-mix(in srgb, var(--text) 32%, var(--bg));
         background: color-mix(in srgb, var(--text) 3%, var(--bg));
         border: 1px solid color-mix(in srgb, var(--text) 8%, var(--bg));
@@ -4945,8 +4703,8 @@
         cursor: not-allowed;
         transform: none;
       }
-      :where(html[data-admin-variant="1"])
-        body:is(
+
+      body:is(
           [data-subview="governance"],
           [data-subview="models"],
           [data-subview="credentials"],
@@ -4958,8 +4716,8 @@
         max-width: 960px;
         margin-inline: auto;
       }
-      :where(html[data-admin-variant="1"])
-        body:is(
+
+      body:is(
           [data-subview="governance"],
           [data-subview="models"],
           [data-subview="credentials"],
@@ -4969,8 +4727,8 @@
         .shellbar {
         margin-bottom: 16px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance section.card,
-      :where(html[data-admin-variant="1"]) #view-governance section.card.setting-row {
+      #view-governance section.card,
+      #view-governance section.card.setting-row {
         display: grid;
         grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr);
         column-gap: 40px;
@@ -4978,56 +4736,56 @@
         padding: 20px 0;
         align-items: start;
       }
-      :where(html[data-admin-variant="1"]) #view-governance section.card.hidden,
-      :where(html[data-admin-variant="1"]) #view-governance section.card.reference-omitted {
+      #view-governance section.card.hidden,
+      #view-governance section.card.reference-omitted {
         display: none;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .head {
+      #view-governance .card > .head {
         grid-column: 1;
         margin: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .head h2 {
+      #view-governance .card > .head h2 {
         font-size: 14px;
         font-weight: 400;
         line-height: 1.5;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .head p {
+      #view-governance .card > .head p {
         display: block;
         margin: 4px 0 0;
         line-height: 1.5;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .card > .body {
+      #view-governance .card > .body {
         grid-column: 2;
         min-width: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot {
+      #view-governance :is(.card, .parity-subsection) > .foot {
         grid-column: 2;
         justify-content: flex-end;
       }
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot[hidden] {
+      #view-governance :is(.card, .parity-subsection) > .foot[hidden] {
         display: none;
       }
-      :where(html[data-admin-variant="1"]) .screening-test-options {
+      .screening-test-options {
         border-top: 1px solid var(--border);
       }
-      :where(html[data-admin-variant="1"]) .screening-test-fields {
+      .screening-test-fields {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
         gap: 12px;
         padding: 4px 0 12px;
       }
-      :where(html[data-admin-variant="1"]) .screening-test-fields input[type="number"] {
+      .screening-test-fields input[type="number"] {
         width: 100%;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .screening-compare {
+      #view-governance .screening-compare {
         grid-column: 1 / -1;
         display: flex;
         gap: 8px;
         align-items: center;
         margin: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .screening-compare input {
+      #view-governance .screening-compare input {
         flex: 0 0 18px;
         width: 18px;
         height: 18px;
@@ -5035,7 +4793,7 @@
         accent-color: var(--cta);
         cursor: pointer;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #auto-flagger-window {
+      #view-governance #auto-flagger-window {
         width: 76px;
         min-width: 76px;
         text-align: center;
@@ -5043,177 +4801,170 @@
         appearance: textfield;
         -moz-appearance: textfield;
       }
-      :where(html[data-admin-variant="1"]) #auto-flagger-window::-webkit-inner-spin-button,
-      :where(html[data-admin-variant="1"]) #auto-flagger-window::-webkit-outer-spin-button {
+      #auto-flagger-window::-webkit-inner-spin-button,
+      #auto-flagger-window::-webkit-outer-spin-button {
         -webkit-appearance: none;
         margin: 0;
       }
-      :where(html[data-admin-variant="1"]) #auto-flagger-window-range {
+      #auto-flagger-window-range {
         color: var(--muted);
         font-size: 12px;
         white-space: nowrap;
       }
-      :where(html[data-admin-variant="1"]) #auto-flagger-test {
+      #auto-flagger-test {
         grid-column: 1 / -1;
         justify-self: end;
       }
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot [data-save],
-      :where(html[data-admin-variant="1"])
-        #view-governance
-        :is(.card, .parity-subsection)
-        > .foot
-        #governance-org-ambient-save,
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot #sc-save {
+      #view-governance :is(.card, .parity-subsection) > .foot [data-save],
+      #view-governance :is(.card, .parity-subsection) > .foot #governance-org-ambient-save,
+      #view-governance :is(.card, .parity-subsection) > .foot #sc-save {
         order: 1;
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"]) #card-security-posture .body > .dd,
-      :where(html[data-admin-variant="1"]) #card-sharing-posture .body > .dd {
+      #card-security-posture .body > .dd,
+      #card-sharing-posture .body > .dd {
         width: 180px;
         margin-left: auto;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #sharing-posture-effective {
+      #view-governance #sharing-posture-effective {
         margin: 0 0 8px;
         text-align: right;
         font-size: 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .audience-toggle {
+      #view-governance .audience-toggle {
         display: flex;
         align-items: center;
         justify-content: flex-end;
         gap: 8px;
         min-height: 34px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .audience-toggle input {
+      #view-governance .audience-toggle input {
         width: 16px;
         height: 16px;
         margin: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-command-policy > .body,
-      :where(html[data-admin-variant="1"]) #view-governance #card-egress > .body,
-      :where(html[data-admin-variant="1"]) #view-governance #card-ambient-policy > .body {
+      #view-governance #card-command-policy > .body,
+      #view-governance #card-egress > .body,
+      #view-governance #card-ambient-policy > .body {
         grid-column: 1 / -1;
         margin-top: 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .governance-secondary-actions {
+      #view-governance .governance-secondary-actions {
         font-size: 12px;
       }
       @media (max-width: 1100px) {
-        :where(html[data-admin-variant="1"]) #view-governance section.card,
-        :where(html[data-admin-variant="1"]) #view-governance section.card.setting-row {
+        #view-governance section.card,
+        #view-governance section.card.setting-row {
           column-gap: 24px;
           grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr);
         }
       }
       @media (max-width: 650px) {
-        :where(html[data-admin-variant="1"]) #view-governance section.card,
-        :where(html[data-admin-variant="1"]) #view-governance section.card.setting-row {
+        #view-governance section.card,
+        #view-governance section.card.setting-row {
           grid-template-columns: 1fr;
         }
-        :where(html[data-admin-variant="1"]) #view-governance .card > .body {
+        #view-governance .card > .body {
           grid-column: 1;
           margin-top: 12px;
         }
-        :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot {
+        #view-governance :is(.card, .parity-subsection) > .foot {
           grid-column: 1;
         }
-        :where(html[data-admin-variant="1"]) #card-security-posture .body > .dd,
-        :where(html[data-admin-variant="1"]) #card-sharing-posture .body > .dd {
+        #card-security-posture .body > .dd,
+        #card-sharing-posture .body > .dd {
           width: 100%;
           margin-left: 0;
         }
-        :where(html[data-admin-variant="1"]) #view-governance #sharing-posture-effective {
+        #view-governance #sharing-posture-effective {
           text-align: left;
         }
-        :where(html[data-admin-variant="1"]) #view-governance .audience-toggle {
+        #view-governance .audience-toggle {
           justify-content: flex-start;
         }
       }
-      :where(html[data-admin-variant="1"]) .posture-help {
+      .posture-help {
         margin-top: 8px;
         font-size: 13px;
       }
-      :where(html[data-admin-variant="1"]) .posture-help dl {
+      .posture-help dl {
         margin: 12px 0 0;
       }
-      :where(html[data-admin-variant="1"]) .posture-help dt {
+      .posture-help dt {
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) .posture-help dd {
+      .posture-help dd {
         margin: 4px 0 12px;
         color: var(--muted);
       }
-      :where(html[data-admin-variant="1"]) .screening-count {
+      .screening-count {
         display: flex;
         align-items: center;
         gap: 6px;
       }
-      :where(html[data-admin-variant="1"]) .screening-count input {
+      .screening-count input {
         min-width: 64px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .governance-prompt {
+      #view-governance .governance-prompt {
         padding-top: 12px;
         margin-top: 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .screening-test-options {
+      #view-governance .screening-test-options {
         padding-top: 12px;
         margin-top: 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .screening-test-options h3 {
+      #view-governance .screening-test-options h3 {
         margin: 0 0 4px;
         font-size: 13px;
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .screening-test-help {
+      #view-governance .screening-test-help {
         margin: 0 0 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .posture-help dl {
+      #view-governance .posture-help dl {
         margin-top: 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .posture-help dd:last-child {
+      #view-governance .posture-help dd:last-child {
         margin-bottom: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-security-posture .choice-stack,
-      :where(html[data-admin-variant="1"]) #view-governance #card-sharing-posture .choice-stack,
-      :where(html[data-admin-variant="1"]) #view-governance #card-external-slack .choice-stack,
-      :where(html[data-admin-variant="1"]) #view-governance #card-governance-org-ambient .choice-stack {
+      #view-governance #card-security-posture .choice-stack,
+      #view-governance #card-sharing-posture .choice-stack,
+      #view-governance #card-external-slack .choice-stack,
+      #view-governance #card-governance-org-ambient .choice-stack {
         display: flex;
         flex-direction: column;
         gap: 4px;
         margin: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-security-posture .posture-choice,
-      :where(html[data-admin-variant="1"]) #view-governance #card-sharing-posture .posture-choice,
-      :where(html[data-admin-variant="1"]) #view-governance #card-external-slack .posture-choice,
-      :where(html[data-admin-variant="1"]) #view-governance #card-governance-org-ambient .posture-choice {
+      #view-governance #card-security-posture .posture-choice,
+      #view-governance #card-sharing-posture .posture-choice,
+      #view-governance #card-external-slack .posture-choice,
+      #view-governance #card-governance-org-ambient .posture-choice {
         padding: 10px 12px;
         border: 1px solid color-mix(in srgb, var(--text) 9%, var(--bg));
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-security-posture .posture-choice > span,
-      :where(html[data-admin-variant="1"]) #view-governance #card-sharing-posture .posture-choice > span,
-      :where(html[data-admin-variant="1"]) #view-governance #card-external-slack .posture-choice > span,
-      :where(html[data-admin-variant="1"]) #view-governance #card-governance-org-ambient .posture-choice > span {
+      #view-governance #card-security-posture .posture-choice > span,
+      #view-governance #card-sharing-posture .posture-choice > span,
+      #view-governance #card-external-slack .posture-choice > span,
+      #view-governance #card-governance-org-ambient .posture-choice > span {
         display: block;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-security-posture .posture-choice:has(input:checked),
-      :where(html[data-admin-variant="1"]) #view-governance #card-sharing-posture .posture-choice:has(input:checked),
-      :where(html[data-admin-variant="1"]) #view-governance #card-external-slack .posture-choice:has(input:checked),
-      :where(html[data-admin-variant="1"])
-        #view-governance
-        #card-governance-org-ambient
-        .posture-choice:has(input:checked) {
+      #view-governance #card-security-posture .posture-choice:has(input:checked),
+      #view-governance #card-sharing-posture .posture-choice:has(input:checked),
+      #view-governance #card-external-slack .posture-choice:has(input:checked),
+      #view-governance #card-governance-org-ambient .posture-choice:has(input:checked) {
         background: color-mix(in srgb, var(--text) 2%, transparent);
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-security-posture .posture-choice:hover,
-      :where(html[data-admin-variant="1"]) #view-governance #card-sharing-posture .posture-choice:hover,
-      :where(html[data-admin-variant="1"]) #view-governance #card-external-slack .posture-choice:hover,
-      :where(html[data-admin-variant="1"]) #view-governance #card-governance-org-ambient .posture-choice:hover {
+      #view-governance #card-security-posture .posture-choice:hover,
+      #view-governance #card-sharing-posture .posture-choice:hover,
+      #view-governance #card-external-slack .posture-choice:hover,
+      #view-governance #card-governance-org-ambient .posture-choice:hover {
         background: color-mix(in srgb, var(--text) 4%, transparent);
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-governance-org-ambient > .head {
+      #view-governance #card-governance-org-ambient > .head {
         display: block;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-governance-org-ambient .head .viewlink {
+      #view-governance #card-governance-org-ambient .head .viewlink {
         display: block;
         margin: 8px 0 0;
         padding: 0;
@@ -5238,11 +4989,7 @@
       .policy-rule .policy-pattern {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
-      :where(html[data-admin-variant="original"]) .policy-rule .rowbtn {
-        min-width: 34px;
-        padding: 6px 8px;
-      }
-      :where(html[data-admin-variant="1"]) #view-governance .policy-rule .rowbtn {
+      #view-governance .policy-rule .rowbtn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -5257,7 +5004,7 @@
         box-shadow: none;
         color: var(--muted);
       }
-      :where(html[data-admin-variant="1"]) #view-governance .policy-rule .rowbtn:hover {
+      #view-governance .policy-rule .rowbtn:hover {
         border: 0;
         background: transparent;
         box-shadow: none;
@@ -5292,9 +5039,6 @@
       #governance-org-ambient + .dd .dd-btn {
         width: 100%;
       }
-      :where(html[data-admin-variant="original"]) #governance-org-ambient-save:disabled {
-        display: none;
-      }
       #card-egress.egress-disabled .egress-editor,
       #card-egress.egress-disabled .egress-actions {
         opacity: 0.45;
@@ -5311,8 +5055,8 @@
       .egress-empty-state > .hint {
         margin: 0;
       }
-      :where(html[data-admin-variant="1"])
-        body:is(
+
+      body:is(
           [data-subview="governance"],
           [data-subview="models"],
           [data-subview="credentials"],
@@ -5321,8 +5065,7 @@
         )
         #view-governance
         input:not([type="radio"]):not([type="checkbox"]),
-      :where(html[data-admin-variant="1"])
-        body:is(
+      body:is(
           [data-subview="governance"],
           [data-subview="models"],
           [data-subview="credentials"],
@@ -5331,8 +5074,7 @@
         )
         #view-governance
         select,
-      :where(html[data-admin-variant="1"])
-        body:is(
+      body:is(
           [data-subview="governance"],
           [data-subview="models"],
           [data-subview="credentials"],
@@ -5341,8 +5083,7 @@
         )
         #view-governance
         textarea,
-      :where(html[data-admin-variant="1"])
-        body:is(
+      body:is(
           [data-subview="governance"],
           [data-subview="models"],
           [data-subview="credentials"],
@@ -5354,7 +5095,7 @@
         > button {
         border-radius: 6px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance input[type="radio"] {
+      #view-governance input[type="radio"] {
         appearance: none;
         -webkit-appearance: none;
         display: inline-grid;
@@ -5368,7 +5109,7 @@
         background: transparent;
         cursor: pointer;
       }
-      :where(html[data-admin-variant="1"]) #view-governance input[type="radio"]::before {
+      #view-governance input[type="radio"]::before {
         content: "";
         width: 8px;
         height: 8px;
@@ -5376,122 +5117,98 @@
         background: var(--cta);
         transform: scale(0);
       }
-      :where(html[data-admin-variant="1"]) #view-governance input[type="radio"]:checked {
+      #view-governance input[type="radio"]:checked {
         border-color: var(--cta);
       }
-      :where(html[data-admin-variant="1"]) #view-governance input[type="radio"]:checked::before {
+      #view-governance input[type="radio"]:checked::before {
         transform: scale(1);
       }
-      :where(html[data-admin-variant="1"]) #view-governance input[type="radio"]:focus-visible {
+      #view-governance input[type="radio"]:focus-visible {
         outline: 2px solid var(--cta);
         outline-offset: 3px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance input[type="radio"]:disabled {
+      #view-governance input[type="radio"]:disabled {
         opacity: 0.45;
         cursor: default;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #internal-member-overrides {
+      #view-governance #internal-member-overrides {
         overflow-x: hidden;
         overflow-y: auto;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        section.card.sv-credentials {
+
+      body[data-subview="credentials"] #view-governance section.card.sv-credentials {
         display: block;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .sv-credentials > .head {
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         align-items: baseline;
         gap: 4px 16px;
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        .sv-credentials
-        > .head
-        h2 {
+
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head h2 {
         grid-column: 1;
         grid-row: 1;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .sv-credentials > .head p {
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head p {
         grid-column: 1 / -1;
         grid-row: 2;
         margin: 0;
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        #card-service-credentials
-        > .head
-        p {
+
+      body[data-subview="credentials"] #view-governance #card-service-credentials > .head p {
         max-width: 70%;
       }
       @media (max-width: 650px) {
-        :where(html[data-admin-variant="1"])
-          body[data-subview="credentials"]
-          #view-governance
-          #card-service-credentials
-          > .head
-          p {
+        body[data-subview="credentials"] #view-governance #card-service-credentials > .head p {
           max-width: 100%;
         }
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        .sv-credentials
-        > .head
-        .viewlink {
+
+      body[data-subview="credentials"] #view-governance .sv-credentials > .head .viewlink {
         grid-column: 2;
         grid-row: 1;
         margin: 0;
         padding: 0;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .sv-credentials > .body {
+      body[data-subview="credentials"] #view-governance .sv-credentials > .body {
         margin-top: 16px;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .credential-main {
+      body[data-subview="credentials"] #view-governance .credential-main {
         flex: 1;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .credential-row {
+      body[data-subview="credentials"] #view-governance .credential-row {
         padding: 12px 0;
         align-items: center;
         border-color: color-mix(in srgb, var(--text) 8%, var(--bg));
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .credential-title strong,
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .keychain-summary strong {
+      body[data-subview="credentials"] #view-governance .credential-title strong,
+      body[data-subview="credentials"] #view-governance .keychain-summary strong {
         font-size: 13px;
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .credential-main > .hint {
+      body[data-subview="credentials"] #view-governance .credential-main > .hint {
         margin: 4px 0 0;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .credential-badges {
+      body[data-subview="credentials"] #view-governance .credential-badges {
         margin-top: 6px;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .badge {
+      body[data-subview="credentials"] #view-governance .badge {
         font-size: 12px;
         font-weight: 400;
         line-height: 1.4;
         padding: 2px 7px;
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        .badge:is(.info, .ok, .muted) {
+
+      body[data-subview="credentials"] #view-governance .badge:is(.info, .ok, .muted) {
         color: var(--muted);
         border-color: color-mix(in srgb, var(--text) 9%, var(--bg));
         background: color-mix(in srgb, var(--text) 2%, transparent);
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        .credential-actions
-        button {
+
+      body[data-subview="credentials"] #view-governance .credential-actions button {
         min-height: 32px;
         padding: 5px 12px;
         border-radius: 6px;
@@ -5501,86 +5218,80 @@
         font-size: 13px;
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        .credential-actions
-        button:hover {
+
+      body[data-subview="credentials"] #view-governance .credential-actions button:hover {
         background: color-mix(in srgb, var(--text) 4%, transparent);
       }
-      :where(html[data-admin-variant="1"])
-        body[data-subview="credentials"]
-        #view-governance
-        .credential-actions
-        button.danger:hover {
+
+      body[data-subview="credentials"] #view-governance .credential-actions button.danger:hover {
         color: var(--danger);
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .keychain-summary {
+      body[data-subview="credentials"] #view-governance .keychain-summary {
         color: var(--muted);
         font-size: 13px;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .keychain-summary strong {
+      body[data-subview="credentials"] #view-governance .keychain-summary strong {
         color: var(--text);
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .editor-grid {
+      body[data-subview="credentials"] #view-governance .editor-grid {
         grid-template-columns: minmax(0, 1fr);
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .editor-panel {
+      body[data-subview="credentials"] #view-governance .editor-panel {
         padding: 16px 0 0;
         border: 0;
         border-top: 1px solid var(--border);
         border-radius: 0;
         background: transparent;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .sc-semantics strong,
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .sc-semantics span,
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .capability-summary dt,
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance .capability-summary dd {
+      body[data-subview="credentials"] #view-governance .sc-semantics strong,
+      body[data-subview="credentials"] #view-governance .sc-semantics span,
+      body[data-subview="credentials"] #view-governance .capability-summary dt,
+      body[data-subview="credentials"] #view-governance .capability-summary dd {
         font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="credentials"] #view-governance input[type="checkbox"] {
+      body[data-subview="credentials"] #view-governance input[type="checkbox"] {
         min-width: 18px;
         height: 18px;
         accent-color: var(--cta);
       }
-      :where(html[data-admin-variant="1"]) #view-governance .model-runtime-fields {
+      #view-governance .model-runtime-fields {
         display: grid;
         gap: 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .model-runtime-fields label {
+      #view-governance .model-runtime-fields label {
         margin: 0 0 4px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .model-runtime-fields .dd,
-      :where(html[data-admin-variant="1"]) #view-governance .model-runtime-fields select {
+      #view-governance .model-runtime-fields .dd,
+      #view-governance .model-runtime-fields select {
         width: 100%;
         max-width: none;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #base-fast-mode-control {
+      #view-governance #base-fast-mode-control {
         margin-top: 16px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .setting-toggle input:checked + .setting-switch {
+      #view-governance .setting-toggle input:checked + .setting-switch {
         border-color: var(--cta);
         background: var(--cta);
       }
-      :where(html[data-admin-variant="1"]) #view-governance .setting-toggle input:focus-visible + .setting-switch {
+      #view-governance .setting-toggle input:focus-visible + .setting-switch {
         outline-color: var(--cta);
       }
-      :where(html[data-admin-variant="1"]) #view-governance #base-fast-mode-control strong,
-      :where(html[data-admin-variant="1"]) #view-governance #base-fast-mode-control small {
+      #view-governance #base-fast-mode-control strong,
+      #view-governance #base-fast-mode-control small {
         font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #base-fast-mode-control .setting-copy {
+      #view-governance #base-fast-mode-control .setting-copy {
         display: flex;
         flex-wrap: wrap;
         align-items: baseline;
         column-gap: 8px;
         row-gap: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #base-fast-mode-control small {
+      #view-governance #base-fast-mode-control small {
         color: var(--muted);
         margin: 0;
       }
@@ -5604,32 +5315,7 @@
         background: var(--subtle);
         font-size: 13px;
       }
-      :where(html[data-admin-variant="original"]) .model-chip button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 22px;
-        height: 22px;
-        padding: 0;
-        border: 0;
-        border-radius: 999px;
-        background: transparent;
-        color: var(--muted);
-        font-size: 16px;
-        line-height: 1;
-      }
-      :where(html[data-admin-variant="original"]) .model-chip button:hover {
-        background: color-mix(in srgb, var(--text) 8%, transparent);
-        color: var(--text);
-      }
-      :where(html[data-admin-variant="original"]) .model-add-row {
-        display: flex;
-        align-items: flex-end;
-        gap: 8px;
-        max-width: 520px;
-        margin-top: 14px;
-      }
-      :where(html[data-admin-variant="1"]) #view-governance .model-chip button {
+      #view-governance .model-chip button {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -5647,11 +5333,11 @@
         font-size: 16px;
         line-height: 1;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .model-chip button:hover {
+      #view-governance .model-chip button:hover {
         background: color-mix(in srgb, var(--text) 8%, transparent);
         color: var(--text);
       }
-      :where(html[data-admin-variant="1"]) .model-add-row {
+      .model-add-row {
         display: flex;
         align-items: flex-end;
         gap: 8px;
@@ -5732,19 +5418,19 @@
       body[data-subview="connectors"] .shellbar {
         display: none;
       }
-      :where(html[data-admin-variant="1"]) #slack-installation-create {
+      #slack-installation-create {
         color: #2563b8;
         text-decoration: underline;
         text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
         text-underline-offset: 0.2em;
       }
-      :where(html.dark[data-admin-variant="1"]) #slack-installation-create {
+      :where(html.dark) #slack-installation-create {
         color: #4c8edb;
       }
-      :where(html[data-admin-variant="1"]) #slack-installation-create:is(:hover, :focus-visible) {
+      #slack-installation-create:is(:hover, :focus-visible) {
         text-decoration-color: currentColor;
       }
-      :where(html[data-admin-variant="1"]) #slack-installation-create:focus-visible {
+      #slack-installation-create:focus-visible {
         outline: 2px solid currentColor;
         outline-offset: 3px;
         border-radius: 2px;
@@ -5757,41 +5443,41 @@
       .connector-dm-tip p {
         margin: 0;
       }
-      :where(html[data-admin-variant="1"]) body[data-subview="connectors"] .shellbar {
+      body[data-subview="connectors"] .shellbar {
         display: flex;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors {
+      #view-connectors {
         overflow: visible;
         border: 0;
         border-radius: 0;
         background: transparent;
         box-shadow: none;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors section.card {
+      #view-connectors section.card {
         padding: 24px 0;
         border-bottom: 1px solid var(--border);
       }
-      :where(html[data-admin-variant="1"]) #view-connectors section.card:last-child {
+      #view-connectors section.card:last-child {
         border-bottom: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors .card > .head {
+      #view-connectors .card > .head {
         margin: 0 0 16px;
         padding: 0;
         border: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors .card > .head h2 {
+      #view-connectors .card > .head h2 {
         font-size: 14px;
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors .card > .head p,
-      :where(html[data-admin-variant="1"]) #view-connectors .hint,
-      :where(html[data-admin-variant="1"]) .connector-dm-tip {
+      #view-connectors .card > .head p,
+      #view-connectors .hint,
+      .connector-dm-tip {
         color: var(--muted);
         font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) .admin-notice {
+      .admin-notice {
         display: flex;
         align-items: flex-start;
         gap: 10px;
@@ -5805,12 +5491,12 @@
         line-height: 1.4;
         overflow-wrap: anywhere;
       }
-      :where(html[data-admin-variant="1"]) .admin-notice--warning {
+      .admin-notice--warning {
         border-color: #f2dfa2;
         background: #fffbeb;
         color: #854d0e;
       }
-      :where(html[data-admin-variant="1"]) .admin-notice::before {
+      .admin-notice::before {
         content: "";
         display: block;
         flex: 0 0 18px;
@@ -5823,106 +5509,103 @@
         mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v5M12 8h.01'/%3E%3C/svg%3E")
           center / contain no-repeat;
       }
-      :where(html[data-admin-variant="1"]) .admin-notice > div,
-      :where(html[data-admin-variant="1"]) .admin-notice > p {
+      .admin-notice > div,
+      .admin-notice > p {
         flex: 1;
         min-width: 0;
       }
-      :where(html[data-admin-variant="1"]) .admin-notice p,
-      :where(html[data-admin-variant="1"]) .admin-notice span,
-      :where(html[data-admin-variant="1"]) .admin-notice strong {
+      .admin-notice p,
+      .admin-notice span,
+      .admin-notice strong {
         margin: 0;
         color: inherit;
         font-size: inherit;
         line-height: inherit;
       }
-      :where(html[data-admin-variant="1"]) .admin-notice strong {
+      .admin-notice strong {
         display: block;
         margin-bottom: 4px;
         font-weight: 600;
       }
-      :where(html[data-admin-variant="1"]) .connector-dm-tip {
+      .connector-dm-tip {
         margin-bottom: 16px;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors .card > .head p {
+      #view-connectors .card > .head p {
         margin: 4px 0 0;
         max-width: 70ch;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors .card > .foot {
+      #view-connectors .card > .foot {
         flex-wrap: wrap;
         gap: 10px;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors .credential-title strong {
+      #view-connectors .credential-title strong {
         font-size: 13px;
         font-weight: 500;
       }
-      :where(html[data-admin-variant="1"]) #view-connectors .credential-row {
+      #view-connectors .credential-row {
         padding: 12px 0;
         border-color: color-mix(in srgb, var(--text) 8%, var(--bg));
       }
-      :where(html[data-admin-variant="1"]) #view-governance .sv-customize > .head {
+      #view-governance .sv-customize > .head {
         row-gap: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .sv-customize .body label:not(.setting-toggle) {
+      #view-governance .sv-customize .body label:not(.setting-toggle) {
         margin-bottom: 4px;
         font-size: 13px;
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"])
-        #view-governance
-        .sv-customize
-        .body
-        input:not([type="checkbox"]):not([type="radio"]) {
+
+      #view-governance .sv-customize .body input:not([type="checkbox"]):not([type="radio"]) {
         max-width: none !important;
         min-height: 34px;
         padding: 7px 10px;
         background: transparent;
         font: inherit;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .sv-customize .setting-toggle {
+      #view-governance .sv-customize .setting-toggle {
         align-items: flex-start;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .sv-customize .setting-switch {
+      #view-governance .sv-customize .setting-switch {
         margin-top: 1px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .sv-customize .setting-copy strong,
-      :where(html[data-admin-variant="1"]) #view-governance .sv-customize .setting-copy small {
+      #view-governance .sv-customize .setting-copy strong,
+      #view-governance .sv-customize .setting-copy small {
         font-size: 13px;
         font-weight: 400;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .sv-customize .setting-copy small {
+      #view-governance .sv-customize .setting-copy small {
         margin-top: 4px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .parity-subsection {
+      #view-governance .parity-subsection {
         display: block;
         min-height: 0;
         padding: 16px 0;
         border-top: 1px solid var(--border);
       }
-      :where(html[data-admin-variant="1"]) #view-governance .parity-subsection:first-child {
+      #view-governance .parity-subsection:first-child {
         padding-top: 0;
         border-top: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .parity-subsection:last-child {
+      #view-governance .parity-subsection:last-child {
         padding-bottom: 0;
       }
-      :where(html[data-admin-variant="1"]) #view-governance :is(.card, .parity-subsection) > .foot .status {
+      #view-governance :is(.card, .parity-subsection) > .foot .status {
         font-size: 12px;
         line-height: 1.4;
       }
       .soul-preview-label {
         display: none;
       }
-      :where(html[data-admin-variant="1"]) .soul-preview-label {
+      .soul-preview-label {
         display: block;
         margin-bottom: 4px;
       }
-      :where(html[data-admin-variant="1"]) #card-soul.is-editing .soul-preview-body {
+      #card-soul.is-editing .soul-preview-body {
         display: none;
       }
-      :where(html[data-admin-variant="1"]) #view-governance #card-soul .soul-preview,
-      :where(html[data-admin-variant="1"]) #view-governance .soul-workbench textarea {
+      #view-governance #card-soul .soul-preview,
+      #view-governance .soul-workbench textarea {
         width: 100%;
         min-height: 140px;
         max-height: 360px;
@@ -5937,22 +5620,22 @@
         white-space: pre-wrap;
         overflow-wrap: anywhere;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .soul-meta {
+      #view-governance .soul-meta {
         font-size: 12px;
         line-height: 1.4;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .soul-diff {
+      #view-governance .soul-diff {
         grid-template-columns: 1fr;
         gap: 12px;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .soul-diff h3,
-      :where(html[data-admin-variant="1"]) #view-governance .soul-history h3 {
+      #view-governance .soul-diff h3,
+      #view-governance .soul-history h3 {
         margin: 0 0 4px;
         color: var(--text);
         font-size: 13px;
         font-weight: 400;
       }
-      :where(html[data-admin-variant="1"]) #view-governance .soul-diff pre {
+      #view-governance .soul-diff pre {
         padding: 7px 10px;
         border-radius: 6px;
         background: transparent;
@@ -6114,78 +5797,6 @@
           gap: 9px;
         }
       }
-      .admin-variant-toggle {
-        position: fixed;
-        right: max(24px, env(safe-area-inset-right));
-        bottom: max(24px, env(safe-area-inset-bottom));
-        z-index: 100;
-        display: flex;
-        gap: 6px;
-        padding: 6px;
-        border: 1px solid #e3e8ee;
-        border-radius: 999px;
-        background: #fff;
-        box-shadow: 0 4px 18px #0a254026;
-        font:
-          500 15px/1.4 Inter,
-          system-ui,
-          sans-serif;
-      }
-      .admin-seed-data-note {
-        display: none;
-        position: absolute;
-        right: calc(100% + 12px);
-        top: 50%;
-        transform: translateY(-50%);
-        padding: 6px 12px;
-        border: 1px solid #93c5fd;
-        border-radius: 999px;
-        background: #dbeafe;
-        color: #1e40af;
-        font-size: 12px;
-        font-weight: 500;
-        white-space: nowrap;
-      }
-      body[data-preview-seed="true"] .admin-seed-data-note {
-        display: block;
-      }
-      .admin-variant-toggle a {
-        display: block;
-        padding: 10px 20px;
-        min-width: 100px;
-        border-radius: 999px;
-        color: #425466;
-        text-align: center;
-        text-decoration: none;
-      }
-      .admin-variant-toggle a:hover {
-        background: #f6f9fc;
-        color: #0a2540;
-      }
-      .admin-variant-toggle a[aria-current="page"] {
-        background: #0a2540;
-        color: white;
-      }
-      .admin-variant-toggle a:focus-visible {
-        outline: 2px solid #0a2540;
-        outline-offset: 2px;
-      }
-      body:has(#app-view.hidden) .admin-variant-toggle {
-        display: none;
-      }
-      .admin-main {
-        padding-bottom: 110px;
-      }
-      @media (max-width: 650px) {
-        .admin-variant-toggle {
-          right: 12px;
-          bottom: max(12px, env(safe-area-inset-bottom));
-        }
-        .admin-variant-toggle a {
-          padding: 8px 14px;
-          min-width: 86px;
-        }
-      }
 
       #view-data .users-layout section.card {
         margin: 0;
@@ -6274,19 +5885,19 @@
           align-items: flex-start;
         }
       }
-      :where(html[data-admin-variant="1"]) #app-view #shellbar .judgment-filters .shell-tab {
+      #app-view #shellbar .judgment-filters .shell-tab {
         border: 1px solid var(--border);
         border-radius: 999px;
         padding: 6px 14px;
         background: transparent;
         color: var(--muted);
       }
-      :where(html[data-admin-variant="1"]) #app-view #shellbar .judgment-filters .shell-tab:hover {
+      #app-view #shellbar .judgment-filters .shell-tab:hover {
         background: var(--subtle);
         color: var(--text);
       }
-      :where(html[data-admin-variant="1"]) #app-view #shellbar .judgment-filters .shell-tab.active,
-      :where(html[data-admin-variant="1"]) #app-view #shellbar .judgment-filters .shell-tab.active:hover {
+      #app-view #shellbar .judgment-filters .shell-tab.active,
+      #app-view #shellbar .judgment-filters .shell-tab.active:hover {
         border-color: #0a2540;
         background: #0a2540;
         color: #fff;
@@ -6483,12 +6094,12 @@
           border-radius: 0;
         }
       }
-      :where(html[data-admin-variant="1"]) nav.tabs .tab {
+      nav.tabs .tab {
         border-radius: 8px;
         transition: background 0.12s ease;
       }
-      :where(html[data-admin-variant="1"]) nav.tabs .tab:not(:disabled):hover,
-      :where(html[data-admin-variant="1"]) nav.tabs .tab.active {
+      nav.tabs .tab:not(:disabled):hover,
+      nav.tabs .tab.active {
         color: var(--text);
         background: color-mix(in srgb, var(--text) 4%, transparent);
         box-shadow: none;
@@ -8166,181 +7777,7 @@
       </div>
     </dialog>
 
-    <template data-original-card="card-security-posture"
-      ><section class="card sv-governance setting-row hidden" id="card-security-posture">
-        <div class="head">
-          <h2>Security posture</h2>
-        </div>
-        <div class="body">
-          <select id="security-posture" data-choice-state hidden>
-            <option value="dangerous">Dangerous — no content scans; nothing pauses between tool calls</option>
-            <option value="auto">Auto — screen external content with proxy or model</option>
-            <option value="strict">Strict — approve tool actions</option>
-          </select>
-          <div class="choice-stack">
-            <label class="posture-choice"
-              ><input
-                type="radio"
-                name="security-posture-choice"
-                value="auto"
-                data-choice-for="security-posture"
-              /><span
-                ><strong>Auto</strong
-                ><small
-                  >Default. External content (web pages, tool output, files) is screened for prompt injection before the
-                  agent acts on it.</small
-                ></span
-              ></label
-            >
-            <label class="posture-choice"
-              ><input
-                type="radio"
-                name="security-posture-choice"
-                value="dangerous"
-                data-choice-for="security-posture"
-              /><span><strong>Dangerous</strong><small>No content screening.</small></span></label
-            >
-            <label class="posture-choice"
-              ><input
-                type="radio"
-                name="security-posture-choice"
-                value="strict"
-                data-choice-for="security-posture"
-              /><span><strong>Strict</strong><small>Every tool action requires human approval.</small></span></label
-            >
-          </div>
-        </div>
-        <div class="foot">
-          <button class="primary" data-save="security-posture">Apply</button
-          ><span class="status" id="st-security-posture"></span>
-        </div></section
-    ></template>
-    <template data-original-card="card-auto-flagger"
-      ><section class="card sv-governance hidden" id="card-auto-flagger">
-        <div class="head">
-          <h2>Auto flagger</h2>
-          <p>
-            Model and prompt that decide whether external context and tool results are quarantined in Auto mode. The
-            security boundary and required verdict format remain fixed.
-          </p>
-        </div>
-        <div class="body">
-          <label for="auto-flagger-harness">Harness</label>
-          <select id="auto-flagger-harness" style="max-width: 360px"></select>
-          <label for="auto-flagger-model">Model</label>
-          <select id="auto-flagger-model" style="max-width: 440px"></select>
-          <label for="auto-flagger-rubric">Quarantine prompt (classification rubric)</label>
-          <textarea id="auto-flagger-rubric" rows="10" maxlength="20000" style="width: 100%"></textarea>
-        </div>
-        <div class="foot">
-          <button class="primary" data-save="auto-flagger">Apply</button>
-          <button id="auto-flagger-test" type="button">Test</button>
-          <label
-            for="auto-flagger-window"
-            style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
-            >on the last
-            <input id="auto-flagger-window" type="number" min="1" max="500" step="1" value="100" style="width: 78px" />
-            screenings</label
-          >
-          <label
-            style="display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px"
-            title="Also replay the configuration in effect today, so the flag rates are comparable"
-            ><input type="checkbox" id="auto-flagger-compare" /> compare with current</label
-          >
-          <button id="auto-flagger-reset" type="button">Restore default</button>
-          <span class="status" id="st-auto-flagger"></span>
-        </div>
-        <div class="foot" id="auto-flagger-test-result" hidden>
-          <span class="status" id="st-auto-flagger-test"></span>
-        </div></section
-    ></template>
-    <template data-original-card="card-base-model"
-      ><section class="card sv-models setting-row hidden" id="card-base-model">
-        <div class="head">
-          <h2>Default runtime</h2>
-        </div>
-        <div class="body">
-          <label for="base-harness">Harness</label>
-          <select id="base-harness" style="max-width: 360px"></select>
-          <label for="base-model">Model</label>
-          <select id="base-model" style="max-width: 360px"></select>
-          <label for="base-effort">Reasoning level</label>
-          <select id="base-effort" style="max-width: 360px"></select>
-          <label class="setting-toggle" id="base-fast-mode-control" style="display: none; margin-top: 10px">
-            <input type="checkbox" id="base-fast-mode" />
-            <span class="setting-switch" aria-hidden="true"></span>
-            <span class="setting-copy"
-              ><strong>Fast mode</strong><small>Only available for supported models.</small></span
-            >
-          </label>
-        </div>
-        <div class="foot">
-          <button class="primary" data-save="runtime">Apply</button><span class="status" id="st-runtime"></span>
-        </div></section
-    ></template>
-    <template data-original-card="card-webui-models"
-      ><section class="card sv-models hidden" id="card-webui-models">
-        <div class="head">
-          <h2>Enabled models</h2>
-        </div>
-        <div class="body">
-          <div id="webui-models-list" class="model-list">
-            <p id="webui-models-empty" class="hint">No additional models enabled.</p>
-          </div>
-          <div class="model-add-row">
-            <div class="model-add-field">
-              <label for="webui-models-add">Add a model</label>
-              <select id="webui-models-add">
-                <option value="">Choose a model…</option>
-              </select>
-            </div>
-            <button type="button" id="webui-models-add-button" disabled>+ Add model</button>
-          </div>
-        </div>
-        <div class="foot">
-          <button class="primary" data-save="webui-models">Save</button
-          ><span class="status" id="st-webui-models"></span>
-        </div></section
-    ></template>
-    <nav class="admin-variant-toggle" aria-label="Design variant">
-      <span class="admin-seed-data-note" title="This page includes development seed data.">Seed data</span>
-      <a data-admin-design="original" href="?variant=original">Original</a>
-      <a data-admin-design="1" href="?variant=1">New</a>
-    </nav>
     <script>
-      const adminVariant = new URLSearchParams(location.search).get("variant") === "1" ? "1" : "original";
-      document.documentElement.dataset.adminVariant = adminVariant;
-      document.querySelectorAll("template[data-original-card]").forEach((template) => {
-        if (adminVariant === "original") {
-          document.getElementById(template.dataset.originalCard).replaceWith(template.content.cloneNode(true));
-        }
-        template.remove();
-      });
-      const seededPreviewPages = new Set();
-      let seededPreviewDirectory = false;
-      function previewPageKey() {
-        const url = new URL(location.href);
-        url.searchParams.delete("variant");
-        return url.pathname + url.search;
-      }
-      function updatePreviewDataNote() {
-        document.body.dataset.previewSeed = String(
-          document.body.classList.contains("design-view") ||
-            seededPreviewPages.has(previewPageKey()) ||
-            (seededPreviewDirectory && document.body.dataset.subview === "history" && historyIsIndex()),
-        );
-      }
-      function updateAdminVariantLinks() {
-        updatePreviewDataNote();
-        document.querySelectorAll("[data-admin-design]").forEach((link) => {
-          const url = new URL(location.href);
-          url.searchParams.set("variant", link.dataset.adminDesign);
-          link.href = url.pathname + url.search + url.hash;
-          if (link.dataset.adminDesign === adminVariant) link.setAttribute("aria-current", "page");
-          else link.removeAttribute("aria-current");
-        });
-      }
-      updateAdminVariantLinks();
       const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
       function syncAdminTheme() {
         const saved = localStorage.getItem("theme") || "system";
@@ -8422,9 +7859,7 @@
         governanceAmbient.className = "card sv-governance hidden";
         governanceAmbient.id = "card-governance-org-ambient";
         governanceAmbient.innerHTML =
-          adminVariant === "1"
-            ? '<div class="head"><h2>Ambient reply policy</h2><p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p><button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button></div><div class="body"><select id="governance-org-ambient" data-choice-state hidden><option value="on">Agent judges all messages and replies when useful</option><option value="off">Agent does not read messages or reply unless @-mentioned</option></select><div class="choice-stack"><label class="posture-choice"><input type="radio" name="ambient-reply-choice" value="on" data-choice-for="governance-org-ambient"><span><strong>Reply when useful</strong><small>Agent judges all messages and replies when useful</small></span></label><label class="posture-choice"><input type="radio" name="ambient-reply-choice" value="off" data-choice-for="governance-org-ambient"><span><strong>Only when mentioned</strong><small>Agent does not read messages or reply unless @-mentioned</small></span></label></div></div><div class="foot"><button type="button" class="primary" id="governance-org-ambient-save" disabled>Apply</button><span class="status" id="st-governance-org-ambient"></span></div>'
-            : '<div class="head"><h2>Ambient reply policy</h2><button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button><p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p></div><div class="body"><select id="governance-org-ambient"><option value="on">Agent judges all messages and replies when useful</option><option value="off">Agent does not read messages or reply unless @-mentioned</option></select></div><div class="foot"><button type="button" class="primary" id="governance-org-ambient-save" disabled>Apply</button><span class="status" id="st-governance-org-ambient"></span></div>';
+          '<div class="head"><h2>Ambient reply policy</h2><p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p><button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button></div><div class="body"><select id="governance-org-ambient" data-choice-state hidden><option value="on">Agent judges all messages and replies when useful</option><option value="off">Agent does not read messages or reply unless @-mentioned</option></select><div class="choice-stack"><label class="posture-choice"><input type="radio" name="ambient-reply-choice" value="on" data-choice-for="governance-org-ambient"><span><strong>Reply when useful</strong><small>Agent judges all messages and replies when useful</small></span></label><label class="posture-choice"><input type="radio" name="ambient-reply-choice" value="off" data-choice-for="governance-org-ambient"><span><strong>Only when mentioned</strong><small>Agent does not read messages or reply unless @-mentioned</small></span></label></div></div><div class="foot"><button type="button" class="primary" id="governance-org-ambient-save" disabled>Apply</button><span class="status" id="st-governance-org-ambient"></span></div>';
         $("card-command-policy").after(governanceAmbient);
 
         const keychains = document.createElement("section");
@@ -8484,40 +7919,37 @@
       prepareParityCards();
       const scAddButton = $("sc-add");
       const scStatusHome = $("st-service-credentials").parentElement;
-      if (adminVariant === "1") {
-        const dialog = document.createElement("dialog");
-        dialog.id = "sc-dialog";
-        dialog.className = "custom-provider-dialog credential-dialog";
-        dialog.setAttribute("aria-labelledby", "sc-dialog-title");
-        dialog.setAttribute("aria-describedby", "sc-dialog-description");
-        dialog.innerHTML =
-          '<div class="project-dialog-head"><div><h2 id="sc-dialog-title">Add credential</h2><p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p></div><button class="project-icon-button" type="button" id="sc-dialog-close" aria-label="Close credential dialog">×</button></div><div class="project-dialog-actions" id="sc-dialog-actions"></div>';
-        $("card-service-credentials").appendChild(dialog);
-        dialog.insertBefore($("sc-editor"), $("sc-dialog-actions"));
-        $("sc-dialog-actions").append($("sc-reset"), $("sc-save"));
-        const dismiss = () => {
-          if (!$("st-service-credentials").classList.contains("saving")) resetScForm();
-        };
-        $("sc-dialog-close").onclick = dismiss;
-        dialog.addEventListener("cancel", (event) => {
-          event.preventDefault();
+      const dialog = document.createElement("dialog");
+      dialog.id = "sc-dialog";
+      dialog.className = "custom-provider-dialog credential-dialog";
+      dialog.setAttribute("aria-labelledby", "sc-dialog-title");
+      dialog.setAttribute("aria-describedby", "sc-dialog-description");
+      dialog.innerHTML =
+        '<div class="project-dialog-head"><div><h2 id="sc-dialog-title">Add credential</h2><p id="sc-dialog-description">Connect a service securely, then choose what the agent can access.</p></div><button class="project-icon-button" type="button" id="sc-dialog-close" aria-label="Close credential dialog">×</button></div><div class="project-dialog-actions" id="sc-dialog-actions"></div>';
+      $("card-service-credentials").appendChild(dialog);
+      dialog.insertBefore($("sc-editor"), $("sc-dialog-actions"));
+      $("sc-dialog-actions").append($("sc-reset"), $("sc-save"));
+      const dismiss = () => {
+        if (!$("st-service-credentials").classList.contains("saving")) resetScForm();
+      };
+      $("sc-dialog-close").onclick = dismiss;
+      dialog.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        dismiss();
+      });
+      dialog.addEventListener("click", (event) => {
+        const rect = dialog.getBoundingClientRect();
+        if (
+          event.target === dialog &&
+          (event.clientX < rect.left ||
+            event.clientX > rect.right ||
+            event.clientY < rect.top ||
+            event.clientY > rect.bottom)
+        )
           dismiss();
-        });
-        dialog.addEventListener("click", (event) => {
-          const rect = dialog.getBoundingClientRect();
-          if (
-            event.target === dialog &&
-            (event.clientX < rect.left ||
-              event.clientX > rect.right ||
-              event.clientY < rect.top ||
-              event.clientY > rect.bottom)
-          )
-            dismiss();
-        });
-      }
+      });
       function openScDialog() {
         const dialog = $("sc-dialog");
-        if (!dialog) return;
         $("sc-dialog-title").textContent = scEditing ? "Edit credential" : "Add credential";
         setStatus("st-service-credentials", "", "");
         $("sc-dialog-actions").prepend($("st-service-credentials"));
@@ -8644,8 +8076,6 @@
       const API_BASE = "__ADMIN_BASE__";
 
       async function api(method, path, body) {
-        const previewPage = previewPageKey();
-        const previewView = view;
         const res = await fetch(API_BASE + path, {
           method,
           headers: body ? { "content-type": "application/json" } : {},
@@ -8656,15 +8086,6 @@
         try {
           data = text ? JSON.parse(text) : null;
         } catch {}
-        const directoryRead = path.split("?")[0] === "/api/scopes";
-        if (directoryRead) seededPreviewDirectory = !!data?.__previewSeed;
-        if (
-          data?.__previewSeed &&
-          (!directoryRead || (previewView === "history" && !urlToState().session && orgWideView()))
-        ) {
-          seededPreviewPages.add(previewPage);
-          updatePreviewDataNote();
-        }
         return { ok: res.ok, status: res.status, data };
       }
 
@@ -9233,8 +8654,6 @@
       }
       function stateToUrl(st) {
         const p = new URLSearchParams();
-        const variant = new URLSearchParams(location.search).get("variant");
-        if (variant === "original" || variant === "1") p.set("variant", variant);
         if ((st.view || DEFAULT_VIEW) === "history") {
           if (st.session) {
             if (st.turn != null) p.set("turn", String(st.turn));
@@ -9630,9 +9049,9 @@
       function pageShell(opts = {}) {
         const bar = $("shellbar");
         bar.textContent = "";
-        const logView =
-          adminVariant === "1" &&
-          ["history", "slack", "judgments", "errors", "audit", "egress", "metrics", "memory"].includes(view);
+        const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "metrics", "memory"].includes(
+          view,
+        );
         bar.classList.toggle("logs-shell", logView);
         const counts = document.createElement("div");
         counts.className = "log-counts";
@@ -9649,18 +9068,14 @@
           const b = document.createElement("button");
           b.type = "button";
           b.className = "back";
-          if (adminVariant === "1") {
-            const label = document.createElement("span");
-            label.textContent = opts.back.label.replace(/^←\s*/, "");
-            b.append($("home-link").querySelector("svg").cloneNode(true), label);
-          } else b.textContent = opts.back.label;
+          const label = document.createElement("span");
+          label.textContent = opts.back.label.replace(/^←\s*/, "");
+          b.append($("home-link").querySelector("svg").cloneNode(true), label);
           b.onclick = opts.back.onClick;
-          if (adminVariant === "1") {
-            const row = document.createElement("div");
-            row.className = "shell-back-row";
-            row.appendChild(b);
-            bar.appendChild(row);
-          } else bar.appendChild(b);
+          const row = document.createElement("div");
+          row.className = "shell-back-row";
+          row.appendChild(b);
+          bar.appendChild(row);
         }
         if (opts.title) {
           const h = document.createElement("h1");
@@ -9731,25 +9146,23 @@
         input.disabled = disabled;
         input.oninput = () => onInput(input.value);
         wrap.appendChild(input);
-        if (adminVariant === "1") {
-          const icon = document.createElement("span");
-          icon.className = "admin-search-icon";
-          icon.setAttribute("aria-hidden", "true");
-          icon.innerHTML =
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
-          const clear = document.createElement("button");
-          clear.type = "button";
-          clear.className = "icon-button admin-search-clear";
-          clear.setAttribute("aria-label", "Clear search");
-          clear.textContent = "×";
-          clear.disabled = disabled;
-          clear.onclick = () => {
-            input.value = "";
-            onInput("");
-            input.focus();
-          };
-          wrap.append(icon, clear);
-        }
+        const icon = document.createElement("span");
+        icon.className = "admin-search-icon";
+        icon.setAttribute("aria-hidden", "true");
+        icon.innerHTML =
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>';
+        const clear = document.createElement("button");
+        clear.type = "button";
+        clear.className = "icon-button admin-search-clear";
+        clear.setAttribute("aria-label", "Clear search");
+        clear.textContent = "×";
+        clear.disabled = disabled;
+        clear.onclick = () => {
+          input.value = "";
+          onInput("");
+          input.focus();
+        };
+        wrap.append(icon, clear);
         return wrap;
       }
       function renderTranscriptHeaderControls(onChange) {
@@ -9797,8 +9210,7 @@
       }
 
       function defaultShell(extras = {}) {
-        updateAdminVariantLinks();
-        extras = { actions: adminVariant === "1" && view === "credentials" ? [scAddButton] : [], ...extras };
+        extras = { actions: view === "credentials" ? [scAddButton] : [], ...extras };
         const title = VIEW_TITLE[view] || titleCase(view);
         if (SCOPED.has(view) && !orgWideView()) {
           pageShell({
@@ -10408,9 +9820,7 @@
               const x = document.createElement("button");
               x.type = "button";
               x.innerHTML =
-                adminVariant === "1"
-                  ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>'
-                  : "×";
+                '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>';
               x.setAttribute("aria-label", "Remove " + id);
               x.onclick = () => {
                 webuiModelIds = webuiModelIds.filter((v) => v !== id);
@@ -10912,14 +10322,12 @@
         syncScPeople();
         captureScForm();
         renderServiceCreds(serviceCredList);
-        if ($("sc-dialog")) {
-          openScDialog();
-          $("sc-name").focus();
-        } else $("card-service-credentials").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        openScDialog();
+        $("sc-name").focus();
       }
       function resetScForm() {
         const dialog = $("sc-dialog");
-        const wasOpen = dialog?.open;
+        const wasOpen = dialog.open;
         if (wasOpen) dialog.close();
         scStatusHome.appendChild($("st-service-credentials"));
         $("sc-editor").classList.add("hidden");
@@ -12089,7 +11497,7 @@
         ).join("");
 
         root.innerHTML = [
-          '<p class="lead">Components and page patterns from the redesigned admin portal, including Skills, Files, Sessions, Metrics, Audit, and Egress. The layout guidance describes New; switch to Original to compare controls. Examples use fictional data and do not save changes.</p>',
+          '<p class="lead">Components and page patterns from the redesigned admin portal, including Skills, Files, Sessions, Metrics, Audit, and Egress. Examples use fictional data and do not save changes.</p>',
           designSection("Foundations", "One palette, a small type scale, and consistent spacing.", [
             designSpec(
               "Semantic colors",
@@ -12122,7 +11530,7 @@
               designSpec(
                 "Choose a page pattern",
                 "Live references · preserve the selected organization",
-                '<div class="design-page-links"><a href="/admin/governance?variant=1">Governance / Models</a><p>Descriptions beside settings, 40px column gap; stack on small screens. Keep Apply right-aligned with status on its left.</p><a href="/admin/skills?variant=1">Skills</a><p>Open installed-skill and skill-pack sections; compact tables and an inline registration form.</p><a href="/admin/files?variant=1">Files</a><p>Search in the header, flat upload toolbar, then scopes or files with metadata.</p><a href="/admin/history?variant=1">Sessions</a><p>Two-way sort toggle, named environments, and a separately titled conversation list.</p><a href="/admin/metrics?variant=1">Metrics</a><p>Quiet summary metrics followed by ruled report sections.</p><a href="/admin/audit?variant=1">Audit</a> · <a href="/admin/egress?variant=1">Egress</a><p>Filters above plain tables; headers stay transparent and regular-weight.</p></div>',
+                '<div class="design-page-links"><a data-design-view="governance">Governance / Models</a><p>Descriptions beside settings, 40px column gap; stack on small screens. Keep Apply right-aligned with status on its left.</p><a data-design-view="skills">Skills</a><p>Open installed-skill and skill-pack sections; compact tables and an inline registration form.</p><a data-design-view="files">Files</a><p>Search in the header, flat upload toolbar, then scopes or files with metadata.</p><a data-design-view="history">Sessions</a><p>Two-way sort toggle, named environments, and a separately titled conversation list.</p><a data-design-view="metrics">Metrics</a><p>Quiet summary metrics followed by ruled report sections.</p><a data-design-view="audit">Audit</a> · <a data-design-view="egress">Egress</a><p>Filters above plain tables; headers stay transparent and regular-weight.</p></div>',
                 true,
               ),
               designSpec(
@@ -12319,9 +11727,7 @@
         });
         root.querySelector(".lead").after(contents);
         root.querySelectorAll(".design-page-links a").forEach((link) => {
-          const url = new URL(link.href);
-          url.searchParams.set("scope", scope);
-          link.href = url.pathname + url.search;
+          link.href = stateToUrl({ view: link.dataset.designView, scope });
         });
         $("design-scope-list").appendChild(
           denseList(
@@ -12913,9 +12319,7 @@
         del.type = "button";
         del.className = "rowbtn danger";
         del.innerHTML =
-          adminVariant === "1"
-            ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>'
-            : "×";
+          '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>';
         del.title = "Remove this command policy rule";
         del.setAttribute("aria-label", "Remove command policy rule");
         del.onclick = () => {
@@ -14002,7 +13406,7 @@
       function renderMetrics(root, d) {
         const phaseSel = urlToState().phase;
         if (phaseSel) return renderPhaseDrill(root, d, phaseSel);
-        if (adminVariant === "1") defaultShell({ count: plural(d.throughput?.total ?? 0, "run") });
+        defaultShell({ count: plural(d.throughput?.total ?? 0, "run") });
         renderCacheHealth(root, d);
         const phases = d.phases || [];
         root.appendChild(
@@ -14221,24 +13625,18 @@
           const scopeTarget = /^(personal|channel|team|org|group):.+/.test(e.scopeLabel || "") ? e.scopeLabel : null;
           const fullText = e.message || "(no message)";
           const previewText = firstLine(fullText, 160);
-          const expandable = adminVariant === "1" || previewText !== fullText;
-          const message = document.createElement(expandable ? "details" : "div");
+          const message = document.createElement("details");
           message.className = "error-message";
-          if (expandable) {
-            const summary = document.createElement("summary");
-            const preview = document.createElement("span");
-            preview.className = "error-preview";
-            preview.textContent = previewText;
-            const full = document.createElement("span");
-            full.className = "error-full";
-            full.textContent = fullText;
-            summary.append(preview, full);
-            message.append(summary);
-          } else {
-            message.textContent = fullText;
-          }
+          const summary = document.createElement("summary");
+          const preview = document.createElement("span");
+          preview.className = "error-preview";
+          preview.textContent = previewText;
+          const full = document.createElement("span");
+          full.className = "error-full";
+          full.textContent = fullText;
+          summary.append(preview, full);
+          message.append(summary);
           return [
-            ...(adminVariant === "1" ? [] : [timeCell(e.ts)]),
             { text: e.category || "uncategorized" },
             { text: e.code || "—", cls: "mono" },
             nodeCell(message),
@@ -14254,19 +13652,11 @@
                   navLink("View session", { view: "history", scope: scopeTarget || scope, session: e.sessionId }),
                 )
               : { text: "—" },
-            ...(adminVariant === "1" ? [timeCell(e.ts)] : []),
+            timeCell(e.ts),
           ];
         });
         const content = table(
-          [
-            ...(adminVariant === "1" ? [] : ["Time"]),
-            "Category",
-            "Code",
-            "Message",
-            ...(all ? ["Scope"] : []),
-            "Session",
-            ...(adminVariant === "1" ? ["Time"] : []),
-          ],
+          ["Category", "Code", "Message", ...(all ? ["Scope"] : []), "Session", "Time"],
           rows,
           all ? "No errors recorded." : "No errors recorded for this scope.",
         );
@@ -15134,7 +14524,7 @@
           },
           placeholder: index ? "Search all skills…" : "Search skills…",
         });
-        const card = adminVariant === "1" ? dataCard("Installed skills", "", tableWrap) : bareDataCard(tableWrap);
+        const card = dataCard("Installed skills", "", tableWrap);
         if (scopeWrap) card.querySelector(".body").prepend(scopeWrap);
         root.appendChild(card);
         root.appendChild(detail);
@@ -15537,9 +14927,7 @@
         });
         box.appendChild(table(["Pack", "Skills", "Trust", "Status", ""], rows, "No packs yet. Register one above."));
         root.appendChild(
-          adminVariant === "1"
-            ? dataCard("Skill packs", "Register a repository, then choose which skills to import into each scope.", box)
-            : bareDataCard(box),
+          dataCard("Skill packs", "Register a repository, then choose which skills to import into each scope.", box),
         );
         root.appendChild(detail);
       }
@@ -16058,7 +15446,6 @@
             title: orgWideView() ? "Org-wide" : shortName(scope),
           });
         }
-        const redesigned = adminVariant === "1";
         const server = d.content || "";
         const wrap = document.createElement("div");
         const ta = document.createElement("textarea");
@@ -16103,26 +15490,19 @@
         };
         foot.append(save, st);
         wrap.append(ta, foot);
-        if (redesigned) {
-          const label = document.createElement("label");
-          label.htmlFor = "memory-text";
-          label.textContent = "Notebook contents";
-          wrap.prepend(label);
-          st.setAttribute("role", "status");
-          const card = dataCard(
-            "Notebook",
-            "What the agent remembers in this scope. Changes apply when you save.",
-            wrap,
-          );
-          card.classList.add("memory-editor");
-          root.appendChild(card);
-        } else root.appendChild(bareDataCard(wrap));
+        const label = document.createElement("label");
+        label.htmlFor = "memory-text";
+        label.textContent = "Notebook contents";
+        wrap.prepend(label);
+        st.setAttribute("role", "status");
+        const card = dataCard("Notebook", "What the agent remembers in this scope. Changes apply when you save.", wrap);
+        card.classList.add("memory-editor");
+        root.appendChild(card);
       }
       function renderMemoryIndex(root, d) {
-        const redesigned = adminVariant === "1";
         let query = "";
         const list = document.createElement("div");
-        if (redesigned) list.className = "memory-notebooks";
+        list.className = "memory-notebooks";
         const scopes = (d.scopes || []).filter((s) => s.hasMemory || scopeKind(s.scopeId) === "org");
         const written = scopes.filter((s) => s.hasMemory);
         const hasTimestamps = written.some((s) => s.updatedAt);
@@ -16139,22 +15519,14 @@
           );
         pageShell({
           title: VIEW_TITLE.memory,
-          count: redesigned
-            ? plural(written.length, "notebook")
-            : written.length
-              ? plural(written.length, "notebook")
-              : "",
-          ...(redesigned
-            ? {
-                search: {
-                  placeholder: "Search notebooks…",
-                  onInput: (value) => {
-                    query = value.trim().toLowerCase();
-                    draw();
-                  },
-                },
-              }
-            : {}),
+          count: plural(written.length, "notebook"),
+          search: {
+            placeholder: "Search notebooks…",
+            onInput: (value) => {
+              query = value.trim().toLowerCase();
+              draw();
+            },
+          },
           context: written.length && !hasTimestamps ? "sorted by size (this backend keeps no edit history)" : "",
         });
         const draw = () => {
@@ -16176,16 +15548,14 @@
             openScope,
             query ? "No notebooks match your search." : "No notebooks yet. The agent hasn't remembered anything.",
           );
-          if (redesigned) {
-            const headings = document.createElement("div");
-            headings.className = "memory-columns";
-            for (const text of ["Notebook", "Size", "Last updated"]) {
-              const label = document.createElement("span");
-              label.textContent = text;
-              headings.appendChild(label);
-            }
-            list.replaceChildren(headings, t);
-          } else list.replaceChildren(bareDataCard(t));
+          const headings = document.createElement("div");
+          headings.className = "memory-columns";
+          for (const text of ["Notebook", "Size", "Last updated"]) {
+            const label = document.createElement("span");
+            label.textContent = text;
+            headings.appendChild(label);
+          }
+          list.replaceChildren(headings, t);
         };
         draw();
         root.appendChild(list);
@@ -16545,13 +15915,10 @@
         drawLists();
       }
       function renderUsers(root, d) {
-        const redesigned = adminVariant === "1";
-        if (redesigned) {
-          const layout = document.createElement("div");
-          layout.className = "users-layout";
-          root.appendChild(layout);
-          root = layout;
-        }
+        const layout = document.createElement("div");
+        layout.className = "users-layout";
+        root.appendChild(layout);
+        root = layout;
         const users = d.users || [];
         const grants = d.grants || [];
         const externalUsers = d.externalUsers || [];
@@ -16624,7 +15991,7 @@
         st.id = "st-users";
         st.style.margin = "10px 0 0";
         formCard.querySelector(".body").appendChild(st);
-        if (redesigned) formCard.classList.add("users-setting");
+        formCard.classList.add("users-setting");
         root.appendChild(formCard);
 
         const impForm = document.createElement("div");
@@ -16699,7 +16066,7 @@
         impSt.id = "st-imp";
         impSt.style.margin = "10px 0 0";
         impCard.querySelector(".body").append(impDatalist, impSt);
-        if (redesigned) impCard.classList.add("users-setting");
+        impCard.classList.add("users-setting");
         root.appendChild(impCard);
 
         const inviteEmail = d.inviteEmail || {};
@@ -16795,8 +16162,7 @@
 
         const lists = document.createElement("div");
         lists.className = "list-root";
-        if (redesigned) root.prepend(lists);
-        else root.appendChild(lists);
+        root.prepend(lists);
         const orgAdminCount = grants.filter((g) => g.role === "org_admin").length;
         const matches = (parts) => parts.join(" ").toLowerCase().includes(filterVal.trim().toLowerCase());
         const drawLists = () => {
@@ -16874,8 +16240,7 @@
             "Everyone who has used the agent — click a row for their activity, artifacts, and config.",
             roster,
           );
-          if (redesigned) lists.prepend(usersCard);
-          else lists.appendChild(usersCard);
+          lists.prepend(usersCard);
 
           const external = actionTable(
             ["Email", "Role", "Expires", "Invited by", "Status", ""],
@@ -16901,10 +16266,8 @@
             "Outside collaborators invited by email until an expiry date. Org members do not need an external invite.",
             external,
           );
-          if (redesigned) {
-            externalCard.classList.add("users-roster");
-            externalCard.querySelector(".head").appendChild(addBtn);
-          } else externalCard.querySelector(".head h2").append(" ", addBtn);
+          externalCard.classList.add("users-roster");
+          externalCard.querySelector(".head").appendChild(addBtn);
           externalCard.querySelector(".body").prepend(invite);
           externalCard.querySelector(".body").appendChild(externalSt);
           lists.appendChild(externalCard);
@@ -17417,38 +16780,19 @@
         const sortLabel = document.createElement("span");
         sortLabel.className = "shell-sort-label";
         sortLabel.textContent = "Sort:";
-        let seg = document.createElement("div");
-        seg.className = "segmented";
-        const sortOpt = (value, label) => {
-          const b = document.createElement("button");
-          b.type = "button";
-          b.className = "seg" + (scopeSort === value ? " active" : "");
-          b.textContent = label;
-          b.onclick = () => {
-            if (scopeSort !== value) {
-              scopeSort = value;
-              renderScopeIndex();
-            }
-          };
-          seg.appendChild(b);
-        };
-        sortOpt("human", "Human activity");
-        sortOpt("all", "All activity");
-        if (adminVariant === "1") {
-          seg = twoWayToggle({
-            label: "Sort sessions",
-            options: [
-              { value: "human", label: "Human activity" },
-              { value: "all", label: "All activity" },
-            ],
-            value: scopeSort,
-            onChange: (value) => {
-              scopeSort = value;
-              renderScopeIndex();
-              $("shellbar").querySelector(".two-way-toggle input:checked")?.focus({ preventScroll: true });
-            },
-          });
-        }
+        const seg = twoWayToggle({
+          label: "Sort sessions",
+          options: [
+            { value: "human", label: "Human activity" },
+            { value: "all", label: "All activity" },
+          ],
+          value: scopeSort,
+          onChange: (value) => {
+            scopeSort = value;
+            renderScopeIndex();
+            $("shellbar").querySelector(".two-way-toggle input:checked")?.focus({ preventScroll: true });
+          },
+        });
         sortControl.append(sortLabel, seg);
         pageShell({
           title: VIEW_TITLE.history,
@@ -17511,9 +16855,7 @@
           (s) => selectScope(s.scopeId),
           rows.length ? "No conversations yet." : "No scopes yet. Nobody has talked to the agent.",
         );
-        root.appendChild(
-          adminVariant === "1" ? dataCard("Conversations by person or channel", "", t) : bareDataCard(t),
-        );
+        root.appendChild(dataCard("Conversations by person or channel", "", t));
         if (quietRows.length) {
           const quiet = document.createElement("details");
           quiet.className = "history-quiet";
@@ -18264,20 +17606,14 @@
         return r;
       }
 
-      function slackContainerMeta(id) {
+      function slackContainerLabel(id) {
         const c = (slackContainers || []).find((x) => x.container === id) || {};
         const nm = c.name || null;
         const kind = c.kind || (nm ? "channel" : "");
-        if (kind === "channel") return { icon: "#", name: nm || id, label: "#" + (nm || id) };
-        if (kind === "dm") return { icon: "@", name: nm || id, label: nm || id };
-        if (kind === "group") {
-          const g = nm || ((c.members || []).length ? c.members.length + " people" : id);
-          return { icon: "@", name: g, label: g };
-        }
-        return nm ? { icon: "#", name: nm, label: "#" + nm } : { icon: "#", name: id, label: id };
-      }
-      function slackContainerLabel(id) {
-        return slackContainerMeta(id).label;
+        if (kind === "channel") return "#" + (nm || id);
+        if (kind === "dm") return nm || id;
+        if (kind === "group") return nm || ((c.members || []).length ? c.members.length + " people" : id);
+        return nm ? "#" + nm : id;
       }
 
       function slackContainerScope(id) {
@@ -18438,16 +17774,9 @@
       function slackUnescape(s) {
         return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
       }
-      function slackHashHue(s) {
-        let h = 0;
-        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-        return h % 360;
-      }
       function slackAvatar(m) {
         const av = document.createElement("span");
         av.className = "sm-avatar";
-        if (adminVariant !== "1")
-          av.style.background = "hsl(" + slackHashHue(m.authorId || m.authorName || "?") + " 52% 42%)";
         av.textContent = (slackAuthorLabel(m).trim()[0] || "?").toUpperCase();
         return av;
       }
@@ -18487,10 +17816,7 @@
 
       function slackAppendMrkdwn(raw, parent) {
         const text = slackUnescape(raw);
-        const re =
-          adminVariant === "1"
-            ? /\*([^*\n]+)\*|(?<!\w)_([^_\n]+)_(?!\w)|~([^~\n]+)~|(https?:\/\/[^\s<>]+)/g
-            : /\*([^*\n]+)\*|(?<!\w)_([^_\n]+)_(?!\w)|~([^~\n]+)~/g;
+        const re = /\*([^*\n]+)\*|(?<!\w)_([^_\n]+)_(?!\w)|~([^~\n]+)~|(https?:\/\/[^\s<>]+)/g;
         let last = 0,
           m;
         while ((m = re.exec(text))) {
@@ -18550,7 +17876,7 @@
             code.textContent = slackUnescape(part.replace(/^\n/, "").replace(/\n$/, ""));
             pre.appendChild(code);
             frag.appendChild(pre);
-          } else if (adminVariant === "1") {
+          } else {
             let quote = null;
             part.split("\n").forEach((line, lineIndex) => {
               const quoted = /^(?:>|&gt;) ?/.test(line);
@@ -18566,8 +17892,6 @@
                 slackParseInline(line, frag, mentions);
               }
             });
-          } else {
-            slackParseInline(part, frag, mentions);
           }
         });
         return frag;
@@ -18633,7 +17957,7 @@
           if (m.sub && m.sub !== m.ts) {
             const t = document.createElement("span");
             t.className = "sm-tag";
-            t.textContent = adminVariant === "1" ? "Thread reply" : "↳ thread";
+            t.textContent = "Thread reply";
             t.title = "Reply in the thread rooted at " + m.sub;
             head.appendChild(t);
           }
@@ -18646,7 +17970,7 @@
           const when = document.createElement("span");
           when.className = "sm-when";
           when.textContent =
-            adminVariant === "1" && view === "slack" && !opts.onOpen
+            view === "slack" && !opts.onOpen
               ? new Date(m.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
               : relTime(m.createdAt);
           when.title = fmtTime(m.createdAt) + " · ts " + m.ts;
@@ -18742,10 +18066,9 @@
             denseList(
               containers,
               (c) => {
-                const meta = slackContainerMeta(c.container);
                 return {
-                  icon: adminVariant === "1" ? null : meta.icon,
-                  name: adminVariant === "1" ? meta.label : meta.name,
+                  icon: null,
+                  name: slackContainerLabel(c.container),
                   preview: `${Number(c.messageCount).toLocaleString()} mirrored · ${plural((c.members || []).length, "member")}`,
                   time: relTime(c.updatedAt),
                   href: stateToUrl({ view: "slack", container: c.container }),
@@ -18776,17 +18099,15 @@
             ...(scopeGo ? [navLink("Governance →", { view: "governance", scope: scopeGo, session: null })] : []),
           ],
         });
-        if (adminVariant === "1") {
-          const bar = $("shellbar");
-          const toolbar = document.createElement("div");
-          toolbar.className = "sm-toolbar";
-          toolbar.append(bar.querySelector(".back"), ...bar.querySelectorAll(".link"));
-          const heading = document.createElement("div");
-          heading.className = "sm-channel-heading";
-          heading.append(bar.querySelector(".shell-title"), bar.querySelector(".shell-context"));
-          bar.querySelector(".shell-spacer")?.remove();
-          bar.prepend(toolbar, heading);
-        }
+        const bar = $("shellbar");
+        const toolbar = document.createElement("div");
+        toolbar.className = "sm-toolbar";
+        toolbar.append(bar.querySelector(".back"), ...bar.querySelectorAll(".link"));
+        const heading = document.createElement("div");
+        heading.className = "sm-channel-heading";
+        heading.append(bar.querySelector(".shell-title"), bar.querySelector(".shell-context"));
+        bar.querySelector(".shell-spacer")?.remove();
+        bar.prepend(toolbar, heading);
         const loading = document.createElement("div");
         loading.className = "loadingline";
         loading.textContent = "Loading messages...";
@@ -18816,19 +18137,13 @@
         const stateNow = urlToState();
         if (view !== "slack" || stateNow.container !== container) return;
         root.textContent = "";
-        const rawFeed = document.createElement("div");
-        rawFeed.className = "sm-rawfeed";
         const rawLink = document.createElement("a");
         rawLink.href = "/api/slack-mirror/messages?container=" + encodeURIComponent(container);
         rawLink.target = "_blank";
         rawLink.rel = "noopener";
         rawLink.textContent = "Raw feed ↗";
         rawLink.title = "Open the raw mirrored JSON rows for this container in a new tab";
-        if (adminVariant === "1") $("shellbar").querySelector(".sm-toolbar").appendChild(rawLink);
-        else {
-          rawFeed.appendChild(rawLink);
-          root.appendChild(rawFeed);
-        }
+        $("shellbar").querySelector(".sm-toolbar").appendChild(rawLink);
         const stream = document.createElement("div");
         stream.className = "sm-stream";
         const dayOf = (m) => new Date(m.createdAt).toDateString();
@@ -20579,12 +19894,11 @@
                   },
                 }),
             title: index ? VIEW_TITLE.files : shortName(scope),
-            actions: adminVariant === "1" ? [uploadBox] : [],
+            actions: [uploadBox],
             count: files.length ? plural(files.length, "file") : "",
           },
           placeholder: index ? "Search all files…" : "Search files…",
         });
-        if (adminVariant !== "1") root.appendChild(uploadBox);
         const card = bareDataCard(fileWrap);
         if (scopeWrap) card.querySelector(".body").prepend(scopeWrap);
         root.appendChild(card);

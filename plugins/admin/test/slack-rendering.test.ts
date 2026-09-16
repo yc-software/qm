@@ -35,9 +35,8 @@ class RenderNode {
   }
 }
 
-function render(text: string, variant = "1") {
+function render(text: string) {
   const context = vm.createContext({
-    adminVariant: variant,
     SLACK_EMOJI: { wave: "👋" },
     document: {
       createElement: (tag: string) => new RenderNode(tag),
@@ -81,20 +80,6 @@ test("Slack message content cannot create executable elements or unsafe links", 
   assert.match(result.textContent, /unsafe/);
 });
 
-test("Original Slack message formatting is preserved", () => {
-  const result = render(
-    "> Plain quote\nhttps://example.com\n*bold* _italic_ ~removed~ <https://example.com|Named link>",
-    "original",
-  );
-  assert.equal(result.find("blockquote").length, 0);
-  assert.equal(result.find("a").length, 1);
-  assert.equal(result.find("a")[0].textContent, "Named link");
-  assert.equal(result.find("strong")[0].textContent, "bold");
-  assert.equal(result.find("em")[0].textContent, "italic");
-  assert.equal(result.find("s")[0].textContent, "removed");
-  assert.match(result.textContent, /^> Plain quote\nhttps:\/\/example.com/);
-});
-
 test("Slack links exclude surrounding punctuation and preserve parentheses inside a URL", () => {
   const result = render("See (https://example.com/report). Also https://example.com/wiki/Example_(topic).");
   assert.deepEqual(
@@ -102,4 +87,13 @@ test("Slack links exclude surrounding punctuation and preserve parentheses insid
     ["https://example.com/report", "https://example.com/wiki/Example_(topic)"],
   );
   assert.equal(result.textContent, "See (https://example.com/report). Also https://example.com/wiki/Example_(topic).");
+});
+
+test("Slack inline markup preserves emphasis, named links, and prose", () => {
+  const result = render("Before *bold* _italic_ ~removed~ <https://example.com|Named link> after");
+  assert.equal(result.find("strong")[0].textContent, "bold");
+  assert.equal(result.find("em")[0].textContent, "italic");
+  assert.equal(result.find("s")[0].textContent, "removed");
+  assert.equal(result.find("a")[0].textContent, "Named link");
+  assert.equal(result.textContent, "Before bold italic removed Named link after");
 });

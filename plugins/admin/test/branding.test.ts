@@ -93,7 +93,7 @@ test("the brand icon is a CSS variable the org can point at its own image", () =
 });
 
 test("design system routes embed the shared component library and retain the script CSP", async () => {
-  const response = await fetch(base + "/design-system?variant=1");
+  const response = await fetch(base + "/design-system");
   assert.equal(response.status, 200);
   const html = await response.text();
   const css = readFileSync(new URL("../public/admin-components.css", import.meta.url), "utf8");
