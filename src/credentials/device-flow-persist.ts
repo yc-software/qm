@@ -555,9 +555,11 @@ export async function registerLoginPaths(input: RegisterLoginInput): Promise<{ s
   return { service, captured: saved.includes(service) };
 }
 
-export async function materializeDeviceFlowLogins(input: DeviceFlowPersistInput): Promise<string[]> {
+export async function materializeDeviceFlowLogins(
+  input: DeviceFlowPersistInput & { allOrigins?: boolean },
+): Promise<string[]> {
   const bundles = (await input.keychain.materializeOwnFiles(input.ownerId)).filter(
-    (b) => b.origin === DEVICE_FLOW_ORIGIN && serviceSelected(input, b.service),
+    (b) => (input.allOrigins === true || b.origin === DEVICE_FLOW_ORIGIN) && serviceSelected(input, b.service),
   );
   if (!bundles.length) return [];
 

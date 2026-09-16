@@ -1641,7 +1641,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   if (hasOwn && openSpeaker) {
     lines.push(
       "",
-      `Use execute with scope:"owner" for commands needing the speaker's logins or connected apps. Their env credentials, connector tokens and saved CLI logins are supplied there automatically. Do not load them through /v1/keychain/use on the shared computer.`,
+      `Use execute with scope:"owner" for commands needing the speaker's logins or connected apps. Their env credentials, connector tokens and saved CLI logins are supplied there automatically, except services restricted to a dedicated credential tool. Do not load them through /v1/keychain/use on the shared computer.`,
       "This is a separate, disposable computer: it cannot see the shared workspace, and is destroyed at the end of this turn. Keep credential-using commands there; return only the results needed for the task. Never copy secrets into the shared workspace or pass them to background jobs. Normal command approvals still apply.",
     );
   } else if (hasOwn) {

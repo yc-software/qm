@@ -390,7 +390,11 @@ test("sharing e2e: screening off preserves carried skills without model calls", 
 });
 
 test("Open speaker keychain uses a disposable computer, follows the speaker, and never grants the room", async (t) => {
-  const b = await fixture(t, { signingSecret: "open-keychain-test-signing-key", sharedOwnerAuthIsolation: false });
+  const b = await fixture(t, {
+    signingSecret: "open-keychain-test-signing-key",
+    apiBaseUrl: "http://core.test",
+    sharedOwnerAuthIsolation: false,
+  });
   assert.ok(b.keychain);
   for (const id of ["U1", "U2"]) {
     await b.keychain.save({ ownerId: id, service: "npm", secret: `npm_${id}`, envKey: "NPM_TOKEN" });

@@ -459,6 +459,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
               handle,
               keychain: deps.keychain,
               ownerId: actor.id,
+              ...(openSpeakerKeychain ? { allOrigins: true } : {}),
               ...(credentialCutoverServices.length ? { excludeServices: credentialCutoverServices } : {}),
               onAnomaly: (service, detail) =>
                 deps.errors?.record({
