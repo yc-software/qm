@@ -1168,8 +1168,15 @@ const apiRoutes: readonly WebRoute[] = [
       if (!body) return;
       c.res.setHeader("Cache-Control", "no-store");
       const callbackUrl = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
-      if (!callbackUrl) return json(c.res, 400, { error: "invalid_return_url" });
-      return relayCore(c.res, "POST", "/v1/composio/authorize", JSON.stringify({ toolkit: body.toolkit, callbackUrl }));
+      if (!callbackUrl && (body.returnTo !== undefined || body.state !== undefined)) {
+        return json(c.res, 400, { error: "invalid_return_url" });
+      }
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/composio/authorize",
+        JSON.stringify({ toolkit: body.toolkit, ...(callbackUrl ? { callbackUrl } : {}) }),
+      );
     },
   },
   {

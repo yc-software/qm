@@ -132,3 +132,35 @@ test("routes that historically tolerated an empty body still do", async () => {
   const forked = calls.at(-1);
   assert.deepEqual(forked?.body, { principalId: "alice" });
 });
+
+test("app authorization accepts existing browser payloads and validates new return context", async () => {
+  const authorize = (body: Record<string, unknown>) =>
+    fetch(`${base}/api/composio/authorize`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+  const legacy = await authorize({ toolkit: "gmail" });
+  assert.equal(legacy.status, 200);
+  assert.ok(calls.at(-1)?.url.startsWith("/v1/composio/authorize"));
+  assert.deepEqual(calls.at(-1)?.body, { toolkit: "gmail" });
+  const state = "00000000-0000-4000-8000-000000000000";
+  const modern = await authorize({ toolkit: "gmail", returnTo: "/s/chat", state });
+  assert.equal(modern.status, 200);
+  const callback = new URL(String(calls.at(-1)?.body.callbackUrl));
+  assert.equal(callback.pathname, "/s/chat");
+  assert.equal(callback.searchParams.get("composioReturn"), state);
+  const before = calls.length;
+  for (const invalid of [
+    { returnTo: "/s/chat" },
+    { state },
+    { returnTo: null, state: null },
+    { returnTo: "https://evil.example", state },
+    { returnTo: "/", state: "bad" },
+  ]) {
+    const response = await authorize({ toolkit: "gmail", ...invalid });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_return_url");
+  }
+  assert.equal(calls.length, before);
+});
