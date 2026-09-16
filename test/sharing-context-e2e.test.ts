@@ -393,6 +393,7 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   const b = await fixture(t, {
     signingSecret: "open-keychain-test-signing-key",
     apiBaseUrl: "http://core.test",
+    maxAttempts: 1,
     sharedOwnerAuthIsolation: false,
   });
   assert.ok(b.keychain);
@@ -426,20 +427,29 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     await b.turn(`!owner python3 -c 'import os; print("leaked" if os.path.exists("retained.txt") else "clean")'`, true),
     "clean",
   );
+  let deniedTurn = 0;
+  const denied = (origin: TurnRequest["origin"] = { kind: "human" }) =>
+    b.turn("!owner true", true, "U1", {
+      origin,
+      conversation: {
+        kind: "channel",
+        channelRef: "C1",
+        threadRef: `C1:keychain-denied-${++deniedTurn}`,
+        audience: [{ externalId: "U1" }, { externalId: "U2" }],
+        publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
+      },
+    });
   await b.config.setSharingPosture("personal:U1", "isolated");
-  await assert.rejects(b.turn("!owner true", true), /owner-auth box is not available/);
+  await assert.rejects(denied(), /owner-auth box is not available/);
   await b.config.setSharingPosture("personal:U1", "open");
   await b.config.setSharingPosture("channel:C1", "isolated");
-  await assert.rejects(b.turn("!owner true", true), /owner-auth box is not available/);
+  await assert.rejects(denied(), /owner-auth box is not available/);
   await b.config.setSharingPosture("channel:C1", "open");
-  await assert.rejects(
-    b.turn("!owner true", true, "U1", { origin: { kind: "automation" } }),
-    /owner-auth box is not available/,
-  );
-  await assert.rejects(
-    b.turn("!owner true", true, "U1", { origin: { kind: "ambient", live: true } }),
-    /owner-auth box is not available/,
-  );
+  await b.config.setSharingPosture("org:default-org", "isolated");
+  await assert.rejects(denied(), /owner-auth box is not available/);
+  await b.config.setSharingPosture("org:default-org", "open");
+  await assert.rejects(denied({ kind: "automation" }), /owner-auth box is not available/);
+  await assert.rejects(denied({ kind: "ambient", live: true }), /owner-auth box is not available/);
   await b.remove("U1");
-  await assert.rejects(b.turn("!owner true", true), /owner-auth box is not available/);
+  await assert.rejects(denied(), /owner-auth box is not available/);
 });
