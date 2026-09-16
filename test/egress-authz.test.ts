@@ -185,11 +185,15 @@ test("allowlist present => non-matching host is 403 not_allowlisted, matching ho
   }
 });
 
-test("NO token fails closed by default and is audited as unknown", async () => {
+test("NO token is CHALLENGED with 407 + Proxy-Authenticate and audited as unknown", async () => {
   const { server, records } = boot();
   const port = await listen(server);
   try {
-    assert.equal(await check(port, "example.com:443"), 403);
+    // 407 (not a bare 403) so challenge-based clients — git's default proxy "anyauth" — send
+    // Basic and retry. A bare 403 here regressed git clones: "CONNECT tunnel failed, response 403".
+    const res = await checkWithHeaders(port, "example.com:443");
+    assert.equal(res.status, 407);
+    assert.equal(res.headers["proxy-authenticate"], 'Basic realm="egress"');
     assert.equal(records.at(-1)?.verdict, "not_allowlisted");
     assert.equal(records.at(-1)?.scopeLabel, "unknown");
     assert.equal(records.at(-1)?.principalId, "unknown");
@@ -198,23 +202,25 @@ test("NO token fails closed by default and is audited as unknown", async () => {
   }
 });
 
-test("wrong-secret / wrong-audience / expired presented tokens fail closed", async () => {
+test("wrong-secret / wrong-audience / expired presented tokens fail closed with a 407 challenge", async () => {
   const { server, records } = boot();
   const port = await listen(server);
   try {
+    // Unverifiable = authentication failure => 407, so an expired per-turn token surfaces as an
+    // auth problem (diagnosable) instead of a policy denial. Nothing tunnels either way.
     assert.equal(
       await check(port, "example.com:443", await egressToken({ allowedHosts: [] }, { secret: SOURCE_SECRET })),
-      403,
+      407,
     );
     assert.equal(records.at(-1)?.scopeLabel, "unknown");
     assert.equal(
       await check(port, "example.com:443", await egressToken({ allowedHosts: [] }, { aud: CONTROL_PLANE_AUD })),
-      403,
+      407,
     );
     assert.equal(records.at(-1)?.scopeLabel, "unknown");
     assert.equal(
       await check(port, "example.com:443", await egressToken({ allowedHosts: [] }, { exp: Date.now() - 1000 })),
-      403,
+      407,
     );
     assert.equal(records.at(-1)?.scopeLabel, "unknown");
   } finally {
