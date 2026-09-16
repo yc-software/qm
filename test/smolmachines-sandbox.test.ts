@@ -212,3 +212,16 @@ test("profile advertises resident disk and process sessions", () => {
   assert.equal(sandbox.profile.writablePersistence, "resident_disk");
   assert.equal(sandbox.profile.processSessions, true);
 });
+
+test("read and write refuse parent path segments before any provider request", async () => {
+  const h = await sandbox.provision(layers);
+  fake.calls.length = 0;
+  for (const rel of ["../../../../../machines", "../../../../m-2/files/root/x", "a/../../b"]) {
+    await assert.rejects(sandbox.readFile(h, rel), /escapes the workspace/);
+    await assert.rejects(sandbox.writeFile(h, rel, "x"), /escapes the workspace/);
+  }
+  assert.deepEqual(
+    fake.calls.filter((c) => c.path.includes("/files")),
+    [],
+  );
+});

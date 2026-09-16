@@ -8,13 +8,14 @@ import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token
 import { CAPABILITY_HEADER } from "../api/contract.ts";
 
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import type {
-  AgentComputerExportArea,
-  AgentComputerExportEntry,
-  AgentComputerExportOptions,
-  Sandbox,
-  SandboxHandle,
-  StageOptions,
+import {
+  hasParentPathSegment,
+  type AgentComputerExportArea,
+  type AgentComputerExportEntry,
+  type AgentComputerExportOptions,
+  type Sandbox,
+  type SandboxHandle,
+  type StageOptions,
 } from "./sandbox.ts";
 
 const posixDirname = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf("/"))) || "/";
@@ -22,6 +23,7 @@ const posixDirname = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf
 const BLOB_TRANSFER_TTL_MS = 2 * 60_000;
 
 export function posixJoin(base: string, rel: string): string {
+  if (hasParentPathSegment(rel)) throw new Error(`path ${rel} escapes the workspace: parent segments are not allowed`);
   const clean = rel.replace(/^\/+/, "");
   return clean ? `${base.replace(/\/+$/, "")}/${clean}` : base;
 }

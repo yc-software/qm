@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createExecFileOps } from "../src/sandbox/exec-file-ops.ts";
+import { createExecFileOps, posixJoin } from "../src/sandbox/exec-file-ops.ts";
 
 const exec = promisify(execFile);
 
@@ -69,4 +69,11 @@ test("combined cleanup is opt-in for provider implementations", () => {
     writeInline: async () => {},
   });
   assert.equal(ops.removeDirAndList, undefined);
+});
+
+test("posixJoin rejects parent path segments", () => {
+  assert.equal(posixJoin("/root/workspace", "a/b.txt"), "/root/workspace/a/b.txt");
+  assert.equal(posixJoin("/root/workspace/", "/a/./b.txt"), "/root/workspace/a/./b.txt");
+  assert.throws(() => posixJoin("/root/workspace", "../x"), /escapes the workspace/);
+  assert.throws(() => posixJoin("/root/workspace", "a/../../x"), /escapes the workspace/);
 });

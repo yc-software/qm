@@ -309,8 +309,9 @@ test("adoptHomeSnapshot promotes a staged blob to the snapshot store and resets 
   await s.adoptHomeSnapshot!(scope, blobId);
 
   const b = await s.provision(layers);
-  assert.equal(await s.readFile(b, "../migrated.txt"), "came from sprites\n", "hydrates from the adopted snapshot");
-  assert.equal(await s.readFile(b, "../old.txt"), null, "the pre-adopt sandbox was discarded, not reused");
+  const migrated = await s.run(b, "cat ~/migrated.txt");
+  assert.equal(migrated.stdout, "came from sprites\n", "hydrates from the adopted snapshot");
+  assert.notEqual((await s.run(b, "cat ~/old.txt")).code, 0, "the pre-adopt sandbox was discarded, not reused");
 });
 
 test("blob staging is advertised only when the channel is actually wired", async () => {
