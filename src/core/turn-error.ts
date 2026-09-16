@@ -5,6 +5,15 @@ export class NonRetryableTurnError extends Error {
   }
 }
 
+export class TitleRejected extends Error {
+  readonly rule: string;
+  constructor(rule: string, sample: string) {
+    super(`${rule}: ${JSON.stringify(sample.slice(0, 80))}`);
+    this.name = "TitleRejected";
+    this.rule = rule;
+  }
+}
+
 export type TurnFailurePayload = { kind: "turn_failure"; message: string; runId?: string };
 
 const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The details are in the operator error log.";

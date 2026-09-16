@@ -158,7 +158,7 @@ import {
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
-import { NonRetryableTurnError, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
+import { NonRetryableTurnError, TitleRejected, turnFailureMessage, type TurnFailurePayload } from "./turn-error.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
@@ -344,7 +344,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     } catch (e) {
       deps.errors?.record({
         category: "session_title",
-        code: "generation_failed",
+        code: e instanceof TitleRejected ? "rejected" : "generation_failed",
         message: errMessage(e),
         scopeLabel: scopeId,
         sessionId,

@@ -7,7 +7,7 @@ import {
   type HarnessTurnResult,
 } from "./harness.ts";
 import { classifyScopeLabel } from "../classify/scope-classifier.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -974,6 +974,8 @@ export function createMockHarness(): Harness {
       generateTitle(transcript: string): Promise<string | undefined> {
         if (transcript.includes("Simulate title provider exception"))
           return Promise.reject(new Error("title model overloaded"));
+        if (transcript.includes("Simulate reply-shaped title"))
+          return Promise.reject(new TitleRejected("reply_opener", "Sorry, I can't title this one"));
         if (transcript.includes("Simulate four-way title outage")) return Promise.resolve(undefined);
         const line = transcript
           .split("\n")

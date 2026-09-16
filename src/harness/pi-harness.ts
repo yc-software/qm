@@ -46,7 +46,7 @@ import type {
   TapeRecord,
 } from "../sessions/session-store.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, TitleRejected } from "../core/turn-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -427,15 +427,17 @@ const MAX_TITLE_CHARS = 60;
 export function sanitizeTitle(out: string | undefined): string | undefined {
   if (!out) return undefined;
   let t = (out.trim().split("\n")[0] ?? "").trim();
-  if (!t || /^none$/i.test(t)) return undefined;
+  if (!t) throw new TitleRejected("empty", out);
+  if (/^none$/i.test(t)) throw new TitleRejected("none", out);
   t = t.replace(/^(?:title|chat title)\s*[:-]\s*/i, "");
   t = t.replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, "").trim();
   t = t.replace(/[\s.,;:!?]+$/g, "").trim();
-  if (!t) return undefined;
-  // Reject reply-shaped output — the model answered the transcript instead of titling it.
-  if (t.length > 90 || t.split(/\s+/).length > 12) return undefined;
-  if (/\*\*|^#/.test(t)) return undefined;
-  if (/^(?:i|i['’]\w+|sorry|unfortunately|sure|okay|ok|here['’]?s|as an ai)\b/i.test(t)) return undefined;
+  if (!t) throw new TitleRejected("empty", out);
+  if (t.length > 90) throw new TitleRejected("too_long", out);
+  if (t.split(/\s+/).length > 12) throw new TitleRejected("too_many_words", out);
+  if (/\*\*|^#/.test(t)) throw new TitleRejected("markdown", out);
+  if (/^(?:i|i['’]\w+|sorry|unfortunately|sure|okay|ok|here['’]?s|as an ai)\b/i.test(t))
+    throw new TitleRejected("reply_opener", out);
   return t.length > MAX_TITLE_CHARS ? `${t.slice(0, MAX_TITLE_CHARS).trimEnd()}…` : t;
 }
 
