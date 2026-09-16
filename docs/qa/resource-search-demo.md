@@ -19,4 +19,4 @@ The default before source is commit `e0966ba8`. Optional arguments choose the ou
 node docs/qa/resource-search-demo.mjs /tmp/search-review e0966ba8
 ```
 
-For the PR, link this document and attach the generated HTML pair if the review host allows HTML attachments. The generated bundles stay outside Git. DOM checks verified four resource results plus a conversation, before/after differences, and resource navigation. Browser screenshot verification was unavailable because no browser surface was enabled in the review environment.
+For the PR, link this document and attach the generated HTML pair if the review host allows HTML attachments. The generated bundles stay outside Git. DOM checks verified four resource results plus a conversation, before/after differences, and resource navigation. Browser verification confirmed the rendered demo and Enter navigation to `/skills/demo-skill`.

@@ -36,7 +36,7 @@ const chat = {
   createdAt: 1789473600000,
 };
 const stubs = {
-  "./core-bridge": `export const userSendMessage=x=>x; export async function api(path) { const q=new URL(path,'http://demo').searchParams.get('q').toLowerCase(); const rows=path.includes('/resources/')?${JSON.stringify(resources)}:[${JSON.stringify(chat)}]; return {hits:rows.filter(r=>(r.title+' '+r.snippet).toLowerCase().includes(q)),failed:[],limited:[]}; }`,
+  "./core-bridge": `export const userSendMessage=x=>x; export async function api(path) { const q=new URL(path,'http://demo').searchParams.get('q').toLowerCase(); const rows=path.includes('/resources/')?DEMO_RESOURCES:[DEMO_CHAT]; return {hits:rows.filter(r=>(r.title+' '+r.snippet).toLowerCase().includes(q)),failed:[],limited:[]}; }`,
   "./sessions": `export const sessionsState={list:[{id:'demo-chat',title:'Release readiness review'}]}; export const sessionTitle=s=>s.title; export async function refreshSessions(){} export async function openSession(){document.querySelector('#demo-status').textContent='Demo: opened Release readiness review';} export function startNewChat(){return {state:{agent:{prompt(){document.querySelector('#demo-status').textContent='Demo: QM would receive your search request';}}}}}`,
   "./session-list": `export const recencyGroup=()=> 'This week';`,
   "./browse": `export const destinations=()=>[{label:'Skills',blurb:'Browse reusable skills',href:'#skills'},{label:'Crons',blurb:'Browse scheduled work',href:'#crons'},{label:'Apps',blurb:'Browse deployed apps',href:'#apps'},{label:'Projects',blurb:'Browse shared projects',href:'#projects'}];`,
@@ -70,7 +70,7 @@ for (const mode of ["after", "before"]) {
     bundle: true,
     write: false,
     format: "iife",
-    define: { "import.meta": "{}" },
+    define: { "import.meta": "{}", DEMO_RESOURCES: JSON.stringify(resources), DEMO_CHAT: JSON.stringify(chat) },
     minify: true,
     legalComments: "none",
     nodePaths: [resolve(plugin, "node_modules")],
