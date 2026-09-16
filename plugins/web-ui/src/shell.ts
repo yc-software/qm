@@ -57,6 +57,7 @@ import {
   mountRestoredCanvas,
   restoredCanvasNeedsSessionList,
   splitState,
+  singlePaneSessionId,
 } from "./split";
 import { activityOf } from "./session-list";
 import { replaceChildrenPreservingFocus } from "./pane-focus";
@@ -146,7 +147,7 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const chatState = mainConversation().state;
   const fromState =
     sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
-  const sessionId = splitState.active ? null : fromState;
+  const sessionId = splitState.active ? singlePaneSessionId() : fromState;
   const next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
 }

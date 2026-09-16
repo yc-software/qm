@@ -240,6 +240,7 @@ function buildDock(): DockviewApi {
       guarded.add(group);
       group.model.onWillDrop(holdTileCap);
     }
+    if (appState.currentView === "chats") syncUrlFromState();
     if (paneDrag) refreshPaneDrag();
     persistSoon();
   });
@@ -819,6 +820,13 @@ function refreshHeaders(): void {
   for (const a of groupActions) a.draw();
   for (const c of paneContents.values()) c.syncTitle();
   syncDocumentTitle();
+  if (appState.currentView === "chats") syncUrlFromState();
+}
+
+export function singlePaneSessionId(): string | null {
+  if (!dockApi || dockApi.panels.length !== 1) return null;
+  const params = panelParams(dockApi.panels[0]!);
+  return paneKindEntry(params) ? null : (params.sessionId ?? null);
 }
 
 function paneSession(panel: IDockviewPanel): CoreSession | undefined {
@@ -1328,6 +1336,7 @@ class GroupActions implements IHeaderActionsRenderer {
       this.draw();
       if (p) openPaneTool(p, tool);
     };
+    if (single) this.menuOpen = false;
     const menu = this.menuOpen
       ? html`
           <div
@@ -1393,53 +1402,56 @@ class GroupActions implements IHeaderActionsRenderer {
     ];
     render(
       html`${
-          single
-            ? html`<span class="split-single-tools">
-                ${PANE_TOOLS.map((t) => {
-                  const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
-                  return html`<button
-                    class="session-tool"
-                    type="button"
-                    aria-label=${t.label}
-                    ${tip(t.label)}
-                    @click=${() => runTool(t.tool)}
-                  >
-                    ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
-                  </button>`;
-                })}
-              </span>`
-            : nothing
-        }
-        <span class="split-tools">
-          <button
-            class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
-            type="button"
-            ${tip("Tools")}
-            aria-label="Tools"
-            aria-haspopup="menu"
-            aria-expanded=${this.menuOpen ? "true" : "false"}
-            @click=${() => {
-              this.menuOpen = !this.menuOpen;
-              this.draw();
-            }}
-          >
-            ${icon(MoreHorizontal, 15)}
-          </button>
-          ${menu}
-        </span>
-        ${sessionId ? sessionActions(sessionId, false, panel!.id) : nothing}
-        ${buttons.map(
-          (b) =>
-            html`<button
-              class="icon-btn subtle${b.cls ?? ""}"
-              type="button"
-              ${tip(b.label)}
-              aria-label=${b.label}
-              @click=${b.run}
-            >
-              ${b.glyph}
-            </button>`,
-        )}`,
+        single
+          ? html`<span class="split-single-tools">
+              ${PANE_TOOLS.map((t) => {
+                const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
+                return html`<button
+                  class="session-tool"
+                  type="button"
+                  aria-label=${t.label}
+                  ${tip(t.label)}
+                  @click=${() => runTool(t.tool)}
+                >
+                  ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
+                </button>`;
+              })}
+            </span>`
+          : html`<span class="split-tools">
+              <button
+                class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
+                type="button"
+                ${tip("Tools")}
+                aria-label="Tools"
+                aria-haspopup="menu"
+                aria-expanded=${this.menuOpen ? "true" : "false"}
+                @click=${() => {
+                  this.menuOpen = !this.menuOpen;
+                  this.draw();
+                }}
+              >
+                ${icon(MoreHorizontal, 15)}
+              </button>
+              ${menu}
+            </span>`
+      }
+      ${sessionId ? sessionActions(sessionId, false, panel!.id) : nothing}
+      ${
+        single
+          ? nothing
+          : buttons.map(
+              (b) =>
+                html`<button
+                  class="icon-btn subtle${b.cls ?? ""}"
+                  type="button"
+                  ${tip(b.label)}
+                  aria-label=${b.label}
+                  @click=${b.run}
+                >
+                  ${b.glyph}
+                </button>`,
+            )
+      }`,
       this.element,
     );
   }
