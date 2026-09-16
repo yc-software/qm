@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -256,6 +256,8 @@ function statefulAws(
     blueGreenBakePolls?: number;
     migrationExitCode?: number;
     foreignServiceTags?: boolean;
+    progressFile?: string;
+    sabotageProgress?: boolean;
   } = {},
 ): {
   log: string;
@@ -313,6 +315,9 @@ function statefulAws(
     dir,
     `
 const args = process.argv.slice(2);
+const progressFile = ${JSON.stringify(opts.progressFile)};
+if (progressFile) fs.appendFileSync(progressFile + ".samples", JSON.stringify({ args, published: fs.existsSync(progressFile) }) + "\\n");
+if (progressFile && ${JSON.stringify(opts.sabotageProgress ?? false)} && a.includes("ecs update-service")) fs.mkdirSync(progressFile, { recursive: true });
 const statePath = ${JSON.stringify(state)};
 const s = JSON.parse(fs.readFileSync(statePath, "utf8"));
 const save = () => fs.writeFileSync(statePath, JSON.stringify(s));
@@ -5234,3 +5239,122 @@ else console.log("");`,
     }
   });
 }
+
+for (const mode of ["success", "migration-failure", "update-failure", "write-failure"] as const) {
+  test(`AWS candidate deployment progress receipt: ${mode}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-progress-"));
+    const progressFile = join(dir, "progress.json");
+    const candidatePath = join(dir, "candidate.json");
+    const single = mode === "success" ? twoServiceConfig() : oneServiceConfig();
+    writeFileSync(
+      candidatePath,
+      JSON.stringify({
+        contract: 1,
+        accountId: "123456789012",
+        region: "us-west-2",
+        label: "candidate-progress",
+        images: Object.fromEntries(
+          single.services.map((name) => [
+            name,
+            `123456789012.dkr.ecr.us-west-2.amazonaws.com/${single.aws!.services[name]!.ecrRepository}@sha256:${"a".repeat(64)}`,
+          ]),
+        ),
+        imageProvenance: Object.fromEntries(
+          single.services.map((name) => [name, { kind: "source-build", source: "checkout" }]),
+        ),
+      }),
+    );
+    const fake = statefulAws(
+      dir,
+      single,
+      {},
+      {
+        progressFile,
+        migrationExitCode: mode === "migration-failure" ? 1 : 0,
+        failFirstUpdateAfterMutation: mode === "update-failure",
+        sabotageProgress: mode === "write-failure",
+      },
+    );
+    const priorFile = process.env.QM_DEPLOY_PROGRESS_FILE;
+    const priorToken = process.env.QM_DEPLOY_PROGRESS_TOKEN;
+    process.env.QM_DEPLOY_PROGRESS_FILE = progressFile;
+    process.env.QM_DEPLOY_PROGRESS_TOKEN = "attempt-unique-token";
+    try {
+      const deploy = () => awsUp(single, dir, { yes: true, candidate: candidatePath });
+      if (mode === "migration-failure" || mode === "update-failure") {
+        await assert.rejects(deploy);
+        assert.equal(existsSync(progressFile), false);
+      } else {
+        await deploy();
+        const samples = readFileSync(progressFile + ".samples", "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const update = samples.findLastIndex((sample) => sample.args.includes("update-service"));
+        assert.ok(update >= 0);
+        assert.ok(samples.slice(0, update + 1).every((sample) => !sample.published));
+        if (mode === "success") {
+          assert.equal(samples[update + 1].published, true);
+          const state = JSON.parse(readFileSync(fake.state, "utf8"));
+          assert.deepEqual(JSON.parse(readFileSync(progressFile, "utf8")), {
+            phase: "monitoring",
+            token: "attempt-unique-token",
+            orgId: single.orgId,
+            targets: Object.fromEntries(
+              single.services.map((name) => [name, state.services[`acme-${name}`].taskDefinition]),
+            ),
+          });
+          assert.equal(statSync(progressFile).mode & 0o777, 0o600);
+          writeFileSync(fake.log, "");
+          await assert.rejects(deploy, /must not already exist/);
+          assert.equal(readFileSync(fake.log, "utf8"), "");
+          rmSync(progressFile);
+          await deploy();
+          assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service/);
+          assert.equal(JSON.parse(readFileSync(progressFile, "utf8")).token, "attempt-unique-token");
+        } else {
+          assert.ok(statSync(progressFile).isDirectory());
+        }
+      }
+    } finally {
+      if (priorFile === undefined) delete process.env.QM_DEPLOY_PROGRESS_FILE;
+      else process.env.QM_DEPLOY_PROGRESS_FILE = priorFile;
+      if (priorToken === undefined) delete process.env.QM_DEPLOY_PROGRESS_TOKEN;
+      else process.env.QM_DEPLOY_PROGRESS_TOKEN = priorToken;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("AWS deployment progress rejects invalid options before AWS calls", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-progress-validation-"));
+  const fake = fakeAws(dir, "");
+  const priorFile = process.env.QM_DEPLOY_PROGRESS_FILE;
+  const priorToken = process.env.QM_DEPLOY_PROGRESS_TOKEN;
+  try {
+    for (const [file, token] of [
+      ["relative.json", "attempt"],
+      [join(dir, "receipt.json"), ""],
+      ["", "attempt"],
+    ]) {
+      process.env.QM_DEPLOY_PROGRESS_FILE = file;
+      process.env.QM_DEPLOY_PROGRESS_TOKEN = token;
+      await assert.rejects(
+        () => awsUp(oneServiceConfig(), dir, { yes: true, candidate: "candidate.json" }),
+        /deployment progress requires/,
+      );
+    }
+    process.env.QM_DEPLOY_PROGRESS_FILE = join(dir, "receipt.json");
+    process.env.QM_DEPLOY_PROGRESS_TOKEN = "attempt";
+    await assert.rejects(() => awsUp(oneServiceConfig(), dir, { yes: true }), /deployment progress requires/);
+    assert.equal(readFileSync(fake.log, "utf8"), "");
+  } finally {
+    if (priorFile === undefined) delete process.env.QM_DEPLOY_PROGRESS_FILE;
+    else process.env.QM_DEPLOY_PROGRESS_FILE = priorFile;
+    if (priorToken === undefined) delete process.env.QM_DEPLOY_PROGRESS_TOKEN;
+    else process.env.QM_DEPLOY_PROGRESS_TOKEN = priorToken;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
