@@ -40,6 +40,7 @@
     "smoke:service-cred": "node scripts/service-credential-livetest.ts",
     "smoke:aws-sandbox": "node scripts/aws-sandbox-smoke.ts",
     "smoke:local-sandbox": "node scripts/local-sandbox-smoke.ts",
+    "build:modal-image": "node scripts/modal-build-image.ts",
     "build:aws-image": "node scripts/aws-build-sandbox-image.ts",
     "sandbox:local:build": "bash scripts/local-sandbox-build.sh",
     "sandbox:porter:build": "docker build --platform linux/amd64 -t \"${PORTER_SANDBOX_IMAGE:?Set PORTER_SANDBOX_IMAGE to the registry tag to publish}\" porter && docker push \"$PORTER_SANDBOX_IMAGE\"",

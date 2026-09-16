@@ -1,5 +1,8 @@
 # Sandbox recovery
 
+See [prebuilt Modal images](modal-image.md) to prepare system dependencies and the
+connector SDK before creating user sandboxes.
+
 The agent runs in core. Sandbox home state is working state with a provider-specific recovery window. Publish code to git and deliverables to Files when they must remain durable and accessible independently of compute.
 
 `MODAL_NATIVE_SNAPSHOTS_ENABLED` defaults to false. First deploy this reader-compatible release with native capture disabled; keep portable checkpointing until every active core and the retained rollback release can read native checkpoints. Enable the flag only in a later deployment after that condition holds. Once a scope has a native checkpoint, disabling the flag continues its native capture and recovery; it does not revert that scope to stale portable state. After activation, rolling back to releases without the native reader is unsupported and can lose working state.
