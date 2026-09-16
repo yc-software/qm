@@ -479,11 +479,6 @@ a.chat-row-open {
 .recent-project-children[hidden] {
   display: none;
 }
-.subagent-children {
-  margin-left: 13px;
-  border-left: 1px solid var(--border, rgba(128, 128, 128, 0.25));
-  padding-left: 4px;
-}
 #sidebar-body.detach-drop-target {
   position: relative;
 }
@@ -492,9 +487,7 @@ a.chat-row-open {
 }
 #sidebar-body.detach-drop-target .detach-drop-zone {
   position: absolute;
-  bottom: 6px;
-  left: 4px;
-  right: 4px;
+  inset: 6px 4px;
   z-index: 3;
   display: flex;
   align-items: center;
@@ -1694,6 +1687,20 @@ a.chat-row-open {
   font-style: italic;
 }
 
+.subagent-strip {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--background);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+}
+.subagent-chip-status {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
 .subagent-chip {
   display: inline-flex;
   align-items: center;
@@ -1720,7 +1727,7 @@ a.chat-row-open {
   color: var(--muted-foreground);
 }
 button.subagent-chip {
-  cursor: pointer;
+  cursor: grab;
 }
 button.subagent-chip:hover {
   border-color: color-mix(in srgb, var(--foreground) 30%, var(--border));
@@ -11812,13 +11819,6 @@ h3.ambient-field-label {
   justify-content: center;
   gap: 12px;
   margin-top: 24px;
-}
-
-.session-menu-parent {
-  padding: 6px 8px;
-}
-.session-menu-parent select {
-  max-width: 220px;
 }
 
 .session-parent-link {

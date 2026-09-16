@@ -123,6 +123,9 @@ import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
   addPendingSession,
+  onSessionDragStart,
+  endSessionDrag,
+  sessionWorking,
   dropPendingSession,
   groupDmTitle,
   refreshSessions,
@@ -1014,7 +1017,7 @@ export function createChatSurface(
             </div>
             ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
             <section class="chat-scroll readonly-scroll">
-              ${pinnedStrip()}
+              ${pinnedStrip()} ${subagentStrip()}
               <div class="message-stack">
                 ${inheritedHeader()}
                 ${
@@ -1357,7 +1360,7 @@ export function createChatSurface(
           ${glanceTier || ctx.pane ? nothing : sessionTopbar()}
           ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
           <section class="chat-scroll">
-            ${pinnedStrip()}
+            ${pinnedStrip()} ${subagentStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
@@ -2476,13 +2479,32 @@ export function createChatSurface(
     refused: "was refused",
   };
 
+  function subagentStrip(): TemplateResult | typeof nothing {
+    if (!chatState.sessionId) return nothing;
+    const children = sessionsState.list.filter((session) => session.parentSessionId === chatState.sessionId);
+    if (!children.length) return nothing;
+    return html`<nav class="subagent-strip" aria-label="Subagents">
+      ${children.map((session) => subagentChip(session.title || "Subagent", session.id))}
+    </nav>`;
+  }
+
   function subagentChip(title: string, sessionId?: string): TemplateResult {
-    const inner = html`${icon(Bot, 13)}<span dir="auto">${title}</span>`;
+    const session = sessionsState.list.find((row) => row.id === sessionId);
+    let status = session && sessionWorking(session) ? "Working" : "";
+    if (session?.awaitingInput) status = "Needs your reply";
+    const inner = html`${icon(Bot, 13)}<span dir="auto">${session?.title || title}</span
+      >${status ? html`<span class="subagent-chip-status">${status}</span>` : nothing}`;
     if (!sessionId) return html`<span class="subagent-chip">${inner}</span>`;
     return html`<button
       class="subagent-chip"
       type="button"
-      title="Open subagent session"
+      title="Open subagent · Drag to the sidebar to make a top-level session"
+      draggable=${session ? "true" : "false"}
+      @dragstart=${(e: DragEvent) => {
+        if (session) onSessionDragStart(e, session);
+        else e.preventDefault();
+      }}
+      @dragend=${endSessionDrag}
       @click=${(e: Event) => {
         e.preventDefault();
         e.stopPropagation();

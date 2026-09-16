@@ -36,7 +36,6 @@ import {
   fetchTranscript,
   currentEarlierCount,
   detachSession,
-  adoptSession,
   inheritedTranscript,
   isContinuable,
   entriesToMessages,
@@ -55,7 +54,7 @@ import {
   activityOf,
   chatBrowseStatusMatches,
   bumpActivity,
-  childrenByParent,
+  sidebarSessions,
   groupProjectSessions,
   recencyGroup,
   recentProjectSeeds,
@@ -63,7 +62,6 @@ import {
   rowIndicators,
   splitPinned,
   withPendingSession,
-  withoutNestedChildren,
   withoutUnsentPending,
   type RecentItem,
   type ChatBrowseStatus,
@@ -215,27 +213,10 @@ function recentItemActivity(item: RecentItem): number {
   return context?.lastActivityAt ?? context?.project?.createdAt ?? context?.project?.updatedAt ?? 0;
 }
 
-let subagentChildren: Map<string, CoreSession[]> = new Map();
-
 function recentItemsFor(sessions: readonly CoreSession[]): RecentItem[] {
-  return groupProjectSessions(withoutNestedChildren(sessions, subagentChildren), projectSeedsForRecents()).sort(
+  return groupProjectSessions(sessions, projectSeedsForRecents()).sort(
     (a, b) => recentItemActivity(b) - recentItemActivity(a),
   );
-}
-
-function sessionRowWithChildren(s: CoreSession, projectChild = false): TemplateResult {
-  const children = subagentChildren.get(s.id) ?? [];
-  if (!children.length) return sessionRow(s, projectChild);
-  return html`
-    ${sessionRow(s, projectChild)}
-    <div class="recent-project-children subagent-children">
-      ${repeat(
-        children,
-        (child) => child.threadRef,
-        (child) => sessionRowWithChildren(child, true),
-      )}
-    </div>
-  `;
 }
 
 function loadRecentContexts(force = false): void {
@@ -334,7 +315,7 @@ export function slackLogo(size = 13): TemplateResult {
 }
 
 function visibleSessions(): CoreSession[] {
-  const sorted = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a));
+  const sorted = sidebarSessions(sessionsState.list).sort((a, b) => activityOf(b) - activityOf(a));
   return sessionsState.webOnly ? sorted.filter((s) => surfaceOf(s) === "web") : sorted;
 }
 
@@ -345,10 +326,9 @@ export function renderList(): void {
   const visible = visibleSessions();
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
-  subagentChildren = childrenByParent(visible);
-  const { pinned, rest } = splitPinned(withoutNestedChildren(active, subagentChildren));
+  const { pinned, rest } = splitPinned(active);
   const activeItems = recentItemsFor(rest);
-  const archivedItems: RecentItem[] = withoutNestedChildren(archived, subagentChildren).map((session) => ({
+  const archivedItems: RecentItem[] = archived.map((session) => ({
     kind: "session",
     session,
   }));
@@ -363,7 +343,7 @@ export function renderList(): void {
               ${repeat(
                 pinned,
                 (session) => session.threadRef,
-                (session) => sessionRowWithChildren(session),
+                (session) => sessionRow(session),
               )}
             `
           : nothing
@@ -411,7 +391,7 @@ function newChatHint(name: string): string {
 }
 
 function recentItem(item: RecentItem): TemplateResult {
-  if (item.kind === "session") return sessionRowWithChildren(item.session);
+  if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
   let glyph: IconNode | null = Folder;
   if (item.groupKind === "personal") glyph = null;
@@ -474,7 +454,7 @@ function recentItem(item: RecentItem): TemplateResult {
         ${repeat(
           item.sessions,
           (session) => session.threadRef,
-          (session) => sessionRowWithChildren(session, true),
+          (session) => sessionRow(session, true),
         )}
       </div>
     </section>
@@ -586,7 +566,7 @@ export function drawChatsPage(): void {
     appState.mainEl.replaceChildren(chatsPageHost);
   }
   const q = chatsPageQuery.trim().toLowerCase();
-  const rows = [...sessionsState.list]
+  const rows = sidebarSessions(sessionsState.list)
     .filter((s) => chatBrowseStatusMatches(s, chatsPageStatus))
     .filter((s) => chatsPageSurface === "all" || surfaceOf(s) === chatsPageSurface)
     .filter((s) => (chatsPageScope ? s.scopeId === chatsPageScope : true))
@@ -636,7 +616,7 @@ export function drawChatsPage(): void {
                 }}
               >
                 ${label}<span
-                  >${sessionsState.list.filter((session) => chatBrowseStatusMatches(session, value)).length}</span
+                  >${sidebarSessions(sessionsState.list).filter((session) => chatBrowseStatusMatches(session, value)).length}</span
                 >
               </button>`,
           )}
@@ -692,7 +672,7 @@ function liveThreads(): ReadonlySet<string> {
   return live;
 }
 
-function sessionWorking(s: CoreSession): boolean {
+export function sessionWorking(s: CoreSession): boolean {
   return rowIndicators(s, liveThreads()).working;
 }
 
@@ -913,20 +893,6 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   return html`
     <div
       data-session-id=${saved ? s.id : nothing}
-      @dragover=${(e: DragEvent) => {
-        if (draggingChildId && draggingChildId !== s.id && saved) {
-          e.preventDefault();
-          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-        }
-      }}
-      @drop=${(e: DragEvent) => {
-        const id = draggingChildId;
-        if (!id || id === s.id || !saved) return;
-        e.preventDefault();
-        e.stopPropagation();
-        endSessionDrag();
-        void moveSessionUnder(id, s.id);
-      }}
       class="session-row ${active ? "active" : ""} ${saved && selection.ids.has(s.id) ? "selected" : ""} ${menuOpen ? "menu-open" : ""} ${readOnly ? "read-only" : ""} ${refreshingTitle ? "title-refreshing" : ""} ${working ? "working" : ""} ${s.awaitingInput ? "awaiting-input" : ""} ${projectChild ? "project-child" : ""} ${s.color ? "colored" : ""}"
       style=${s.color ? `--session-color:${s.color}` : nothing}
     >
@@ -1032,54 +998,35 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
 
 let draggingChildId: string | null = null;
 
-function onSessionDragStart(e: DragEvent, s: CoreSession): void {
+export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   if (!s.id) {
     e.preventDefault();
     return;
   }
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  draggingChildId = s.threadRef.startsWith("agent:main:subagent:") ? s.id : null;
+  draggingChildId = s.parentSessionId ? s.id : null;
   appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
-  beginSessionDrag(s);
+  if (!draggingChildId) beginSessionDrag(s);
 }
 
-function endSessionDrag(): void {
+export function endSessionDrag(): void {
   draggingChildId = null;
   appState.listEl?.classList.remove("detach-drop-target");
   appState.listEl?.querySelector(".detach-drop-zone")?.classList.remove("over");
   endPaneDrag();
 }
 
-async function moveSessionUnder(id: string, parentId: string | null): Promise<void> {
+async function promoteSession(id: string): Promise<void> {
   sessionsState.openMenuId = null;
   endSessionDrag();
   try {
-    if (parentId) await adoptSession(id, parentId);
-    else await detachSession(id);
+    await detachSession(id);
     await refreshSessions({ silent: true });
-    for (const conversation of allConversations()) conversation.redraw();
   } catch (error) {
     canvasToast(errMessage(error));
     renderList();
   }
-}
-
-function parentChoices(session: CoreSession): CoreSession[] {
-  const descendants = new Set([session.id]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const child of sessionsState.list) {
-      if (child.parentSessionId && descendants.has(child.parentSessionId) && !descendants.has(child.id)) {
-        descendants.add(child.id);
-        changed = true;
-      }
-    }
-  }
-  return sessionsState.list.filter(
-    (candidate) => candidate.scopeId === session.scopeId && !descendants.has(candidate.id),
-  );
 }
 
 function detachDropZone(): TemplateResult {
@@ -1102,10 +1049,10 @@ function detachDropZone(): TemplateResult {
       if (!id) return;
       e.preventDefault();
       endSessionDrag();
-      void moveSessionUnder(id, null);
+      void promoteSession(id);
     }}
   >
-    ${icon(CornerLeftUp, 13)}<span>Drop here to move out of its parent</span>
+    ${icon(CornerLeftUp, 13)}<span>Drop to make a top-level session</span>
   </div>`;
 }
 
@@ -1150,24 +1097,6 @@ function sessionMenuPopover(s: CoreSession): TemplateResult {
       <button class="session-menu-option" type="button" role="menuitem" @click=${() => setArchived(s, !archived)}>
         ${archived ? icon(ArchiveRestore, 15) : icon(Archive, 15)}<span>${archived ? "Unarchive" : "Archive"}</span>
       </button>
-      ${
-        s.threadRef.startsWith("agent:main:subagent:")
-          ? html` <div class="session-menu-parent">
-              ${menuSelect({
-                ariaLabel: "Parent session",
-                value: s.parentSessionId ?? "",
-                onSelect: (value) => void moveSessionUnder(s.id, value || null),
-                options: [
-                  { value: "", label: "No parent" },
-                  ...parentChoices(s).map((parent) => ({
-                    value: parent.id,
-                    label: parent.title || "Untitled session",
-                  })),
-                ],
-              })}
-            </div>`
-          : nothing
-      }
       ${sessionColorRow(s)}
     </div>
   `;
@@ -1653,6 +1582,7 @@ async function runSessionsRefresh(
       listSettled = null;
       sessionsLoading = false;
       renderList();
+      for (const conversation of allConversations()) conversation.redraw();
     }
   }
 }
