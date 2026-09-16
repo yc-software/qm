@@ -266,12 +266,28 @@ for (const postgres of [false, true]) {
             { audience: [] },
           );
           views.push(result.view);
+          const current = await serializer.serializeSlackConversation(
+            client,
+            {
+              kind: "channel",
+              channel: container,
+              threadTs: "1000",
+              ts: "1001",
+              rawText: "question",
+              userId: "U1",
+              files: raw.files,
+            },
+            { audience: [] },
+          );
+          assert.deepEqual(current.view.omittedFiles, [{ name: "Large report", reason: "too-big" }]);
         }
         assert.deepEqual(views[1]!.messages, views[0]!.messages);
         assert.equal(views[1]!.messages[0]!.authorId, "BOTHER");
         assert.equal(views[1]!.messages[0]!.name, "Report bot");
         assert.deepEqual(views[1]!.files, views[0]!.files);
-        assert.deepEqual(views[1]!.omittedFiles, [{ name: "Large report", reason: "too-big" }]);
+        assert.deepEqual(views[1]!.messages[0]!.files, ["Large report"]);
+        assert.deepEqual(views[1]!.files, []);
+        assert.deepEqual(views[1]!.omittedFiles, []);
         await cache.ingest([{ container, ts: "1000", deleted: true }]);
         await cache.ingest([{ ...event, botId: "BWRONG", editedAt: 30 }]);
         assert.equal((await cache.readMessages(container, { includeDeleted: true }))[0]!.botId, "BOTHER");

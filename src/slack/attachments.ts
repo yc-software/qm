@@ -1,7 +1,6 @@
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
-import type { SlackMessageAttachment } from "./forwards.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -55,16 +54,6 @@ export const MAX_ATTACHMENT_BYTES = 1_000_000_000;
 
 export function isOversize(file: Pick<SlackFile, "size">): boolean {
   return typeof file.size === "number" && file.size > MAX_ATTACHMENT_BYTES;
-}
-
-export interface ThreadMessage {
-  user?: string;
-  text?: string;
-  ts?: string;
-  bot_id?: string;
-  subtype?: string;
-  files?: SlackFile[];
-  attachments?: SlackMessageAttachment[];
 }
 
 export function isTrustedSlackHost(url: string, extraHost?: string): boolean {
