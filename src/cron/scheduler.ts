@@ -59,6 +59,7 @@ export interface Scheduler {
   runNow(cronId: string): Promise<RunNowResult>;
   notifyChanged(cronId: string): void;
   start(intervalMs: number): void;
+  ready(): Promise<void>;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(): Promise<void>;
@@ -529,6 +530,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             if (!stopped) sweeper.start(intervalMs);
           },
         );
+    },
+    async ready() {
+      await starting;
     },
     async stopClaims() {
       stopped = true;

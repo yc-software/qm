@@ -154,6 +154,8 @@ if (built.backgroundOwnership) {
       await periodicStop;
       if (signal.aborted || epoch !== activationEpoch) return;
       built.scheduler.start(1000);
+      await built.scheduler.ready();
+      if (signal.aborted || epoch !== activationEpoch) return;
       built.suggestedActivityMaintenance.start();
       for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
         if (signal.aborted) return;

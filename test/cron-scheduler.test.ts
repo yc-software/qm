@@ -1498,3 +1498,86 @@ test("scheduler cannot resume after uncertain queue shutdown until a stop retry 
   await scheduler.stop();
   assert.equal(starts, 2);
 });
+
+test("scheduler relinquishes queue claims before a long turn drains and preserves its queue connection", async () => {
+  const crons = createCronStore();
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
+  let claimsStopped = false;
+  let queueClosed = false;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    now: () => 1000,
+    run: async () => {
+      entered.resolve();
+      await finish.promise;
+      assert.equal(queueClosed, false);
+      return { status: "ok", reply: "done" };
+    },
+    jobQueue: {
+      start: async (handlers) => {
+        onFire = handlers.onFire;
+      },
+      enqueueFire: async () => {},
+      healthy: () => true,
+      stopClaims: async () => {
+        claimsStopped = true;
+      },
+      stop: async () => {
+        queueClosed = true;
+      },
+    },
+  });
+  const cron = await crons.create({
+    schedule: { firstFireAt: 1 },
+    action: "work",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+  });
+  scheduler.start(1000);
+  const work = onFire!({ cronId: cron.id, scheduledAt: 1 });
+  await entered.promise;
+  const stopped = scheduler.stop();
+  await scheduler.stopClaims();
+  assert.equal(claimsStopped, true);
+  assert.equal(queueClosed, false);
+  let drained = false;
+  const draining = scheduler.drained().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false);
+  finish.resolve();
+  await Promise.all([work, stopped, draining]);
+  assert.equal(queueClosed, true);
+});
+
+test("scheduler pause fences the next cron in an already admitted polling batch", async () => {
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const { crons, calls, scheduler } = harness(async () => {
+    entered.resolve();
+    await finish.promise;
+    return { status: "ok", reply: "done" };
+  });
+  for (let i = 0; i < 2; i++)
+    await crons.create({
+      schedule: { firstFireAt: 1 },
+      action: `work ${i}`,
+      owner: "U1",
+      createdBy: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+    });
+  const tick = scheduler.tick(1000);
+  await entered.promise;
+  await scheduler.stopClaims();
+  finish.resolve();
+  await tick;
+  assert.equal(calls.length, 1);
+  await scheduler.stop();
+});
