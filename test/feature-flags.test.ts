@@ -20,3 +20,12 @@ test("the org scope enables a feature everywhere", async () => {
   await store.setEnabled("command_scoped_credentials", "org:default-org", true, "admin");
   assert.equal(await store.enabled("command_scoped_credentials", "channel:C1"), true);
 });
+
+test("persistent subagents default off and can be enabled for individual people", async () => {
+  const store = createFeatureFlagStore(createMemoryMap<FeatureFlagRecord>());
+  assert.equal(await store.enabled("persistent_subagents", "personal:U1"), false);
+  await store.setEnabled("persistent_subagents", "personal:U1", true, "admin");
+  assert.equal(await store.enabled("persistent_subagents", "personal:U1"), true);
+  assert.equal(await store.enabled("persistent_subagents", "personal:U2"), false);
+  assert.equal(await store.enabled("persistent_subagents", "channel:C1"), false);
+});

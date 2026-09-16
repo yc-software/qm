@@ -5,6 +5,7 @@ import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunText, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
+import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
@@ -1639,7 +1640,10 @@ export function buildApp(
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
+  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox"));
   const sessionSyscalls = createSessionSyscalls({
+    mailbox: sessionMailbox,
+    enabled: (actorId) => featureFlags.enabled("persistent_subagents", scopeId("personal", actorId)),
     sessions,
     runs,
     signals: runSignals,
@@ -1979,7 +1983,10 @@ export function buildApp(
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock.withLock("session-tree-admission", async () => {
-      await deliverSubagentMail({ sessions, runs, maxAttempts, prepareRequest: prepareSessionRequest }, run);
+      await deliverSubagentMail(
+        { sessions, runs, maxAttempts, mailbox: sessionMailbox, prepareRequest: prepareSessionRequest },
+        run,
+      );
       await runs.markReturned(run.id);
     });
   runs.onTerminal((run) => {

@@ -3235,3 +3235,118 @@ test("read passes turn cancellation through and cannot record a late success", a
   assert.equal(received, controller.signal);
   assert.equal(emitted.filter((e) => e.type === "tool_result").length, 0);
 });
+
+test("session tools are omitted when the actor feature is disabled", () => {
+  assert.equal(
+    createAgentTools({ current: fakeToolContext() }, { sessionTools: false }).some((tool) => tool.name === "session"),
+    false,
+  );
+});
+
+test("agent mail is screened separately, logged privately, and delivered once across parallel tools", async () => {
+  const tc = fakeToolContext();
+  const message = {
+    id: "mail",
+    senderId: "child",
+    recipientId: "parent",
+    actor: { id: "U1", type: "internal" as const },
+    audience: [],
+    text: "child finding",
+    createdAt: 1,
+  };
+  let pending = true;
+  const emitted: Emitted[] = [];
+  const screens: Array<{ provenance: string; result: string; unscreenable: boolean }> = [];
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () => (pending ? [message] : []),
+    acknowledge: async () => {
+      pending = false;
+    },
+  };
+  tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
+  const ref: ToolContextRef = {
+    current: tc,
+    scopeLabel: "personal:U1",
+    orgScopeId: "org:default-org",
+    emit: (entry) => {
+      emitted.push(entry as Emitted);
+    },
+    screenToolResult: async (input) => {
+      screens.push(input);
+      return { outcome: "allow" };
+    },
+  };
+  const read = createAgentTools(ref).find((tool) => tool.name === "read");
+  const results = await Promise.all([call(read, { path: "a.txt" }), call(read, { path: "b.txt" })]);
+  assert.equal(results.filter((result) => JSON.stringify(result).includes("child finding")).length, 1);
+  assert.ok(
+    screens.some((input) => input.result === "child finding" && input.provenance === "external" && !input.unscreenable),
+  );
+  const entry = emitted.find(
+    (entry) => entry.type === "tool_result" && String(entry.payload.result).includes("child finding"),
+  )!;
+  assert.equal(entry.scopeLabel, "personal:U1");
+});
+
+test("quarantined mail remains pending for release and mailbox failures preserve carrier output", async () => {
+  const tc = fakeToolContext();
+  let pending = true;
+  let release = false;
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () =>
+      pending
+        ? [
+            {
+              id: "mail",
+              senderId: "child",
+              recipientId: "parent",
+              actor: { id: "U1", type: "internal" },
+              audience: [],
+              text: "held finding",
+              createdAt: 1,
+            },
+          ]
+        : [],
+    acknowledge: async () => {
+      pending = false;
+    },
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    scopeLabel: "personal:U1",
+    pendingApprovals: [],
+    emit: async () => {},
+    screenToolResult: async (input) => ({
+      outcome: input.source === "session-delegation" && !release ? "quarantine" : "allow",
+    }),
+  };
+  const first = await call(
+    createAgentTools(ref).find((tool) => tool.name === "read"),
+    { path: "a.txt" },
+  );
+  assert.ok(JSON.stringify(first).includes("data"));
+  assert.ok(!JSON.stringify(first).includes("held finding"));
+  assert.equal(pending, true);
+  assert.equal(ref.pausedOnApproval, true);
+  release = true;
+  const second = await call(
+    createAgentTools(ref).find((tool) => tool.name === "read"),
+    { path: "a.txt" },
+  );
+  assert.ok(JSON.stringify(second).includes("held finding"));
+  assert.equal(pending, false);
+  tc.sessionSyscalls.receive = async () => {
+    throw new Error("flag disabled");
+  };
+  const third = await call(
+    createAgentTools(ref).find((tool) => tool.name === "read"),
+    { path: "a.txt" },
+  );
+  assert.ok(JSON.stringify(third).includes("data"));
+});

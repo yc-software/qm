@@ -39,3 +39,18 @@ test("historical list reads stay a plural label without a fake child badge", () 
     detail: "subagents",
   });
 });
+
+test("wait has no phantom subagent badge", () => {
+  assert.deepEqual(sessionToolView({ action: "wait" }, {}, sessions), { action: "wait", detail: "for agent messages" });
+});
+
+test("sibling messaging resolves title targets into clickable badges", () => {
+  const view = sessionToolView(
+    { action: "send_message", target: sessions[0]!.title },
+    { delivered: "queued_message" },
+    sessions,
+  );
+  assert.equal(view.sessionId, sessions[0]!.id);
+  assert.equal(view.chipTitle, sessions[0]!.title);
+  assert.equal(view.detail, "");
+});

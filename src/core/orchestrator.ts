@@ -1754,6 +1754,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             };
           }
           if (!input.approval.approved) {
+            const messagePrefix = "security-screen-release:session_message_";
+            if (p.approvalKey?.startsWith(messagePrefix))
+              await deps.sessionSyscalls?.rejectMessage?.(session.id, p.approvalKey.slice(messagePrefix.length));
             await pending.delete(input.approval.requestId);
             deps.auditLog.record({
               at: Date.now(),
@@ -2359,13 +2362,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
-          ...(deps.sessionSyscalls
+          ...(deps.sessionSyscalls &&
+          (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true
             ? {
                 sessionSyscalls: deps.sessionSyscalls.forTurn({
                   session,
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
-                  request: { ...input, readOnly: strictReadOnly },
+                  request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }
             : {}),

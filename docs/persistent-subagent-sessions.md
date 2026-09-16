@@ -4,11 +4,11 @@ A delegated task runs in a durable session with its own transcript and a mutable
 
 ## Lifecycle
 
-`session.open` accepts a task, title, model, harness, thinking level, and read-only preference. Reusing its request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. Read-only delegation cannot be upgraded to writable execution. The session tree admits at most ten pending or running qm runs, including direct turns and completion wakes.
+`session.open` accepts a task, title, model, harness, thinking level, and read-only preference. Reusing its request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. Read-only delegation cannot be upgraded to writable execution. The session tree admits at most ten pending or running qm runs, including direct turns and explicit follow-up tasks.
 
-`session.write` queues a separate screened turn, including when the child is already running. Agent messages never inherit an active human turn’s authority. An interrupt aborts running child work. Messages identify their sending session. Late signals retain durable receipts until replay succeeds; human replays retain their sender and runtime settings and revalidate current access.
+`session.send_message` (`write` is an alias) adds attributed data to a durable recipient inbox without starting a turn. Parents, children, siblings, and other accessible sessions can exchange messages. Targets accept IDs, child/sibling titles, or `parent`. Messages arrive at tool boundaries; `session.wait` waits up to 60 seconds for mail. Idle recipients see messages when they next use a tool. Agents should continue independent work and wait for required results before giving one combined answer.
 
-An ordinary-session target receives a separate private, read-only turn. The message does not steer an active people-facing turn or inherit an external delivery destination. These private wakes can inspect context and reply with the session tool. Replies remain private and read-only, queue without steering active work, and never generate automatic parent returns. They cannot delegate or interrupt. A persisted eight-hop limit bounds reply chains. Writable child execution remains subject to its existing tool and credential authorization; a session message is not an independent guarantee against external actions.
+`session.followup_task` explicitly queues new work for an attached child, behind any active turn. Stable call IDs deduplicate retries. An interrupt aborts active child work. Messages are external data, not human authorization. Each message is screened independently of its carrier tool and persisted at the receiving session's scope. Quarantined messages remain recoverable for approval; denying the approval consumes the message. Read-only and automated authorization restrictions still apply to assigned work.
 
 Read access checks scope, current participant access, audience visibility, and participant tenure. Sending and adoption require current scope access. A wider target audience cannot receive a narrower source's contents.
 
@@ -16,9 +16,9 @@ Read access checks scope, current participant access, audience visibility, and p
 
 Subagents appear as clickable, draggable inline chips in their parent conversation’s collapsible tool rows, outside the sidebar session list. Dragging a chip into the sidebar detaches it and makes it a top-level session. The web UI does not offer reparenting onto other sessions. A child transcript links back to its current parent. The underlying parentage API rejects cycles, unauthorized changes, and cross-scope moves.
 
-A terminal child run produces a deduplicated completion wake for its current parent. The parent request supplies the delivery destination and audience; the child's original destination is not reused after adoption. A freshly adopted parent without runtime context leaves completion pending until that context exists. Detached children produce no automatic parent return.
+A terminal child run produces a deduplicated internal result for its current parent, without starting a parent run or sending a user-facing acknowledgement. The current parent request supplies the audience. A freshly adopted parent without runtime context leaves completion pending until that context exists. Detached children produce no automatic parent return.
 
-Terminal receipts live in the run store. A paginated sweep retries pending returns after restart and continues past blocked entries. Completion receipts are acknowledged only after enqueue succeeds. Silent completions use a generic notice rather than borrowing text from a later child run.
+Terminal receipts live in the run store. A paginated sweep retries pending returns after restart and continues past blocked entries. Completion receipts are acknowledged only after durable inbox insertion succeeds. Inbox messages are consumed after their content is persisted to the recipient transcript; an acknowledgement failure can cause redelivery. Silent completions use a generic notice rather than borrowing text from a later child run.
 
 ## Storage and scope
 
@@ -29,3 +29,9 @@ This change does not add Slack dispatch, automatic thread placement, acknowledge
 ## Swarms
 
 Swarm workers continue to coordinate through the swarm API, which owns their computer assignment, membership, and execution budgets. Session tools cannot spawn or send from swarm turns, send to swarm workers, or adopt a child under a swarm worker. Ordinary human turns in a swarm root remain ordinary session turns. All session-generated work is automated, preserving unattended authorization.
+
+## Feature flag
+
+`persistent_subagents` defaults off. Enable it through the existing feature-flags admin resource for individual actor scopes (`personal:<principal-id>`). The actor flag applies even when that actor works in a shared conversation. Enable only the intended people on YC; qm-fleet remains off without its own opt-in. Disabled actors are not offered the session tool, and syscall authorization rechecks the flag. Existing transcripts remain accessible.
+
+Messages use the existing durable artifact store under `session_mailbox`; no process-local queue owns delivery. The flag configuration is also durable and local to each deployment.

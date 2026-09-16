@@ -1115,6 +1115,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.sessionSyscalls
       ? {
           sessionSyscalls: {
+            receive: (timeoutMs?: number) => deps.sessionSyscalls!.receive?.(timeoutMs) ?? Promise.resolve([]),
+            acknowledge: (ids: string[]) => deps.sessionSyscalls!.acknowledge?.(ids) ?? Promise.resolve(),
             open: (input: SessionOpenInput) => once(() => deps.sessionSyscalls!.open(input)),
             write: (input: SessionWriteInput) => once(() => deps.sessionSyscalls!.write(input)),
             read: (input: SessionReadInput) => deps.sessionSyscalls!.read(input),

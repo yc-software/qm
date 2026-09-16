@@ -4452,8 +4452,7 @@
         display: none;
       }
       #card-security-posture > .head p,
-      #card-external-slack > .head p,
-      #card-feature-flags .editor-grid {
+      #card-external-slack > .head p {
         display: none;
       }
       .choice-stack {
@@ -5983,11 +5982,13 @@
                         >Feature
                         <select id="feature-flag-name">
                           <option value="command_scoped_credentials">Command-scoped credentials</option>
+                          <option value="persistent_subagents">Persistent subagents</option>
                         </select>
                       </label>
                       <label
                         >Scope ID
-                        <input id="feature-flag-scope" placeholder="channel:C012345" autocomplete="off" />
+                        <input id="feature-flag-scope" placeholder="personal:principal-id" autocomplete="off" />
+                        <span class="hint">For persistent subagents, use the person’s personal scope.</span>
                       </label>
                     </div>
                   </div>
@@ -8715,32 +8716,33 @@
         featureFlagRows = rows || [];
         const root = $("feature-flag-list");
         root.textContent = "";
-        const row = featureFlagRows.find((item) => item.featureName === "command_scoped_credentials");
-        const scopes = row?.enabledScopes || [];
-        if (!scopes.length) {
+        const enabled = featureFlagRows.flatMap((row) =>
+          (row.enabledScopes || []).map((scopeId) => ({ featureName: row.featureName, scopeId })),
+        );
+        if (!enabled.length) {
           root.className = "hint";
-          root.textContent = "Command-scoped credentials: no enabled scopes.";
+          root.textContent = "No enabled scopes.";
           return;
         }
         root.className = "";
-        scopes.forEach((scopeId) => {
+        enabled.forEach(({ featureName, scopeId }) => {
           const line = document.createElement("div");
           line.className = "setting-row";
           const code = document.createElement("code");
-          code.textContent = scopeId;
+          code.textContent = featureName + ": " + scopeId;
           const remove = document.createElement("button");
           remove.className = "danger";
           remove.textContent = "Disable";
-          remove.onclick = () => updateFeatureFlag(scopeId, false);
+          remove.onclick = () => updateFeatureFlag(scopeId, false, featureName);
           line.append(code, remove);
           root.appendChild(line);
         });
       }
-      async function updateFeatureFlag(scopeId, on) {
+      async function updateFeatureFlag(scopeId, on, featureName = $("feature-flag-name").value) {
         const status = $("st-feature-flags");
         status.textContent = on ? "Enabling…" : "Disabling…";
         const result = await api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/feature-flags", {
-          featureName: $("feature-flag-name").value,
+          featureName,
           scopeId,
           on,
         });

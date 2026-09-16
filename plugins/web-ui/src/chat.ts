@@ -2465,6 +2465,9 @@ export function createChatSurface(
   const SESSION_ACTION_LABELS: Record<string, { active: string; done: string; attempted: string }> = {
     open: { active: "Creating", done: "Created", attempted: "Tried creating" },
     write: { active: "Messaging", done: "Messaged", attempted: "Tried messaging" },
+    send_message: { active: "Messaging", done: "Messaged", attempted: "Tried messaging" },
+    followup_task: { active: "Assigning", done: "Assigned", attempted: "Tried assigning" },
+    wait: { active: "Waiting", done: "Waited", attempted: "Tried waiting" },
     interrupt: {
       active: "Interrupting",
       done: "Interrupted",
