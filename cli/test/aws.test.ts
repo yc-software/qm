@@ -14,6 +14,7 @@ import {
   assertAwsPublicRouting,
   assertGithubDeployTrust,
   awsCheckLive,
+  awsCoreRequest,
   awsBackgroundWorkStatus,
   awsBackgroundWorkBootState,
   awsBootstrapBackgroundWork,
@@ -5060,6 +5061,38 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
           .digest("hex")}`,
       );
     }
+    const fetchBeforeLimit = globalThis.fetch;
+    let cancelled = false;
+    globalThis.fetch = async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(" ".repeat(33)));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      );
+    try {
+      await assert.rejects(
+        awsCoreRequest(
+          configured,
+          new URL(configured.publicUrl),
+          {
+            method: "POST",
+            body: "{}",
+            redirect: "error",
+            signal: AbortSignal.timeout(1000),
+          },
+          32,
+        ),
+        /size limit/,
+      );
+      assert.equal(cancelled, true);
+    } finally {
+      globalThis.fetch = fetchBeforeLimit;
+    }
     for (const invalid of [
       { ...distribution, DomainName: "another.cloudfront.net" },
       { ...distribution, Enabled: false },
@@ -5100,6 +5133,49 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
     else process.env.CORE_SIGNING_SECRET = priorSecret;
     if (priorProtocol === undefined) delete process.env.AWS_FAKE_LISTENER_PROTOCOL;
     else process.env.AWS_FAKE_LISTENER_PROTOCOL = priorProtocol;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS core transport bounds streamed TLS bodies and destroys oversized responses", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-core-body-limit-"));
+  const fake = fakeAws(dir, "console.log('')");
+  let destroyed = false;
+  t.mock.method(https, "request", (_url: URL, _options: https.RequestOptions, callback: (value: unknown) => void) => {
+    const request = new EventEmitter() as EventEmitter & { end(): void };
+    request.end = () => {
+      const response = Object.assign(new EventEmitter(), {
+        statusCode: 200,
+        destroy(error: Error) {
+          destroyed = true;
+          response.emit("error", error);
+        },
+      });
+      callback(response);
+      response.emit("data", Buffer.from(" ".repeat(16)));
+      response.emit("data", Buffer.from(" ".repeat(17)));
+      response.emit("end");
+    };
+    return request;
+  });
+  try {
+    await assert.rejects(
+      awsCoreRequest(
+        config,
+        new URL(config.publicUrl),
+        {
+          method: "POST",
+          body: "{}",
+          signal: AbortSignal.timeout(1000),
+        },
+        32,
+      ),
+      /size limit/,
+    );
+    assert.equal(destroyed, true);
+  } finally {
+    t.mock.restoreAll();
+    fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -5558,7 +5634,37 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     };
     const fetchLayer = globalThis.fetch;
     const mutations: unknown[] = [];
+    let smokeCalls = 0;
+    let smokeFailure = false;
     globalThis.fetch = async (url, init) => {
+      if (String(url).includes("/v1/deployment/live-session")) {
+        smokeCalls++;
+        const body = String(init?.body ?? "");
+        const request = JSON.parse(body);
+        const headers = new Headers(init?.headers);
+        assert.equal(headers.get("authorization"), "Bearer separate-control-secret-value-0000000000");
+        assert.equal(
+          headers.get("x-signature"),
+          `v0=${createHmac("sha256", TEST_SECRET_VALUE)
+            .update(`v0:${headers.get("x-timestamp")}:POST\n/v1/deployment/live-session\n${body}`)
+            .digest("hex")}`,
+        );
+        assert.equal(request.expectedDeploymentId, manifest.backgroundDeploymentId);
+        assert.equal(request.expectedGeneration, ownership.generation);
+        assert.deepEqual(request.expectedTaskArns, [taskArn]);
+        assert.ok(init?.signal instanceof AbortSignal);
+        if (smokeFailure) throw new Error("disconnected with a sensitive credential");
+        return new Response(
+          ` \n\n${JSON.stringify({
+            ok: true,
+            requestId: request.requestId,
+            deploymentId: ownership.deploymentId,
+            generation: ownership.generation,
+            instanceId: "instance-one",
+            taskArn,
+          })}\n`,
+        );
+      }
       if (!String(url).includes("/v1/background-work")) return fetchLayer(url, init);
       const headers = new Headers(init?.headers);
       assert.equal(headers.get("authorization"), "Bearer separate-control-secret-value-0000000000");
@@ -5591,6 +5697,10 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       return new Response(JSON.stringify(ownership), { status: 200 });
     };
     assert.deepEqual((await awsBackgroundWorkStatus(single, dir)).taskArns, [taskArn]);
+    writeFileSync(fake.log, "");
+    await awsCheckLive(single, { configDir: dir, report: false });
+    assert.equal(smokeCalls, 0);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs run-task/);
     await assert.rejects(awsSetBackgroundWork(single, dir, true), /explicitly bootstrap/);
     const stoppedLegacyArn = "arn:aws:ecs:us-west-2:123456789012:task/stopped-legacy-core";
     ownership.members.push({
@@ -5624,6 +5734,25 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       manifest.backgroundDeploymentId,
     );
     assert.equal(bootstrapped.generation, 1);
+    writeFileSync(fake.log, "");
+    await awsCheckLive(single, { configDir: dir, report: false });
+    assert.equal(smokeCalls, 1);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs run-task/);
+    smokeFailure = true;
+    await assert.rejects(awsCheckLive(single, { configDir: dir, report: false }), /unconfirmed/);
+    assert.equal(smokeCalls, 2);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs run-task/);
+    smokeFailure = false;
+    const activeOwnership = structuredClone(ownership);
+    ownership.generation++;
+    ownership.desiredDeploymentId = "other-owner";
+    ownership.members[0]!.state = "relinquished";
+    ownership.members[0]!.ready = false;
+    writeFileSync(fake.log, "");
+    await awsCheckLive(single, { configDir: dir, report: false });
+    assert.equal(smokeCalls, 2);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs run-task/);
+    Object.assign(ownership, activeOwnership);
     writeFileSync(fake.log, "");
     await assert.rejects(awsUp(single, dir, { yes: true }), /pause or hand over/);
     assert.doesNotMatch(

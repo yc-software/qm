@@ -73,6 +73,7 @@ import {
   streamLabeled,
 } from "../util.ts";
 import { doctorCommon } from "./doctor.ts";
+import { checkControlledLiveSession } from "../live-session.ts";
 import {
   assertTerraformScaffoldSupportsConfig,
   awsObjectStoreBucket,
@@ -102,13 +103,34 @@ export async function awsCoreRequest(
   config: QmConfig,
   url: URL,
   init: RequestInit,
+  maxResponseBytes?: number,
 ): Promise<{ status: number; body: string }> {
   const target = awsPublicFrontDoor(config).dnsName.toLowerCase().replace(/\.$/, "");
   if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
   if (awsPublicOrigin(config).protocol === "http:") {
     assertCloudFrontLayerTarget(config, url, target);
     const response = await fetch(url, init);
-    return { status: response.status, body: await response.text() };
+    if (maxResponseBytes === undefined) return { status: response.status, body: await response.text() };
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = response.body?.getReader();
+    if (reader) {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > maxResponseBytes) throw new CliError("AWS core response exceeded its size limit");
+          chunks.push(value);
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => {});
+        throw error;
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    return { status: response.status, body: Buffer.concat(chunks).toString("utf8") };
   }
   return new Promise((resolve, reject) => {
     const request = https.request(
@@ -123,7 +145,17 @@ export async function awsCoreRequest(
       },
       (response) => {
         const chunks: Buffer[] = [];
-        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        let size = 0;
+        response.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (maxResponseBytes !== undefined && size > maxResponseBytes) {
+            const error = new CliError("AWS core response exceeded its size limit");
+            reject(error);
+            response.destroy(error);
+            return;
+          }
+          chunks.push(chunk);
+        });
         response.on("error", reject);
         response.on("end", () =>
           resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
@@ -2839,7 +2871,12 @@ export function taskDefinitionForBackgroundWork(
   };
 }
 
-function awsBackgroundWorkTransport(config: QmConfig): BackgroundWorkTransport {
+function awsBackgroundWorkTransport(
+  config: QmConfig,
+  path = "/v1/background-work",
+  timeoutMs = 30_000,
+  maxResponseBytes?: number,
+): BackgroundWorkTransport {
   const aws = requireAws(config);
   const secret = (name: string): string =>
     awsText(aws, [
@@ -2855,24 +2892,30 @@ function awsBackgroundWorkTransport(config: QmConfig): BackgroundWorkTransport {
   if (isInvalidSecret("CORE_SIGNING_SECRET", signing) || control.trim().length < 32 || control === signing)
     throw new CliError("deployment control requires a distinct secret of at least 32 characters");
   const url = new URL(config.publicUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/background-work`;
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
   url.search = "";
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
       .update(`v0:${timestamp}:${method}\n${url.pathname}\n${body}`)
       .digest("hex");
-    return awsCoreRequest(config, url, {
-      method,
-      headers: {
-        "content-type": "application/json",
-        "x-timestamp": String(timestamp),
-        "x-signature": `v0=${signature}`,
-        authorization: `Bearer ${control}`,
+    return awsCoreRequest(
+      config,
+      url,
+      {
+        method,
+        headers: {
+          "content-type": "application/json",
+          "x-timestamp": String(timestamp),
+          "x-signature": `v0=${signature}`,
+          authorization: `Bearer ${control}`,
+        },
+        ...(method === "POST" ? { body } : {}),
+        redirect: "error",
+        signal: AbortSignal.timeout(timeoutMs),
       },
-      ...(method === "POST" ? { body } : {}),
-      signal: AbortSignal.timeout(30_000),
-    });
+      maxResponseBytes,
+    );
   };
 }
 
@@ -4719,7 +4762,17 @@ async function checkLive(
   }
   if (!failures.length) {
     try {
-      awsLiveSession(config, states.get("core")!);
+      const cohort = aws.backgroundWorkControl ? await awsBackgroundWorkStatus(config, configDir) : undefined;
+      if (cohort?.status.enabled && cohort.status.desiredDeploymentId === cohort.deploymentId) {
+        const transport = awsBackgroundWorkTransport(config, "/v1/deployment/live-session", 600_000, 65_536);
+        await checkControlledLiveSession({
+          before: cohort,
+          read: () => awsBackgroundWorkStatus(config, configDir),
+          request: (body) => transport("POST", body),
+        });
+      } else {
+        awsLiveSession(config, states.get("core")!);
+      }
       if (opts.report ?? true) step("core: private live session smoke passed");
     } catch (error) {
       failures.push(`core: private live session smoke failed: ${errMessage(error)}`);
