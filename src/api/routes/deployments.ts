@@ -10,7 +10,7 @@ import {
 } from "node:http2";
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
-import { deploymentView, type App, type DeployInput } from "../app.ts";
+import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { canonicalPayload, escapeHtml, sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
@@ -31,14 +31,12 @@ function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   return { agent: new SocksProxyAgent(`socks5h://127.0.0.1:${port}`, { keepAlive: false }) };
 }
 
+function isRedeployInput(b: unknown): b is RedeployInput {
+  return isObj(b) && typeof b.entrypoint === "string" && Array.isArray(b.files);
+}
+
 function isDeployInput(b: unknown): b is DeployInput {
-  return (
-    isObj(b) &&
-    typeof b.ownerScopeId === "string" &&
-    typeof b.createdBy === "string" &&
-    typeof b.entrypoint === "string" &&
-    Array.isArray(b.files)
-  );
+  return isObj(b) && typeof b.ownerScopeId === "string" && typeof b.createdBy === "string" && isRedeployInput(b);
 }
 
 async function proxyDeployment(ctx: BaseCtx): Promise<void> {
@@ -1321,12 +1319,11 @@ async function redeployDeployment(ctx: ApiCtx): Promise<void> {
   const id = await deploymentId(app, params.id!);
   if (!id) return sendJson(res, 404, { error: "not_found" });
   if (!(await callerMayManageDeployment(ctx, id))) return sendJson(res, 403, { error: "forbidden" });
-  const b = body as { entrypoint?: unknown; files?: unknown };
-  if (typeof b.entrypoint !== "string" || !Array.isArray(b.files)) {
+  if (!isRedeployInput(body)) {
     return sendJson(res, 400, { error: "bad_request", message: "entrypoint (string) and files (array) required" });
   }
   try {
-    return sendJson(res, 200, { deployment: await app.redeploy(id, { entrypoint: b.entrypoint, files: b.files }) });
+    return sendJson(res, 200, { deployment: await app.redeploy(id, body) });
   } catch (e) {
     return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
   }

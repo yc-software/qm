@@ -48,6 +48,7 @@ interface CtxOpts {
   ledger?: ToolLedger;
   runId?: string;
   rw?: boolean;
+  splitEnv?: Record<string, string>;
 }
 
 function fileSandbox(files: Array<{ path: string; data: Uint8Array }>): Sandbox {
@@ -81,6 +82,9 @@ function ctx(deploy: DeployService, opts: CtxOpts = {}) {
     createdBy: "U1",
     ...(opts.ledger ? { ledger: opts.ledger } : {}),
     ...(opts.runId ? { runId: opts.runId } : {}),
+    ...(opts.splitEnv
+      ? { actingSlackUserId: "U1", layerAuth: { credentialPaths: [], splitEnvTemplates: [opts.splitEnv] } }
+      : {}),
   });
 }
 
@@ -199,6 +203,40 @@ test("publish by name inherits the current entrypoint when redeploying without o
     (await s.deployStore.filesOf(d.id, 2))?.map((f) => ({ path: f.path, data: [...f.data] })),
     [{ path: "server.js", data: [...bytes("v2")] }],
   );
+});
+
+test("publish by name keeps the previous version's env unless the call replaces it", async () => {
+  const s = svc();
+  const files = [{ path: "app/server.js", data: bytes("v1") }];
+  await ctx(s.deploy, { files }).publish({
+    dir: "app",
+    entrypoint: "node server.js",
+    name: "dash",
+    env: { DB: "one" },
+  });
+  await ctx(s.deploy, { files }).publish({ dir: "app", name: "dash" });
+  await ctx(s.deploy, { files }).publish({ dir: "app", name: "dash", env: { OTHER: "x" } });
+  await ctx(s.deploy, { files }).publish({ dir: "app", name: "dash", env: {} });
+  const envs = (await s.deployStore.getByName("dash"))!.versions.map((v) => v.env);
+  assert.deepEqual(envs, [{ DB: "one" }, { DB: "one" }, { OTHER: "x" }, {}]);
+});
+
+test("publish from a layer with split env stamps it on top of the inherited env", async () => {
+  const s = svc();
+  const files = [{ path: "app/server.js", data: bytes("v1") }];
+  const splitEnv = { ACTING: "{actingSlackUserId}" };
+  await ctx(s.deploy, { files, splitEnv }).publish({
+    dir: "app",
+    entrypoint: "node server.js",
+    name: "dash",
+    env: { DB: "one" },
+  });
+  await ctx(s.deploy, { files, splitEnv }).publish({ dir: "app", name: "dash" });
+  const envs = (await s.deployStore.getByName("dash"))!.versions.map((v) => v.env);
+  assert.deepEqual(envs, [
+    { DB: "one", ACTING: "U1" },
+    { DB: "one", ACTING: "U1" },
+  ]);
 });
 
 test("publish without an entrypoint and without a prior version fails before provisioning", async () => {

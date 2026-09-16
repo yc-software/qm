@@ -47,8 +47,8 @@ import type {
   BackgroundJobSummary,
 } from "../connectors/background-exec-broker.ts";
 import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } from "../monitors/monitor-broker.ts";
-import type { DeployService, DeployFile } from "../deploy/deploy-service.ts";
-import { publicUrlOf, type Deployment } from "../deploy/deploy-store.ts";
+import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
+import { currentVersionOf, publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -118,11 +118,6 @@ interface PublishResult {
   audience?: PublishAudienceDescriptor;
   dataDir?: string;
   alwaysOn?: boolean;
-}
-
-function deploymentEntrypoint(d: Deployment | null): string | undefined {
-  if (!d) return undefined;
-  return d.versions.find((v) => v.version === d.currentVersion)?.entrypoint || undefined;
 }
 
 export class NeedsApproval extends Error {
@@ -1001,7 +996,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             ),
           )
         : {};
-      const env = { ...input.env, ...authEnv };
+      const stamped = Object.keys(authEnv).length > 0;
+      const target = input.renameFrom ?? input.name;
+      const env =
+        input.env ??
+        (stamped && target !== undefined ? currentVersionOf(await deps.deploy.getDeployment(target))?.env : undefined);
 
       const pc = deps.publishContext;
       const aud: PublishAudience =
@@ -1036,7 +1035,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.renameFrom !== undefined ? { renameFrom: input.renameFrom } : {}),
-          ...(Object.keys(env).length ? { env } : {}),
+          ...(env || stamped ? { env: { ...env, ...authEnv } } : {}),
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(doReconcile

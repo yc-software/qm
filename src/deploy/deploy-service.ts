@@ -9,6 +9,7 @@ import { normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
+  currentVersionOf,
   deployCurrentGitRef,
   type DeployStore,
   type Deployment,
@@ -26,16 +27,19 @@ export interface DeployFile {
   data: string | Uint8Array;
 }
 
-export interface DeployInput {
-  ownerScopeId: ScopeId;
-  createdBy: string;
-  createdInScope?: ScopeId;
+export interface RedeployInput {
   entrypoint: string;
   files: DeployFile[];
   homeFiles?: DeployFile[];
-  name?: string;
   env?: Record<string, string>;
   alwaysOn?: boolean;
+}
+
+export interface DeployInput extends RedeployInput {
+  ownerScopeId: ScopeId;
+  createdBy: string;
+  createdInScope?: ScopeId;
+  name?: string;
 }
 
 export type Reach =
@@ -64,16 +68,7 @@ export interface ReachOptions {
 export interface DeployService {
   readonly providerProfile: DeployProfile;
   deploy(input: DeployInput): Promise<Deployment>;
-  redeploy(
-    id: string,
-    input: {
-      entrypoint: string;
-      files: DeployFile[];
-      homeFiles?: DeployFile[];
-      env?: Record<string, string>;
-      alwaysOn?: boolean;
-    },
-  ): Promise<Deployment>;
+  redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
   listDeployments(): Promise<Deployment[]>;
   rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean }): Promise<void>;
@@ -143,9 +138,8 @@ function validateDisplayName(displayName: string): void {
   if (displayName.length > DISPLAY_NAME_MAX) throw new Error(`display name too long (max ${DISPLAY_NAME_MAX} chars)`);
 }
 
-function deploymentEntrypoint(d: Deployment | null): string | undefined {
-  if (!d) return undefined;
-  return d.versions.find((v) => v.version === d.currentVersion)?.entrypoint || undefined;
+export function deploymentEntrypoint(d: Deployment | null): string | undefined {
+  return currentVersionOf(d)?.entrypoint || undefined;
 }
 
 function requiredEntrypoint(input: string | undefined, d: Deployment | null): string {
@@ -208,7 +202,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
     if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
-    const version = d.versions.find((v) => v.version === d.currentVersion);
+    const version = currentVersionOf(d);
     if (!version) return d.endpoint;
     const resolved = await deps.provider.resolveEndpoint(d, version);
     if (resolved) {
@@ -217,7 +211,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     }
     return withDeployLock(d.id, async () => {
       const cur = (await deps.deployStore.get(d.id)) ?? d;
-      const v = cur.versions.find((x) => x.version === cur.currentVersion) ?? version;
+      const v = currentVersionOf(cur) ?? version;
       const again = await deps.provider.resolveEndpoint!(cur, v);
       if (again) {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
@@ -387,25 +381,27 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async redeploy(id, input) {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
+        if (!before) throw new Error(`unknown deployment: ${id}`);
+        const current = currentVersionOf(before);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
-        const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
+        let homeDir = input.homeFiles === undefined ? current?.homeDir : undefined;
+        if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);
+        const env = input.env ?? current?.env;
         const v = await deps.deployStore.addVersion(id, {
           entrypoint: input.entrypoint,
           snapshotDir,
           files: input.files,
           ...(homeDir ? { homeDir } : {}),
-          ...(input.env ? { env: input.env } : {}),
+          ...(env ? { env } : {}),
         });
-        const d = await deps.deployStore.get(id);
-        if (!d) throw new Error(`unknown deployment: ${id}`);
-        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion, input.alwaysOn);
+        const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
         deps.auditLog.record({
           at: Date.now(),
-          principalId: d.createdBy,
+          principalId: before.createdBy,
           action: "deploy_version",
           resource: `${id}@v${v.version}`,
-          scopeLabel: d.ownerScopeId,
+          scopeLabel: before.ownerScopeId,
         });
         return (await deps.deployStore.get(id))!;
       });
@@ -454,7 +450,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!d) throw new Error(`unknown deployment: ${id}`);
         if (d.status === "running") return d;
         if (d.status !== "archived") throw new Error(`deployment is not archived: ${id}`);
-        const version = d.versions.find((v) => v.version === d.currentVersion);
+        const version = currentVersionOf(d);
         if (!version) throw new Error(`no such version ${d.currentVersion}`);
         try {
           const endpoint = await applyVersion(id, version, d.appliedVersion);
