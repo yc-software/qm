@@ -201,7 +201,7 @@ test("a channel thread reply's edit reaches the thread session via the sub root"
   assert.equal(marks[0]!.name, "Josh");
 });
 
-test("when the tape is not contiguous the marker entry still lands but the tape stays untouched", async () => {
+test("when model tape is not contiguous the revision is mirrored without advancing model coverage", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread(`dm:${DM}`, "dm", SCOPE, undefined, "slack");
   const { lease } = await sessions.acquireLease(session.id, "turn");
@@ -211,7 +211,13 @@ test("when the tape is not contiguous the marker entry still lands but the tape 
   await recordMessageRevisions(sessions, [edit()]);
 
   assert.equal(revisions(await sessions.getEntries(session.id)).length, 1);
-  assert.equal((await sessions.getTape(session.id)).length, 0);
+  assert.deepEqual(await sessions.getTranscriptEntries(session.id), await sessions.getEntries(session.id));
+  assert.equal(await sessions.tapeCoverage(session.id), -1);
+  assert.ok(
+    (await sessions.getTape(session.id)).every(
+      (row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry",
+    ),
+  );
 });
 
 test("the marker renders into model context on the entries-replay path", () => {
