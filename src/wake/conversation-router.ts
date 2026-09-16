@@ -1,7 +1,7 @@
 import { withAbort } from "../util/async.ts";
 import { isHalt } from "./wake.ts";
 
-export interface ConversationTask {
+interface ConversationTask {
   id: string;
   request: string;
   state: "running" | "waiting" | "completed";
@@ -18,7 +18,7 @@ export interface ConversationRoutingInput {
   attachments?: Array<{ name: string; mimetype: string }>;
 }
 
-export type ConversationRoute =
+type ConversationRoute =
   | { text: string; action: "update" | "answer" | "cancel"; taskIds: string[] }
   | { text: string; action: "start" }
   | { text: string; action: "clarify"; question: string };
@@ -33,7 +33,7 @@ export type ConversationRoutingJudge = (
   signal: AbortSignal,
 ) => Promise<string | undefined>;
 
-export const CONVERSATION_ROUTING_SYSTEM = `Interpret a person's latest message in an ongoing conversation.
+const CONVERSATION_ROUTING_SYSTEM = `Interpret a person's latest message in an ongoing conversation.
 The person can speak whenever they want, regardless of which tasks are running.
 Return a routing proposal, not an answer or a promise to perform work.
 
