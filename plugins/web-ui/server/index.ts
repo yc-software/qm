@@ -1,3 +1,4 @@
+import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1148,13 +1149,27 @@ const apiRoutes: readonly WebRoute[] = [
       ),
   },
   {
+    method: "GET",
+    path: "/api/composio/connections",
+    handle: async (c) => {
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(
+        c.res,
+        "GET",
+        `/v1/composio/connections?${new URLSearchParams({ cursor: c.url.searchParams.get("cursor") ?? "" })}`,
+      );
+    },
+  },
+  {
     method: "POST",
     path: "/api/composio/authorize",
     handle: async (c) => {
-      const body = await readJson<{ toolkit?: unknown }>(c.req, c.res, false);
+      const body = await readJson<{ toolkit?: unknown; returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
       if (!body) return;
       c.res.setHeader("Cache-Control", "no-store");
-      return relayCore(c.res, "POST", "/v1/composio/authorize", JSON.stringify({ toolkit: body.toolkit }));
+      const callbackUrl = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+      if (!callbackUrl) return json(c.res, 400, { error: "invalid_return_url" });
+      return relayCore(c.res, "POST", "/v1/composio/authorize", JSON.stringify({ toolkit: body.toolkit, callbackUrl }));
     },
   },
   {
