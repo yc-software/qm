@@ -199,7 +199,7 @@ test("resolvePackAuth: an explicit slug fails closed when disabled or outside ho
   );
 });
 
-test("resolvePackAuth: a github repo with no slug reuses the registrant's connected GitHub token", async () => {
+test("resolvePackAuth: a github repo with no slug reuses the registrant's connected GitHub token as Basic auth", async () => {
   const calls: Array<[string, string]> = [];
   const sources = {
     serviceCredential: async () => ({ secret: "svc", host: "github.com", enabled: true }),
@@ -208,9 +208,10 @@ test("resolvePackAuth: a github repo with no slug reuses the registrant's connec
       return "ghtok";
     },
   };
+  const expected = `Basic ${Buffer.from("x-access-token:ghtok").toString("base64")}`;
   assert.deepEqual(await resolvePackAuth(sources, { url: "https://github.com/o/r.git", createdBy: "alice" }), {
     header: "Authorization",
-    value: "Bearer ghtok",
+    value: expected,
     secret: "ghtok",
   });
   assert.deepEqual(calls, [["api.github.com", "alice"]], "looks up the registrant's api.github.com connector token");
