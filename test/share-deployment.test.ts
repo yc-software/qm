@@ -16,6 +16,7 @@ import {
   archiveDeployment,
   restoreDeployment,
   getDeployment,
+  getDeploymentShares,
   setDeploymentDisplayName,
 } from "../src/api/routes/deployments.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
@@ -476,4 +477,24 @@ test("transferDeploymentOwner to the current home is a no-op", async () => {
   const after = (await deploy.listDeployments()).find((x) => x.id === d.id)!;
   assert.equal(after.ownerScopeId, scopeId("personal", "U1"));
   assert.equal((await acl.list()).length, 0, "no self-grant sprayed by a no-op transfer");
+});
+
+test("deployment permissions are visible only to the owner, including for managers", async () => {
+  const { app } = apiHarness();
+  await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "permissions",
+  });
+  await callShare(app, cap("U1"), "permissions", { scope: "personal:U2", access: "manage" });
+  const owner = await callManage(getDeploymentShares, app, cap("U1"), "permissions", {});
+  assert.equal(owner.status, 200);
+  assert.deepEqual(owner.body.grantees, [{ scope: "personal:U2", permission: "write" }]);
+  assert.equal((await callManage(getDeploymentShares, app, cap("U2"), "permissions", {})).status, 403);
+  assert.equal((await callManage(getDeploymentShares, app, null, "permissions", {})).status, 403);
+  assert.equal((await callManage(getDeploymentShares, app, cap("U1"), "missing", {})).status, 404);
+  await callShare(app, cap("U1"), "permissions", { scope: "personal:U2", access: "none" });
+  assert.deepEqual((await callManage(getDeploymentShares, app, cap("U1"), "permissions", {})).body.grantees, []);
 });

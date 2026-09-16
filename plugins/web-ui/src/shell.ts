@@ -934,12 +934,12 @@ function warmDeferredChunks(): void {
 function openAppEditChat(slug: string): void {
   const user = appState.me?.user ?? "anon";
   const threadRef = `web:${user}:app-edit:${slug}`;
+  if (storedDraft(threadRef) === `Update my deployed app "${slug}": `) saveDraft(threadRef, "");
   const existing = sessionsState.list.find((s) => s.threadRef === threadRef);
   if (existing) {
     void openSession(existing);
     return;
   }
-  if (!storedDraft(threadRef)) saveDraft(threadRef, `Update my deployed app "${slug}": `);
   startNewChat(null, null, threadRef);
   renderList();
 }
@@ -960,6 +960,7 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  document.body.classList.toggle("app-edit-embed", wanted === "app-edit" && params.get("embed") === "1");
   const chatsLink = wanted === null || wanted === "chats";
   const linkedId = wantedSession && chatsLink ? wantedSession : null;
   const entriesPrefetch = linkedId ? fetchTranscript(linkedId, { tailTurns: TAIL_TURNS }).catch(() => null) : null;

@@ -62,22 +62,10 @@ see a slim top bar. Chat opens a resizable editing conversation beside the app. 
 app links and refreshes keep editing available for the signed-in session; viewers with
 read-only access see the app alone.
 
-The bar follows the app document's title and its body's computed background, text
-color, and font, including theme changes. To tune it, set these optional CSS properties
-on `:root` or `body` in the app. Keep text and background legible together:
-
-```css
-:root {
-  --qm-bar-background: #f7f4ed;
-  --qm-bar-color: #34332f;
-  --qm-bar-accent: #94633b;
-  --qm-bar-font-family: Georgia, serif;
-}
-```
-
-These styles travel with the published source and its versions. They affect presentation
-only; the bar's Chat, update, and hide controls keep their behavior. The drawer preserves
-the conversation when the app reloads after a publish.
+The bar uses a consistent neutral appearance, independent of the app's theme. Its
+name follows the app document title. The drawer opens directly into an empty composer;
+the app identity is supplied as conversation context, not pasted into the draft. The
+conversation survives app reloads after a publish.
 
 ## Durable data — where app state must live
 

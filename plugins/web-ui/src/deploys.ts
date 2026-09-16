@@ -1,3 +1,4 @@
+import { openDeploymentPermissions } from "./deploy-permissions";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Archive, Check, Copy, ExternalLink, RotateCcw, X } from "lucide";
@@ -95,11 +96,11 @@ function permissionBadge(d: DeploymentView): TemplateResult {
 
 function ownerLabel(d: DeploymentView): string {
   const me = appState.me?.user;
-  if (d.ownerScopeId === `personal:${me}`) return "Your personal context";
+  if (d.ownerScopeId === `personal:${me}`) return "Owned by you";
   if (d.ownerScopeId?.startsWith("personal:"))
-    return `${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))} · Personal`;
+    return `Owned by ${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))}`;
   if (d.ownerScopeId?.startsWith("org:")) return "Organization";
-  return d.createdBy ? `Shared context · created by ${friendlyPrincipal(d.createdBy)}` : "Shared context";
+  return "Shared context";
 }
 
 function deployTabs(): TemplateResult {
@@ -273,79 +274,30 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
         ${loading ? html`<div class="hint">Loading authoritative app details…</div>` : nothing}
         ${deployNotices.detail?.id === d.id ? html`<div class="status">${deployNotices.detail.text}</div>` : nothing}
 
-        <section class="deploy-detail-section">
-          <h3>Overview</h3>
-          <div class="deploy-facts">
-            <div><span>Status</span><strong>${statusLabel(d)}</strong></div>
-            <div><span>Live version</span><strong>${d.appliedVersion ?? d.currentVersion ?? "None"}</strong></div>
-            <div><span>Latest version</span><strong>${d.currentVersion ?? "None"}</strong></div>
-            <div>
-              <span>Last deployed</span
-              ><strong>${deploymentLatestAt(d) ? new Date(deploymentLatestAt(d)).toLocaleString() : "Never"}</strong>
-            </div>
-            <div>
-              <span>Last opened</span
-              ><strong>${d.lastAccessAt ? relTime(d.lastAccessAt) : "No recorded access"}</strong>
-            </div>
-            <div><span>Access</span><strong>${permissionBadge(d)}</strong></div>
+        <div class="deploy-summary">
+          <span>Live v${d.appliedVersion ?? d.currentVersion ?? "—"}</span>
+          ${d.currentVersion !== undefined && d.appliedVersion !== undefined && d.currentVersion !== d.appliedVersion ? html`<span>Latest v${d.currentVersion}</span>` : nothing}
+          ${deploymentLatestAt(d) ? html`<span ${tip(new Date(deploymentLatestAt(d)).toLocaleString())}>Updated ${relTime(deploymentLatestAt(d))}</span>` : nothing}
+        </div>
+        <div class="deploy-access-line">
+          <div>
+            <span>${ownerLabel(d)}</span>
+            ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="deploy-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
+            ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="deploy-secondary-context">Created by ${friendlyPrincipal(d.createdBy)}</span>` : nothing}
           </div>
-        </section>
-
-        <section class="deploy-detail-section">
-          <h3>Ownership and access</h3>
-          <div class="field">
-            <label>Created in</label>
-            <div class="value">${contextScope ? scopeChip(contextScope) : "Unknown"}</div>
-          </div>
-          <div class="field">
-            <label>Owner</label>
-            <div class="value">${ownerLabel(d)}</div>
-          </div>
-          ${
-            d.createdBy
-              ? html`<div class="field">
-                  <label>Created by</label>
-                  <div class="value">${friendlyPrincipal(d.createdBy)}</div>
-                </div>`
-              : nothing
-          }
-          ${
-            d.gitUrl
-              ? html`<div class="field deploy-git-field">
-                  <label>Git remote</label>
-                  <div class="value">
-                    <code>${d.gitUrl}</code
-                    ><button
-                      class="icon-btn subtle"
-                      type="button"
-                      ${tip("Copy Git remote")}
-                      aria-label="Copy Git remote"
-                      @click=${(event: Event) => void copyText(d.gitUrl!, event.currentTarget as HTMLButtonElement)}
-                    >
-                      ${icon(Copy, 14)}
-                    </button>
-                  </div>
-                  <p class="hint">
-                    ${d.permission === "write" ? "Clone or push a new version with this short-lived authenticated URL." : "Clone source with this short-lived read-only authenticated URL."}
-                  </p>
-                </div>`
-              : nothing
-          }
-        </section>
+          ${d.ownerScopeId === `personal:${appState.me?.user}` ? html`<button class="btn" type="button" @click=${() => void openDeploymentPermissions(d.id, deploymentTitle(d), d.ownerScopeId!)}>Permissions</button>` : permissionBadge(d)}
+        </div>
 
         ${
           canManage(d)
             ? html`<section class="deploy-detail-section">
                 <h3>Settings</h3>
                 <div class="deploy-setting-row">
-                  <div>
-                    <strong>Display name</strong
-                    ><span>The human-friendly name shown here. This does not change the app URL.</span>
-                  </div>
-                  ${editingName ? deployEditForm(d, "displayName") : html`<div class="deploy-setting-value"><span dir="auto">${d.displayName || "Using URL slug"}</span><button class="btn" type="button" @click=${() => startEditDeploy(d, "displayName")}>Edit</button></div>`}
+                  <div><strong>Display name</strong><span>Shown in the app bar and app list.</span></div>
+                  ${editingName ? deployEditForm(d, "displayName") : html`<div class="deploy-setting-value"><span dir="auto">${deploymentTitle(d)}</span><button class="btn" type="button" @click=${() => startEditDeploy(d, "displayName")}>Edit</button></div>`}
                 </div>
                 <div class="deploy-setting-row">
-                  <div><strong>URL slug</strong><span>Changes the app URL. Existing links do not redirect.</span></div>
+                  <div><strong>App URL</strong><span>Changes the app URL. Existing links do not redirect.</span></div>
                   ${editingSlug ? deployEditForm(d, "name") : html`<div class="deploy-setting-value"><code>/d/${deploymentSlug(d)}/</code><button class="btn" type="button" @click=${() => startEditDeploy(d, "name")}>Change</button></div>`}
                 </div>
                 <div class="actions deploy-danger-actions">
@@ -381,8 +333,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
                           >${version.version === d.appliedVersion ? html`<span class="badge ok">Live</span>` : nothing}${version.version === d.currentVersion && version.version !== d.appliedVersion ? html`<span class="badge">Latest</span>` : nothing}
                         </div>
                         <div>
-                          <span>${new Date(version.createdAt).toLocaleString()}</span
-                          >${version.commit ? html`<code ${tip(version.commit)}>${version.commit.slice(0, 10)}</code>` : nothing}
+                          <span>${new Date(version.createdAt).toLocaleString()}</span>
                         </div>
                       </div>
                     `,

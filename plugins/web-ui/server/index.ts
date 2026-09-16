@@ -1,3 +1,4 @@
+import { appEditSlug } from "../src/app-edit.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -329,12 +330,18 @@ function webTurnBase(
   text: string,
 ) {
   const displayName = resolveIdentity(req)?.name ?? null;
+  const appSlug = appEditSlug(threadRef, user);
   return {
     surface: "web",
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
     liveActor: true,
     deliveryTarget: threadRef,
+    ...(appSlug
+      ? {
+          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.`,
+        }
+      : {}),
     text,
   };
 }
@@ -1993,6 +2000,25 @@ const apiRoutes: readonly WebRoute[] = [
       } catch {
         return json(res, 502, { error: "bad_core_response" });
       }
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/deployments/:id/share",
+    handle: async ({ res, params }) => relayCap(res, "GET", `/v1/deployments/${encodeURIComponent(params.id!)}/share`),
+  },
+  {
+    method: "POST",
+    path: "/api/deployments/:id/share",
+    handle: async ({ req, res, params }) => {
+      const body = await readJson<{ scope?: unknown; recipient?: unknown; access?: unknown }>(req, res, false);
+      if (!body) return;
+      return relayCap(
+        res,
+        "POST",
+        `/v1/deployments/${encodeURIComponent(params.id!)}/share`,
+        JSON.stringify({ scope: body.scope, recipient: body.recipient, access: body.access }),
+      );
     },
   },
   {

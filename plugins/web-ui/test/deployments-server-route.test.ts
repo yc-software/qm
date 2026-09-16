@@ -16,6 +16,7 @@ interface Call {
   method: string;
   url: string;
   body: Record<string, unknown>;
+  capability?: string;
 }
 
 const calls: Call[] = [];
@@ -35,10 +36,19 @@ const core = createServer((req: IncomingMessage, res) => {
   req.on("end", () => {
     const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     if (!(req.url ?? "").startsWith("/v1/surface-config")) {
-      calls.push({ method: req.method ?? "GET", url: req.url ?? "", body });
+      calls.push({
+        method: req.method ?? "GET",
+        url: req.url ?? "",
+        body,
+        capability: req.headers["x-agent-capability"] as string | undefined,
+      });
     }
     res.writeHead(200, { "content-type": "application/json" });
-    if (req.method === "GET" && req.url?.startsWith("/v1/deployments?")) {
+    if (req.url?.startsWith("/v1/session-cap")) {
+      res.end(JSON.stringify({ token: "signed-in-user-capability" }));
+    } else if (req.url?.startsWith("/v1/deployments/d1/share")) {
+      res.end(JSON.stringify({ grantees: [] }));
+    } else if (req.method === "GET" && req.url?.startsWith("/v1/deployments?")) {
       res.end(JSON.stringify({ deployments: [deployment] }));
     } else if (req.method === "GET") {
       res.end(JSON.stringify({ deployment }));
@@ -90,4 +100,23 @@ test("deployment detail and restore bridge bind the signed-in principal", async 
     .slice(before)
     .find((call) => call.method === "POST" && isNoncedCoreCall(call.url, "/v1/deployments/status-page/restore"));
   assert.deepEqual(slugRestoreCall?.body, { principalId: "alice" });
+});
+
+test("deployment sharing uses the signed-in capability and drops caller identity fields", async () => {
+  const before = calls.length;
+  assert.equal((await fetch(`${base}/api/deployments/d1/share`, { headers })).status, 200);
+  assert.equal(
+    (
+      await fetch(`${base}/api/deployments/d1/share`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ scope: "personal:bob", access: "view", actorId: "mallory", principalId: "mallory" }),
+      })
+    ).status,
+    200,
+  );
+  const requests = calls.slice(before).filter((call) => call.url === "/v1/deployments/d1/share");
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((call) => call.capability === "signed-in-user-capability"));
+  assert.deepEqual(requests[1]?.body, { scope: "personal:bob", access: "view" });
 });

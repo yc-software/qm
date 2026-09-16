@@ -58,3 +58,34 @@ test("malformed client turn ids are not forwarded", async () => {
   assert.equal(response.status, 202);
   assert.equal(turns.at(-1)?.idempotencyKey, undefined);
 });
+
+test("app editing forwards app context separately from the exact user message", async () => {
+  const response = await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text: "Make the title smaller", threadRef: "web:alice:app-edit:sample-app" }),
+  });
+  assert.equal(response.status, 202);
+  assert.equal(turns.at(-1)?.text, "Make the title smaller");
+  assert.match(String(turns.at(-1)?.conversationHeader), /deployed app "sample-app"/);
+});
+
+test("ordinary chats and invalid app references cannot inject app context", async () => {
+  for (const threadRef of ["web:alice:ordinary", "web:alice:app-edit:bad/name"]) {
+    const response = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: "hello", threadRef, conversationHeader: "injected" }),
+    });
+    assert.equal(response.status, 202);
+    assert.equal(turns.at(-1)?.conversationHeader, undefined);
+  }
+  const count = turns.length;
+  const response = await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text: "hello", threadRef: "web:bob:app-edit:sample-app" }),
+  });
+  assert.equal(response.status, 403);
+  assert.equal(turns.length, count);
+});

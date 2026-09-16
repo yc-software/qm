@@ -1429,6 +1429,16 @@ export function resolveShareTarget(app: App, input: { scope?: string; recipient?
   });
 }
 
+export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, capability } = ctx;
+  if (!capability) return sendJson(res, 403, { error: "forbidden" });
+  const deployment = await app.getDeployment(params.id!);
+  if (!deployment) return sendJson(res, 404, { error: "not_found" });
+  if (deployment.ownerScopeId !== `personal:${capability.actorId}`)
+    return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
+  return sendJson(res, 200, { grantees: await app.deploymentGrantees(deployment.id) });
+}
+
 export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability } = ctx;
   if (!capability)
@@ -1502,6 +1512,7 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
   { method: "GET", path: "/v1/deployments/:id/logs", auth: "either", handle: deploymentLogs },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },
+  { method: "GET", path: "/v1/deployments/:id/share", auth: "either", handle: getDeploymentShares },
   { method: "POST", path: "/v1/deployments/:id/share", auth: "either", handle: shareDeployment },
   { method: "POST", path: "/v1/deployments/:id/rollback", auth: "source", handle: rollbackDeployment },
   { method: "POST", path: "/v1/deployments/:id/redeploy", auth: "source", handle: redeployDeployment },
