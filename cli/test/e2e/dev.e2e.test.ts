@@ -40,15 +40,23 @@ test("delegated dev commands reject extra arguments and irrelevant flags before 
   assert.equal(extra.code, 2);
   assert.match(extra.out, /unexpected argument: "garbage"/);
 
+  const invalidSurface = runCli(["dev", "up", "--surface", "invalid"], { cwd: repoRoot });
+  assert.equal(invalidSurface.code, 2);
+  assert.match(invalidSurface.out, /--surface must be web, slack, or both/);
+
+  const conflictingSurface = runCli(["dev", "up", "--surface", "slack", "--no-slack"], { cwd: repoRoot });
+  assert.equal(conflictingSurface.code, 2);
+  assert.match(conflictingSurface.out, /--no-slack conflicts with --surface slack/);
+
   const irrelevant = runCli(["dev", "status", "--rotate"], { cwd: repoRoot });
   assert.equal(irrelevant.code, 2);
   assert.match(irrelevant.out, /status does not support --rotate/);
 });
 
-test("dev up accepts an org override before entering the canonical pool path", (t) => {
+test("dev up forwards a Slack surface and org override to the canonical pool path", (t) => {
   const store = tmp("dev-org-pool");
   t.after(() => rmDir(store));
-  const result = runCli(["dev", "up", "--org", "beta"], {
+  const result = runCli(["dev", "up", "--surface", "slack", "--org", "beta"], {
     cwd: repoRoot,
     env: { QM_POOL_STORE: store, DEV_INSTANCE_WAIT: "0" },
   });

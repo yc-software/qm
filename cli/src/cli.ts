@@ -165,7 +165,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --sandbox-dir <path>                   path to the sandbox layer dir (default: sandbox/ in the deploy dir)
 
 ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
-  dev up [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
+  dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
                                            run the supervised contributor engine in scripts/dev/
   dev --ci [up|down]                       CI mode: core only (Slack in-process), no pool lease (live-e2e)
 
@@ -303,6 +303,8 @@ async function dispatch(argv: string[]): Promise<void> {
         "follow",
         "fix",
         "sandbox",
+        "surface",
+        "no-slack",
         "no-watch",
         "org",
       ]);
