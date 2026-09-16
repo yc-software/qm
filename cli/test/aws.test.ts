@@ -5750,6 +5750,12 @@ test("inactive capacity proves exact drained unprotected cohorts without mutatin
     await awsBackgroundWorkCapacity(configured, dir);
     assert.equal(readFileSync(fake.state, "utf8"), JSON.stringify(unresolved));
 
+    reset();
+    const retiringCurrent = structuredClone(baseline);
+    retiringCurrent.taskInventory[configured.aws!.services["web-ui"]!.ecsService][0].desiredStatus = "STOPPED";
+    writeFileSync(fake.state, JSON.stringify(retiringCurrent));
+    await assert.rejects(awsBackgroundWorkCapacity(configured, dir), /retiring task/);
+
     for (const workload of ["core", "web-ui"]) {
       reset();
       const lingering = structuredClone(baseline);

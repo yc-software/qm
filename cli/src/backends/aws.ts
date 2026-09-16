@@ -3169,7 +3169,13 @@ export async function awsBackgroundWorkCapacity(
     const live: string[] = [];
     for (const batch of chunks([...listed], 100)) {
       const response = awsJson<{
-        tasks?: Array<{ taskArn?: string; taskDefinitionArn?: string; lastStatus?: string; healthStatus?: string }>;
+        tasks?: Array<{
+          taskArn?: string;
+          taskDefinitionArn?: string;
+          lastStatus?: string;
+          desiredStatus?: string;
+          healthStatus?: string;
+        }>;
         failures?: unknown[];
       }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", ...batch]);
       if (
@@ -3184,6 +3190,7 @@ export async function awsBackgroundWorkCapacity(
         if (task.lastStatus === "STOPPED") continue;
         if (
           task.lastStatus !== "RUNNING" ||
+          task.desiredStatus !== "RUNNING" ||
           task.taskDefinitionArn !== taskDefinition ||
           (task.healthStatus !== "HEALTHY" && (isServiceName(workload) || task.healthStatus !== "UNKNOWN"))
         )
