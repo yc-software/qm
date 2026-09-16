@@ -40,6 +40,7 @@ const searchState = {
   failed: false,
   loading: false,
   sel: 0,
+  selectionMoved: false,
 };
 
 let host: HTMLDivElement | null = null;
@@ -65,6 +66,7 @@ export function openChatSearch(): void {
   searchState.loading = false;
   searchState.failed = false;
   searchState.sel = 0;
+  searchState.selectionMoved = false;
   searchState.resources = [];
   searchState.resourceFailures = [];
   searchState.resourcesLimited = false;
@@ -122,6 +124,7 @@ function clampSel(): void {
 function onQueryInput(e: InputEvent): void {
   searchState.query = (e.currentTarget as HTMLInputElement).value;
   searchState.sel = 0;
+  searchState.selectionMoved = false;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   fetchSeq++;
@@ -154,7 +157,11 @@ async function runSearch(q: string): Promise<void> {
   try {
     const r = await api<{ hits: ChatSearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctl.signal });
     if (seq !== fetchSeq || !searchState.open) return;
-    searchState.hits = groupHitsBySession(r.hits ?? []);
+    const hits = groupHitsBySession(r.hits ?? []);
+    if (searchState.selectionMoved && searchState.sel === resourceHits().length + searchState.hits.length) {
+      searchState.sel += hits.length - searchState.hits.length;
+    }
+    searchState.hits = hits;
     searchState.failed = false;
   } catch {
     if (seq !== fetchSeq || ctl.signal.aborted) return;
@@ -173,6 +180,13 @@ async function runResourceSearch(q: string, ctl: AbortController, seq: number): 
     });
     if (seq !== fetchSeq || !searchState.open) return;
     const result = resourceResults(response, UI_BASE);
+    const resourceCount = resourceHits().length;
+    if (
+      searchState.sel >= resourceCount &&
+      (searchState.selectionMoved || searchState.sel < resourceCount + searchState.hits.length)
+    ) {
+      searchState.sel += result.hits.length - searchState.resources.length;
+    }
     searchState.resources = result.hits;
     searchState.resourcesLimited = Boolean(response.limited?.length);
     searchState.resourceFailures = result.failed;
@@ -211,6 +225,7 @@ function onPaletteKeydown(e: KeyboardEvent): void {
     e.preventDefault();
     const count = rowCount();
     if (!count) return;
+    searchState.selectionMoved = true;
     searchState.sel = (searchState.sel + (e.key === "ArrowDown" ? 1 : count - 1)) % count;
     draw();
     scrollSelectedIntoView();
@@ -299,6 +314,7 @@ function resultRows(): TemplateResult[] {
         @click=${() => void openHit(hit)}
         @pointermove=${() => {
           if (searchState.sel !== i) {
+            searchState.selectionMoved = true;
             searchState.sel = i;
             draw();
           }
@@ -333,6 +349,7 @@ function resourceRows(): TemplateResult[] {
         @click=${() => openResource(hit)}
         @pointermove=${() => {
           if (searchState.sel !== i) {
+            searchState.selectionMoved = true;
             searchState.sel = i;
             draw();
           }
@@ -357,6 +374,7 @@ function askRow(): TemplateResult {
       @click=${() => askQm()}
       @pointermove=${() => {
         if (searchState.sel !== i) {
+          searchState.selectionMoved = true;
           searchState.sel = i;
           draw();
         }

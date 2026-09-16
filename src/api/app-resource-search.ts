@@ -82,7 +82,6 @@ export function createResourceSearchMethods(
       const search = async (kind: ResourceKind): Promise<ResourceSearchHit[]> => {
         const hits: ResourceSearchHit[] = [];
         const candidates = await store.search(kind, query, 201);
-        if (candidates.length > 200) limited.push(kind);
         const rows = candidates.slice(0, 200);
         if (kind === "skills" && rows.length) {
           const { skills, homes } = await store.skillMetadata([...new Set(rows.map((r) => r.title))]);

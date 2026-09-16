@@ -6,6 +6,7 @@ import { createContext, runInContext } from "node:vm";
 
 const source = readFileSync(new URL("../src/search.ts", import.meta.url), "utf8");
 const handlers = source.slice(source.indexOf("function onQueryInput("), source.indexOf("function groupHitsBySession("));
+const selection = source.slice(source.indexOf("function rowCount("), source.indexOf("function onQueryInput("));
 const lifecycle = source
   .slice(source.indexOf("export function openChatSearch("), source.indexOf("function ensureHost("))
   .replace("export function", "function");
@@ -16,12 +17,20 @@ const keyboard = source.slice(
 );
 
 function harness() {
-  const state = { open: true, query: "", hits: [] as unknown[], loading: false, failed: false, sel: 0 };
+  const state = {
+    open: true,
+    query: "",
+    hits: [] as unknown[],
+    resources: [] as unknown[],
+    loading: false,
+    failed: false,
+    sel: 0,
+    selectionMoved: false,
+  };
   const requests: Array<{ signal: AbortSignal; resolve: (value: unknown) => void; reject: (error: Error) => void }> =
     [];
   const resourceRequests: typeof requests = [];
   let asks = 0;
-  let resources: unknown[] = [];
   const opened: unknown[] = [];
   let timer: (() => void) | undefined;
   const context = createContext({
@@ -35,14 +44,13 @@ function harness() {
     draw() {},
     resourceResults: (r: unknown) => r,
     UI_BASE: "",
-    resourceHits: () => resources,
+    resourceHits: () => state.resources,
     openResource: (hit: unknown) => opened.push(hit),
     openHit: (hit: unknown) => opened.push(hit),
-    clampSel() {},
+    scrollSelectedIntoView() {},
     askQm() {
       asks++;
     },
-    askRowShown: () => true,
     requestAnimationFrame() {},
     groupHitsBySession: (hits: unknown[]) => hits,
     clearTimeout() {
@@ -61,7 +69,7 @@ function harness() {
             requests.push({ signal, resolve, reject });
           }),
   });
-  runInContext(stripTypeScriptTypes(handlers + lifecycle + keyboard), context);
+  runInContext(stripTypeScriptTypes(selection + handlers + lifecycle + keyboard), context);
   return {
     state,
     requests,
@@ -69,7 +77,10 @@ function harness() {
     asks: () => asks,
     opened,
     resources(hits: unknown[]) {
-      resources = hits;
+      state.resources = hits;
+    },
+    down() {
+      runInContext("onPaletteKeydown({key: 'ArrowDown', preventDefault(){}})", context);
     },
     enter() {
       runInContext("onPaletteKeydown({key: 'Enter', preventDefault(){}})", context);
@@ -157,6 +168,7 @@ test("Enter while searching does not start an unintended agent conversation", ()
 
 test("Enter opens resources before chats and offsets chat selection correctly", () => {
   const h = harness();
+  h.input("skill");
   const resource = { title: "Skill", href: "/skills/1" };
   const chat = { sessionId: "chat1" };
   h.resources([resource]);
@@ -203,4 +215,51 @@ test("closing search aborts both requests and prevents old resources reappearing
   h.resourceRequests[0]!.resolve({ hits: [{ title: "Old" }], failed: [] });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(JSON.stringify((h.state as unknown as { resources: unknown[] }).resources), "[]");
+});
+
+for (const navigate of [false, true]) {
+  test(`late resources preserve the ${navigate ? "keyboard-selected" : "first"} chat`, async () => {
+    const h = harness();
+    h.input("document");
+    h.fire();
+    const chats = [{ sessionId: "first" }, { sessionId: "second" }];
+    h.requests[0]!.resolve({ hits: chats });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (navigate) h.down();
+    h.resourceRequests[0]!.resolve({ hits: [{ title: "One" }, { title: "Two" }], failed: [] });
+    await new Promise((resolve) => setImmediate(resolve));
+    h.enter();
+    assert.deepEqual(h.opened, [chats[navigate ? 1 : 0]]);
+  });
+}
+
+for (const first of ["chats", "resources"] as const) {
+  test(`late ${first === "chats" ? "resources" : "chats"} preserve the explicitly selected ask row`, async () => {
+    const h = harness();
+    h.input("document");
+    h.fire();
+    const chats = { hits: [{ sessionId: "chat" }] };
+    const resources = { hits: [{ title: "Resource" }], failed: [] };
+    if (first === "chats") h.requests[0]!.resolve(chats);
+    else h.resourceRequests[0]!.resolve(resources);
+    await new Promise((resolve) => setImmediate(resolve));
+    h.down();
+    if (first === "chats") h.resourceRequests[0]!.resolve(resources);
+    else h.requests[0]!.resolve(chats);
+    await new Promise((resolve) => setImmediate(resolve));
+    h.enter();
+    assert.equal(h.asks(), 1);
+    assert.deepEqual(h.opened, []);
+  });
+}
+
+test("initial resources select the first result instead of retaining the default ask row", async () => {
+  const h = harness();
+  h.input("document");
+  h.fire();
+  const resource = { title: "Resource" };
+  h.resourceRequests[0]!.resolve({ hits: [resource], failed: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  h.enter();
+  assert.deepEqual(h.opened, [resource]);
 });

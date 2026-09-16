@@ -84,7 +84,7 @@ test("revoked project membership removes both project and cron hits, even for th
   assert.equal(result.hits.length, 0);
 });
 
-test("private matches cannot crowd out later authorized matches and each kind is bounded", async () => {
+test("private matches within the candidate cap are filtered and authorized hits are bounded", async () => {
   const { app } = fresh();
   for (let i = 0; i < 65; i++)
     await app.createCron({
@@ -112,6 +112,21 @@ test("private matches cannot crowd out later authorized matches and each kind is
   const result = await app.searchResources("U1", "zanzibar");
   assert.equal(result.hits.length, 8);
   assert.ok(result.hits.every((h) => ids.has(h.id)));
+});
+
+test("private matches beyond the candidate cap reveal no search metadata", async () => {
+  const { app } = fresh();
+  const empty = await app.searchResources("U1", "zanzibar");
+  for (let i = 0; i < 201; i++)
+    await app.createCron({
+      owner: `private${Math.floor(i / 100)}`,
+      createdBy: `private${Math.floor(i / 100)}`,
+      ownerScopeId: `personal:private${Math.floor(i / 100)}`,
+      title: `zanzibar private ${i}`,
+      action: `zanzibar private ${i}`,
+      schedule: { everyMs: 60000 },
+    });
+  assert.deepEqual(await app.searchResources("U1", "zanzibar"), empty);
 });
 
 test("published skill search resolves shadowing without calling the full visible-skills API", async () => {
