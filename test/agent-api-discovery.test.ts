@@ -193,7 +193,8 @@ test("the catalog IS the gate: discovery rows with real paths are admitted, unli
   assert.equal(agentApiMatches("POST", "/v1/deployments/abc/share"), true);
   assert.equal(agentApiMatches("GET", "/v1/deployments/abc"), true);
   assert.equal(agentApiMatches("POST", "/v1/deployments/abc/restore"), true);
-  assert.equal(agentApiMatches("GET", "/v1/deployments/abc/share"), false, "share is POST-only");
+  assert.equal(agentApiMatches("GET", "/v1/deployments/abc/share"), true, "owners can inspect app grants");
+  assert.equal(agentApiMatches("DELETE", "/v1/deployments/abc/share"), false, "app grants use GET and POST");
   assert.equal(agentApiMatches("POST", "/v1/share"), true, "the uniform share verb is agent-callable");
   assert.equal(agentApiMatches("GET", "/v1/share"), false, "share is POST-only");
   assert.equal(agentApiMatches("POST", "/v1/crons"), true);

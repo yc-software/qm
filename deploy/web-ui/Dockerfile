@@ -15,6 +15,7 @@ COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
 RUN npm ci --omit=dev && rm package-lock.json \
   && rm -rf /root/.npm /tmp/node-compile-cache
 COPY plugins/web-ui/server ./server
+COPY plugins/web-ui/src/app-edit.ts ./src/app-edit.ts
 COPY plugins/admin/src /admin/src
 COPY plugins/admin/public /admin/public
 COPY plugins/chassis/src /chassis/src
