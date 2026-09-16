@@ -61,7 +61,6 @@
       ]
     },
     "deploy/connector-sdk": {
-      "entry": ["build.mjs"],
       "ignoreDependencies": ["@composio/core"]
     }
   }
