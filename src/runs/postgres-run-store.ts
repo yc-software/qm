@@ -244,15 +244,18 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
       const id = randomUUID();
-      const { rows } = await q(
-        `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at)
-         VALUES ($1,$2,'pending',$3,$4,0,$5,$6)
-         ON CONFLICT (idempotency_key) DO UPDATE SET id = runs.id
-         RETURNING *, pg_notify('qm_run_available', 'null')`,
-        [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
-      );
-      const run = rowToRun(rows[0]!);
-      return { run, deduped: run.id !== id };
+      for (;;) {
+        const { rows } = await q(
+          `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at)
+           VALUES ($1,$2,'pending',$3,$4,0,$5,$6)
+           ON CONFLICT (idempotency_key) DO NOTHING
+           RETURNING *, pg_notify('qm_run_available', 'null')`,
+          [id, sessionId, JSON.stringify(request), dedupKey ?? null, maxAttempts, Date.now()],
+        );
+        if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
+        const existing = await runs.getByDedupKey(dedupKey!);
+        if (existing) return { run: existing, deduped: true };
+      }
     },
 
     async getByDedupKey(dedupKey) {

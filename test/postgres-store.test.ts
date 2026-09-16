@@ -1365,6 +1365,87 @@ test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger
   }
 });
 
+test("pg run store: duplicate enqueue never updates a protected run owner", { skip }, async () => {
+  const first = createPostgresRunStore(URL!);
+  const sibling = createPostgresRunStore(URL!);
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const key = `protected-${randomUUID()}`;
+  let runId: string | undefined;
+  try {
+    const original = await first.runs.enqueue({ sessionId: key, request: turn("original"), dedupKey: key });
+    runId = original.run.id;
+    await raw.query(`CREATE FUNCTION reject_run_owner_update() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'turn dedup owner still has active routes' USING ERRCODE='23503';
+      END
+    $$`);
+    await raw.query(`CREATE TRIGGER reject_run_owner_update BEFORE UPDATE OF id ON runs
+      FOR EACH ROW EXECUTE FUNCTION reject_run_owner_update()`);
+    for (const status of ["pending", "running", "done"]) {
+      if (status === "running") await first.runs.claimById(runId, "protected-worker", 60_000);
+      if (status === "done") {
+        const claimed = await first.runs.get(runId);
+        await first.runs.complete(runId, claimed!.leaseToken!, { status: "ok", reply: "finished" });
+      }
+      const before = await first.runs.get(runId);
+      const duplicates = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          sibling.runs.enqueue({
+            sessionId: "different-session",
+            request: turn("duplicate"),
+            dedupKey: key,
+            maxAttempts: 9,
+          }),
+        ),
+      );
+      for (const duplicate of duplicates) {
+        assert.equal(duplicate.deduped, true);
+        assert.deepEqual(duplicate.run, before);
+        assert.equal(duplicate.run.status, status);
+      }
+      assert.deepEqual(await first.runs.get(runId), before);
+    }
+  } finally {
+    await raw.query("DROP TRIGGER IF EXISTS reject_run_owner_update ON runs");
+    await raw.query("DROP FUNCTION IF EXISTS reject_run_owner_update()");
+    if (runId) await raw.query("DELETE FROM runs WHERE id=$1", [runId]);
+    await raw.end();
+    await first.close();
+    await sibling.close();
+  }
+});
+
+test("pg run store: enqueue retries when a conflicting key is released before lookup", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const key = `released-${randomUUID()}`;
+  try {
+    const original = await runs.enqueue({ sessionId: key, request: turn("original"), dedupKey: key });
+    await raw.query(`CREATE FUNCTION release_conflicting_run_key() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        UPDATE runs SET idempotency_key=NULL WHERE id='${original.run.id}';
+        RETURN NULL;
+      END
+    $$`);
+    await raw.query(`CREATE TRIGGER release_conflicting_run_key AFTER INSERT ON runs
+      FOR EACH STATEMENT EXECUTE FUNCTION release_conflicting_run_key()`);
+    const retried = await runs.enqueue({ sessionId: key, request: turn("retry"), dedupKey: key });
+    assert.equal(retried.deduped, false);
+    assert.notEqual(retried.run.id, original.run.id);
+    assert.equal(retried.run.request.text, "retry");
+    assert.equal((await runs.get(original.run.id))?.dedupKey, null);
+    assert.equal((await runs.getByDedupKey(key))?.id, retried.run.id);
+  } finally {
+    await raw.query("DROP TRIGGER IF EXISTS release_conflicting_run_key ON runs");
+    await raw.query("DROP FUNCTION IF EXISTS release_conflicting_run_key()");
+    await raw.query("DELETE FROM runs WHERE session_id=$1", [key]);
+    await raw.end();
+    await close();
+  }
+});
+
 test("pg run store: waitFor survives a transient poll failure without an unhandled rejection", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   let unhandled: unknown;
