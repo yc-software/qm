@@ -303,6 +303,7 @@ import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createWorker, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
+  createLegacyEnrollmentBridge,
   createPostgresInstanceRegistry,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
@@ -2205,14 +2206,30 @@ export function buildApp(
         deploymentId: config.backgroundDeploymentId,
       }
     : undefined;
-  const instanceRegistry: InstanceRegistry =
-    config.buildSha && pgArtifactMap && !config.backgroundDeploymentId
+  const legacyRegistry =
+    pgArtifactMap && (config.buildSha || backgroundOwnership)
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
-          buildSha: config.buildSha,
+          buildSha: backgroundOwnership ? `enrollment:${backgroundOwnership.deploymentId}` : config.buildSha!,
           startedAt: Date.now(),
         })
       : createNoopInstanceRegistry();
+  const instanceRegistry: InstanceRegistry = backgroundOwnership
+    ? createLegacyEnrollmentBridge(legacyRegistry, async () => {
+        if (!config.backgroundWorkEnabled || !backgroundAdmission()) return false;
+        const state = await backgroundOwnership.store.get();
+        const member = state.members.find((entry) => entry.instanceId === backgroundOwnership.instanceId);
+        return (
+          !state.enabled &&
+          state.generation === 0 &&
+          member?.generation === 0 &&
+          !member.retired &&
+          member.state === "admitted" &&
+          member.ready &&
+          backgroundAdmission()
+        );
+      })
+    : legacyRegistry;
   const taskProtection: TaskProtection | null =
     config.ecsTaskProtection && config.ecsAgentUri ? createEcsTaskProtection(config.ecsAgentUri) : null;
   const drain: DrainController = createDrainController({

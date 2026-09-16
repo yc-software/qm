@@ -93,3 +93,23 @@ caller does not cancel the check or release that guard before cleanup finishes.
 The deployment lease still serializes operator requests across the cohort.
 An uncertain result must fail the release; do not retry automatically or fall
 back to a second canary execution.
+
+## Enrolling an active legacy deployment
+
+Before bootstrap, a controlled process with its legacy boot flag enabled publishes
+an enrollment-specific legacy build heartbeat only after its generation-zero
+membership is admitted and ready. Older legacy workers then stop claiming new
+runs even when both processes use the same image. Controlled processes ignore
+legacy supersession results and continue using durable ownership admission.
+Inactive, unready, or fenced processes do not publish this compatibility heartbeat;
+publishing also stops once durable ownership is enabled.
+
+This bridge preserves the legacy worker drain behavior and its running-turn task
+protection. It does not add missing lifecycle controls to older binaries: their
+Slack ingress, cron callbacks, and inline HTTP execution can remain active.
+Never treat the heartbeat as a deployment relinquishment acknowledgment or as
+proof that a legacy task is safe to terminate. Bootstrap still requires explicit
+infrastructure proof that every legacy task has retired, including pending tasks.
+Do not clear task protection or terminate live turns to finish enrollment.
+If enrollment is abandoned, the legacy heartbeat expiry permits older workers
+to resume their existing claim loop.
