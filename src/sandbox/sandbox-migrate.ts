@@ -43,22 +43,27 @@ export interface PackedHome {
   sourceFiles: number;
 }
 
+const HOME_TAR_PREFIX = ".home-";
+
 export async function packHome(
   fromSandbox: Sandbox,
   fromHandle: SandboxHandle,
   fromHome: string,
   timeoutMs: number,
 ): Promise<PackedHome> {
-  const tarRel = `.home-${randomUUID()}.tgz`;
+  const tarRel = `${HOME_TAR_PREFIX}${randomUUID()}.tgz`;
   const tarPath = posixJoin(fromHandle.rootDir, tarRel);
   const H = shq(fromHome);
+  const P = shq(tarPath);
   const packed = await fromSandbox.run(
     fromHandle,
-    `cd ${H} && files=$(find . -type f | wc -l) && tar czf ${tarPath} --exclude=${shq(`./${posix.relative(fromHome, tarPath)}`)} . 2>/dev/null; rc=$?; [ "$rc" -le 1 ] || exit "$rc"; sha256sum ${tarPath} | cut -d' ' -f1 && wc -c < ${tarPath} && echo "$files"`,
+    `cd ${H} && tar czf ${P} --exclude=${shq(`./${posix.relative(fromHome, fromHandle.rootDir)}/${HOME_TAR_PREFIX}*.tgz`)} . 2>/dev/null; rc=$?; [ "$rc" -le 1 ] || exit "$rc"; sha256sum ${P} | cut -d' ' -f1 && wc -c < ${P} && find . -type f ! -name ${shq(`${HOME_TAR_PREFIX}*.tgz`)} | wc -l`,
     { timeoutMs },
   );
-  if (packed.code !== 0)
+  if (packed.code !== 0) {
+    await fromSandbox.run(fromHandle, `rm -f ${P}`, { timeoutMs: 30_000 }).catch(() => {});
     throw new Error(`packHome: source tar failed (${packed.code}): ${(packed.stderr || packed.stdout).slice(0, 200)}`);
+  }
   const [shaLine = "", sizeLine = "", filesLine = ""] = packed.stdout.trim().split("\n");
   const sha = shaLine.trim();
   const bytes = Number.parseInt(sizeLine.trim(), 10);
@@ -85,39 +90,44 @@ export async function copyHome(args: CopyHomeArgs): Promise<CopyHomeResult> {
   const T = shq(toHome);
   const { tarPath, tarRel, sha, bytes, sourceFiles } = await packHome(fromSandbox, fromHandle, fromHome, timeoutMs);
   const toTarPath = posixJoin(toHandle.rootDir, tarRel);
-
-  if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
-    const stageOpts = { timeoutSec: timeoutMs / 1000 };
-    const blobId = await fromSandbox.stageOut(fromHandle, tarRel, stageOpts);
-    await toSandbox.stageIn(toHandle, tarRel, blobId, stageOpts);
-  } else {
-    const tarBytes = await fromSandbox.readFileBytes(fromHandle, tarRel);
-    if (!tarBytes) throw new Error("copyHome: source tar vanished before read");
-    await toSandbox.writeFileBytes(toHandle, tarRel, tarBytes);
+  try {
+    return await transferHome();
+  } finally {
+    await Promise.all([
+      fromSandbox.run(fromHandle, `rm -f ${shq(tarPath)}`, { timeoutMs: 30_000 }).catch(() => {}),
+      toSandbox.run(toHandle, `rm -f ${shq(toTarPath)}`, { timeoutMs: 30_000 }).catch(() => {}),
+    ]);
   }
 
-  const extracted = await toSandbox.run(
-    toHandle,
-    `dsha=$(sha256sum ${toTarPath} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${toTarPath} 2>/dev/null && find . -type f | wc -l`,
-    { timeoutMs },
-  );
-  if (extracted.code !== 0) {
-    throw new Error(
-      `copyHome: dest verify/extract failed (${extracted.code}): ${(extracted.stderr || extracted.stdout).slice(0, 200)}`,
+  async function transferHome(): Promise<CopyHomeResult> {
+    if (supportsBlobStaging(fromSandbox) && supportsBlobStaging(toSandbox)) {
+      const stageOpts = { timeoutSec: timeoutMs / 1000 };
+      const blobId = await fromSandbox.stageOut(fromHandle, tarRel, stageOpts);
+      await toSandbox.stageIn(toHandle, tarRel, blobId, stageOpts);
+    } else {
+      const tarBytes = await fromSandbox.readFileBytes(fromHandle, tarRel);
+      if (!tarBytes) throw new Error("copyHome: source tar vanished before read");
+      await toSandbox.writeFileBytes(toHandle, tarRel, tarBytes);
+    }
+
+    const extracted = await toSandbox.run(
+      toHandle,
+      `dsha=$(sha256sum ${shq(toTarPath)} | cut -d' ' -f1); [ "$dsha" = ${shq(sha)} ] || { echo "sha-mismatch:$dsha"; exit 3; }; mkdir -p ${T} && cd ${T} && tar xzf ${shq(toTarPath)} 2>/dev/null && find . -type f ! -name ${shq(`${HOME_TAR_PREFIX}*.tgz`)} | wc -l`,
+      { timeoutMs },
     );
+    if (extracted.code !== 0) {
+      throw new Error(
+        `copyHome: dest verify/extract failed (${extracted.code}): ${(extracted.stderr || extracted.stdout).slice(0, 200)}`,
+      );
+    }
+    const destFiles = Number.parseInt(extracted.stdout.trim().split("\n").pop() ?? "", 10);
+
+    if (fromHome !== toHome) {
+      const t = await toSandbox.run(toHandle, translateScript(toHome, fromHome), { timeoutMs: 120_000 });
+      if (t.code !== 0)
+        throw new Error(`copyHome: translation failed (${t.code}): ${(t.stderr || t.stdout).slice(0, 200)}`);
+    }
+
+    return { bytes, sha, sourceFiles, destFiles };
   }
-  const destFiles = Number.parseInt(extracted.stdout.trim().split("\n").pop() ?? "", 10);
-
-  if (fromHome !== toHome) {
-    const t = await toSandbox.run(toHandle, translateScript(toHome, fromHome), { timeoutMs: 120_000 });
-    if (t.code !== 0)
-      throw new Error(`copyHome: translation failed (${t.code}): ${(t.stderr || t.stdout).slice(0, 200)}`);
-  }
-
-  await Promise.all([
-    fromSandbox.run(fromHandle, `rm -f ${tarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
-    toSandbox.run(toHandle, `rm -f ${toTarPath}`, { timeoutMs: 30_000 }).catch(() => {}),
-  ]);
-
-  return { bytes, sha, sourceFiles, destFiles };
 }
