@@ -2117,6 +2117,7 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   const scheduler = createScheduler({
+    requireQueueStart: Boolean(config.backgroundDeploymentId),
     crons,
     deliveries,
     idempotency,

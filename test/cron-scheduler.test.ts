@@ -1581,3 +1581,68 @@ test("scheduler pause fences the next cron in an already admitted polling batch"
   assert.equal(calls.length, 1);
   await scheduler.stop();
 });
+
+test("scheduler resumes new queue claims while an older admitted turn remains alive", async () => {
+  const crons = createCronStore();
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
+  let calls = 0;
+  let starts = 0;
+  let closed = false;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    now: () => 1000,
+    run: async () => {
+      if (++calls === 1) {
+        entered.resolve();
+        await finish.promise;
+      }
+      assert.equal(closed, false);
+      return { status: "ok", reply: "done" };
+    },
+    jobQueue: {
+      start: async (handlers) => {
+        starts++;
+        onFire = handlers.onFire;
+      },
+      enqueueFire: async () => {},
+      healthy: () => true,
+      stopClaims: async () => {},
+      stop: async () => {
+        closed = true;
+      },
+    },
+  });
+  const jobs = [];
+  for (let i = 0; i < 2; i++)
+    jobs.push(
+      await crons.create({
+        schedule: { firstFireAt: 1 },
+        action: `work ${i}`,
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  scheduler.start(1000);
+  await scheduler.ready();
+  const oldHandler = onFire!;
+  const oldWork = oldHandler({ cronId: jobs[0]!.id, scheduledAt: 1 });
+  await entered.promise;
+  await scheduler.stopClaims();
+  scheduler.start(1000);
+  await scheduler.ready();
+  assert.equal(starts, 2);
+  await oldHandler({ cronId: jobs[1]!.id, scheduledAt: 1 });
+  assert.equal(calls, 1);
+  await onFire!({ cronId: jobs[1]!.id, scheduledAt: 1 });
+  assert.equal(calls, 2);
+  assert.equal(closed, false);
+  finish.resolve();
+  await oldWork;
+  await scheduler.stop();
+});

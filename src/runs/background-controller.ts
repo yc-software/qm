@@ -66,7 +66,8 @@ export function createBackgroundController(deps: BackgroundControllerDeps) {
         const member = state.members.find((entry) => entry.instanceId === deps.identity.instanceId);
         const desired =
           running &&
-          !member?.retired &&
+          member !== undefined &&
+          !member.retired &&
           (state.enabled ? state.desiredDeploymentId === deps.identity.deploymentId : deps.legacyEnabled);
         if (admission !== null && (!desired || state.generation !== admission || activation?.signal.aborted))
           await release();

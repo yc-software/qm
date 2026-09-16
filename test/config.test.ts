@@ -764,3 +764,24 @@ test("Fly shared application name is passed to the deployment provider", () => {
   assert.equal(config.flyDeploy.sharedAppName, "qm-example-apps");
   assert.equal(config.flyDeploy.dataVolumeSizeGb, 1);
 });
+
+test("background ownership requires durable storage and an independent deployment authority", () => {
+  const env = {
+    BACKGROUND_DEPLOYMENT_ID: "core:release-a",
+    DATABASE_URL: "postgres://localhost/test",
+    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
+    DEPLOYMENT_CONTROL_SECRET: "deployment-control-secret-0123456789abcdef",
+  };
+  const config = loadConfig(env);
+  assert.equal(config.backgroundDeploymentId, env.BACKGROUND_DEPLOYMENT_ID);
+  assert.equal(config.deploymentControlSecret, env.DEPLOYMENT_CONTROL_SECRET);
+  assert.equal(config.backgroundWorkEnabled, true);
+  assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
+  assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
+  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
+  assert.throws(
+    () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),
+    /distinct DEPLOYMENT_CONTROL_SECRET/,
+  );
+  assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
+});

@@ -135,7 +135,9 @@ if (built.backgroundOwnership) {
   let activationEpoch = 0;
   const stopPeriodic = () => {
     activationEpoch++;
-    periodicStop = Promise.all([built.scheduler.stop(), built.suggestedActivityMaintenance.stop()]).then(() => {});
+    periodicStop = Promise.all([built.scheduler.stopClaims(), built.suggestedActivityMaintenance.stop()]).then(
+      () => {},
+    );
     void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
     void built.runtime
       .stopBackgroundClaims()
