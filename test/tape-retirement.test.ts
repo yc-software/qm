@@ -395,7 +395,11 @@ test("a tainted uncovered session is refused without a coverage claim", async ()
   const entries = await sim.store.getEntries(sim.session.id);
   const outcome = await appendRenderImport(sim.store, sim.lease, entries, scope, true);
   assert.equal(outcome, "unservable-fold");
-  assert.equal((await sim.store.getTape(sim.session.id)).length, 0);
+  assert.ok(
+    (await sim.store.getTape(sim.session.id)).every(
+      (row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry",
+    ),
+  );
   assert.equal(await sim.store.tapeCoverage(sim.session.id), -1);
 });
 

@@ -1,4 +1,5 @@
 import "./run-availability.ts";
+import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
@@ -380,8 +381,9 @@ test("pg latestEntrySeq, participant windows, and tape meta attachments round-tr
     meta: { bareText: "one", attachments, sourceRole: "agent" },
   });
   const rows = await s.getTape(session.id);
-  assert.deepEqual(rows[0]!.meta?.attachments, attachments);
-  assert.equal(rows[0]!.meta?.sourceRole, "agent");
+  const message = rows.find((row) => row.kind === "message")!;
+  assert.deepEqual(message.meta?.attachments, attachments);
+  assert.equal(message.meta?.sourceRole, "agent");
 });
 
 test("pg participant tenure remains exact when every event shares a timestamp", { skip }, async () => {
@@ -2233,4 +2235,198 @@ test("pg session store: bounded participant listing is recent and optional", { s
     ids.slice(-2).reverse(),
   );
   assert.deepEqual(await store.listByParticipant("bounded-user", { limit: 0 }), []);
+});
+
+test(
+  "pg canonical transcript annotations are exact and taint release preserves original identity",
+  { skip },
+  async () => {
+    const s = createPostgresSessionStore(URL!);
+    const scope = scopeId("personal", "canonical-tape");
+    const session = await s.getOrCreateByThread("pg-canonical-tape", "dm", scope);
+    const { lease } = await s.acquireLease(session.id);
+    assert.ok(lease);
+    for (let i = 0; i < 4; i++)
+      await s.append(lease, {
+        type: "tool_result",
+        scopeLabel: scope,
+        payload: { tool: "execute", callId: `c${i}`, result: "denied", isError: true, code: 1, securityTainted: true },
+      });
+    const before = await s.getEntries(session.id);
+    assert.deepEqual(await s.getTranscriptEntries(session.id), before);
+    assert.deepEqual(await s.getTranscriptEntries(session.id, { limit: 2 }), before.slice(-2));
+    assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
+    assert.equal(await s.tapeCoverage(session.id), -1);
+    assert.equal(await s.clearSecurityTaint(session.id), true);
+    const after = await s.getEntries(session.id);
+    assert.deepEqual(await s.getTranscriptEntries(session.id), after);
+    assert.equal(after[0]!.createdAt, before[0]!.createdAt);
+    assert.equal(after[0]!.parentSeq, before[0]!.parentSeq);
+    assert.equal((after[0]!.payload as { securityTainted?: boolean }).securityTainted, undefined);
+    assert.equal((await s.getTape(session.id)).length, 8);
+    assert.equal(await s.clearSecurityTaint(session.id), true);
+    assert.equal((await s.getTape(session.id)).length, 8);
+    assert.equal(await s.tapeCoverage(session.id), -1);
+    await s.releaseLease(lease);
+  },
+);
+
+test("pg transcript write failure rolls back the entry and its counters", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "canonical-failure");
+  const session = await s.getOrCreateByThread("pg-canonical-failure", "dm", scope);
+  const { lease } = await s.acquireLease(session.id);
+  assert.ok(lease);
+  const pg = (await import("pg")).default;
+  const client = new pg.Client({ connectionString: URL! });
+  await client.connect();
+  await client.query(
+    `CREATE FUNCTION reject_transcript_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'transcript unavailable'; END $$`,
+  );
+  await client.query(
+    `CREATE TRIGGER reject_transcript_test BEFORE INSERT ON session_tape FOR EACH ROW WHEN (NEW.session_id = '${session.id}') EXECUTE FUNCTION reject_transcript_test()`,
+  );
+  try {
+    await assert.rejects(
+      s.append(lease, { type: "user", payload: { text: "must rollback" }, scopeLabel: scope }),
+      /transcript unavailable/,
+    );
+    assert.deepEqual(await s.getEntries(session.id), []);
+    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+    assert.equal(await s.latestEntrySeq(session.id), -1);
+    const counters = (await client.query("SELECT messages FROM sessions WHERE id=$1", [session.id])).rows[0];
+    assert.equal(counters.messages, 0);
+  } finally {
+    await client.query("DROP TRIGGER reject_transcript_test ON session_tape");
+    await client.query("DROP FUNCTION reject_transcript_test()");
+    await client.end();
+    await s.releaseLease(lease);
+  }
+});
+
+test("pg transcript backfill is bounded, idempotent, and independent of model coverage", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "canonical-backfill");
+  const session = await s.getOrCreateByThread("pg-canonical-backfill", "dm", scope);
+  const pg = (await import("pg")).default;
+  const client = new pg.Client({ connectionString: URL! });
+  await client.connect();
+  try {
+    await client.query(
+      `INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at)
+      SELECT $1,i,NULLIF(i-1,-1),'user',json_build_object('text','history '||i,'securityTainted',true)::text,$2,123000+i
+      FROM generate_series(0,619) i`,
+      [session.id, scope],
+    );
+    const dry = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: false });
+    assert.deepEqual(dry, { busy: false, scanned: 200, changed: 200, afterSeq: 199 });
+    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+    for (let afterSeq = -1; afterSeq < 619;) {
+      const page = await migrateTranscriptPage(client, session.id, { afterSeq, limit: 200, apply: true });
+      assert.ok(!page.busy);
+      assert.ok(page.scanned <= 200);
+      afterSeq = page.afterSeq;
+    }
+    assert.deepEqual(await s.getTranscriptEntries(session.id), await s.getEntries(session.id));
+    assert.equal(await s.tapeCoverage(session.id), -1);
+    const repeated = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: true });
+    assert.deepEqual(repeated, { busy: false, scanned: 200, changed: 0, afterSeq: 199 });
+    assert.equal((await s.getTape(session.id)).length, 620);
+    await s.clearSecurityTaint(session.id);
+    assert.deepEqual(await s.getTranscriptEntries(session.id), await s.getEntries(session.id));
+  } finally {
+    await client.end();
+  }
+});
+
+test("pg transcript backfill refuses an active lease or writer transaction", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "canonical-busy");
+  const session = await s.getOrCreateByThread("pg-canonical-busy", "dm", scope);
+  const pg = (await import("pg")).default;
+  const client = new pg.Client({ connectionString: URL! });
+  const writer = new pg.Client({ connectionString: URL! });
+  await client.connect();
+  await writer.connect();
+  try {
+    const { lease } = await s.acquireLease(session.id);
+    assert.ok(lease);
+    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply: true }), {
+      busy: true,
+    });
+    await s.releaseLease(lease);
+    await writer.query("BEGIN");
+    await writer.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [session.id]);
+    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply: true }), {
+      busy: true,
+    });
+    await writer.query("ROLLBACK");
+    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply: true }), {
+      busy: false,
+      scanned: 0,
+      changed: 0,
+      afterSeq: -1,
+    });
+  } finally {
+    await writer.end();
+    await client.end();
+  }
+});
+
+test(
+  "pg transcript migration rejects extra canonical tails and entries in an empty legacy session",
+  { skip },
+  async () => {
+    const s = createPostgresSessionStore(URL!);
+    const pg = (await import("pg")).default;
+    const client = new pg.Client({ connectionString: URL! });
+    await client.connect();
+    try {
+      for (const originalCount of [0, 3]) {
+        const scope = scopeId("personal", `extra-canonical-${originalCount}`);
+        const session = await s.getOrCreateByThread(`pg-extra-canonical-${originalCount}`, "dm", scope);
+        const { lease } = await s.acquireLease(session.id);
+        assert.ok(lease);
+        for (let i = 0; i <= originalCount; i++)
+          await s.append(lease, { type: "user", payload: { text: `row ${i}` }, scopeLabel: scope });
+        await s.releaseLease(lease);
+        await client.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=$2", [session.id, originalCount]);
+        for (const apply of [false, true]) {
+          await assert.rejects(
+            migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply }),
+            /extra entry/,
+          );
+        }
+        assert.equal((await s.getTranscriptEntries(session.id)).length, originalCount + 1);
+      }
+    } finally {
+      await client.end();
+    }
+  },
+);
+
+test("pg transcript migration refuses gapped legacy history", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const pg = (await import("pg")).default;
+  const client = new pg.Client({ connectionString: URL! });
+  await client.connect();
+  try {
+    const scope = scopeId("personal", "gapped-transcript");
+    const session = await s.getOrCreateByThread("pg-gapped-transcript", "dm", scope);
+    const { lease } = await s.acquireLease(session.id);
+    assert.ok(lease);
+    for (let i = 0; i < 3; i++)
+      await s.append(lease, { type: "user", payload: { text: `row ${i}` }, scopeLabel: scope });
+    await s.releaseLease(lease);
+    await client.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=1", [session.id]);
+    await client.query("DELETE FROM session_tape WHERE session_id=$1", [session.id]);
+    for (const apply of [false, true])
+      await assert.rejects(
+        migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply }),
+        /sequence gap/,
+      );
+    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
+  } finally {
+    await client.end();
+  }
 });

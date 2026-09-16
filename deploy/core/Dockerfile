@@ -17,6 +17,8 @@ RUN npm ci --omit=dev && npm audit --omit=dev --audit-level=moderate \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY src ./src
+COPY scripts/migrate-transcript-tape.ts ./scripts/migrate-transcript-tape.ts
+COPY scripts/lib/transcript-tape-migration.ts ./scripts/lib/transcript-tape-migration.ts
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json
 COPY skills-seed ./skills-seed
 COPY plugins/onboarding ./plugins/onboarding

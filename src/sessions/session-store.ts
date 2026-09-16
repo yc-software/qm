@@ -180,6 +180,44 @@ export function tapeEntryMirrorRecord(entry: {
   };
 }
 
+export function tapeTranscriptEntryRecord(entry: SessionEntry): NewTapeRecord {
+  return {
+    kind: "annotation",
+    payload: {
+      event: "transcript_entry",
+      entry: { type: entry.type, payload: entry.payload, at: entry.createdAt, parentSeq: entry.parentSeq },
+    },
+    scopeLabel: entry.scopeLabel,
+    entrySeq: entry.seq,
+  };
+}
+
+export function transcriptEntryFromTape(row: TapeRecord): SessionEntry | null {
+  if (row.kind !== "annotation" || row.entrySeq === undefined) return null;
+  const payload = row.payload as {
+    event?: unknown;
+    entry?: { type?: unknown; payload?: unknown; at?: unknown; parentSeq?: unknown };
+  } | null;
+  const entry = payload?.entry;
+  if (
+    payload?.event !== "transcript_entry" ||
+    !entry ||
+    typeof entry.type !== "string" ||
+    typeof entry.at !== "number" ||
+    (entry.parentSeq !== null && typeof entry.parentSeq !== "number")
+  )
+    return null;
+  return {
+    sessionId: row.sessionId,
+    seq: row.entrySeq,
+    parentSeq: entry.parentSeq,
+    type: entry.type as EntryType,
+    payload: entry.payload ?? null,
+    scopeLabel: row.scopeLabel,
+    createdAt: entry.at,
+  };
+}
+
 export type TranscriptAppendSessions = Pick<SessionStore, "append" | "appendTape" | "latestEntrySeq" | "tapeCoverage">;
 
 export async function appendEntryOutsideTurn(
@@ -671,6 +709,7 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;

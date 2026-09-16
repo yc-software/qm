@@ -22,7 +22,7 @@ interface Sim {
 }
 
 async function simSession(threadRef = "dm:projection-test"): Promise<Sim> {
-  const store = createMemorySessionStore({ now: () => CLOCK });
+  const store = { ...createMemorySessionStore({ now: () => CLOCK }), getTranscriptEntries: async () => [] };
   const session = await store.getOrCreateByThread(threadRef, "dm", scope);
   const { lease } = await store.acquireLease(session.id);
   assert.ok(lease);
