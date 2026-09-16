@@ -94,6 +94,12 @@ until explicit bootstrap verifies every participating task. The exported
 desired deployment identity, or `null` to start paused. It refuses missing cohorts
 and inconsistent durable membership.
 
+The exported `awsBackgroundWorkBootState` reads the exact manifest core task to
+return its recorded boot flag and optional deployment identity. It returns
+`undefined` only without a recorded core task, and rejects missing or ambiguous
+boot flags or identities. Deployment wrappers can preserve the boot environment
+while changing durable ownership independently.
+
 Once bootstrapped, background mode changes use generation-checked ownership
 requests without restarting ECS tasks. Activation waits for prior owners to stop
 claiming and every expected task to finish activation. Pausing stops new claims;

@@ -2882,6 +2882,41 @@ interface AwsBackgroundCohort {
   manifest: DeploymentManifest;
 }
 
+export function awsBackgroundWorkBootState(config: QmConfig): { enabled: boolean; deploymentId?: string } | undefined {
+  const aws = requireAws(config);
+  assertAwsCallerAccount(aws);
+  const manifest = currentDeploymentManifest(aws);
+  const taskDefinition = manifest?.tasks.core;
+  if (!taskDefinition) return undefined;
+  const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
+    "ecs",
+    "describe-task-definition",
+    "--task-definition",
+    taskDefinition,
+  ]).taskDefinition;
+  const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
+  const core = containers?.filter((container) => container.name === "core");
+  if (core?.length !== 1) throw new CliError("recorded task definition must contain exactly one core container");
+  const secrets = (core[0]!.secrets ?? []) as Array<{ name: string }>;
+  if (secrets.some((secret) => secret.name === "BACKGROUND_WORK_ENABLED" || secret.name === "BACKGROUND_DEPLOYMENT_ID"))
+    throw new CliError("recorded background boot settings cannot be supplied as secrets");
+  const environment = (core[0]!.environment ?? []) as Array<{ name: string; value: string }>;
+  const identities = environment.filter((entry) => entry.name === "BACKGROUND_DEPLOYMENT_ID");
+  if (
+    manifest.backgroundDeploymentId
+      ? identities.length !== 1 || identities[0]!.value !== manifest.backgroundDeploymentId
+      : identities.length !== 0
+  )
+    throw new CliError("recorded core task does not match the manifest background deployment identity");
+  const flags = environment.filter((entry) => entry.name === "BACKGROUND_WORK_ENABLED");
+  if (flags.length !== 1 || !["0", "1"].includes(flags[0]!.value))
+    throw new CliError("recorded core task must contain one explicit BACKGROUND_WORK_ENABLED value of 0 or 1");
+  return {
+    enabled: flags[0]!.value === "1",
+    ...(manifest.backgroundDeploymentId ? { deploymentId: manifest.backgroundDeploymentId } : {}),
+  };
+}
+
 async function awsBackgroundCohort(
   config: QmConfig,
   configDir: string,

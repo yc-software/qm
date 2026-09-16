@@ -15,6 +15,7 @@ import {
   assertGithubDeployTrust,
   awsCheckLive,
   awsBackgroundWorkStatus,
+  awsBackgroundWorkBootState,
   awsBootstrapBackgroundWork,
   awsRetireBackgroundWorkMembers,
   awsDeploymentLayerTransport,
@@ -1471,6 +1472,65 @@ test("AWS up coalesces a requested restart into one deployment even when the tas
     await assert.rejects(() => awsUp(single, dir, { buildOnly: true, restart: ["core"] }), /cannot be used/);
   } finally {
     process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("recorded background boot flags come from the manifest task and reject ambiguous settings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-background-boot-"));
+  const configured = oneServiceConfig();
+  const fake = statefulAws(dir, configured);
+  try {
+    assert.equal(awsBackgroundWorkBootState(configured), undefined);
+    const state = JSON.parse(readFileSync(fake.state, "utf8"));
+    const task = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:42";
+    state.dynamo = manifestItems([{ id: "recorded", tasks: { core: task } }], "recorded");
+    const manifest = JSON.parse(state.dynamo["deployment/manifest/recorded"].manifest.S);
+    const core: {
+      name: string;
+      environment: Array<{ name: string; value: string }>;
+      secrets: Array<{ name: string }>;
+    } = {
+      name: "core",
+      environment: [{ name: "BACKGROUND_WORK_ENABLED", value: "1" }],
+      secrets: [],
+    };
+    state.definitions[task] = { containerDefinitions: [core] };
+    const save = () => {
+      state.dynamo["deployment/manifest/recorded"].manifest.S = JSON.stringify(manifest);
+      writeFileSync(fake.state, JSON.stringify(state));
+    };
+    save();
+    assert.deepEqual(awsBackgroundWorkBootState(configured), { enabled: true });
+    assert.match(readFileSync(fake.log, "utf8"), /describe-task-definition --task-definition .*acme-core:42/);
+    core.environment[0]!.value = "0";
+    manifest.backgroundDeploymentId = "core:recorded";
+    core.environment.push({ name: "BACKGROUND_DEPLOYMENT_ID", value: "core:recorded" });
+    save();
+    assert.deepEqual(awsBackgroundWorkBootState(configured), { enabled: false, deploymentId: "core:recorded" });
+    core.environment[1]!.value = "wrong-identity";
+    save();
+    assert.throws(() => awsBackgroundWorkBootState(configured), /manifest background deployment identity/);
+    core.environment[1]!.value = "core:recorded";
+    for (const value of ["", "yes", "2"]) {
+      core.environment[0]!.value = value;
+      save();
+      assert.throws(() => awsBackgroundWorkBootState(configured), /explicit BACKGROUND_WORK_ENABLED/);
+    }
+    core.environment[0]!.value = "1";
+    core.environment.push({ ...core.environment[0]! });
+    save();
+    assert.throws(() => awsBackgroundWorkBootState(configured), /explicit BACKGROUND_WORK_ENABLED/);
+    core.environment.pop();
+    core.secrets.push({ name: "BACKGROUND_WORK_ENABLED" });
+    save();
+    assert.throws(() => awsBackgroundWorkBootState(configured), /supplied as secrets/);
+    core.secrets = [];
+    core.environment.shift();
+    save();
+    assert.throws(() => awsBackgroundWorkBootState(configured), /explicit BACKGROUND_WORK_ENABLED/);
+  } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
