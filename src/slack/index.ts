@@ -493,7 +493,7 @@ export async function startSlackPlugin(
         return;
       }
       stopped = true;
-      replaySweeper?.stop();
+      await replaySweeper?.stop();
       if (deliveriesTimer) clearInterval(deliveriesTimer);
       if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
       if (followerRetry) clearTimeout(followerRetry);

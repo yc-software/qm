@@ -99,7 +99,7 @@ export function createPgBossCronQueue(
     },
     async stop() {
       started = false;
-      ticker?.stop();
+      await ticker?.stop();
       try {
         await boss.stop({ close: true, graceful: false });
       } finally {

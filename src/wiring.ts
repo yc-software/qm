@@ -2339,7 +2339,7 @@ export function buildApp(
         swallowAs("wiring: worker drain failed", undefined),
       );
       await Promise.all(workers.map((w) => w.releaseInFlight()));
-      drain.stop();
+      await drain.stop();
       runs.close?.();
       void runSignals.close?.();
       void sessionStateBus.close?.();

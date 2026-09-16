@@ -124,7 +124,7 @@ export function createFlyTunnelManager(opts: {
     },
     async stop(): Promise<void> {
       stopped = true;
-      sweeper.stop();
+      await sweeper.stop();
       await starting?.catch(() => {});
       await tunnel?.stop();
     },

@@ -1468,3 +1468,33 @@ test("scheduler stop waits for delayed queue startup and supports an awaited res
   assert.equal(starts, 2);
   assert.equal(stops, 2);
 });
+
+test("scheduler cannot resume after uncertain queue shutdown until a stop retry succeeds", async () => {
+  let starts = 0;
+  let stops = 0;
+  const scheduler = createScheduler({
+    crons: createCronStore(),
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    run: async () => ({ status: "ok", reply: "unused" }),
+    jobQueue: {
+      start: async () => {
+        starts++;
+      },
+      enqueueFire: async () => {},
+      healthy: () => false,
+      stop: async () => {
+        if (++stops === 1) throw new Error("uncertain queue stop");
+      },
+    },
+  });
+  scheduler.start(1000);
+  await assert.rejects(scheduler.stop(), /uncertain queue stop/);
+  scheduler.start(1000);
+  assert.equal(starts, 1);
+  await scheduler.stop();
+  scheduler.start(1000);
+  await scheduler.stop();
+  assert.equal(starts, 2);
+});

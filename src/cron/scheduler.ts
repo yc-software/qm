@@ -450,6 +450,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   let stopped = false;
   let started = false;
+  let stopFailed = false;
   let starting: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
   const pending = new Set<Promise<void>>();
@@ -491,7 +492,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       void enqueueNext(cronId).catch((e: unknown) => console.error("[scheduler] cron enqueue failed:", errMessage(e)));
     },
     start(intervalMs) {
-      if (started || stopping) return;
+      if (started || stopping || stopFailed) return;
       started = true;
       stopped = false;
       stopSignal = Promise.withResolvers<void>();
@@ -528,9 +529,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await deps.jobQueue?.stop();
         await Promise.all(sweeps);
         await Promise.allSettled([...pending]);
-      })().finally(() => {
-        stopping = null;
-      });
+        stopFailed = false;
+      })()
+        .catch((error: unknown) => {
+          stopFailed = true;
+          throw error;
+        })
+        .finally(() => {
+          stopping = null;
+        });
       return stopping;
     },
   };
