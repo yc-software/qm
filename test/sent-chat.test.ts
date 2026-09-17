@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ensureSentChat, loopItemRoutes } from "../src/api/routes/loop-items.ts";
+import { buildGmailReplyMime } from "../src/loops/sources/gmail.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
@@ -35,6 +36,26 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   await ensureSentChat(ctx);
   assert.equal(response!.item.id, original.id);
   assert.equal(response!.item.thread[0]!.text, "Summarize this");
+  await items.setProposal(original.id, { data: { body: "My unfinished draft" }, by: "human" });
+  const proposal = (await items.get(original.id))!.proposal;
+  ctx.body = {
+    threadId: "sent-only-thread",
+    messageId: "newer-message",
+    subject: "New title",
+    from: "New sender",
+    text: "New context",
+  };
+  await ensureSentChat(ctx);
+  const refreshed = (await items.get(original.id))!;
+  assert.deepEqual(refreshed.proposal, proposal);
+  assert.equal(refreshed.sourcePayload!.snippet, "New context");
+  assert.equal(refreshed.sourcePayload!.from, "New sender");
+  assert.equal(refreshed.sourcePayload!.title, "New title");
+  assert.equal(refreshed.sourceSummary, "New title");
+  assert.equal((refreshed.sourcePayload!.gmail as { messageId: string }).messageId, "newer-message");
+  ctx.body = { ...(ctx.body as object), accountType: "personal" };
+  await ensureSentChat(ctx);
+  assert.notEqual(response!.item.id, original.id);
   ctx.actor = { p: "bob" } as ApiCtx["actor"];
   await ensureSentChat(ctx);
   assert.notEqual(response!.item.id, original.id);
@@ -120,5 +141,48 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
     assert.equal(sent, 1);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("sent chat preserves long quoted recipient headers and rejects oversized input", async () => {
+  const store = createLoopStore();
+  const items = createLoopItemLedger();
+  let status = 0;
+  let id = "";
+  const to = [
+    '"Doe, Jane" <jane@example.com>',
+    ...Array.from({ length: 15 }, (_, i) => `Recipient ${i} <recipient${i}@example.com>`),
+  ].join(", ");
+  const cc = '"Smith, Casey" <casey@example.com>';
+  const ctx = {
+    actor: { p: "alice" },
+    body: { threadId: "t", to, cc },
+    deps: { loops: { store, items } },
+    res: {
+      setHeader() {},
+      writeHead(code: number) {
+        status = code;
+      },
+      end(data: string) {
+        id = JSON.parse(data).item?.id ?? "";
+      },
+    },
+  } as unknown as ApiCtx;
+  await ensureSentChat(ctx);
+  assert.equal(status, 200);
+  const stored = (await items.get(id))!;
+  const mime = buildGmailReplyMime(stored, { body: "Hello" })!;
+  assert.ok(mime.startsWith(`To: ${to}\r\nCc: ${cc}\r\n`));
+  for (const invalid of [
+    { to: "x".repeat(8001) },
+    { cc: "x".repeat(8001) },
+    { to: "a@example.com\r\nBcc: b@example.com" },
+    { accountType: "forged" },
+    { accountType: ["default"] },
+  ]) {
+    ctx.body = { threadId: "t", ...invalid };
+    await ensureSentChat(ctx);
+    assert.equal(status, 400);
+    assert.deepEqual((await items.get(stored.id))!.sourcePayload, stored.sourcePayload);
   }
 });

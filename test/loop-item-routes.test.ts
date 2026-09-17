@@ -792,3 +792,14 @@ test("a capability caller's edit is stored as the agent's draft, so its mentions
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Everyone @\u200bhere please look");
 });
+
+test("concurrent source sends share a durable decision claim", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const send = () =>
+    call(w, { method: "POST", path: `/v1/loops/${loop.id}/items/${item.id}/action`, body: { kind: "send" } });
+  const outcomes = await Promise.all([send(), send()]);
+  assert.deepEqual(outcomes.map((out) => out.status).sort(), [200, 409]);
+  assert.equal(w.sent.length, 1);
+  assert.equal((await w.loops.items.get(item.id))!.decisionToken, undefined);
+});

@@ -78,14 +78,42 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     const sentRow = host.querySelector(".inbox-sent-row")!;
     assert.ok(sentRow.closest(".inbox-item")!.classList.contains("src-gmail"));
     assert.equal(sentRow.querySelector(".inbox-item-glyph svg")!.getAttribute("width"), "14");
+    assert.match(urls.at(-1)!, /accountType=default/);
     assert.match(urls.at(-1)!, /pageToken=cursor/);
     assert.equal(host.querySelector(".inbox-sent-more"), null);
-    globalThis.fetch = async () =>
-      Response.json({ from: "Sam", cc: "", body: "Full sent body", html: false, attachments: [] });
+    let chatRequest: Record<string, unknown> = {};
+    globalThis.fetch = async (input, options) => {
+      if (String(input).endsWith("/inbox/sent-chat")) {
+        chatRequest = JSON.parse(String(options?.body));
+        return Response.json({ item: { id: "company-chat", thread: [] } });
+      }
+      if (String(input).endsWith("/sent-seed.local.json")) return new Response(null, { status: 404 });
+      assert.match(String(input), /accountType=company$/);
+      return Response.json({
+        id: "newer",
+        accountType: "company",
+        threadId: "thread-1",
+        from: "Sam",
+        cc: "",
+        body: "Full sent body",
+        html: false,
+        attachments: [],
+      });
+    };
     await openSentEmail(
-      { id: "newer", threadId: "thread-1", to: "Alex", subject: "Hello", snippet: "", sentAt: 2000 },
+      {
+        id: "newer",
+        accountType: "company",
+        threadId: "thread-1",
+        to: "Alex",
+        subject: "Hello",
+        snippet: "",
+        sentAt: 2000,
+      },
       draw,
     );
+    assert.equal(chatRequest.accountType, "company");
+    assert.equal(chatRequest.messageId, "newer");
     render(sentEmailPageTpl(draw, html`<div class="inbox-chat">Assistant</div>`), host);
     assert.equal(host.querySelector(".inbox-context-text")!.textContent, "Full sent body");
     assert.ok(host.querySelector(".pane-head.inbox-item-head"));
@@ -117,7 +145,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
       });
     };
     await openSentEmailById("unlisted", draw);
-    assert.match(detailRequest, /\/api\/inbox\/sent\/unlisted$/);
+    assert.match(detailRequest, /\/api\/inbox\/sent\/unlisted\?accountType=default$/);
     render(sentEmailPageTpl(draw), host);
     assert.match(host.textContent!, /Direct link/);
     assert.match(host.textContent!, /Loaded without listing/);

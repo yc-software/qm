@@ -488,7 +488,7 @@ function ensureRealtime(): void {
 }
 
 function inboxItemById(id: string): InboxItem | undefined {
-  const sent = selectedSentChat();
+  const sent = selectedSentChat(id);
   return sent?.id === id ? toInboxItem(sent) : inboxState.items.find((item) => item.id === id);
 }
 
@@ -566,11 +566,8 @@ async function explainDraftConflict(item: InboxItem, edited: boolean): Promise<v
   );
 }
 
-function splitAddresses(raw: string): string[] {
-  return raw
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+function addressHeaderList(raw: string): string[] {
+  return raw.trim() ? [raw.trim()] : [];
 }
 
 function actionPath(item: InboxItem, leaf: "action" | "followup"): string {
@@ -1051,7 +1048,7 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                       type="text"
                       .value=${(draft.to ?? []).join(", ")}
                       placeholder="who@example.com"
-                      @input=${(e: Event) => editDraft(item, { to: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                      @input=${(e: Event) => editDraft(item, { to: addressHeaderList((e.currentTarget as HTMLInputElement).value) })}
                       @blur=${() => void persistDraft(item)}
                     />
                   </label>
@@ -1062,7 +1059,7 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
                           <input
                             type="text"
                             .value=${(draft.cc ?? []).join(", ")}
-                            @input=${(e: Event) => editDraft(item, { cc: splitAddresses((e.currentTarget as HTMLInputElement).value) })}
+                            @input=${(e: Event) => editDraft(item, { cc: addressHeaderList((e.currentTarget as HTMLInputElement).value) })}
                             @blur=${() => void persistDraft(item)}
                           />
                         </label>`
@@ -1370,6 +1367,11 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
         ${
           surface.viewId === "sent"
             ? sentMailTpl(drawAll, (message) => {
+                resetActiveInboxItem();
+                if (surface.pane) {
+                  exitSplitIfActive();
+                  switchView("inbox");
+                }
                 fullViewId = "sent";
                 if (fullSurface) fullSurface.selectedId = null;
                 syncInboxUrl(message.id, true);
@@ -1488,6 +1490,7 @@ function drawFull(): void {
       drawAll,
       sentChatTpl(drawAll, (item) => chatTpl(toInboxItem(item))),
       sentDraftTpl(),
+      closeInboxItem,
     );
   } else
     page = html`
@@ -1549,6 +1552,8 @@ function syncInboxUrl(itemId: string | null, push = false): void {
 }
 
 export function resetActiveInboxItem(): void {
+  const sent = selectedSentChat();
+  if (sent) void persistDraft(toInboxItem(sent));
   resetSelectedSentEmail();
   const open = fullSurface?.selectedId;
   if (!open || !fullSurface) return;
@@ -1560,11 +1565,12 @@ export function resetActiveInboxItem(): void {
 function closeInboxItem(): void {
   resetActiveInboxItem();
   syncInboxUrl(null);
+  if (fullViewId === "sent") ensureSentMail(drawAll);
   drawAll();
 }
 
 export function routeInboxHistory(segment: string | null): void {
-  resetSelectedSentEmail();
+  resetActiveInboxItem();
   const viewId = inboxViewIdForSegment(segment);
   if (viewId) {
     fullViewId = viewId;
@@ -1593,7 +1599,7 @@ export function drawAll(): void {
 }
 
 export function selectInboxView(viewId: string, push = false): void {
-  resetSelectedSentEmail();
+  resetActiveInboxItem();
   if (!isInboxViewId(viewId)) viewId = "all";
   fullViewId = viewId;
   if (fullSurface) {

@@ -8,6 +8,7 @@ import { loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } fr
 import { parseScopeId } from "../../types.ts";
 import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
+import { addressList } from "../../loops/sources/adapter.ts";
 import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
 import {
   ensureInboxLoop,
@@ -320,22 +321,34 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   if (adapter?.actions.includes(kind)) {
     const tokens = ctx.deps.loopSourceTokens;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
-    const slackClient = ctx.deps.loopSlackClient;
-    const result = await adapter.act(
-      { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
-      item,
-      kind,
-      args,
-    );
-    if (!result.ok) {
-      if (result.partial) await deps.items.appendThread(item.id, [{ role: "system", text: result.message }]);
-      const statusByReason = { not_connected: 409, bad_item: 400, upstream: 502 } as const;
-      return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
+    const decisionToken = await deps.items.acquireDecision(item.id);
+    if (!decisionToken)
+      return sendJson(ctx.res, 409, { error: "conflict", message: "an action is already in progress" });
+    try {
+      const current = await deps.items.get(item.id);
+      if (!current || ledgerState(current) === "actioned")
+        return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
+      if (current.proposal?.at !== item.proposal?.at) return draftChanged();
+      item = current;
+      const slackClient = ctx.deps.loopSlackClient;
+      const result = await adapter.act(
+        { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
+        item,
+        kind,
+        args,
+      );
+      if (!result.ok) {
+        if (result.partial) await deps.items.appendThread(item.id, [{ role: "system", text: result.message }]);
+        const statusByReason = { not_connected: 409, bad_item: 400, upstream: 502 } as const;
+        return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
+      }
+      if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
+      if (result.resolves === false) return sendJson(ctx.res, 200, { item: ledgerItemView(item) });
+      const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
+      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
+    } finally {
+      await deps.items.releaseDecision(item.id, decisionToken);
     }
-    if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
-    if (result.resolves === false) return sendJson(ctx.res, 200, { item: ledgerItemView(item) });
-    const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item) });
   }
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
@@ -418,8 +431,33 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   if (!threadId || threadId.length > 200 || jsonSize(body) > MAX_SOURCE_PAYLOAD_BYTES)
     return sendJson(ctx.res, 400, { error: "bad_request" });
   const text = (key: string, max: number): string => (typeof body[key] === "string" ? body[key].slice(0, max) : "");
+  const accountType = body.accountType === undefined ? "default" : body.accountType;
+  const to = addressList(body.to === undefined ? [] : [body.to]);
+  const cc = addressList(body.cc === undefined ? [] : [body.cc]);
+  if (
+    typeof accountType !== "string" ||
+    !["default", "personal", "company"].includes(accountType) ||
+    to === null ||
+    cc === null
+  )
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "invalid account or recipient headers" });
+  const payload = {
+    title: text("subject", 300),
+    from: text("from", 500),
+    snippet: text("text", 50000),
+    gmail: {
+      threadId,
+      accountType,
+      messageId: text("messageId", 200),
+      subject: text("subject", 300),
+      to: to ?? [],
+      cc: cc ?? [],
+      rfcMessageId: text("rfcMessageId", 400),
+    },
+    sentChat: true,
+  } as LoopSourcePayload;
   const loop = await ensureInboxLoop(deps.store, owner);
-  const dedupeKey = `sent-chat:${threadId}`;
+  const dedupeKey = accountType === "default" ? `sent-chat:${threadId}` : `sent-chat:${accountType}:${threadId}`;
   const id = loopItemId(loop.id, dedupeKey);
   let item = await deps.items.get(id);
   if (!item) {
@@ -430,34 +468,13 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
         source: "gmail",
         summary: text("subject", 300),
         proposal: { data: { body: "" }, by: "human" },
-        sourcePayload: {
-          title: text("subject", 300),
-          from: text("from", 500),
-          snippet: text("text", 50000),
-          gmail: {
-            threadId,
-            subject: text("subject", 300),
-            to: [text("to", 2000)].filter(Boolean),
-            cc: [text("cc", 2000)].filter(Boolean),
-            rfcMessageId: text("rfcMessageId", 400),
-          },
-          sentChat: true,
-        },
+        sourcePayload: payload,
       },
     ]);
     item = await deps.items.get(id);
   }
   if (!item) return sendJson(ctx.res, 500, { error: "chat_unavailable" });
-  item =
-    (await deps.items.annotate(id, {
-      gmail: {
-        threadId,
-        subject: text("subject", 300),
-        to: [text("to", 2000)].filter(Boolean),
-        cc: [text("cc", 2000)].filter(Boolean),
-        rfcMessageId: text("rfcMessageId", 400),
-      },
-    })) ?? item;
+  item = (await deps.items.annotate(id, payload, { summary: text("subject", 300) })) ?? item;
   if (item.actionKind === "sent") item = (await deps.items.reopen(id, { sentReply: true })) ?? item;
   ctx.res.setHeader("Cache-Control", "no-store");
   sendJson(ctx.res, 200, { item: ledgerItemView(item) });

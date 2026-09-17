@@ -522,13 +522,12 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
         error: "not_connected",
         message: "Connect this Google account in Settings to see sent mail.",
       });
-    return sendJson(
-      ctx.res,
-      200,
-      ctx.params.messageId
+    return sendJson(ctx.res, 200, {
+      ...(ctx.params.messageId
         ? await getSentEmail(auth.accessToken, ctx.params.messageId)
-        : await listSentEmails(auth.accessToken, pageToken),
-    );
+        : await listSentEmails(auth.accessToken, pageToken)),
+      accountType,
+    });
   } catch (error) {
     let status = 502;
     if (error instanceof GmailReadError) {

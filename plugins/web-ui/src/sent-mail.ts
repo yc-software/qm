@@ -15,6 +15,7 @@ interface SentThreadMessage {
 }
 
 export interface SentEmail {
+  accountType?: "default" | "personal" | "company";
   id: string;
   threadId: string;
   to: string;
@@ -25,6 +26,7 @@ export interface SentEmail {
 }
 
 interface SentMailPage {
+  accountType?: SentEmail["accountType"];
   messages: SentEmail[];
   nextPageToken?: string;
   accountEmail: string;
@@ -49,13 +51,14 @@ let detail:
     })
   | null = null;
 let detailError = "";
-let chatItem: LedgerItem | null = null;
+const chatItems = new Map<string, LedgerItem>();
+let chatItemId: string | null = null;
 let chatError = "";
 let detailGeneration = 0;
 
 export async function openSentEmail(message: SentEmail, draw: () => void): Promise<void> {
   selected = message;
-  chatItem = null;
+  chatItemId = null;
   chatError = "";
   detail = null;
   detailError = "";
@@ -73,7 +76,9 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
           html: false,
           attachments: [],
         }
-      : await api<NonNullable<typeof detail>>(`/api/inbox/sent/${encodeURIComponent(message.id)}`);
+      : await api<NonNullable<typeof detail>>(
+          `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams({ accountType: message.accountType ?? "default" })}`,
+        );
     if (current === detailGeneration) {
       detail = result;
       selected = { ...message, ...result };
@@ -100,6 +105,8 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
     const result = await api<{ item: LedgerItem }>("/api/inbox/sent-chat", {
       method: "POST",
       body: JSON.stringify({
+        accountType: detail.accountType ?? selected?.accountType ?? "default",
+        messageId: detail.id,
         threadId: detail.threadId,
         subject: detail.subject,
         from: detail.from,
@@ -109,7 +116,10 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
         text: text.slice(0, 50000),
       }),
     });
-    if (current === detailGeneration) chatItem = result.item;
+    if (current === detailGeneration) {
+      chatItemId = result.item.id;
+      updateSentChat(result.item);
+    }
   } catch (cause) {
     if (current === detailGeneration) chatError = cause instanceof Error ? cause.message : "Couldn't load chat.";
   } finally {
@@ -118,19 +128,20 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
 }
 
 export function sentChatTpl(draw: () => void, renderChat: (item: LedgerItem) => TemplateResult): TemplateResult {
-  if (chatItem) return renderChat(chatItem);
+  const item = selectedSentChat();
+  if (item) return renderChat(item);
   return html`<div class="inbox-chat">
     <h2 class="inbox-chat-cta">Ask about this email</h2>
     ${chatError ? html`<div role="alert">${chatError}<button class="btn" @click=${() => void loadSentChat(draw)}>Try again</button></div>` : html`<div role="status">Loading chat…</div>`}
   </div>`;
 }
 
-export function selectedSentChat(): LedgerItem | null {
-  return chatItem;
+export function selectedSentChat(id: string | null = chatItemId): LedgerItem | null {
+  return id ? (chatItems.get(id) ?? null) : null;
 }
 
 export function updateSentChat(item: LedgerItem): void {
-  if (chatItem?.id === item.id) chatItem = item;
+  if (chatItemId === item.id || chatItems.has(item.id)) chatItems.set(item.id, item);
 }
 
 export async function openSentEmailById(id: string, draw: () => void): Promise<void> {
@@ -148,10 +159,11 @@ export async function openSentEmailById(id: string, draw: () => void): Promise<v
 }
 
 export function resetSentMail(): void {
+  chatItems.clear();
   generation++;
   detailGeneration++;
   selected = null;
-  chatItem = null;
+  chatItemId = null;
   chatError = "";
   detail = null;
   detailError = "";
@@ -176,7 +188,12 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
     const page = local ?? (await api<SentMailPage>(`/api/inbox/sent?${params}`));
     if (current !== generation) return;
     messages = [
-      ...new Map([...(more ? messages : []), ...page.messages].map((message) => [message.id, message])).values(),
+      ...new Map(
+        [
+          ...(more ? messages : []),
+          ...page.messages.map((message) => ({ ...message, accountType: page.accountType ?? ("default" as const) })),
+        ].map((message) => [message.id, message]),
+      ).values(),
     ].sort((a, b) => b.sentAt - a.sentAt);
     accountEmail = page.accountEmail;
     nextPageToken = page.nextPageToken;
@@ -251,7 +268,7 @@ export function selectedSentEmail(): SentEmail | null {
 export function resetSelectedSentEmail(): void {
   detailGeneration++;
   selected = null;
-  chatItem = null;
+  chatItemId = null;
   chatError = "";
   detail = null;
   detailError = "";
@@ -333,6 +350,7 @@ export function sentEmailPageTpl(
   draw: () => void,
   aside?: TemplateResult,
   draft?: TemplateResult,
+  close: () => void = () => closeSentEmail(draw),
 ): TemplateResult | typeof nothing {
   if (!selected) return nothing;
   const message = selected;
@@ -355,7 +373,7 @@ export function sentEmailPageTpl(
   return html`
     <div class="pane-head inbox-item-head src-gmail">
       <div class="inbox-item-head-copy">
-        ${listBackLink("Sent", () => closeSentEmail(draw))}
+        ${listBackLink("Sent", close)}
         <h1 class="pane-title">
           <span class="inbox-item-glyph">${icon(Mail, 18)}</span>
           <span>To: ${message.to || "Undisclosed recipients"}</span>

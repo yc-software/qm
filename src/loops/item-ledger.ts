@@ -60,7 +60,7 @@ export interface LoopItemLedger {
   enqueue(input: EnqueueItemInput): Promise<EnqueueResult>;
   ingest(entries: IngestEntryInput[]): Promise<IngestOutcome>;
   setProposal(id: string, proposal: Omit<LoopProposal, "at">, opts?: { expectedAt?: number }): Promise<LoopItem | null>;
-  annotate(id: string, patch: LoopSourcePayload): Promise<LoopItem | null>;
+  annotate(id: string, patch: LoopSourcePayload, opts?: { summary?: string }): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
   reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;
@@ -266,12 +266,17 @@ export function createLoopItemLedger(
       if (applied) emit(after, "proposal");
       return applied ? after : null;
     },
-    async annotate(id, patch) {
+    async annotate(id, patch, opts) {
       let applied = false;
       const after = await update(id, (item) => {
         applied = true;
         const now = Date.now();
-        return { ...item, sourcePayload: { ...item.sourcePayload, ...patch }, updatedAt: now };
+        return {
+          ...item,
+          sourcePayload: { ...item.sourcePayload, ...patch },
+          ...(opts?.summary !== undefined ? { sourceSummary: opts.summary } : {}),
+          updatedAt: now,
+        };
       });
       if (applied) emit(after, "annotate");
       return applied ? after : null;
