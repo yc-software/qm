@@ -158,12 +158,12 @@ for (;;) {
     ]),
   );
   if (counts.fail) stop("failed", exitCode || 1, { counts });
-  if (counts.skipping || counts.cancel) stop("blocked", 1, { reason: "non_passing_checks", counts });
   if (counts.pending) {
     report("pending", { counts });
     await pause(pollMs);
     continue;
   }
+  if (counts.skipping || counts.cancel) stop("blocked", 1, { reason: "non_passing_checks", counts });
   await verifyHead();
   remaining();
   stop("success", 0, { head: expectedHead, counts });

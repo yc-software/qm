@@ -129,6 +129,24 @@ test("pending exit 8 and exit 0 poll until a complete passing snapshot", () => {
   assert.equal(result.calls.length, 7);
 });
 
+test("pending snapshots can replace skipped or cancelled checks before passing", () => {
+  for (const bucket of ["skipping", "cancel"]) {
+    const result = run([
+      view,
+      { ...pending, json: [...pending.json, { name: "previous check", bucket }] },
+      view,
+      pass,
+      view,
+    ]);
+    assert.equal(result.code, 0);
+    assert.deepEqual(
+      result.lines.map((line) => line.status),
+      ["pending", "success"],
+    );
+    assert.equal(result.calls.length, 5);
+  }
+});
+
 test("transport errors exhaust the bounded retry budget", () => {
   const error = { operation: "checks", stderr: "TLS handshake timeout", code: 1 };
   const result = run([view, error, error, error]);
