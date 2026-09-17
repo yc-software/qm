@@ -10,7 +10,7 @@ const server = readFileSync(new URL("../server/index.ts", import.meta.url), "utf
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("inbox is a first-class view with a draggable sidebar entry", () => {
-  assert.match(shellState, /"chats",\s*"inbox",\s*"contexts"/);
+  assert.match(shellState, /"chats",\s*"inbox",\s*"calendar",\s*"contexts"/);
   assert.match(shell, /case "inbox":\s*void renderInbox\(\);/);
   assert.match(shell, /data-view="inbox"/);
   assert.match(shell, /application\/x-webui-inbox/);
@@ -18,8 +18,8 @@ test("inbox is a first-class view with a draggable sidebar entry", () => {
 });
 
 test("inbox access rides the existing permissions plumbing", () => {
-  assert.match(shell, /can\("inbox"\) \? inboxNavRow\(\) : nothing/);
-  assert.match(shellState, /if \(view === "inbox"\) return can\("inbox"\);/);
+  assert.match(shell, /can\("inbox"\) \? html`\$\{inboxNavRow\(\)\}/);
+  assert.match(shellState, /if \(view === "inbox" \|\| view === "calendar"\) return can\("inbox"\);/);
   assert.match(server, /process\.env\.INBOX_USERS/);
   assert.match(server, /INBOX_USERS\.has\("all"\) \|\| INBOX_USERS\.has\(principalId\.trim\(\)\.toLowerCase\(\)\)/);
   assert.match(server, /if \(isInboxUser\(user\)\) permissions\.push\("inbox"\);/);

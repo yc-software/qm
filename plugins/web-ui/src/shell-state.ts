@@ -21,6 +21,7 @@ export interface Me {
 const VIEWS = [
   "chats",
   "inbox",
+  "calendar",
   "contexts",
   "webhooks",
   "crons",
@@ -53,6 +54,6 @@ export function can(key: string): boolean {
 
 export function canView(view: View): boolean {
   if (view === "loops") return can("loops");
-  if (view === "inbox") return can("inbox");
+  if (view === "inbox" || view === "calendar") return can("inbox");
   return true;
 }
