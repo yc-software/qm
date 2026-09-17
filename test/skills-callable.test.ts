@@ -69,7 +69,7 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
   assert.doesNotMatch(sys.reply ?? "", /make-digest/);
 });
 
-test("ordinary sandbox work never synchronizes the visible skill catalog", async () => {
+test("ordinary sandbox work reconciles ownership without copying skill contents", async () => {
   const { app, skills, sandbox } = freshApp();
   await publishPersonalSkill(skills);
   const touched: string[] = [];
@@ -94,5 +94,20 @@ test("ordinary sandbox work never synchronizes the visible skill catalog", async
     conversation: { kind: "dm", threadRef: "dm:U1:no-sync" },
     text: "!read missing.txt",
   } as TurnRequest);
-  assert.deepEqual(touched, []);
+  assert.deepEqual(touched, ["skills/.index", "skills/.index"]);
+});
+
+test("ordinary sandbox reads remove archived skill files before access", async () => {
+  const { app, skills } = freshApp();
+  const skill = await publishPersonalSkill(skills);
+  const request = {
+    surface: "test",
+    actor,
+    conversation: { kind: "dm", threadRef: "dm:U1:archive" },
+  };
+  const before = await app.turn({ ...request, text: "!read skills/make-digest/SKILL.md" } as TurnRequest);
+  assert.match(before.reply ?? "", /Step 1: gather/);
+  await skills.archive(skill.id);
+  const after = await app.turn({ ...request, text: "!read ././skills/make-digest/SKILL.md" } as TurnRequest);
+  assert.doesNotMatch(after.reply ?? "", /Step 1: gather/);
 });

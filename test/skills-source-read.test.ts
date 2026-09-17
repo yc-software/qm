@@ -159,7 +159,7 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
   resolution.skill!.manifest.files![0]!.content = "v2";
   assert.equal((await turn.readSkill("skill://source-helper/references/example.txt")).content, "v2");
   await turn.provision();
-  assert.equal(files.size, 0);
+  assert.deepEqual([...files.keys()], ["skills/.index"]);
   await turn.ensureSkillTree("source-helper");
   assert.equal(provisions, 1);
   assert.equal(files.get("skills/source-helper/references/example.txt"), "v2");

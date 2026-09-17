@@ -78,6 +78,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     credentialCutoverServices,
     quarantinedServices,
     cutoverModeOf,
+    visibleSkills,
     visibleSkillsForTurn,
     skillMaterializer,
     emitGapWork,
@@ -301,6 +302,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         emit("proc_reconcile", procReconcileStart, Date.now());
       }
     }
+    if (deps.skills) await skillMaterializer.reconcileIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
     box.handle = handle;
     return handle;
   };
@@ -367,7 +369,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           : r.skill.manifest.name === skillDir),
     );
     const handle = sandboxId ? await provisionResource(sandboxId) : await provision();
-    await skillMaterializer.reconcileIndex(deps.sandbox, handle, current, visibleSkillsForTurn);
     for (const r of requested) {
       await materializeSkillTree(handle, r, sandboxId);
     }
@@ -391,6 +392,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       resourcePendingHandles.set(id, handle);
       await prepareCredentials(handle, emitGapWork);
       await prepareTurnFiles(handle);
+      if (deps.skills)
+        await skillMaterializer.reconcileIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
       resourceHandles.set(id, handle);
       resourcePendingHandles.delete(id);
       return handle;
