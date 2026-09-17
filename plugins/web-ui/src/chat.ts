@@ -1,3 +1,4 @@
+import { goalElapsedLabel } from "./goal-strip.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
@@ -18,7 +19,6 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import {
   Activity,
-  Ban,
   Bot,
   Brain,
   Check,
@@ -1670,11 +1670,20 @@ export function createChatSurface(
       const msg = message as AssistantMessage;
       if ((msg as AssistantWork).retryableSend) return nothing;
       const work = (msg as AssistantWork).work;
-      const text = assistantDisplayText(messageText(msg)).trim();
+      const text = assistantDisplayText(messageText(msg), msg.stopReason).trim();
       const hasText = Boolean(text);
       const showWork =
         shouldShowApprovalWork(msg, work, text) &&
         shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
+      let workView = showWork
+        ? workBlock(
+            work,
+            isStreaming,
+            msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : text,
+            (msg as AssistantWork).streamingBaseline ?? "",
+          )
+        : nothing;
+      if (msg.stopReason === "aborted") workView = stoppedWork(work);
       const deliveredFiles = (msg as AssistantWork).deliveredFiles;
       const hasVisibleContent =
         showWork ||
@@ -1685,10 +1694,8 @@ export function createChatSurface(
       return html`
         <article class="message-row assistant-row ${isStreaming ? "streaming" : ""}" data-index=${index}>
           <div class="assistant-body">
-            ${showWork ? workBlock(work, isStreaming, msg.stopReason === "aborted" || msg.stopReason === "error" ? "" : text, (msg as AssistantWork).streamingBaseline ?? "") : nothing}
-            ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+            ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-            ${msg.stopReason === "aborted" ? html`<div class="stopped-note">${icon(Ban, 13)}<span>Stopped</span></div>` : nothing}
             ${isStreaming ? nothing : messageMeta(msg, index)}
           </div>
         </article>
@@ -1698,7 +1705,10 @@ export function createChatSurface(
   }
 
   function copyableText(message: AgentMessage): string {
-    const raw = messageText(message);
+    const raw =
+      message.role === "assistant"
+        ? assistantDisplayText(messageText(message), (message as AssistantMessage).stopReason)
+        : messageText(message);
     if (!isReadOnlySlackView()) return raw;
     const role = (message as { role?: string }).role;
     return role === "user" || role === "user-with-attachments" ? slackWireToPlain(raw) : stripSlackDirectives(raw);
@@ -1825,7 +1835,8 @@ export function createChatSurface(
     return !chatState.agent && chatState.forkSession !== null && surfaceOf(chatState.forkSession) === "slack";
   }
 
-  function assistantDisplayText(text: string): string {
+  function assistantDisplayText(text: string, stopReason?: string): string {
+    if (stopReason === "aborted" && text.trim() === "(stopped)") return "";
     return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
   }
 
@@ -1854,7 +1865,7 @@ export function createChatSurface(
         const streamingFinal = isStreaming && phase?.phase === "final_answer";
         const text = streamingFinal ? chunk.text.slice(phase.streamOffset) : chunk.text;
         for (const [partIndex, part] of setupContent(
-          assistantDisplayText(isStreaming && hasWork && !streamingFinal ? "" : text),
+          assistantDisplayText(isStreaming && hasWork && !streamingFinal ? "" : text, message.stopReason),
         ).entries()) {
           if (part.type !== "text") {
             if (!(message as AssistantWork).persisted) continue;
@@ -2341,6 +2352,18 @@ export function createChatSurface(
     if (work.status === "thinking") return "Thinking";
     const secs = workSeconds(work);
     return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
+  }
+
+  function stoppedWork(work: WorkBlock | null | undefined): TemplateResult {
+    const seconds = work ? workSeconds(work) : 0;
+    const label = work ? `You stopped after ${goalElapsedLabel(0, seconds * 1000)}` : "You stopped";
+    const timeline = work ? messageWorkTimeline(work, "") : [];
+    return work && timeline.length
+      ? html`<details class="stopped-work">
+          <summary class="stopped-head">${label}${icon(ChevronRight, 14)}</summary>
+          <div class="work-rows">${timeline.map((item) => renderTimelineItem(item, work))}</div>
+        </details>`
+      : html`<div class="stopped-head">${label}</div>`;
   }
 
   function workBlock(work: WorkBlock, isStreaming: boolean, text: string, baseline: string): TemplateResult {

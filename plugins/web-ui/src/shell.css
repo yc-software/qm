@@ -4248,19 +4248,30 @@ qm-markdown .tok-in {
 .composer-error.inline {
   margin: 4px 0 0;
 }
-.stopped-note {
-  display: inline-flex;
+.stopped-head {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 6px;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--secondary);
+  gap: 6px;
+  padding: 8px 0 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  list-style: none;
 }
-.stopped-note .icon {
-  opacity: 0.8;
+summary.stopped-head {
+  cursor: pointer;
+}
+summary.stopped-head::-webkit-details-marker {
+  display: none;
+}
+summary.stopped-head:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+.stopped-work[open] > .stopped-head .icon {
+  transform: rotate(90deg);
 }
 .file-note {
   display: inline-flex;
