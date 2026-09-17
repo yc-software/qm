@@ -54,9 +54,10 @@ infra/
 ```
 
 `qm.config.jsonc` is committed and contains no secret values. `.env` is ignored.
-`package.json` pins the CLI package at the exact version that scaffolded the
-directory — `contract: 1` is only the compatibility floor — so every checkout
-resolves the same interpreter; upgrade the pin deliberately.
+`package.json` pins a registry-installed CLI package at the exact version that
+scaffolded the directory — `contract: 1` is only the compatibility floor — so
+every checkout resolves the same interpreter; upgrade the pin deliberately.
+Explicit local, Git, or URL source overrides and npm alias overrides are preserved for development.
 `cd` into it and the DEPLOY commands act on it; `--config` / `--env-file` / `--sandbox-dir` relocate
 a piece (e.g. several deployments sharing one `sandbox/`). `check` validates the config,
 computed secret names, tools, skills, and plugins without network access; `up`, `plan`, and
