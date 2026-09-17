@@ -888,11 +888,23 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     }
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
     const queuedSignals = new Set<Promise<void>>();
-    const queueSignal = (text: string): Promise<void> => {
+    const queueSignal = (text: string, images: HarnessTurnInput["images"] = []): Promise<void> => {
       const pending = (async () => {
         await rt.client.session.promptAsync({
           path: { id: sessionId },
-          body: { model, agent: "qm", parts: [{ type: "text", text }] },
+          body: {
+            model,
+            agent: "qm",
+            parts: [
+              { type: "text", text },
+              ...images.map((image, index) => ({
+                type: "file" as const,
+                mime: image.mimeType,
+                filename: `image-${index + 1}`,
+                url: `data:${image.mimeType};base64,${image.dataBase64}`,
+              })),
+            ],
+          },
         });
         await waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS);
       })();
@@ -906,13 +918,20 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             turn.runId,
             {
               onAbort: async () => abort(true),
-              onSteer: async (text, ts) => {
+              onSteer: async (text, ts, request) => {
+                const prepared = await turn.prepareSteer?.(text, request);
+                const prompt = prepared?.text ?? text;
                 await turn.emit({
                   type: "user",
-                  payload: { text, ...(ts ? { ts } : {}), steered: true },
+                  payload: {
+                    text,
+                    ...(ts ? { ts } : {}),
+                    steered: true,
+                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
+                  },
                   scopeLabel: turn.scopeLabel,
                 });
-                await queueSignal(text);
+                await queueSignal(prompt, prepared?.images);
               },
             },
             { onError: (error) => swallow("opencode signal poll", error), drainOnStop: true },

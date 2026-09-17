@@ -3054,6 +3054,56 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
           return deps.harness.turns.runTurn({
             session,
+            prepareSteer: async (text, request) => {
+              if (!request?.attachments?.length) return { text };
+              const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
+              const inboxDir = `${turnInboxDir}/${randomUUID()}`;
+              const received = strictReadOnly
+                ? { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] }
+                : await materializeInbound(
+                    deps.sandbox,
+                    await provision(),
+                    request.attachments,
+                    blobTransfer,
+                    { ...fileRegistration, seed },
+                    inboxDir,
+                    securityPolicy.inboundScreening === "external"
+                      ? ({ content, name, mimetype }) =>
+                          classifySecurityData(
+                            JSON.stringify({ name, mimetype, content }),
+                            actor.id,
+                            scopeId,
+                            undefined,
+                            {
+                              hook: "tool_response",
+                              surface: "inbound_file",
+                              origin: input.origin.kind,
+                            },
+                          )
+                      : undefined,
+                  );
+              const issues = inboundIssueList({
+                ...received,
+                surfaceNotes: strictReadOnly
+                  ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
+                  : [],
+              });
+              return {
+                text: [
+                  text,
+                  inboundManifest(received.metas, inboxDir),
+                  issues.length ? fileEventPayload("in", issues).text : "",
+                  securityPolicy.inboundScreening === "external" &&
+                  (received.unscreened.length || received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
+                    ? unscreenedNotice("inbound content")
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join("\n\n"),
+                attachments: received.metas,
+                images: received.images,
+              };
+            },
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
             ...(claudeOauthToken ? { claudeOauthToken } : {}),
             ...(userHarnessOverride && !restoredRuntime && runtimeHandoffs === 0 ? { runtimePinned: true } : {}),

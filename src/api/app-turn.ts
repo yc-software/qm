@@ -508,11 +508,6 @@ export function createTurnMethods(
               return req.async ? { status: "queued", runId: targetRun.id, steered: true } : drive(targetRun.id);
             if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
-          // A mid-run message can carry files. They can't be materialized into
-          // the live turn's inbox, but the run must hear about them — name
-          // them in the steer (with the message ts so the agent can pull each
-          // via the surface-file API), and never report a captionless file as
-          // steered while silently dropping it.
           const fileNames = (req.attachments ?? []).map((a) =>
             a.sourceId
               ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
@@ -811,8 +806,32 @@ export function createTurnMethods(
       const run = await deps.runs.get(runId);
       if (!run) return { accepted: false, reason: "not_found" };
       if (viewer && !(await viewerMayUseRun(run, viewer))) return { accepted: false, reason: "not_found" };
+      const queuedKey = signal.queuedRunId
+        ? `queued-steer:${run.request.conversation.threadRef}:${signal.queuedRunId}`
+        : undefined;
+      if (queuedKey && (await deps.signals.hasDedupeKey(queuedKey))) return { accepted: true };
       if (isTerminal(run.status)) return { accepted: false, reason: "terminal" };
-      if (signal.kind === "steer" && !signal.text?.trim()) {
+      if (signal.queuedRunId) {
+        const queued = await deps.runs.get(signal.queuedRunId);
+        if (!queued || (viewer && !(await viewerMayUseRun(queued, viewer))))
+          return { accepted: false, reason: "not_found" };
+        if (
+          signal.kind !== "steer" ||
+          !signal.request ||
+          queued.request.conversation.threadRef !== run.request.conversation.threadRef
+        )
+          return { accepted: false, reason: "conversation_mismatch" };
+        if (queued.id === run.id || queued.status !== "pending") return { accepted: false, reason: "queued_started" };
+        const text = queued.request.displayText ?? queued.request.text;
+        signal = {
+          ...signal,
+          text,
+          ts: queuedKey,
+          dedupeKey: queuedKey,
+          request: { ...signal.request, text, attachments: queued.request.attachments, idempotencyKey: queuedKey },
+        };
+      }
+      if (signal.kind === "steer" && !signal.text?.trim() && !signal.request?.attachments?.length) {
         return { accepted: false, reason: "text_required" };
       }
       if (signal.request && signal.request.conversation.threadRef !== run.request.conversation.threadRef) {
@@ -829,10 +848,15 @@ export function createTurnMethods(
         outbound = {
           ...signal,
           ts: signal.ts ?? `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`,
-          ...(steerer ? { text: attributedSteerText(steerer, run.request.actor.id, signal.text!) } : {}),
+          ...(steerer ? { text: attributedSteerText(steerer, run.request.actor.id, signal.text ?? "") } : {}),
         };
       }
-      await deps.signals.send(runId, outbound);
+      if (signal.queuedRunId) {
+        if (!(await deps.runs.steerQueued(signal.queuedRunId, runId, outbound, deps.signals))) {
+          if (await deps.signals.hasDedupeKey(queuedKey!)) return { accepted: true };
+          return { accepted: false, reason: "queued_started" };
+        }
+      } else await deps.signals.send(runId, outbound);
       const after = await deps.runs.get(runId);
       if (!after || isTerminal(after.status)) {
         const drained = await replayOrphanedRunSignals(runId);

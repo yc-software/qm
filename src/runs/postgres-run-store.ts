@@ -447,6 +447,31 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return (rowCount ?? 0) > 0;
     },
 
+    async steerQueued(queuedRunId, targetRunId, signal, signals) {
+      await signals.hasDedupeKey(signal.dedupeKey!);
+      const { rows } = await q(
+        `WITH target AS (
+           SELECT id FROM runs WHERE id=$2 AND status IN ('pending','running') FOR UPDATE
+         ), moved AS (
+           DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='pending'
+           AND EXISTS (SELECT 1 FROM target) RETURNING id
+         ), sent AS (
+           INSERT INTO run_signals(run_id,kind,text,payload,created_at,dedupe_key)
+           SELECT $2,$3,$4,$5,$6,$7 FROM moved RETURNING id
+         ) SELECT pg_notify('run_signals',$2) FROM sent`,
+        [
+          queuedRunId,
+          targetRunId,
+          signal.kind,
+          signal.text ?? null,
+          JSON.stringify(signal),
+          Date.now(),
+          signal.dedupeKey ?? null,
+        ],
+      );
+      return rows.length > 0;
+    },
+
     async activeSessionIds(): Promise<string[]> {
       const { rows } = await q("SELECT DISTINCT session_id FROM runs WHERE status IN ('pending','running')");
       return rows.map((r) => r.session_id as string);

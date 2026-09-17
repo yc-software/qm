@@ -1,3 +1,4 @@
+import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
@@ -90,6 +91,7 @@ const skills = {
 
 function buildOrchestrator(
   extra: {
+    blobTransfer?: BlobTransferStore;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
     sandbox?: Sandbox;
@@ -869,4 +871,117 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
   assert.equal(updated, true);
   assert.match(result.reply ?? "", /SAFE_DESCRIPTION/);
   assert.doesNotMatch(result.reply ?? "", /UNSCREENED_UPDATE|UNSCREENED_BODY/);
+});
+
+test("steered files materialize in separate inboxes and keep distinct durable artifacts", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const first = await blobTransfer.put(Buffer.from("first file"));
+  const second = await blobTransfer.put(Buffer.from("second file"));
+  const writes = new Map<string, string>();
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async (_handle, path, bytes) => {
+      writes.set(path, Buffer.from(bytes).toString());
+    },
+  };
+  const harness = createMockHarness();
+  const prepared: Array<Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>>> = [];
+  harness.turns.runTurn = async (turn) => {
+    for (const blob of [first, second]) {
+      prepared.push(
+        await turn.prepareSteer!("read this", {
+          surface: "web",
+          actor: { externalId: actor.id },
+          conversation: { kind: "dm", threadRef: "steer-files" },
+          text: "read this",
+          attachments: [{ name: "report.txt", mimetype: "text/plain", ...blob }],
+        }),
+      );
+    }
+    return { reply: "done" };
+  };
+  const { orchestrator, config, files } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+  const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
+  assert.equal(inboundWrites.length, 2);
+  assert.deepEqual(
+    inboundWrites.map(([, content]) => content),
+    ["first file", "second file"],
+  );
+  for (const [i, [path]] of inboundWrites.entries()) {
+    assert.ok(prepared[i]!.text.includes(path));
+    assert.ok(await files.get(prepared[i]!.attachments![0]!.artifactId!));
+  }
+  assert.notEqual(prepared[0]!.attachments![0]!.artifactId, prepared[1]!.attachments![0]!.artifactId);
+});
+
+test("read-only turns report steered files as unavailable without provisioning a sandbox", async () => {
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("", {
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-strict" },
+      text: "",
+      attachments: [{ name: "secret.txt", mimetype: "text/plain", sizeBytes: 4, blobId: "b1" }],
+    });
+    return { reply: "done" };
+  };
+  const { orchestrator, config } = buildOrchestrator({ harness });
+  await config.setSecurityPosture(scopeId("org", ORG), "strict");
+  const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
+  assert.equal(result.status, "ok", result.reason);
+  assert.deepEqual(prepared?.attachments, []);
+  assert.match(prepared?.text ?? "", /secret.txt/);
+});
+
+test("steered documents use the inbound security screen before writing their contents", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(Buffer.from("STEER_UNTRUSTED_CONTENT"));
+  const writes: string[] = [];
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async (_handle, path) => {
+      writes.push(path);
+    },
+  };
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("read the attachment", {
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-screen" },
+      text: "read the attachment",
+      attachments: [{ name: "unsafe.txt", mimetype: "text/plain", ...blob }],
+    });
+    return { reply: "done" };
+  };
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    shadow: false,
+    classify: async ({ payload }) => ({
+      verdict: { decision: payload.includes("STEER_UNTRUSTED_CONTENT") ? "strict" : "auto" },
+      score: 0,
+      threshold: 1,
+    }),
+  };
+  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
+  const result = await orchestrator.handleTurn(dm("steer-screen", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.deepEqual(prepared?.attachments, []);
+  assert.match(prepared?.text ?? "", /unsafe.txt.*withheld/);
+  assert.equal(
+    writes.some((path) => path.endsWith("unsafe.txt")),
+    false,
+  );
 });

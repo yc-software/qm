@@ -1,4 +1,5 @@
 import type { SubscribeOptions } from "../util/event-bus.ts";
+import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 
@@ -94,6 +95,7 @@ export interface RunStore {
   inFlightForThread(sessionId: string): Promise<Run[]>;
 
   withdraw(runId: string): Promise<boolean>;
+  steerQueued(queuedRunId: string, targetRunId: string, signal: RunSignal, signals: RunSignalStore): Promise<boolean>;
 
   editPendingText(runId: string, text: string, expectedText: string): Promise<boolean>;
 

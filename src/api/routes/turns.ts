@@ -99,6 +99,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "kind must be abort or steer" });
   }
   const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
+  const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
@@ -114,7 +115,13 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   }
   const outcome = await app.signalRun(
     id,
-    { kind, ...(text !== undefined ? { text } : {}), ...(ts ? { ts } : {}), ...(request ? { request } : {}) },
+    {
+      kind,
+      ...(text !== undefined ? { text } : {}),
+      ...(ts ? { ts } : {}),
+      ...(request ? { request } : {}),
+      ...(queuedRunId ? { queuedRunId } : {}),
+    },
     actor?.p,
   );
   if (outcome.accepted) return sendJson(res, 200, outcome);

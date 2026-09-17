@@ -1815,16 +1815,29 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let tapeError: Error | undefined;
           let tapedTriggerUser = false;
           const toolAbort = new AbortController();
-          const pendingSteerTapeMeta: Array<{ text: string; ts?: string; entryCreatedAt: number }> = [];
-          const steerTapeStamp = (message: unknown): TapeMeta | undefined => {
+          const pendingSteerTapeMeta: Array<{
+            text: string;
+            bareText?: string;
+            ts?: string;
+            entryCreatedAt: number;
+            images?: HarnessTurnInput["images"];
+            attachments?: HarnessTurnInput["attachments"];
+          }> = [];
+          const steerTapeStamp = (
+            message: unknown,
+          ): { meta: TapeMeta; images?: HarnessTurnInput["images"] } | undefined => {
             const text = textFromContent((message as { content?: unknown }).content);
             const at = pendingSteerTapeMeta.findIndex((p) => p.text === text);
             if (at < 0) return undefined;
             const [steer] = pendingSteerTapeMeta.splice(at, 1);
             return {
-              bareText: steer!.text,
-              ...(steer!.ts ? { ts: steer!.ts } : {}),
-              entryCreatedAt: steer!.entryCreatedAt,
+              images: steer!.images,
+              meta: {
+                bareText: steer!.bareText ?? steer!.text,
+                ...(steer!.ts ? { ts: steer!.ts } : {}),
+                ...(steer!.attachments?.length ? { attachments: steer!.attachments } : {}),
+                entryCreatedAt: steer!.entryCreatedAt,
+              },
             };
           };
           const tapeMessage = async (message: unknown): Promise<void> => {
@@ -1840,7 +1853,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             const rec: NewTapeRecord = {
               kind: "message",
               harness: "pi",
-              payload: stripImageBytes(message, isTrigger ? turn.images : undefined),
+              payload: stripImageBytes(message, isTrigger ? turn.images : steerStamp?.images),
               scopeLabel: resultScope ?? turn.scopeLabel,
               ...(isTrigger
                 ? {
@@ -1853,7 +1866,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                     },
                   }
                 : {}),
-              ...(steerStamp ? { meta: steerStamp } : {}),
+              ...(steerStamp ? { meta: steerStamp.meta } : {}),
             };
             try {
               await turn.tape(rec);
@@ -1999,12 +2012,20 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 harness: "pi",
                 payload: {
                   role: "user",
-                  content: [{ type: "text", text: steer.text }],
+                  content: [
+                    { type: "text", text: steer.text },
+                    ...(steer.images ?? []).map((image) => ({
+                      type: "image",
+                      mimeType: image.mimeType,
+                      ...(image.artifactId ? { artifactRef: image.artifactId } : { omitted: true }),
+                    })),
+                  ],
                   timestamp: steer.entryCreatedAt,
                 },
                 scopeLabel: turn.scopeLabel,
                 meta: {
-                  bareText: steer.text,
+                  bareText: steer.bareText ?? steer.text,
+                  ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
                   ...(steer.ts ? { ts: steer.ts } : {}),
                   entryCreatedAt: steer.entryCreatedAt,
                 },
@@ -2054,22 +2075,45 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   signals,
                   turn.runId,
                   {
-                    onSteer: async (text, ts) => {
+                    onSteer: async (text, ts, request) => {
+                      const prepared = await turn.prepareSteer?.(text, request);
+                      const prompt = prepared?.text ?? text;
+                      if (!entry.agentSession.isStreaming) return false;
                       if (ts && !steeredSeen.has(ts)) {
                         steeredSeen.add(ts);
                         try {
                           const steered = await turn.emit({
                             type: "user",
-                            payload: { text, ts, steered: true },
+                            payload: {
+                              text,
+                              ts,
+                              steered: true,
+                              ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
+                            },
                             scopeLabel: turn.scopeLabel,
                           });
-                          pendingSteerTapeMeta.push({ text, ts, entryCreatedAt: steered.createdAt });
+                          pendingSteerTapeMeta.push({
+                            text: prompt,
+                            bareText: text,
+                            ts,
+                            entryCreatedAt: steered.createdAt,
+                            images: prepared?.images,
+                            attachments: prepared?.attachments,
+                          });
                         } catch (e) {
                           swallow("pi: steer persist", e);
                         }
                       }
-                      if (entry.agentSession.isStreaming) entry.ref.silentRequested = false;
-                      await entry.agentSession.steer(text);
+                      if (!entry.agentSession.isStreaming) return false;
+                      entry.ref.silentRequested = false;
+                      await entry.agentSession.steer(
+                        prompt,
+                        prepared?.images?.map((image) => ({
+                          type: "image" as const,
+                          mimeType: image.mimeType,
+                          data: image.dataBase64,
+                        })),
+                      );
                     },
                     onAbort: async () => {
                       userAborted = true;

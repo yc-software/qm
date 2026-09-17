@@ -243,6 +243,23 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return true;
     },
 
+    async steerQueued(queuedRunId, targetRunId, signal, signals) {
+      const queued = runs.get(queuedRunId);
+      const target = runs.get(targetRunId);
+      if (!queued || queued.status !== "pending" || !target || isTerminal(target.status) || queuedRunId === targetRunId)
+        return false;
+      runs.delete(queuedRunId);
+      try {
+        await signals.send(targetRunId, signal);
+      } catch (error) {
+        runs.set(queuedRunId, queued);
+        throw error;
+      }
+      retryAfter.delete(queuedRunId);
+      if (queued.dedupKey) byKey.delete(queued.dedupKey);
+      return true;
+    },
+
     async activeSessionIds() {
       const ids = new Set<string>();
       for (const r of runs.values()) if (!isTerminal(r.status)) ids.add(r.sessionId);

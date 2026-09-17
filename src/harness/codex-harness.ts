@@ -1157,10 +1157,17 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             turn.runId,
             {
               onAbort: async () => interrupt(true),
-              onSteer: async (text, ts) => {
+              onSteer: async (text, ts, request) => {
+                const prepared = await turn.prepareSteer?.(text, request);
+                const prompt = prepared?.text ?? text;
                 const steered = await turn.emit({
                   type: "user",
-                  payload: { text, ...(ts ? { ts } : {}), steered: true },
+                  payload: {
+                    text,
+                    ...(ts ? { ts } : {}),
+                    steered: true,
+                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
+                  },
                   scopeLabel: turn.scopeLabel,
                 });
                 if (turn.tape) {
@@ -1174,10 +1181,20 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
                       ...(ts ? { ts } : {}),
                       entryCreatedAt: steered.createdAt,
                     },
-                    payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+                    payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] },
                   });
                 }
-                await rt.server.request("turn/steer", { threadId, expectedTurnId: turnId, input: [userInput(text)] });
+                await rt.server.request("turn/steer", {
+                  threadId,
+                  expectedTurnId: turnId,
+                  input: [
+                    userInput(prompt),
+                    ...(prepared?.images ?? []).map((image) => ({
+                      type: "image",
+                      url: `data:${image.mimeType};base64,${image.dataBase64}`,
+                    })),
+                  ],
+                });
               },
             },
             { onError: (error) => swallow("codex signal poll", error) },

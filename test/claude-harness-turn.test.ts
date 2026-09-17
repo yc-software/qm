@@ -499,3 +499,43 @@ for (const terminal of [{ stop_reason: "max_tokens" }, { is_error: true }]) {
     );
   });
 }
+
+test("steering forwards prepared images and file paths while retaining the original caption in history", async () => {
+  const signals = createMemoryRunSignalStore();
+  const runId = "run-steer-files";
+  const request = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "files" },
+    text: "check this",
+    attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1" }],
+  };
+  let injected: unknown;
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    await iterator.next();
+    await signals.send(runId, { kind: "steer", text: "check this", ts: "files.1", request });
+    injected = (await iterator.next()).value?.message.content;
+    yield resultMessage("saw the image");
+    yield resultMessage("done");
+  };
+  const harness = createClaudeHarness({ signals });
+  const { turn, entries } = harnessTurn({ runId });
+  turn.prepareSteer = async (text, received) => {
+    assert.equal(text, "check this");
+    assert.deepEqual(received, request);
+    return {
+      text: "check this\nThe file is in inbox/steer/photo.png",
+      attachments: [{ name: "photo.png", mimetype: "image/png", sizeBytes: 3, direction: "in", artifactId: "f1" }],
+      images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "f1" }],
+    };
+  };
+  await harness.turns.runTurn(turn);
+  assert.deepEqual(injected, [
+    { type: "text", text: "check this\nThe file is in inbox/steer/photo.png" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "YWJj" } },
+  ]);
+  const entry = entries.find((e) => (e.payload as { steered?: boolean }).steered);
+  assert.equal((entry?.payload as { text: string }).text, "check this");
+  assert.equal((entry?.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
+});

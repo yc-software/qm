@@ -64,7 +64,11 @@ interface ChatState {
 export interface ChatSurface {
   state: ChatState;
   hasLiveRun(): boolean;
-  signalLiveRun(kind: "abort" | "steer", text?: string): Promise<import("./core-bridge").SignalOutcome>;
+  signalLiveRun(
+    kind: "abort" | "steer",
+    text?: string,
+    queuedRunId?: string,
+  ): Promise<import("./core-bridge").SignalOutcome>;
   stopLiveRun(): Promise<void>;
   isStopping(): boolean;
   currentTurnOptions(): TurnOptions;

@@ -467,15 +467,22 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             turn.runId,
             {
               onAbort: async () => interrupt(true),
-              onSteer: async (steer, ts) => {
+              onSteer: async (steer, ts, request) => {
+                const prepared = await turn.prepareSteer?.(steer, request);
+                const prompt = prepared?.text ?? steer;
                 await turn.emit({
                   type: "user",
-                  payload: { text: steer, ...(ts ? { ts } : {}), steered: true },
+                  payload: {
+                    text: steer,
+                    ...(ts ? { ts } : {}),
+                    steered: true,
+                    ...(prepared?.attachments?.length ? { attachments: prepared.attachments } : {}),
+                  },
                   scopeLabel: turn.scopeLabel,
                 });
-                steerPrompts.push(steer);
+                steerPrompts.push(prompt);
                 pendingPrompts++;
-                queue.push(userMessage(steer));
+                queue.push(userMessage(prompt, prepared?.images));
               },
             },
             { onError: (error) => swallow("claude signal poll", error) },

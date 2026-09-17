@@ -78,64 +78,97 @@ function gatedSse(events: Array<Record<string, unknown>>, gate: Promise<void>): 
   return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-test("tape rows land synchronously in consumption order, steers at their injection point", async () => {
-  const signals = createMemoryRunSignalStore();
-  const harness = createPiHarness({ apiKey: "sk-test", signals });
-  const sink: Sink = { entries: [], tape: [] };
-  let releaseFirstStep = () => {};
-  const steerQueued = new Promise<void>((resolve) => {
-    releaseFirstStep = () => setTimeout(resolve, 50);
-  });
-  const tapeRowsAtDispatch: number[] = [];
-  const requestMessages: Array<Array<{ role: string }>> = [];
-  const realFetch = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    calls += 1;
-    tapeRowsAtDispatch.push(sink.tape.filter((rec) => rec.kind === "message").length);
-    requestMessages.push((JSON.parse(String(init?.body ?? "{}")) as { messages?: [] }).messages ?? []);
-    if (calls === 1) return gatedSse(textReplyEvents("first step"), steerQueued);
-    return sse(textReplyEvents("final reply"));
-  }) as typeof globalThis.fetch;
-  try {
-    const turn = turnInput("tape-order", sink, { runId: "run-order" });
-    const emit = turn.emit;
-    turn.emit = async (entry) => {
-      const appended = await emit(entry);
-      if (entry.type === "user" && (entry.payload as { steered?: unknown }).steered === true) releaseFirstStep();
-      return appended;
-    };
-    setTimeout(() => {
-      void signals.send("run-order", { kind: "steer", text: "actually, do it differently", ts: "1712.001" });
-    }, 30);
-    const result = await harness.turns.runTurn(turn);
-    assert.equal(result.reply, "final reply");
+for (const variant of ["text", "images", "finished during preparation"]) {
+  const withImages = variant !== "text";
+  const finishDuringPreparation = variant === "finished during preparation";
+  test(`tape rows land in consumption order, including steered ${variant}`, async () => {
+    const signals = createMemoryRunSignalStore();
+    const harness = createPiHarness({ apiKey: "sk-test", signals });
+    const sink: Sink = { entries: [], tape: [] };
+    let releaseFirstStep = () => {};
+    const steerQueued = new Promise<void>((resolve) => {
+      releaseFirstStep = () => setTimeout(resolve, 50);
+    });
+    const tapeRowsAtDispatch: number[] = [];
+    const requestMessages: Array<Array<{ role: string }>> = [];
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      calls += 1;
+      tapeRowsAtDispatch.push(sink.tape.filter((rec) => rec.kind === "message").length);
+      requestMessages.push((JSON.parse(String(init?.body ?? "{}")) as { messages?: [] }).messages ?? []);
+      if (calls === 1) return gatedSse(textReplyEvents("first step"), steerQueued);
+      return sse(textReplyEvents("final reply"));
+    }) as typeof globalThis.fetch;
+    try {
+      const turn = turnInput("tape-order", sink, { runId: "run-order" });
+      if (withImages)
+        turn.prepareSteer = async (text) => {
+          if (finishDuringPreparation) {
+            releaseFirstStep();
+            await new Promise((resolve) => setTimeout(resolve, 150));
+          }
+          return {
+            text: `${text}\nFile available in inbox/photo.png`,
+            images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
+          };
+        };
+      const emit = turn.emit;
+      turn.emit = async (entry) => {
+        const appended = await emit(entry);
+        if (entry.type === "user" && (entry.payload as { steered?: unknown }).steered === true) releaseFirstStep();
+        return appended;
+      };
+      setTimeout(() => {
+        void signals.send("run-order", { kind: "steer", text: "actually, do it differently", ts: "1712.001" });
+      }, 30);
+      const result = await harness.turns.runTurn(turn);
+      if (finishDuringPreparation) {
+        assert.equal(result.reply, "first step");
+        const pending = await signals.takePending("run-order");
+        assert.equal(pending.length, 1);
+        assert.equal(pending[0]?.text, "actually, do it differently");
+        return;
+      }
+      assert.equal(result.reply, "final reply");
 
-    const messageRows = sink.tape.filter((rec) => rec.kind === "message");
-    assert.deepEqual(
-      messageRows.map((rec) => (rec.payload as { role: string }).role),
-      ["user", "assistant", "user", "assistant"],
-      "the tape holds exactly the consumed messages, in consumption order",
-    );
-    assert.equal(messageRows[0]!.meta?.bareText, "do the thing");
-    assert.equal(messageRows[2]!.meta?.bareText, "actually, do it differently");
-    assert.equal(messageRows[2]!.meta?.ts, "1712.001", "the steer row is stamped with its arrival ts");
-    assert.equal(calls, 2);
-    assert.equal(tapeRowsAtDispatch[0], 1, "the trigger user row is committed before the first dispatch");
-    assert.equal(
-      tapeRowsAtDispatch[1],
-      3,
-      "step 2 is not dispatched until the trigger, first reply, and injected steer are all on the tape",
-    );
-    assert.deepEqual(
-      requestMessages[1]!.map((message) => message.role),
-      ["user", "assistant", "user"],
-      "the steer was injected into the model context exactly where the tape says",
-    );
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
+      const messageRows = sink.tape.filter((rec) => rec.kind === "message");
+      assert.deepEqual(
+        messageRows.map((rec) => (rec.payload as { role: string }).role),
+        ["user", "assistant", "user", "assistant"],
+        "the tape holds exactly the consumed messages, in consumption order",
+      );
+      assert.equal(messageRows[0]!.meta?.bareText, "do the thing");
+      assert.equal(messageRows[2]!.meta?.bareText, "actually, do it differently");
+      assert.equal(messageRows[2]!.meta?.ts, "1712.001", "the steer row is stamped with its arrival ts");
+      if (withImages) {
+        const content = (messageRows[2]!.payload as { content: Array<Record<string, unknown>> }).content;
+        assert.deepEqual(
+          content.find((block) => block.type === "image"),
+          {
+            type: "image",
+            mimeType: "image/png",
+            artifactRef: "steered-photo",
+          },
+        );
+      }
+      assert.equal(calls, 2);
+      assert.equal(tapeRowsAtDispatch[0], 1, "the trigger user row is committed before the first dispatch");
+      assert.equal(
+        tapeRowsAtDispatch[1],
+        3,
+        "step 2 is not dispatched until the trigger, first reply, and injected steer are all on the tape",
+      );
+      assert.deepEqual(
+        requestMessages[1]!.map((message) => message.role),
+        ["user", "assistant", "user"],
+        "the steer was injected into the model context exactly where the tape says",
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+}
 
 test("a failed tape append fails the turn loudly with the append error, no checkpoint", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });

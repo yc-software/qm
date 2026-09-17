@@ -2406,6 +2406,7 @@ const apiRoutes: readonly WebRoute[] = [
         threadRef?: unknown;
         scopeId?: unknown;
         channelName?: unknown;
+        queuedRunId?: unknown;
       }>(req, res, false);
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
@@ -2428,7 +2429,12 @@ const apiRoutes: readonly WebRoute[] = [
         res,
         "POST",
         `/v1/runs/${encodeURIComponent(id)}/signal`,
-        JSON.stringify({ kind, ...(text !== undefined ? { text } : {}), ...steerFields }),
+        JSON.stringify({
+          kind,
+          ...(text !== undefined ? { text } : {}),
+          ...steerFields,
+          ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
+        }),
       );
     },
   },

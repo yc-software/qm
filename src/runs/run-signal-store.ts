@@ -11,6 +11,7 @@ export interface RunSignal {
   request?: TurnRequest;
   dedupeKey?: string;
   sessionRequest?: OrchestratorInput;
+  queuedRunId?: string;
 }
 
 export interface RunSignalStore {
@@ -19,7 +20,6 @@ export interface RunSignalStore {
   pending(runId: string): Promise<Array<{ id: string; signal: RunSignal }>>;
   acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;
-  takeLive(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
   pendingRunIds(): Promise<string[]>;
   prune(olderThanMs: number): Promise<void>;
@@ -71,13 +71,6 @@ export function createMemoryRunSignalStore(): RunSignalStore {
       pending.delete(runId);
       return list;
     },
-    async takeLive(runId) {
-      const list = pending.get(runId) ?? [];
-      const aborts = list.filter((s) => s.kind === "abort");
-      if (aborts.length) pending.set(runId, aborts);
-      else pending.delete(runId);
-      return list;
-    },
     async pendingRunIds() {
       return [...pending.keys()];
     },
@@ -104,7 +97,7 @@ export function createMemoryRunSignalStore(): RunSignalStore {
 const SIGNAL_POLL_MS = 5_000;
 
 export interface SignalPollHandlers {
-  onSteer(text: string, ts?: string): Promise<void>;
+  onSteer(text: string, ts?: string, request?: TurnRequest): Promise<void | boolean>;
   onAbort(): Promise<void>;
 }
 
@@ -114,6 +107,7 @@ export function startSignalPoll(
   handlers: SignalPollHandlers,
   opts?: { intervalMs?: number; onError?: (e: unknown) => void; drainOnStop?: boolean },
 ): () => Promise<void> {
+  const declined = new Set<string>();
   let draining = false;
   let redrain = false;
   let accepting = true;
@@ -127,13 +121,26 @@ export function startSignalPoll(
     draining = true;
     inFlight = (async () => {
       let abortDelivered = false;
-      for (const s of await signals.takeLive(runId)) {
-        if (s.kind === "abort") {
-          if (!abortDelivered) {
-            await handlers.onAbort();
-            abortDelivered = true;
+      for (const { id, signal: s } of await signals.pending(runId)) {
+        try {
+          if (s.kind === "abort") {
+            if (!abortDelivered) {
+              await handlers.onAbort();
+              abortDelivered = true;
+            }
+          } else if (!declined.has(id)) {
+            if (s.text || s.request?.attachments?.length) {
+              const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request);
+              if (delivered === false) {
+                declined.add(id);
+                continue;
+              }
+            }
+            await signals.acknowledge(runId, id);
           }
-        } else if (s.text) await handlers.onSteer(s.text, s.ts);
+        } catch (e) {
+          opts?.onError?.(e);
+        }
       }
     })()
       .catch((e: unknown) => opts?.onError?.(e))
