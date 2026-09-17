@@ -10,8 +10,7 @@ import {
 import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
-  boundCompactSummary,
-  compactedScopeLabel,
+  validateCompactSummary,
   compactionThroughSeq,
   estimateEntryTokens,
   forModelContext,
@@ -88,8 +87,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     const plan = planCompaction(input.visibleHistory, maxContextTokens, keepRecentTokenFraction, reuseBudgetTokens);
     if (!plan || !plan.toSummarize.length) return null;
 
-    const summaryLabel = compactedScopeLabel(plan.toSummarize, input.scopeId, input.orgScopeId);
-    if (!summaryLabel) return null;
+    const summaryLabel = input.scopeId;
 
     const raw = await deps.harness.models.compactHistory({
       session: input.session,
@@ -99,16 +97,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
       },
     });
-    const text = boundCompactSummary(raw, plan.toSummarize);
-    if (text !== raw.trim()) {
-      deps.errors?.record({
-        category: "turn",
-        code: "compaction_summary_bounded",
-        message: `summarizer returned ${raw.length} chars; deterministic fallback persisted`,
-        scopeLabel: input.scopeId as ScopeId,
-        sessionId: input.session.id,
-      });
-    }
+    const text = validateCompactSummary(raw);
     return {
       text,
       summaryLabel,

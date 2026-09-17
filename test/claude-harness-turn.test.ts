@@ -481,3 +481,21 @@ test("Claude preserves a committed runtime handoff when SDK interruption returns
   assert.equal(entries.filter((entry) => entry.type === "assistant").length, 0);
   assert.ok(entries.some((entry) => entry.type === "tool_result"));
 });
+
+for (const terminal of [{ stop_reason: "max_tokens" }, { is_error: true }]) {
+  test(`Claude compaction rejects incomplete SDK success: ${JSON.stringify(terminal)}`, async () => {
+    currentScript = async function* (prompts) {
+      await prompts[Symbol.asyncIterator]().next();
+      yield resultMessage("partial summary", terminal);
+    };
+    const harness = createClaudeHarness({});
+    await assert.rejects(
+      harness.models.compactHistory!({
+        session: { id: "summary-session" } as HarnessTurnInput["session"],
+        history: [],
+        recordModelCall: () => {},
+      }),
+      /did not complete/,
+    );
+  });
+}

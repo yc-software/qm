@@ -14,6 +14,7 @@ import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
+import { createErrorLog } from "../src/admin/error-log.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
@@ -24,8 +25,7 @@ import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
   MAX_COMPACT_SUMMARY_CHARS,
-  boundCompactSummary,
-  compactedScopeLabel,
+  validateCompactSummary,
   deterministicCompactSummary,
   estimateHistoryTokens,
   forModelContext,
@@ -50,7 +50,6 @@ const budgetWhoseKeepWindowFits = (keepTokens: number): number => Math.ceil(keep
 const actor: Principal = { id: "U1", type: "internal", teamIds: ["eng"] };
 const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
 const PERSONAL = scopeId("personal", "U1");
-const ORG_SCOPE = scopeId("org", ORG);
 const TEAM = scopeId("team", "eng");
 
 function spyHarness(opts: { withSummarizer?: boolean } = {}) {
@@ -104,6 +103,7 @@ function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultT
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
+  const errors = createErrorLog();
   const sessions = createMemorySessionStore();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
   const deploy = createDeployService({
@@ -122,6 +122,7 @@ function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultT
     sandbox: fakeSandbox(),
     modelGateway: createModelGateway(),
     auditLog,
+    errors,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
     harness,
     memory: createMemoryService(workspace),
@@ -130,7 +131,7 @@ function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultT
     maxContextTokens,
     defaultTurnWallClockMs,
   });
-  return { orch, sessions };
+  return { orch, sessions, errors };
 }
 
 async function seed(sessions: SessionStore, entries: Array<Partial<SessionEntry>>): Promise<string> {
@@ -370,25 +371,7 @@ test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupt
   );
 });
 
-test("compactedScopeLabel inherits the narrowest audience and refuses ambiguous cross-audience folds", async () => {
-  const entry = (label: string): SessionEntry => ({
-    sessionId: "s",
-    seq: 0,
-    parentSeq: null,
-    type: "user",
-    payload: { text: "x" },
-    scopeLabel: label,
-    createdAt: 0,
-  });
-
-  assert.equal(compactedScopeLabel([entry(PERSONAL)], PERSONAL, ORG_SCOPE), PERSONAL);
-  assert.equal(compactedScopeLabel([entry(TEAM)], PERSONAL, ORG_SCOPE), TEAM);
-  assert.equal(compactedScopeLabel([entry(PERSONAL), entry(ORG_SCOPE)], PERSONAL, ORG_SCOPE), PERSONAL);
-  assert.equal(compactedScopeLabel([entry(PERSONAL), entry(scopeId("personal", "U2"))], PERSONAL, ORG_SCOPE), null);
-  assert.equal(compactedScopeLabel([entry(ORG_SCOPE)], PERSONAL, ORG_SCOPE), ORG_SCOPE);
-});
-
-test("a summary over narrower (team) data inherits the team label, never the broader session/org floor", async () => {
+test("a summary uses the session scope regardless of the source entry scopes", async () => {
   const { harness, compactCalls } = spyHarness();
   const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("team 4", "recent 5"));
 
@@ -407,11 +390,7 @@ test("a summary over narrower (team) data inherits the team label, never the bro
 
   const summaries = await summaryEntries(sessions, sid);
   assert.ok(summaries.length >= 1);
-  assert.equal(
-    summaries[0]!.scopeLabel,
-    TEAM,
-    "the summary must inherit the narrower team label, not the session/org floor (no audience widening)",
-  );
+  assert.equal(summaries[0]!.scopeLabel, PERSONAL, "compaction does not inherit source entry scopes");
 });
 
 const mkEntry = (over: Partial<SessionEntry> & { seq: number }): SessionEntry => ({
@@ -691,46 +670,11 @@ test("a session parked over soft with a too-large prior summary re-summarizes (B
   );
 });
 
-test("the compaction prompt tells the summarizer to preserve constraints and NOT launder untrusted content into fact", async () => {
-  const { CONTEXT_COMPACTION_PROMPT } = (await import("../src/harness/pi-harness.ts")) as unknown as {
-    CONTEXT_COMPACTION_PROMPT: string;
-  };
-  const p = CONTEXT_COMPACTION_PROMPT.toLowerCase();
-  assert.match(p, /untrusted history, not/, "keeps the existing untrusted-history framing");
-  assert.match(p, /constraint/, "preserves stated constraints");
-  assert.match(p, /launder/, "explicitly forbids laundering untrusted content into fact");
-  assert.match(p, /trust label|attributed/, "preserves trust labels / author attribution");
-  assert.match(p, /do not continue the conversation/, "forbids continuing the conversation");
-  assert.match(p, /do not respond to/, "forbids answering questions or instructions in the transcript");
-  assert.match(p, /do not perform, resume, or plan any/, "forbids resuming the task");
-  assert.match(p, /output only the summary/, "requires summary-only output");
-  assert.match(p, /under 8,000 characters/, "gives the model a length target well under the hard cap");
-  assert.match(p, /index/, "frames the summary as an index into the transcript");
-  assert.match(p, /history tool/, "names the tool that dereferences pointers");
-  assert.match(p, /seq or seq range/, "asks for seq pointers in place of retrievable detail");
-  assert.match(p, /cannot be re-derived/, "keeps only non-re-derivable facts inline");
-  assert.match(p, /fold its still-relevant content/, "gives merge semantics for a folded prior summary");
-});
-
-test("boundCompactSummary passes a normal summary through trimmed", () => {
-  const history = [mkEntry({ seq: 1 }), mkEntry({ seq: 2 })];
-  assert.equal(boundCompactSummary("  a tidy summary  ", history), "a tidy summary");
-});
-
-test("boundCompactSummary falls back deterministically when the model output is empty or missing", () => {
-  const history = [mkEntry({ seq: 1 })];
-  const fallback = deterministicCompactSummary(history);
-  assert.equal(boundCompactSummary(undefined, history), fallback);
-  assert.equal(boundCompactSummary("   ", history), fallback);
-});
-
-test("boundCompactSummary falls back deterministically when the summarizer runs away instead of summarizing", () => {
-  const history = [mkEntry({ seq: 1 })];
-  const runaway = "I'll scan for new signed replies… ".repeat(2_000);
-  assert.ok(runaway.length > MAX_COMPACT_SUMMARY_CHARS);
-  const out = boundCompactSummary(runaway, history);
-  assert.equal(out, deterministicCompactSummary(history));
-  assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS, "the fallback itself fits the cap, so it never re-triggers");
+test("validateCompactSummary accepts a trimmed summary and rejects missing or oversized output", () => {
+  assert.equal(validateCompactSummary("  a tidy summary  "), "a tidy summary");
+  assert.throws(() => validateCompactSummary(undefined), /empty summary/);
+  assert.throws(() => validateCompactSummary("   "), /empty summary/);
+  assert.throws(() => validateCompactSummary("x".repeat(MAX_COMPACT_SUMMARY_CHARS + 1)), /character limit/);
 });
 
 test("the deterministic fallback keeps the newest entries — a late stated constraint survives the slice", () => {
@@ -743,10 +687,10 @@ test("the deterministic fallback keeps the newest entries — a late stated cons
   assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS);
 });
 
-test("a runaway summarizer output is bounded at the orchestrator: the persisted summary is the deterministic fallback", async () => {
+test("a runaway summarizer output does not commit a compaction checkpoint", async () => {
   const { harness } = spyHarness();
   harness.models.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
+  const { orch, sessions, errors } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
   const sid = await seed(
     sessions,
     msgTexts(12).map((text) => ({ payload: { text } })),
@@ -755,11 +699,18 @@ test("a runaway summarizer output is bounded at the orchestrator: the persisted 
   const res = await orch.handleTurn(spineTurn("!histcount"));
   assert.equal(res.status, "ok");
 
-  const summaries = await waitForSummary(sessions, sid);
-  assert.ok(summaries.length >= 1, "a summary is persisted");
-  const persisted = contextSummaryPayload(summaries[0]!)!.text;
-  assert.match(persisted, /^Compacted \d+ prior entr/, "the runaway output was replaced deterministically");
-  assert.ok(persisted.length <= MAX_COMPACT_SUMMARY_CHARS);
+  const deadline = Date.now() + 3_000;
+  while (!(await errors.list({ sessionId: sid })).some((error) => error.code === "background_compaction_failed")) {
+    assert.ok(Date.now() < deadline, "background compaction never reported failure");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal((await summaryEntries(sessions, sid)).length, 0);
+  assert.equal(
+    (await sessions.getTape(sid)).some(
+      (row) => row.kind === "context_event" && (row.payload as { event?: string })?.event === "compaction",
+    ),
+    false,
+  );
 });
 
 function assertSummaryBoundary(history: SessionEntry[], label: string): void {

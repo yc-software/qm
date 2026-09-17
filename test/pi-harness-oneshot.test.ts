@@ -376,6 +376,8 @@ test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
 });
 
 test("oneShot routes configured models through the model gateway without mutating transport metadata", async (t) => {
+  let lastBody = "";
+  let stopReason = "end_turn";
   const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
   const server = createServer((request, response) => {
     let body = "";
@@ -384,6 +386,7 @@ test("oneShot routes configured models through the model gateway without mutatin
       body += String(chunk);
     });
     request.on("end", () => {
+      lastBody = body;
       const requestModel = (JSON.parse(body) as { model?: string }).model;
       requests.push({
         ...(request.headers["api-key"] ? { gatewayKey: String(request.headers["api-key"]) } : {}),
@@ -411,7 +414,7 @@ test("oneShot routes configured models through the model gateway without mutatin
         { type: "content_block_stop", index: 0 },
         {
           type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
+          delta: { stop_reason: stopReason, stop_sequence: null },
           usage: { output_tokens: 1 },
         },
         { type: "message_stop" },
@@ -461,6 +464,38 @@ test("oneShot routes configured models through the model gateway without mutatin
     modelId: "claude-haiku-4-5",
     headers: { "x-model-marker": "preserved" },
   });
+  const harness = createPiHarness({ defaultModelId: "claude-haiku-4-5", modelGateway });
+  const compact = harness.models.compactHistory!;
+  const input: Parameters<typeof compact>[0] = {
+    session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
+    history: [
+      {
+        sessionId: "summary-session",
+        seq: 136,
+        parentSeq: null,
+        type: "user",
+        payload: { text: "what? local recovery what?" },
+        scopeLabel: "personal:test",
+        createdAt: 0,
+      },
+    ],
+    recordModelCall: () => {},
+  };
+  assert.equal(await compact(input), "gateway");
+  assert.deepEqual(requests.at(-1), {
+    gatewayKey: "gateway-secret",
+    providerKey: "gateway-secret",
+    model: "router/haiku",
+  });
+  const body = JSON.parse(lastBody) as { messages: Array<{ content: Array<{ text?: string }> }> };
+  const prompt = body.messages
+    .flatMap((message) => message.content)
+    .map((block) => block.text ?? "")
+    .join("\n");
+  assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("user#136"));
+  assert.match(prompt.slice(prompt.indexOf("</conversation>")), /Create a structured context checkpoint summary/);
+  stopReason = "max_tokens";
+  await assert.rejects(compact(input), /did not complete \(length\)/);
 });
 
 test("Pi assistant error messages fail the turn instead of becoming a blank reply", () => {

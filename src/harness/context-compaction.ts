@@ -1,5 +1,4 @@
-import type { ScopeId, SessionEntry } from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import type { SessionEntry } from "../types.ts";
 import { contextSummaryPayload, entrySecurityTainted } from "../sessions/session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -21,27 +20,6 @@ export const INTERRUPTED_TOOL_RESULT =
 
 export const CONTEXT_SUMMARY_HEADER =
   "[Earlier conversation summary — an index of turns compacted out of your context. The full transcript is still stored: reopen any type#seq it cites with the history tool (seq parameter; a very long entry returns as head and tail), or search it (query).]";
-
-export function compactedScopeLabel(
-  entries: SessionEntry[],
-  sessionScopeId: ScopeId,
-  orgScopeId: ScopeId,
-): ScopeId | null {
-  const labels = [...new Set(entries.map((e) => e.scopeLabel))];
-  const byKind = (kind: string): ScopeId[] => labels.filter((label) => parseScopeId(label).kind === kind);
-  const only = (xs: ScopeId[]): ScopeId | null => (xs.length === 1 ? xs[0]! : null);
-
-  const personal = byKind("personal");
-  if (personal.length) return only(personal);
-
-  const team = byKind("team");
-  if (team.length) return only(team);
-
-  const nonFloor = labels.filter((label) => label !== orgScopeId && label !== sessionScopeId);
-  if (nonFloor.length) return only(nonFloor);
-
-  return labels.includes(sessionScopeId) ? sessionScopeId : orgScopeId;
-}
 
 function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
   return entries.filter(
@@ -224,8 +202,9 @@ export function deterministicCompactSummary(history: SessionEntry[]): string {
 
 export const MAX_COMPACT_SUMMARY_CHARS = MAX_COMPACT_ENTRY_CHARS - CHAINED_SUMMARY_PREFIX_HEADROOM;
 
-export function boundCompactSummary(candidate: string | undefined, history: SessionEntry[]): string {
+export function validateCompactSummary(candidate: string | undefined): string {
   const text = candidate?.trim();
-  if (!text || text.length > MAX_COMPACT_SUMMARY_CHARS) return deterministicCompactSummary(history);
+  if (!text) throw new Error("Compaction returned an empty summary");
+  if (text.length > MAX_COMPACT_SUMMARY_CHARS) throw new Error("Compaction summary exceeds the character limit");
   return text;
 }
