@@ -86,6 +86,27 @@ export interface PersistedApprovedHarnesses {
   scopeId: ScopeId;
   ids: string[];
 }
+export interface FactoryConfig {
+  forge: "github" | "gitlab";
+  publishProject: string;
+  targetBranch: string;
+  repoCloneUrl: string;
+  repoSetupCmd?: string;
+  linearTeamId: string;
+  sourceAppDirs: string;
+  sourceTestRe: string;
+  verifyTestsCmd: string;
+  verifyTestFileCmd: string;
+  verifyLintCmd: string;
+  proofStartCmd?: string;
+  proofBaseUrlCmd?: string;
+  slackChannel?: string;
+  bugbotRequired: boolean;
+  followupsEnabled: boolean;
+}
+export interface PersistedFactoryConfig extends FactoryConfig {
+  scopeId: ScopeId;
+}
 export interface PersistedWebuiModels {
   scopeId: ScopeId;
   ids: string[];
@@ -213,6 +234,8 @@ export interface ScopedConfigStore {
   getApprovedHarnesses(): string[] | null;
   setApprovedHarnesses(ids: string[] | null): void;
   getApprovedHarnessesDurable(): Promise<string[] | null>;
+  getFactoryConfig(): FactoryConfig | null;
+  setFactoryConfig(config: FactoryConfig | null): void;
   getInternalMemberOverrides(): string[];
   setInternalMemberOverrides(members: string[]): void;
   getInternalMemberOverridesDurable(): Promise<string[]>;
@@ -274,6 +297,7 @@ export function createMemoryConfigStore(
     channelHeaderPin?: DurableMap<PersistedScopedFlag>;
     baseModels?: DurableMap<PersistedBaseModel>;
     approvedHarnesses?: DurableMap<PersistedApprovedHarnesses>;
+    factoryConfigs?: DurableMap<PersistedFactoryConfig>;
     internalMemberOverrides?: DurableMap<PersistedInternalMemberOverrides>;
     orgAmbient?: DurableMap<PersistedScopedFlag>;
     interactiveFastMode?: DurableMap<PersistedScopedFlag>;
@@ -306,6 +330,7 @@ export function createMemoryConfigStore(
   const channelHeaderPin = new Map<ScopeId, boolean>();
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
   let approvedHarnesses: string[] | null = null;
+  let factoryConfig: FactoryConfig | null = null;
   let internalMemberOverrides: string[] = [];
   let orgAmbient = true;
   let interactiveFastMode = false;
@@ -330,6 +355,12 @@ export function createMemoryConfigStore(
   const channelHeaderPinStore = opts.channelHeaderPin ?? createMemoryMap<PersistedScopedFlag>();
   const baseModelStore = opts.baseModels ?? createMemoryMap<PersistedBaseModel>();
   const approvedHarnessStore = opts.approvedHarnesses ?? createMemoryMap<PersistedApprovedHarnesses>();
+  const factoryConfigStore = opts.factoryConfigs ?? createMemoryMap<PersistedFactoryConfig>();
+  const toFactoryConfig = (row: PersistedFactoryConfig | null): FactoryConfig | null => {
+    if (!row) return null;
+    const { scopeId: _scopeId, ...config } = row;
+    return config;
+  };
   const internalMemberOverridesStore =
     opts.internalMemberOverrides ?? createMemoryMap<PersistedInternalMemberOverrides>();
   const orgAmbientStore = opts.orgAmbient ?? createMemoryMap<PersistedScopedFlag>();
@@ -494,6 +525,7 @@ export function createMemoryConfigStore(
           for (const r of await channelHeaderPinStore.all()) channelHeaderPin.set(r.scopeId, r.on);
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
           approvedHarnesses = (await approvedHarnessStore.get(org))?.ids ?? null;
+          factoryConfig = toFactoryConfig(await factoryConfigStore.get(org));
           internalMemberOverrides = (await internalMemberOverridesStore.get(org))?.members ?? [];
           orgAmbient = (await orgAmbientStore.get(org))?.on ?? true;
           interactiveFastMode = (await interactiveFastModeStore.get(org))?.on ?? false;
@@ -897,6 +929,14 @@ export function createMemoryConfigStore(
       else persist(`approvedHarnesses:${org}`, "approved harnesses", () => approvedHarnessStore.delete(org));
     },
     getApprovedHarnessesDurable: async () => (await approvedHarnessStore.get(org))?.ids ?? null,
+    getFactoryConfig: () => (factoryConfig ? { ...factoryConfig } : null),
+    setFactoryConfig(config) {
+      const next = config ? { ...config } : null;
+      factoryConfig = next;
+      persist(`factoryConfig:${org}`, "factory config", () =>
+        next ? factoryConfigStore.put(org, { scopeId: org, ...next }) : factoryConfigStore.delete(org),
+      );
+    },
     getInternalMemberOverrides: () => [...internalMemberOverrides],
     setInternalMemberOverrides(members) {
       const next = [...new Set(members.map((m) => m.trim().toLowerCase()).filter(Boolean))];
@@ -1113,6 +1153,7 @@ export function createMemoryConfigStore(
         externalSlack,
         baseModel,
         approved,
+        factoryRow,
         brandingRow,
         orgAmbientRow,
         interactiveFastModeRow,
@@ -1131,6 +1172,7 @@ export function createMemoryConfigStore(
         externalSlackParticipantsStore.get(id),
         baseModelStore.get(id),
         id === org ? approvedHarnessStore.get(org) : null,
+        id === org ? factoryConfigStore.get(org) : null,
         brandingStore.get(id),
         id === org ? orgAmbientStore.get(org) : null,
         id === org ? interactiveFastModeStore.get(org) : null,
@@ -1176,6 +1218,7 @@ export function createMemoryConfigStore(
       if (baseModel) baseModels.set(id, baseModel);
       else baseModels.delete(id);
       if (id === org) approvedHarnesses = approved?.ids ?? null;
+      if (id === org) factoryConfig = toFactoryConfig(factoryRow);
       if (id === org) internalMemberOverrides = internalOverridesRow?.members ?? [];
       if (id === org) orgAmbient = orgAmbientRow?.on ?? true;
       if (id === org) interactiveFastMode = interactiveFastModeRow?.on ?? false;
@@ -1208,6 +1251,7 @@ export function createMemoryConfigStore(
               `interactiveFastMode:${org}`,
               `individualModelAuth:${org}`,
               `autoFlagger:${org}`,
+              `factoryConfig:${org}`,
             ]
           : []),
         `channelHeaderPin:${id}`,

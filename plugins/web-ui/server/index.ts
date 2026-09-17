@@ -1834,6 +1834,18 @@ const apiRoutes: readonly WebRoute[] = [
     handle: serveFileContent,
   },
   {
+    method: "DELETE",
+    path: "/api/files/:id",
+    handle: async (c) => {
+      const { res, user } = c;
+      return relayCore(
+        res,
+        "DELETE",
+        `/v1/files/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
+      );
+    },
+  },
+  {
     method: "GET",
     path: "/api/files",
     handle: async (c) => {

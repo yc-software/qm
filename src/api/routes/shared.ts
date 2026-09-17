@@ -1,5 +1,5 @@
 import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.ts";
-import type { Principal } from "../../types.ts";
+import type { Principal, ScopeId } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { samePerson } from "../../directory/person.ts";
@@ -41,6 +41,13 @@ export async function authorizeAdmin(
   if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) return actor;
   sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
   return null;
+}
+
+export async function isOrgAdmin(deps: ServerDeps, principalId: string, scope: ScopeId): Promise<boolean> {
+  if (!deps.admin || !principalId) return false;
+  const scoped = (await deps.admin.listGrants()).filter((g) => g.scopeId === scope);
+  if (!adminStatusFromGrants(scoped, principalId).isAdmin) return false;
+  return activePrincipal(deps, principalId);
 }
 
 export async function activePrincipal(deps: ServerDeps, principalId: string): Promise<boolean> {
