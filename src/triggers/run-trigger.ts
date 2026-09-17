@@ -198,17 +198,38 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     }
   }
 
+  const currentAudience = currentMembers?.map((member) => ({
+    externalId: member.id,
+    ...(member.displayName ? { displayName: member.displayName } : {}),
+    ...(member.teamIds ? { teamIds: member.teamIds } : {}),
+  }));
   const audience =
     (isScopeFloor || isScopeShared) && members.length
-      ? members.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
+      ? members.map((member) => ({
+          externalId: member.id,
+          ...(member.displayName ? { displayName: member.displayName } : {}),
+          ...(member.teamIds ? { teamIds: member.teamIds } : {}),
+        }))
       : undefined;
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
   const threadRef = spec.threadRef ?? spec.fireKey;
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
   if (ownerKind === "channel") {
-    conversation = { kind: "channel", channelRef: ownerRef, threadRef, ...(audience ? { audience } : {}) };
+    conversation = {
+      kind: "channel",
+      channelRef: ownerRef,
+      threadRef,
+      ...(audience ? { audience } : {}),
+      ...(currentAudience ? { publishMembers: currentAudience } : {}),
+    };
   } else if (ownerKind === "group") {
-    conversation = { kind: "group", channelRef: ownerRef, threadRef, ...(audience ? { audience } : {}) };
+    conversation = {
+      kind: "group",
+      channelRef: ownerRef,
+      threadRef,
+      ...(audience ? { audience } : {}),
+      ...(currentAudience ? { publishMembers: currentAudience } : {}),
+    };
   }
 
   let homeAccess: { ok: boolean; note?: string };

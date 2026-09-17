@@ -616,6 +616,57 @@ test("org env-delivery credentials ride provision env under their envKey — rea
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, "steel-rotated", "keychain is read at provision time, not boot");
 });
 
+test("a scheduled channel turn receives granted env credentials from a complete current roster", async () => {
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+  });
+  const built = buildApp(config);
+  const org = scopeId("org", "default-org");
+  await built.app.upsertDirectory([
+    { principalId: "U1", displayName: "One", type: "internal" },
+    { principalId: "U2", displayName: "Two", type: "internal" },
+  ]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C-scheduled", name: "scheduled", isPrivate: true }],
+    [
+      { channelId: "C-scheduled", principalId: "U1" },
+      { channelId: "C-scheduled", principalId: "U2" },
+    ],
+    1,
+    ["C-scheduled"],
+  );
+  await built.serviceCreds.setServiceCredential(org, {
+    slug: "scheduled-sentinel",
+    name: "Scheduled sentinel",
+    delivery: "env",
+    envKey: "SCHEDULED_SENTINEL_KEY",
+    secret: "scheduled-sentinel-value",
+    host: "",
+  });
+  await grantCred(built.acl, org, "scheduled-sentinel");
+  const captures: ProvisionOptions[] = [];
+  const realProvision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (layers, opts) => {
+    if (opts) captures.push(opts);
+    return realProvision(layers, opts);
+  };
+  const cron = await built.app.createCron({
+    schedule: { firstFireAt: Date.now() },
+    action: "!run printf scheduled",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C-scheduled"),
+    runAs: "scopeFloor",
+    members: [{ id: "U-stale", type: "internal" }],
+  });
+
+  await runNowSettled(built.scheduler, cron.id);
+
+  assert.equal(captures.at(-1)?.env?.SCHEDULED_SENTINEL_KEY, "scheduled-sentinel-value");
+});
+
 test("a disabled or broker-delivery credential never rides provision env", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),

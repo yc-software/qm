@@ -157,6 +157,11 @@ test("managed groups override Slack membership and historical sessions grant no 
       groupMember: async (_groupId: string, principalId: string) => principalId === "outsider",
       channelPrivacy: async (channelId: string) => channelId !== "public-channel",
       list: async () => [{ principalId: "owner" }, { principalId: "outsider" }],
+      conversationMembers: async (kind: "channel" | "group", id: string) => {
+        if (kind === "channel" && id === "private-channel") return [{ principalId: "owner" }];
+        if (kind === "group" && id === "slack-group") return [{ principalId: "outsider" }];
+        return undefined;
+      },
       channelMembership: async (channelId: string, principalId: string) =>
         channelId === "private-channel" ? principalId === "owner" : undefined,
       groupMembership: async (groupId: string, principalId: string) =>
@@ -190,6 +195,31 @@ test("managed groups override Slack membership and historical sessions grant no 
     (await currentMembers("channel:private-channel"))?.map((member) => member.id),
     ["owner"],
   );
+});
+
+test("current scope members require a complete authoritative roster", async () => {
+  const listed = [
+    { principalId: "owner", displayName: "Owner" },
+    { principalId: "filtered", displayName: "Filtered" },
+  ];
+  let authoritative: typeof listed | undefined = [{ principalId: "owner", displayName: "Owner" }];
+  const currentMembers = createCurrentScopeMembers({
+    directory: {
+      channelMember: async () => true,
+      groupMember: async () => true,
+      list: async () => listed,
+      conversationMembers: async () => authoritative,
+    },
+  });
+
+  assert.deepEqual(
+    (await currentMembers("channel:C-private"))?.map((member) => member.id),
+    ["owner"],
+  );
+  authoritative = undefined;
+  assert.equal(await currentMembers("channel:C-private"), undefined);
+  authoritative = [];
+  assert.equal(await currentMembers("channel:C-private"), undefined);
 });
 
 test("capability scope checks follow current shared rosters", async () => {

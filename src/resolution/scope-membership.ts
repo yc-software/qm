@@ -20,6 +20,10 @@ export interface ScopeMembershipDeps {
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     list?(): Promise<Array<{ principalId: string; displayName?: string }>>;
+    conversationMembers?(
+      kind: "channel" | "group",
+      id: string,
+    ): Promise<Array<{ principalId: string; displayName?: string }> | undefined>;
     get?(principalId: string): Promise<{ principalId?: string; slackId?: string } | null>;
   };
   identity?: {
@@ -117,24 +121,15 @@ export function createCurrentScopeMembers(deps: ScopeMembershipDeps): CurrentSco
 
     if (kind === "group" && deps.managedGroups?.recognizes(ref)) {
       const memberIds = await deps.managedGroups.members(ref);
-      return (memberIds ?? []).map((id) => principal(id)).filter((member): member is Principal => member !== null);
+      if (!memberIds?.length) return undefined;
+      const roster = memberIds.map((id) => principal(id));
+      return roster.every((member): member is Principal => member !== null) ? roster : undefined;
     }
 
-    if (!deps.directory?.list) return undefined;
-    if (kind === "channel" && (await deps.directory.channelPrivacy?.(ref)) !== true) return undefined;
-
-    const candidates = await deps.directory.list();
-    const membership = kind === "channel" ? deps.directory.channelMember : deps.directory.groupMember;
-    const included = await Promise.all(
-      candidates.map(async (member) =>
-        (await membership.call(deps.directory, ref, member.principalId))
-          ? principal(member.principalId, member.displayName)
-          : null,
-      ),
-    );
-    const present = included.filter((member): member is Principal => member !== null);
-    if (kind === "group" && present.length === 0) return undefined;
-    return present;
+    const members = await deps.directory?.conversationMembers?.(kind, ref).catch(() => undefined);
+    if (!members?.length) return undefined;
+    const roster = members.map((member) => principal(member.principalId, member.displayName));
+    return roster.every((member): member is Principal => member !== null) ? roster : undefined;
   };
 }
 

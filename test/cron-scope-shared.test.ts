@@ -134,6 +134,59 @@ describe("runTrigger: scopeShared unions the owner's keychain into the scope run
       seen[0]!.conversation.audience?.map((member) => member.externalId),
       ["U3"],
     );
+    assert.deepEqual(
+      seen[0]!.conversation.publishMembers?.map((member) => member.externalId),
+      ["U3"],
+    );
+  });
+
+  it("publishes only a complete current roster, never a stored member snapshot", async () => {
+    const authoritative = [
+      { id: "U-carol", type: "internal" as const },
+      { id: "U-live", type: "internal" as const },
+    ];
+    for (const kind of ["channel", "group"] as const) {
+      for (const runAs of ["owner", "scopeFloor", "scopeShared"] as const) {
+        const { deps, seen } = captureDeps();
+        deps.currentScopeMembers = async () => authoritative;
+        await runTrigger(deps, {
+          owner: "U-carol",
+          ownerScopeId: scopeId(kind, "C-eng"),
+          input: "x",
+          fireKey: `complete-${kind}-${runAs}`,
+          surface: "cron",
+          runAs,
+          members: [{ id: "U-stale", type: "internal" }],
+        });
+        assert.deepEqual(
+          seen[0]!.conversation.publishMembers?.map((member) => member.externalId),
+          ["U-carol", "U-live"],
+        );
+      }
+    }
+
+    const { deps, seen } = captureDeps();
+    deps.currentScopeMembers = async () => undefined;
+    await runTrigger(deps, {
+      owner: "U-carol",
+      ownerScopeId: scopeId("channel", "C-eng"),
+      input: "x",
+      fireKey: "withheld-roster",
+      surface: "cron",
+      members,
+    });
+    assert.equal(seen[0]!.conversation.publishMembers, undefined);
+
+    const dm = captureDeps();
+    dm.deps.currentScopeMembers = async () => authoritative;
+    await runTrigger(dm.deps, {
+      owner: "U-carol",
+      ownerScopeId: scopeId("personal", "U-carol"),
+      input: "x",
+      fireKey: "personal-roster",
+      surface: "cron",
+    });
+    assert.equal(dm.seen[0]!.conversation.publishMembers, undefined);
   });
 });
 

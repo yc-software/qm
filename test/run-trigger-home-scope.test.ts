@@ -19,6 +19,8 @@ function unknownChannelDirectory() {
     listChannelsFor: async (): Promise<{ channelId: string; name: string }[]> => [],
     channelPrivacy: async (): Promise<boolean | undefined> => undefined,
     list: async () => [{ principalId: OWNER, displayName: "Pete" }],
+    conversationMembers: async (): Promise<Array<{ principalId: string; displayName?: string }> | undefined> =>
+      undefined,
     get: async () => null,
   };
 }
@@ -140,6 +142,7 @@ describe("runTrigger home-scope gate for group homes", () => {
         { principalId: OWNER, displayName: "Pete" },
         { principalId: "kim@example.com", displayName: "Kim" },
       ],
+      conversationMembers: async () => [{ principalId: "kim@example.com", displayName: "Kim" }],
     };
     const sessions = {
       listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
