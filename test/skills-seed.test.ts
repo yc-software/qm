@@ -43,6 +43,12 @@ test("installSeedSkills publishes the repository starter catalog into org scope"
   assert.ok(result.installed.includes("google-workspace"));
   assert.ok(result.installed.includes("google-drive-sheets"));
   assert.ok(result.installed.includes("github-gitlab"));
+  assert.ok(result.installed.includes("send"));
+  const github = (await skills.list()).find((s) => s.manifest.name === "github-gitlab")!;
+  assert.equal(
+    github.manifest.files?.find((file) => file.path === "scripts/watch-ci.mjs")?.content,
+    readFileSync("skills-seed/github-gitlab/scripts/watch-ci.mjs", "utf8"),
+  );
   assert.ok(result.installed.includes("taste-skill"));
   assert.ok(result.installed.includes("use-shared-credential"));
 

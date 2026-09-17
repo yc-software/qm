@@ -37,7 +37,11 @@ Never copy tokens into remotes or expose them while checking authentication.
 
 ## Logging in
 
-If `gh auth status` (or `glab auth status`) fails, log in with the native command:
+Use the native login only after an explicit authentication rejection. A TLS timeout,
+connection reset, rate limit, or GitHub server error is not evidence of logout or
+permission expiry. Do not consume another credential grant to repair transport.
+
+For a confirmed missing or expired GitHub login:
 
 ```bash
 gh auth login
@@ -109,3 +113,41 @@ glab mr create --repo GROUP/PROJECT --title "..." --description-file mr.md
 ```
 
 Report the final URL and leave enough context for review.
+
+## Wait for GitHub CI
+
+Use the bundled helper instead of a bare `gh pr checks --watch` or a handwritten
+shell loop. It is one blocking watcher process, not repeated agent turns:
+
+```bash
+node skills/github-gitlab/scripts/watch-ci.mjs --repo OWNER/REPO --pr NUMBER --head REVIEWED_HEAD_SHA
+```
+
+Capture the full head SHA from `gh pr view NUMBER --repo OWNER/REPO --json headRefOid`
+before review. Use that same SHA for the watcher and the final merge gate. Start the
+watcher with the background-process tool and subscribe to its completion. Keep one
+watcher per PR. Set the process lifetime longer than the helper's 30-minute deadline;
+use `--timeout-ms` for a different bounded deadline. Use only credentials authorized
+for that background process; a live foreground grant does not authorize background work.
+
+The helper polls GitHub internally and emits JSON status records. It retries only
+recognized transient transport/server errors with bounded backoff. Pending checks
+remain pending. Real CI failures, authentication/authorization failures, changed heads,
+unknown errors, exhausted retries, and deadline expiry all stop with nonzero status.
+Explicit API rate limits stop as `rate_limited`, not authentication errors.
+Empty check sets, skipped checks, and cancelled checks are not successful evidence.
+Do not interpret an exit code alone as "checks concluded": read the status record.
+Do not suppress a nonzero exit or print a success marker after it. Keep `set -e`.
+
+Success means the checks observed for the expected head passed, not permission to
+merge. Re-read checks and review threads immediately before merging. Wait for async
+reviewers on that exact head; resolve findings and obtain a fresh-context adversarial
+review. After any push or head change, discard old success/review evidence and repeat.
+Only merge when all gates pass, with GitHub's atomic head guard:
+
+```bash
+gh pr merge NUMBER --repo OWNER/REPO --squash --match-head-commit REVIEWED_HEAD_SHA
+```
+
+Never use auto-merge or bypass repository gates. This helper does not retry GitLab
+commands or change their authentication behavior.
