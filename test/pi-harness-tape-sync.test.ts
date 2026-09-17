@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
@@ -292,7 +293,7 @@ test("native document bytes reach the provider on every step without entering th
   const sink: Sink = { entries: [], tape: [] };
   const realFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
-  const dataBase64 = Buffer.from("%PDF-document-fixture").toString("base64");
+  const dataBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body)));
     return sse(textReplyEvents("read the document"));
@@ -311,6 +312,53 @@ test("native document bytes reach the provider on every step without entering th
       !JSON.stringify(requests.at(-1)).includes(dataBase64),
       "reused sessions must clear documents when the audience no longer supplies them",
     );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("Pi request captures exclude document fallback text on Responses routes", async () => {
+  const harness = createPiHarness({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" });
+  const sink: Sink = { entries: [], tape: [] };
+  const captures: unknown[] = [];
+  const realFetch = globalThis.fetch;
+  const requests: unknown[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return sse([
+      { type: "response.created", response: { id: "resp_qa", status: "in_progress" } },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_qa",
+          status: "completed",
+          output: [],
+          usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+        },
+      },
+    ]);
+  }) as typeof fetch;
+  try {
+    await harness.turns.runTurn(
+      turnInput("capture-document-fallback", sink, {
+        documents: [
+          {
+            name: "sample.rtf",
+            mimeType: "application/rtf",
+            dataBase64: (await readFile(new URL("./fixtures/documents/sample.rtf", import.meta.url))).toString(
+              "base64",
+            ),
+          },
+        ],
+        recordLlmRequest: async (capture) => {
+          captures.push(capture);
+        },
+      }),
+    );
+    assert.ok(JSON.stringify(requests).includes("RTF-QUARTZ-731"));
+    assert.ok(captures.length > 0);
+    assert.ok(!JSON.stringify(captures).includes("RTF-QUARTZ-731"));
+    assert.ok(!JSON.stringify(sink.tape).includes("RTF-QUARTZ-731"));
   } finally {
     globalThis.fetch = realFetch;
   }

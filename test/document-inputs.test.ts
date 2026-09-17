@@ -11,7 +11,7 @@ import {
   loadDocumentInputs,
   type DocumentInput,
 } from "../src/core/document-inputs.ts";
-import { sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/harness/pi-harness.ts";
+import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/harness/pi-harness.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
@@ -337,4 +337,50 @@ test("encrypted PDFs do not expose content through text fallback", async () => {
   const text = await documentFallbackText({ name: "encrypted.pdf", mimeType: "application/pdf", dataBase64 });
   assert.match(text, /could not be included/);
   assert.doesNotMatch(text, /QUARTZ-731/);
+});
+
+for (const model of [
+  openai,
+  anthropic,
+  { api: "google-generative-ai", provider: "google", input: ["text", "image"] },
+  { api: "openai-completions", provider: "openai", input: ["text", "image"] },
+]) {
+  test(`${model.api} isolates invalid documents while retaining scanned native PDFs`, async () => {
+    const documents = await Promise.all(
+      ["scanned", "malformed", "encrypted"].map(async (name) => ({
+        name: `${name}.pdf`,
+        mimeType: "application/pdf",
+        dataBase64: (await readFile(new URL(`./fixtures/documents/${name}.pdf`, import.meta.url))).toString("base64"),
+      })),
+    );
+    for (let turn = 0; turn < 2; turn++) {
+      const blocks = JSON.stringify(
+        await documentBlocks(
+          documents.map((document) => ({ ...document })),
+          model,
+        ),
+      );
+      assert.ok(blocks.includes(documents[0]!.dataBase64));
+      for (const document of documents.slice(1)) {
+        assert.ok(!blocks.includes(document.dataBase64));
+        assert.ok(blocks.includes(document.name));
+      }
+      assert.equal((blocks.match(/could not be included/g) ?? []).length, 2);
+    }
+  });
+}
+
+test("output budgeting does not count native document base64 as text tokens", () => {
+  const data = "a".repeat(1_200_000);
+  for (const content of [
+    { type: "input_file", file_data: `data:application/pdf;base64,${data}` },
+    { type: "document", source: { type: "base64", media_type: "application/pdf", data } },
+    { type: "file", file: { file_data: `data:application/pdf;base64,${data}` } },
+    { inlineData: { mimeType: "application/pdf", data } },
+  ]) {
+    const payload = { max_tokens: 1, messages: [{ role: "user", content: [content] }] };
+    const result = guardOutputBudget(payload, { contextWindow: 200_000, maxTokens: 8192 });
+    assert.equal(result.kind, "raised");
+    if (result.kind === "raised") assert.ok(result.estimatedPromptTokens < 2000);
+  }
 });

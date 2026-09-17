@@ -5,6 +5,7 @@ import {
   documentFallbackText,
   documentText,
   isTextDocument,
+  nativeDocumentIsReadable,
   type DocumentInput,
 } from "../core/document-inputs.ts";
 
@@ -56,7 +57,8 @@ export async function documentBlocks(
       : text;
   };
   for (const document of documents) {
-    const format = nativeDocumentFormat(model, document);
+    const candidate = nativeDocumentFormat(model, document);
+    const format = candidate && (await nativeDocumentIsReadable(document, signal)) ? candidate : undefined;
     const ext = documentExtension(document);
     let mimeType = document.mimeType;
     if (ext === "pdf") mimeType = "application/pdf";

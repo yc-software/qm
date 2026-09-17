@@ -1,4 +1,4 @@
-import { documentExtension, documentFallbackText } from "../core/document-inputs.ts";
+import { documentExtension, documentFallbackText, nativeDocumentIsReadable } from "../core/document-inputs.ts";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -1000,7 +1000,11 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const tapePromptParts = [...promptParts];
     let remainingDocumentChars = 100_000;
     for (const document of turn.documents ?? []) {
-      if (documentExtension(document) === "pdf" && ["anthropic", "openai", "google"].includes(model.providerID)) {
+      if (
+        documentExtension(document) === "pdf" &&
+        ["anthropic", "openai", "google"].includes(model.providerID) &&
+        (await nativeDocumentIsReadable(document, turn.cancel))
+      ) {
         promptParts.push({
           type: "file",
           mime: "application/pdf",

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
@@ -542,7 +543,7 @@ test("steering forwards prepared images and file paths while retaining the origi
 });
 
 test("Claude sends documents without persisting their contents in the tape", async () => {
-  const pdf = Buffer.from("private-pdf-bytes").toString("base64");
+  const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
   const secret = "private-document-text";
   let sent = "";
   currentScript = async function* (prompts) {

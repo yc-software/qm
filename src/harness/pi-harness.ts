@@ -1387,7 +1387,13 @@ function estimatePayloadTokens(payload: Record<string, unknown>): number | undef
       const mediaType = (this as { media_type?: unknown } | null)?.media_type;
       const anthropicImage = key === "data" && typeof mediaType === "string" && mediaType.startsWith("image/");
       const openaiImage = (key === "url" || key === "image_url") && value.startsWith("data:image/");
-      return anthropicImage || openaiImage ? IMAGE_STAND_IN : value;
+      const container = this as { media_type?: unknown; mimeType?: unknown; type?: unknown } | null;
+      const nativeDocument =
+        (key === "file_data" && value.startsWith("data:")) ||
+        (key === "data" &&
+          ((container?.type === "base64" && container.media_type === "application/pdf") ||
+            container?.mimeType === "application/pdf"));
+      return anthropicImage || openaiImage || nativeDocument ? IMAGE_STAND_IN : value;
     });
     if (typeof json !== "string") return undefined;
     return Math.ceil(json.length / OUTPUT_GUARD_CHARS_PER_TOKEN);
@@ -1655,6 +1661,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
           const result = prior ? await prior(payload, model) : payload;
+          const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
           let finalPayload = await withDocumentInputs(
             result ?? payload,
             model as DocumentModel,
@@ -1674,7 +1681,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           }
           if (captureRequests) {
             try {
-              ref.llmCapture?.push(sanitizeLlmPayload(finalPayload, model));
+              ref.llmCapture?.push(capturedPayload!);
             } catch (e) {
               swallow("pi: llm request capture", e);
             }

@@ -187,6 +187,17 @@ export function documentText(document: DocumentInput, signal?: AbortSignal): Pro
   return pending;
 }
 
+export async function nativeDocumentIsReadable(document: DocumentInput, signal?: AbortSignal): Promise<boolean> {
+  if (!isTextDocument(document) && !OFFICE_FALLBACK_EXTENSIONS.has(documentExtension(document))) return true;
+  try {
+    await documentText(document, signal);
+    return true;
+  } catch {
+    signal?.throwIfAborted();
+    return false;
+  }
+}
+
 export function boundedDocumentText(text: string): string {
   return text.length > MAX_DOCUMENT_TEXT_CHARS
     ? `${text.slice(0, MAX_DOCUMENT_TEXT_CHARS)}\n[Document text truncated at ${MAX_DOCUMENT_TEXT_CHARS} characters.]`
