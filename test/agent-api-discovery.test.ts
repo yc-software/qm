@@ -16,11 +16,12 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
 
-async function start() {
+async function start(swarmsEnabled = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "agent-apis-")),
       signingSecret: SECRET,
+      swarmsEnabled,
     }),
   );
   const server = createServer(built.app, {
@@ -240,5 +241,30 @@ test("discovery includes admin routes for a verified human thread reply", async 
     assert.ok(!paths(member.body).includes("/v1/admin/scopes"));
   } finally {
     await s.close();
+  }
+});
+
+test("disabled swarms are absent from discovery and reject direct API calls", async () => {
+  const { base, built, close } = await start(false);
+  try {
+    assert.equal(built.app.swarms, undefined);
+    const token = await capFor("U1");
+    const { status, body } = await listApis(base, token);
+    assert.equal(status, 200);
+    assert.ok(!paths(body).includes("/v1/swarm"));
+    assert.ok(body.guidance.every((line: string) => !line.includes("Swarm")));
+    for (const method of ["GET", "POST"]) {
+      const response = await fetch(`${base}/v1/swarm`, {
+        method,
+        headers: { "x-agent-capability": token, "content-type": "application/json" },
+        ...(method === "POST"
+          ? { body: JSON.stringify({ action: "spawn", requestId: "disabled", text: "work" }) }
+          : {}),
+      });
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "swarm service unavailable" });
+    }
+  } finally {
+    await close();
   }
 });

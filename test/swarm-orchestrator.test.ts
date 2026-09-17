@@ -490,3 +490,66 @@ test("a resolved command approval informs the model without changing its request
     await built.runtime.stop();
   }
 });
+
+test("disabled swarms park queued notifications once without running the model or writing failures", async () => {
+  const built = buildApp(testConfig({ swarmsEnabled: false }));
+  try {
+    const rootTurn = await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "disabled-swarm-root" },
+      origin: { kind: "human" },
+      text: "Initialize",
+    });
+    assert.equal(rootTurn.status, "ok");
+    const root = (await built.sessions.get(rootTurn.sessionId!))!;
+    const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
+    let swarmModelCalls = 0;
+    exerciseTurn = async (turn) => {
+      if (turn.input.includes("disabled-swarm-message")) swarmModelCalls++;
+    };
+    const { run } = await built.runs.enqueue({
+      sessionId: root.threadRef,
+      request: {
+        ...rootRun.request,
+        surface: "swarm",
+        turnWallClockMs: 600_000,
+        origin: { kind: "automation" },
+        text: "disabled-swarm-message",
+        swarm: { swarmId: root.id, recipientId: root.id, messageId: "queued" },
+      },
+    });
+    built.runtime.start();
+    const completed = await built.runs.waitFor(run.id, 15_000);
+    assert.equal(completed.status, "failed");
+    assert.equal(completed.attempts, 1);
+    assert.equal(completed.result?.reason, "swarm service unavailable");
+    assert.equal(swarmModelCalls, 0);
+    assert.equal(runResultDelivery(completed), null);
+    const entries = await built.sessions.getEntries(root.id);
+    assert.ok(!entries.some((entry) => JSON.stringify(entry.payload).includes("turn_failure")));
+    for (const [surface, threadRef] of [
+      ["swarm", "worker"],
+      ["web", "swarm:root:worker"],
+    ]) {
+      const { run: manual } = await built.runs.enqueue({
+        sessionId: threadRef!,
+        request: {
+          ...rootRun.request,
+          surface: surface!,
+          conversation: { ...rootRun.request.conversation, threadRef: threadRef! },
+          origin: { kind: "human" },
+          text: "disabled-swarm-message",
+        },
+      });
+      const rejected = await built.runs.waitFor(manual.id, 15_000);
+      assert.equal(rejected.status, "failed");
+      assert.equal(rejected.attempts, 1);
+      assert.equal(rejected.result?.reason, "swarm service unavailable");
+      assert.equal(swarmModelCalls, 0);
+    }
+  } finally {
+    exerciseTurn = undefined;
+    await built.runtime.stop();
+  }
+});

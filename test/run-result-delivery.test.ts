@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
+import {
+  runResultDelivery,
+  wireRunResultDeliveries,
+  recordRunFailureEntry,
+  type TurnFailureSessions,
+} from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
@@ -370,4 +375,15 @@ test("private session turns cannot deliver even with a stale destination", () =>
     runResultDelivery(run({ request: { ...turn("private", "C9:171.001"), privateSessionMessage: true } })),
     null,
   );
+});
+
+test("failed internal swarm notifications never append user-facing failure entries", async () => {
+  const failed = run({ status: "failed", result: { status: "failed", reason: "swarm service unavailable" } });
+  failed.request.swarm = { swarmId: "root", recipientId: "root", messageId: "message" };
+  const sessions = {
+    getByThread: async () => {
+      throw new Error("must not access the transcript");
+    },
+  } as unknown as TurnFailureSessions;
+  assert.equal(await recordRunFailureEntry(sessions, failed), false);
 });

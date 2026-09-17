@@ -229,3 +229,9 @@ exercise the HTTP spawn/reply flow across an application restart with real durab
 state. These tests use deterministic model and sandbox doubles; live provider and
 model acceptance remains a separate deployment check. The agent-board UI is
 intentionally deferred.
+
+Operators can set `SWARMS_ENABLED=false` to disable the swarm service, API,
+agent discovery, and background reconciliation. Existing swarm records and
+computers are retained. Already queued swarm turns fail without model execution
+and are not retried. The default is `true`. Restart core and workers after changing
+this deployment setting.

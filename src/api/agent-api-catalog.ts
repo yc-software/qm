@@ -10,6 +10,7 @@ interface AgentApiRoute {
 interface AgentApiView {
   claims: CapabilityClaims;
   isAdmin: boolean;
+  swarmsEnabled: boolean;
 }
 
 interface AgentApiFamily {
@@ -35,6 +36,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (method, path) => path === "/v1/swarm" && (method === "GET" || method === "POST"),
+    when: (view) => view.swarmsEnabled,
     guidance:
       "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. An optional forumSandboxId names an existing shared computer, selected explicitly per command with execute's sandbox_id.",
     routes: [
@@ -907,10 +909,15 @@ export interface AgentApiListing {
   guidance: string[];
 }
 
-export function renderAgentApis(claims: CapabilityClaims, admin: { isAdmin: boolean; role?: string }): AgentApiListing {
+export function renderAgentApis(
+  claims: CapabilityClaims,
+  admin: { isAdmin: boolean; role?: string },
+  features: { swarmsEnabled: boolean },
+): AgentApiListing {
   const view: AgentApiView = {
     claims,
     isAdmin: admin.isAdmin,
+    swarmsEnabled: features.swarmsEnabled,
   };
   const visible = [...FAMILIES, WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
   return {

@@ -45,6 +45,7 @@ export interface Config {
   slackContextSource?: SlackContextSource;
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
+  swarmsEnabled?: boolean;
   swarmDefaults?: SwarmSettings;
   production: boolean;
   allowUnauthenticatedCore: boolean;
@@ -1376,6 +1377,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     execTimeoutMaxMs:
       (numEnvStrict("EXEC_TIMEOUT_MAX_SEC", env.EXEC_TIMEOUT_MAX_SEC) ?? CONFIG_DEFAULTS.execTimeoutMaxSec) * 1000,
     turnWallClockMs,
+    swarmsEnabled: boolEnvStrict("SWARMS_ENABLED", env.SWARMS_ENABLED) ?? true,
     swarmDefaults,
     runMaxAgeMs,
     runWaitMs: (turnWallClockMs > 0 ? turnWallClockMs : runMaxAgeMs) + 60_000,

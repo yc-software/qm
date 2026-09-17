@@ -1353,7 +1353,7 @@ export function buildApp(
   };
   const swarmStoreKind = config.databaseUrl ? "postgres" : "memory";
   const swarms =
-    config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
+    config.swarmsEnabled !== false && config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
       ? createSwarmService({
           defaults: config.swarmDefaults,
           store: createSwarmStore(artifactMap<SwarmStorage>("swarms"), {
