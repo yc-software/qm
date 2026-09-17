@@ -112,6 +112,10 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
     },
     shadowed: [],
   } as unknown as SkillResolution;
+  const unrelated = structuredClone(resolution);
+  unrelated.skill!.id = "other";
+  unrelated.skill!.manifest.name = "unrelated";
+  unrelated.skill!.pack = { packId: "other-pack", commit: "c", upstreamName: "unrelated" };
   const handle = { id: "box", rootDir: "/workspace" };
   const turn = createTurnSandboxes({
     deps: {
@@ -142,8 +146,8 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
     connectorEnv: {},
     ownerEnvCredentialIds: [],
     credentialCutoverServices: [],
-    visibleSkills: [resolution],
-    visibleSkillsForTurn: async () => [resolution],
+    visibleSkills: [resolution, unrelated],
+    visibleSkillsForTurn: async () => [resolution, unrelated],
     skillMaterializer: createSkillMaterializer(),
     emitGapWork: () => {},
     perf: { credsMs: 0 },
@@ -154,6 +158,8 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
   resolution = structuredClone(resolution);
   resolution.skill!.manifest.files![0]!.content = "v2";
   assert.equal((await turn.readSkill("skill://source-helper/references/example.txt")).content, "v2");
+  await turn.provision();
+  assert.equal(files.size, 0);
   await turn.ensureSkillTree("source-helper");
   assert.equal(provisions, 1);
   assert.equal(files.get("skills/source-helper/references/example.txt"), "v2");
@@ -164,9 +170,16 @@ test("a source-only read avoids sandbox work and a subsequent asset request mate
   resolution.screenedBundles = [
     { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
   ];
-  await turn.ensureSkillTree(".packs", "resource-1");
+  const beforeResource = new Map(files);
+  await turn.provisionResource("resource-1");
+  assert.deepEqual(files, beforeResource);
+  await turn.ensureSkillTree(".packs/pack", "resource-1");
   assert.deepEqual(sandboxIds, [undefined, "resource-1"]);
   assert.equal(files.get("skills/.packs/pack/lib.txt"), "PACK_RESOURCE");
+  assert.equal(
+    [...files.keys()].some((path) => path.startsWith("skills/unrelated/")),
+    false,
+  );
 });
 
 test("pack assets remain readable and executable on later turns after source-only reads", async (t) => {

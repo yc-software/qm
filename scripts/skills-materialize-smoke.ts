@@ -5,7 +5,7 @@ import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
-import { materializeSkillIndex, materializeSkillTree } from "../src/skills/materialize.ts";
+import { reconcileSkillIndex, materializeSkillTree } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 
@@ -40,15 +40,15 @@ try {
   ]);
   const light = res("plain-skill", "# Plain\njust instructions");
 
-  console.log("materializeSkillIndex (eager, bodies only) …");
-  await materializeSkillIndex(sb, h, [heavy, light]);
-  assert((await sb.readFile(h, "skills/popular-web-designs/SKILL.md"))?.includes("entry point"), "heavy SKILL.md laid");
-  assert((await sb.readFile(h, "skills/plain-skill/SKILL.md"))?.includes("just instructions"), "light SKILL.md laid");
+  console.log("reconcileSkillIndex (ownership only) …");
+  await reconcileSkillIndex(sb, h, [heavy, light]);
+  assert((await sb.readFile(h, "skills/popular-web-designs/SKILL.md")) === null, "heavy body stays in core");
+  assert((await sb.readFile(h, "skills/plain-skill/SKILL.md")) === null, "unused body stays in core");
   assert(
     (await sb.readFile(h, "skills/popular-web-designs/scripts/render.py")) === null,
     "asset NOT laid by index (lazy)",
   );
-  console.log("  ok: bodies present, assets absent");
+  console.log("  ok: no skill content copied");
 
   console.log("materializeSkillTree (lazy, assets + bundle, one tar) …");
   const b = bundle("pack1", [{ path: "lib/cite.mjs", content: "export const cite = 1\n" }]);
@@ -61,7 +61,10 @@ try {
     (await sb.readFile(h, "skills/popular-web-designs/references/catalog.md"))?.includes("catalog"),
     "ref laid lazily",
   );
-  assert((await sb.readFile(h, "lib/cite.mjs"))?.includes("cite"), "pack bundle overlaid at repo-relative path");
+  assert(
+    (await sb.readFile(h, "skills/.packs/pack1/lib/cite.mjs"))?.includes("cite"),
+    "pack bundle overlaid at repo-relative path",
+  );
   assert((await sb.readFile(h, "skills/popular-web-designs/.tree")) !== null, "tree marker written");
   console.log("  ok: assets + bundle landed via tar");
 

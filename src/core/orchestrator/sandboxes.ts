@@ -78,7 +78,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     credentialCutoverServices,
     quarantinedServices,
     cutoverModeOf,
-    visibleSkills,
     visibleSkillsForTurn,
     skillMaterializer,
     emitGapWork,
@@ -302,15 +301,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         emit("proc_reconcile", procReconcileStart, Date.now());
       }
     }
-    if (deps.skills) {
-      const materializeStart = Date.now();
-      try {
-        await skillMaterializer.materializeIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
-      } finally {
-        emit("skills_materialize", materializeStart, Date.now());
-        box.materializeMs = Date.now() - materializeStart;
-      }
-    }
     box.handle = handle;
     return handle;
   };
@@ -370,10 +360,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const ensureSkillTree = async (skillDir: string, sandboxId?: string): Promise<void> => {
     const current = await visibleSkillsForTurn();
     const requested = current.filter(
-      (r) => r.skill && (skillDir === ".packs" ? r.skill.pack : r.skill.manifest.name === skillDir),
+      (r) =>
+        r.skill &&
+        (skillDir.startsWith(".packs/")
+          ? r.skill.pack?.packId === skillDir.slice(".packs/".length)
+          : r.skill.manifest.name === skillDir),
     );
-    if (!requested.length) return;
     const handle = sandboxId ? await provisionResource(sandboxId) : await provision();
+    await skillMaterializer.reconcileIndex(deps.sandbox, handle, current, visibleSkillsForTurn);
     for (const r of requested) {
       await materializeSkillTree(handle, r, sandboxId);
     }
@@ -397,8 +391,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       resourcePendingHandles.set(id, handle);
       await prepareCredentials(handle, emitGapWork);
       await prepareTurnFiles(handle);
-      if (deps.skills)
-        await skillMaterializer.materializeIndex(deps.sandbox, handle, visibleSkills, visibleSkillsForTurn);
       resourceHandles.set(id, handle);
       resourcePendingHandles.delete(id);
       return handle;

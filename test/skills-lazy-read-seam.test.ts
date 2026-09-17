@@ -102,3 +102,12 @@ test("a background job that runs a skill's script materializes its tree first to
   assert.equal(r.status.state, "exited");
   assert.equal(r.output, "ran", "the job ran cleanly because the assets were laid before it started");
 });
+
+test("pack file access selects only the named pack", async () => {
+  const seen: string[] = [];
+  const tc = ctx((dir) => seen.push(dir));
+  await tc.read("skills/.packs/selected/reference.txt");
+  await tc.execute("python skills/.packs/selected/script.py");
+  await tc.backgroundStart("sh skills/.packs/selected/job.sh");
+  assert.deepEqual(seen, [".packs/selected", ".packs/selected", ".packs/selected"]);
+});

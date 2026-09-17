@@ -77,13 +77,14 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
 
-const SKILL_FILE_RE = /^(?:\.\/)?skills\/([^/]+)\/.+$/;
+const SKILL_FILE_RE = /^(?:\.\/)?skills\/(\.packs\/[^/]+|[^/]+)\/.+$/;
 function skillTreeDirFor(path: string): string | null {
   const m = SKILL_FILE_RE.exec(path);
   return m ? m[1]! : null;
 }
 
-const SKILL_DIR_IN_COMMAND_RE = /(?:^|[\s'"=(&|;])(?:\.\/)?skills\/([^/\s'"&|;)]+)(?=[/\s'"&|;)]|$)/g;
+const SKILL_DIR_IN_COMMAND_RE =
+  /(?:^|[\s'"=(&|;])(?:\.\/)?skills\/(\.packs\/[^/\s'"&|;)]+|[^/\s'"&|;)]+)(?=[/\s'"&|;)]|$)/g;
 function skillTreeDirsInCommand(command: string): string[] {
   const dirs = new Set<string>();
   for (const m of command.matchAll(SKILL_DIR_IN_COMMAND_RE)) dirs.add(m[1]!);

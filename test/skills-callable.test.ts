@@ -69,29 +69,30 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
   assert.doesNotMatch(sys.reply ?? "", /make-digest/);
 });
 
-test("the next provision reconciles the index after the last visible skill is archived", async () => {
+test("ordinary sandbox work never synchronizes the visible skill catalog", async () => {
   const { app, skills, sandbox } = freshApp();
-  const skill = await publishPersonalSkill(skills);
-  await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cleanup-1" },
-    text: "!read skills/make-digest/SKILL.md",
-  } as TurnRequest);
-
-  const removed: string[] = [];
-  const originalRemove = sandbox.removeDir.bind(sandbox);
-  sandbox.removeDir = async (handle, path) => {
-    removed.push(path);
-    await originalRemove(handle, path);
+  await publishPersonalSkill(skills);
+  const touched: string[] = [];
+  const read = sandbox.readFile.bind(sandbox);
+  sandbox.readFile = async (handle, path) => {
+    if (path.startsWith("skills/")) touched.push(path);
+    return read(handle, path);
   };
-  await skills.archive(skill.id);
+  const write = sandbox.writeFile.bind(sandbox);
+  sandbox.writeFile = async (handle, path, content) => {
+    if (path.startsWith("skills/")) touched.push(path);
+    return write(handle, path, content);
+  };
+  const remove = sandbox.removeDir.bind(sandbox);
+  sandbox.removeDir = async (handle, path) => {
+    if (path.startsWith("skills/")) touched.push(path);
+    return remove(handle, path);
+  };
   await app.turn({
     surface: "test",
     actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:cleanup-2" },
+    conversation: { kind: "dm", threadRef: "dm:U1:no-sync" },
     text: "!read missing.txt",
   } as TurnRequest);
-
-  assert.ok(removed.some((path) => path === "skills/make-digest" || path.startsWith("skills/make-digest/")));
+  assert.deepEqual(touched, []);
 });

@@ -18,7 +18,7 @@ const SKILL_PACKS_DIR = `${SKILLS_DIR}/.packs`;
 export { SKILLS_DIR } from "./materialization-paths.ts";
 
 export interface SkillMaterializer {
-  materializeIndex(
+  reconcileIndex(
     sandbox: Sandbox,
     handle: SandboxHandle,
     resolved: SkillResolution[],
@@ -46,7 +46,7 @@ function indexHash(resolved: SkillResolution[]): string {
   const h = createHash("sha256");
   const entries = resolved
     .filter((r) => r.skill)
-    .map((r) => `${r.skill!.manifest.name}\0${r.skill!.scopeId}\0${r.skill!.id}\0${renderSkillBody(r)}`)
+    .map((r) => `${r.skill!.manifest.name}\0${r.skill!.scopeId}\0${r.skill!.id}`)
     .sort();
   for (const e of entries) {
     h.update(e);
@@ -213,7 +213,7 @@ async function layFiles(sandbox: Sandbox, handle: SandboxHandle, entries: LayEnt
   for (const e of entries) await sandbox.writeFile(handle, e.path, e.content);
 }
 
-async function materializeSkillIndexUnlocked(
+async function reconcileSkillIndexUnlocked(
   sandbox: Sandbox,
   handle: SandboxHandle,
   resolved: SkillResolution[],
@@ -261,13 +261,6 @@ async function materializeSkillIndexUnlocked(
   }
 
   const entries: LayEntry[] = [];
-  for (const r of resolved) {
-    if (!r.skill) continue;
-    entries.push({
-      path: `${SKILLS_DIR}/${safeSkillDirName(r.skill.manifest.name)}/SKILL.md`,
-      content: renderSkillBody(r),
-    });
-  }
   entries.push({
     path: INDEX_MARKER,
     content: JSON.stringify({
@@ -377,10 +370,10 @@ export function createSkillMaterializer(advisoryLock?: AdvisoryLock): SkillMater
     return queue(key, () => advisoryLock?.withLock(key, fn) ?? fn());
   };
   return {
-    materializeIndex(sandbox, handle, resolved, current) {
+    reconcileIndex(sandbox, handle, resolved, current) {
       return locked(handle, async () => {
         const latest = current ? await current() : resolved;
-        await materializeSkillIndexUnlocked(sandbox, handle, latest);
+        await reconcileSkillIndexUnlocked(sandbox, handle, latest);
       });
     },
     materializeTree(sandbox, handle, resolution, bundles = [], current) {
@@ -394,12 +387,12 @@ export function createSkillMaterializer(advisoryLock?: AdvisoryLock): SkillMater
 
 const localMaterializer = createSkillMaterializer();
 
-export function materializeSkillIndex(
+export function reconcileSkillIndex(
   sandbox: Sandbox,
   handle: SandboxHandle,
   resolved: SkillResolution[],
 ): Promise<void> {
-  return localMaterializer.materializeIndex(sandbox, handle, resolved);
+  return localMaterializer.reconcileIndex(sandbox, handle, resolved);
 }
 
 export function materializeSkillTree(

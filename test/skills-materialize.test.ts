@@ -4,7 +4,7 @@ import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "..
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import {
   createSkillMaterializer,
-  materializeSkillIndex,
+  reconcileSkillIndex,
   materializeSkillTree,
   safeSkillDirName,
 } from "../src/skills/materialize.ts";
@@ -53,81 +53,81 @@ test("materialized skill directory names are validated and never lossy", () => {
   assert.throws(() => safeSkillDirName(".."), /skill name must/);
 });
 
-test("materializeSkillIndex lays only each SKILL.md body + an index marker", async () => {
+test("reconcileSkillIndex records ownership without copying any skill content", async () => {
   const { sandbox, files, calls } = fakeSandbox();
-  await materializeSkillIndex(sandbox, handle, [res("alpha", "A"), res("beta", "B")]);
+  await reconcileSkillIndex(sandbox, handle, [res("alpha", "A"), res("beta", "B")]);
 
-  assert.equal(files.get("skills/alpha/SKILL.md"), "A");
-  assert.equal(files.get("skills/beta/SKILL.md"), "B");
+  assert.equal(files.has("skills/alpha/SKILL.md"), false);
+  assert.equal(files.has("skills/beta/SKILL.md"), false);
   assert.ok(files.has("skills/.index"), "an index marker is written");
-  assert.equal(calls.writes, 3, "2 SKILL.md bodies + 1 marker — no asset writes");
+  assert.equal(calls.writes, 1);
 });
 
-test("materializeSkillIndex does NOT lay a skill's asset tree (that's lazy)", async () => {
+test("reconcileSkillIndex does NOT lay a skill's asset tree (that's lazy)", async () => {
   const { sandbox, files } = fakeSandbox();
-  await materializeSkillIndex(sandbox, handle, [
+  await reconcileSkillIndex(sandbox, handle, [
     res("gamma", "G", [{ path: "scripts/hello.py", content: "print('hi')" }]),
   ]);
 
-  assert.equal(files.get("skills/gamma/SKILL.md"), "G", "the body is eager");
+  assert.equal(files.has("skills/gamma/SKILL.md"), false);
   assert.equal(files.has("skills/gamma/scripts/hello.py"), false, "the asset is NOT laid until first read");
 });
 
-test("materializeSkillIndex SKIPS when the body set is unchanged (order-independent)", async () => {
+test("reconcileSkillIndex SKIPS when the body set is unchanged (order-independent)", async () => {
   const { sandbox, calls } = fakeSandbox();
-  await materializeSkillIndex(sandbox, handle, [res("alpha", "A"), res("beta", "B")]);
+  await reconcileSkillIndex(sandbox, handle, [res("alpha", "A"), res("beta", "B")]);
   const writes = calls.writes;
 
-  await materializeSkillIndex(sandbox, handle, [res("beta", "B"), res("alpha", "A")]);
+  await reconcileSkillIndex(sandbox, handle, [res("beta", "B"), res("alpha", "A")]);
   assert.equal(calls.writes, writes, "no rewrite on a matching body set");
 });
 
-test("materializeSkillIndex re-lays when a body changes", async () => {
+test("reconcileSkillIndex ignores body changes until that skill is invoked", async () => {
   const { sandbox, files, calls } = fakeSandbox();
-  await materializeSkillIndex(sandbox, handle, [res("alpha", "A")]);
+  await reconcileSkillIndex(sandbox, handle, [res("alpha", "A")]);
   const writes = calls.writes;
-  await materializeSkillIndex(sandbox, handle, [res("alpha", "A2")]);
-  assert.ok(calls.writes > writes, "a changed body busts the index marker");
-  assert.equal(files.get("skills/alpha/SKILL.md"), "A2");
+  await reconcileSkillIndex(sandbox, handle, [res("alpha", "A2")]);
+  assert.equal(calls.writes, writes);
+  assert.equal(files.has("skills/alpha/SKILL.md"), false);
 });
 
-test("materializeSkillIndex does NOT re-lay when only an asset changes (asset is not in the index hash)", async () => {
+test("reconcileSkillIndex does NOT re-lay when only an asset changes (asset is not in the index hash)", async () => {
   const { sandbox, calls } = fakeSandbox();
-  await materializeSkillIndex(sandbox, handle, [res("gamma", "G", [{ path: "s.py", content: "v1" }])]);
+  await reconcileSkillIndex(sandbox, handle, [res("gamma", "G", [{ path: "s.py", content: "v1" }])]);
   const writes = calls.writes;
-  await materializeSkillIndex(sandbox, handle, [res("gamma", "G", [{ path: "s.py", content: "v2" }])]);
+  await reconcileSkillIndex(sandbox, handle, [res("gamma", "G", [{ path: "s.py", content: "v2" }])]);
   assert.equal(calls.writes, writes, "asset-only change doesn't touch the eager index");
 });
 
-test("materializeSkillIndex removes an archived skill's materialized tree", async () => {
+test("reconcileSkillIndex removes an archived skill's materialized tree", async () => {
   const { sandbox, files, calls } = fakeSandbox();
   const alpha = res("alpha", "A", [{ path: "asset.txt", content: "asset" }]);
-  await materializeSkillIndex(sandbox, handle, [alpha]);
+  await reconcileSkillIndex(sandbox, handle, [alpha]);
   await materializeSkillTree(sandbox, handle, alpha, [bundle("p", [{ path: "lib/alpha.mjs", content: "shared" }])]);
 
-  await materializeSkillIndex(sandbox, handle, []);
+  await reconcileSkillIndex(sandbox, handle, []);
   assert.equal(files.has("skills/alpha/SKILL.md"), false);
   assert.equal(files.has("skills/alpha/asset.txt"), false);
   assert.equal(files.has("lib/alpha.mjs"), false);
 
   const removes = calls.removes;
-  await materializeSkillIndex(sandbox, handle, []);
+  await reconcileSkillIndex(sandbox, handle, []);
   assert.equal(calls.removes, removes, "the reconciled marker makes the next pass idempotent");
 });
 
-test("materializeSkillIndex migrates a legacy hash marker without retaining old skill paths", async () => {
+test("reconcileSkillIndex migrates a legacy hash marker without retaining old skill paths", async () => {
   const { sandbox, files } = fakeSandbox();
   const alpha = res("alpha", "A");
-  await materializeSkillIndex(sandbox, handle, [alpha]);
+  await reconcileSkillIndex(sandbox, handle, [alpha]);
   const state = JSON.parse(files.get("skills/.index")!) as { hash: string };
   files.set("skills/.index", state.hash);
   files.set("skills/removed/SKILL.md", "removed");
   files.set("skills/removed/asset.txt", "stale");
 
-  await materializeSkillIndex(sandbox, handle, [alpha]);
+  await reconcileSkillIndex(sandbox, handle, [alpha]);
   assert.equal(files.has("skills/removed/SKILL.md"), false);
   assert.equal(files.has("skills/removed/asset.txt"), false);
-  assert.equal(files.get("skills/alpha/SKILL.md"), "A");
+  assert.equal(files.has("skills/alpha/SKILL.md"), false);
   const migrated = JSON.parse(files.get("skills/.index")!);
   assert.equal(migrated.version, 2);
   assert.equal(migrated.legacyExternalPathsPreserved, true);
@@ -137,7 +137,7 @@ test("legacy migration cleans the managed skills namespace but preserves unknown
   const { sandbox, files } = fakeSandbox();
   const alpha = res("alpha", "A");
   const currentBundle = bundle("p", [{ path: "lib/current.mjs", content: "current" }]);
-  await materializeSkillIndex(sandbox, handle, [alpha]);
+  await reconcileSkillIndex(sandbox, handle, [alpha]);
   await materializeSkillTree(sandbox, handle, alpha, [currentBundle]);
   const index = JSON.parse(files.get("skills/.index")!) as { hash: string };
   files.set("skills/.index", index.hash);
@@ -145,7 +145,7 @@ test("legacy migration cleans the managed skills namespace but preserves unknown
   files.set("skills/.packs/p/lib/current.mjs", "stale known content");
   files.set("lib/unknown-pre-v1.mjs", "ownership unknowable");
 
-  await materializeSkillIndex(sandbox, handle, [alpha]);
+  await reconcileSkillIndex(sandbox, handle, [alpha]);
   await materializeSkillTree(sandbox, handle, alpha, [currentBundle]);
   assert.equal(files.has("skills/removed/stale.txt"), false);
   assert.equal(
@@ -156,7 +156,7 @@ test("legacy migration cleans the managed skills namespace but preserves unknown
   assert.equal(files.get("lib/unknown-pre-v1.mjs"), "ownership unknowable");
   assert.equal(JSON.parse(files.get("skills/.index")!).legacyExternalPathsPreserved, true);
 
-  await materializeSkillIndex(sandbox, handle, [res("alpha", "A2")]);
+  await reconcileSkillIndex(sandbox, handle, [res("alpha", "A2")]);
   assert.equal(
     JSON.parse(files.get("skills/.index")!).legacyExternalPathsPreserved,
     true,
@@ -346,11 +346,11 @@ test("fresh reconciliation prevents an older turn from regressing a newer projec
   const olderTurn = createSkillMaterializer(fleetLock);
   const current = res("gamma", "G3", [{ path: "s.py", content: "v3" }]);
 
-  await newerTurn.materializeIndex(sandbox, handle, [current], async () => [current]);
+  await newerTurn.reconcileIndex(sandbox, handle, [current], async () => [current]);
   await newerTurn.materializeTree(sandbox, handle, current, [], async () => ({ resolution: current, bundles: [] }));
   const removes = calls.removes;
 
-  await olderTurn.materializeIndex(sandbox, handle, [], async () => [current]);
+  await olderTurn.reconcileIndex(sandbox, handle, [], async () => [current]);
   await olderTurn.materializeTree(
     sandbox,
     handle,
@@ -382,7 +382,7 @@ test("materializeSkillTree never lays bundle content over core marker paths", as
   const { sandbox, files } = fakeSandbox();
   const alpha = res("alpha", "A");
   const beta = res("beta", "B");
-  await materializeSkillIndex(sandbox, handle, [alpha, beta]);
+  await reconcileSkillIndex(sandbox, handle, [alpha, beta]);
   files.set("keep.txt", "valuable");
   const forged = JSON.stringify({
     version: 1,
@@ -407,7 +407,7 @@ test("materializeSkillTree never lays bundle content over core marker paths", as
 test("materializeSkillTree never trusts a pre-hardening JSON delete manifest", async () => {
   const { sandbox, files } = fakeSandbox();
   const alpha = res("alpha", "A");
-  await materializeSkillIndex(sandbox, handle, [alpha]);
+  await reconcileSkillIndex(sandbox, handle, [alpha]);
   files.set("keep.txt", "valuable");
   files.set(
     "skills/alpha/.tree",
@@ -442,7 +442,7 @@ test("materializeSkillTree removes stale bundle paths but preserves another curr
   const { sandbox, files } = fakeSandbox();
   const alpha = res("alpha", "A");
   const beta = res("beta", "B");
-  await materializeSkillIndex(sandbox, handle, [alpha, beta]);
+  await reconcileSkillIndex(sandbox, handle, [alpha, beta]);
   await materializeSkillTree(sandbox, handle, beta, [
     bundle("shared-pack", [{ path: "lib/shared.mjs", content: "shared" }]),
   ]);
@@ -501,7 +501,7 @@ test("materializeSkillTree uses importFiles (one batch) when the backend offers 
   assert.equal(files.get("skills/gamma/b.py"), "B");
 });
 
-test("switching a same-named skill source removes prior private assets before any command", async () => {
+test("reconciling a same-named skill source removes prior private assets before invocation", async () => {
   const { sandbox, files, calls } = fakeSandbox();
   const privateSkill = res(
     "deploy",
@@ -512,19 +512,19 @@ test("switching a same-named skill source removes prior private assets before an
   Object.assign(privateSkill.skill!, { id: "private", scopeId: "personal:U1" });
   const orgSkill = res("deploy", "Same instructions");
   Object.assign(orgSkill.skill!, { id: "public", scopeId: "org:acme" });
-  await materializeSkillIndex(sandbox, handle, [privateSkill]);
+  await reconcileSkillIndex(sandbox, handle, [privateSkill]);
   await materializeSkillTree(sandbox, handle, privateSkill, [
     bundle("private-pack", [{ path: "private-lib.txt", content: "PRIVATE_PACK" }]),
   ]);
   assert.ok([...files.values()].some((body) => body.includes("PRIVATE_ASSET")));
   assert.ok([...files.values()].some((body) => body.includes("PRIVATE_PACK")));
-  await materializeSkillIndex(sandbox, handle, [orgSkill]);
-  assert.equal(files.get("skills/deploy/SKILL.md"), "Same instructions");
+  await reconcileSkillIndex(sandbox, handle, [orgSkill]);
+  assert.equal(files.has("skills/deploy/SKILL.md"), false);
   assert.equal(
     [...files.values()].some((body) => body.includes("PRIVATE_ASSET") || body.includes("PRIVATE_PACK")),
     false,
   );
   const writes = calls.writes;
-  await materializeSkillIndex(sandbox, handle, [orgSkill]);
+  await reconcileSkillIndex(sandbox, handle, [orgSkill]);
   assert.equal(calls.writes, writes);
 });
