@@ -1931,6 +1931,9 @@ qm-markdown .tok-in {
 .user-bubble > .pin-content {
   display: flow-root;
 }
+.user-bubble :is(markdown-block, qm-markdown) p {
+  line-height: inherit;
+}
 .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
   position: relative;
   max-height: 2lh;
