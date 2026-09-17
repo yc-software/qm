@@ -794,7 +794,24 @@ for (const location of [
     assert.equal(read.status, "ok", read.reason);
     assert.doesNotMatch(read.reply ?? "", /!security-risk|!security-screen-unavailable/);
     assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
+    assert.equal(disk.has("skills/local-method/SKILL.md"), false);
+    const localRead = await orchestrator.handleTurn({
+      surface: "test",
+      actor,
+      origin: { kind: "human" },
+      conversation: {
+        kind: "channel",
+        channelRef: "C1",
+        threadRef: `C1:read-local-${location}`,
+        audience: [actor],
+        publishMembers: [actor],
+      },
+      text: "!read skills/local-method/SKILL.md",
+    });
+    assert.equal(localRead.status, "ok", localRead.reason);
+    assert.match(localRead.reply ?? "", /Do useful work/);
     assert.ok(disk.has("skills/local-method/SKILL.md"));
+    assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
   });
 }
 
