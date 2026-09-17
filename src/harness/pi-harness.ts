@@ -963,7 +963,7 @@ export function refusalFallbackNote(fromModel: string, toModel: string, refusal:
 
 export type TurnWallClockOutcome = "ok" | "aborted" | "abandoned";
 
-export const TURN_ABORT_GRACE_MS = 30_000;
+const TURN_ABORT_GRACE_MS = 30_000;
 
 export const EMPTY_ENDING_MIN_BUDGET_MS = 30_000;
 export const EMPTY_ENDING_NOTE =
@@ -1343,11 +1343,6 @@ export function applyFastSpeed<T>(payload: T, fast: boolean | undefined, api?: s
     }
   }
   return payload;
-}
-
-export function modelHasFastMode(model: unknown): boolean {
-  const m = model as { headers?: Record<string, string>; fastMode?: boolean } | undefined;
-  return Boolean(m?.fastMode) || Boolean(m?.headers?.["anthropic-beta"]?.includes(FAST_MODE_BETA));
 }
 
 export const OUTPUT_BUDGET_FLOOR_TOKENS = 1_024;
