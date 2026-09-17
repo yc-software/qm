@@ -197,44 +197,29 @@ test("an edit landing during consolidation survives without disabling later cons
   assert.equal(calls, 2);
 });
 
-test("an edit landing during consolidation survives without disabling later consolidation", async () => {
+test("a lost consolidation race leaves the after-N trigger armed, so the next capture retries", async () => {
   const { memory } = freshMemory();
   await memory.capture(SCOPE, ["original fact"], AT);
   let calls = 0;
-  let release!: () => void;
-  const blocked = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let modelStarted!: () => void;
-  const waiting = new Promise<void>((resolve) => {
-    modelStarted = resolve;
-  });
-  const logs: string[] = [];
   const consolidator = createConsolidator({
     harness: {
       async oneShot() {
         calls++;
-        modelStarted();
-        await blocked;
+        if (calls === 1) await memory.replace(SCOPE, "# Memory\n\n- user edit");
         return "UPDATE 1: consolidated fact";
       },
     },
     memory,
-    log: (message) => logs.push(message),
+    afterN: 1,
   })!;
 
-  const first = consolidator.maintain(SCOPE);
-  await waiting;
-  await memory.replace(SCOPE, "# Memory\n\n- user edit");
-  release();
-  await first;
+  await consolidator.maybeMaintain(SCOPE);
+  assert.equal(calls, 1);
+  assert.doesNotMatch(await memory.read(SCOPE), /consolidated:/, "a dropped write lands no marker");
 
-  assert.match(await memory.read(SCOPE), /user edit/);
-  assert.doesNotMatch(await memory.read(SCOPE), /consolidated fact/);
-  assert.deepEqual(logs, []);
-
-  await consolidator.maintain(SCOPE);
+  await consolidator.maybeMaintain(SCOPE);
   assert.equal(calls, 2);
+  assert.match(await memory.read(SCOPE), /consolidated fact/);
 });
 
 test("degrades to capture-only when the store can't round-trip a rewrite: logs once, stops trying, never crashes", async () => {
