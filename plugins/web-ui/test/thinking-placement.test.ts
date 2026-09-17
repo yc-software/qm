@@ -9,7 +9,10 @@ test("thinking follows the transcript outside the composer", () => {
   const stack = chat.slice(chat.indexOf('<div class="message-stack'), chat.indexOf('<div class="chat-bottom-dock">'));
   assert.match(stack, /liveWorkStatus\(agent\)/);
   assert.ok(stack.indexOf("messageContent") < stack.indexOf("liveWorkStatus(agent)"));
-  const dock = chat.slice(chat.indexOf('<div class="chat-bottom-dock">'), chat.indexOf("decorateStreamingTail();"));
+  const dock = chat.slice(
+    chat.indexOf('<div class="chat-bottom-dock">'),
+    chat.indexOf("transcriptViewport.afterRender();"),
+  );
   assert.doesNotMatch(dock, /liveWorkStatus/);
   assert.doesNotMatch(chat, /typingRow|work-thinking/);
   assert.doesNotMatch(css, /\.composer-wrap > \.live-work-status/);
