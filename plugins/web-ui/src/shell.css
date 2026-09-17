@@ -4195,7 +4195,8 @@ qm-markdown .tok-in {
   outline: 2px solid color-mix(in srgb, var(--foreground) 35%, transparent);
   outline-offset: 3px;
 }
-.send-btn:disabled {
+.send-btn:disabled,
+.stop-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }

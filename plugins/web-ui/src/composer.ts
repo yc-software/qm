@@ -739,7 +739,6 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         ${icon(ArrowUp, 16)}
       </button>`;
     }
-    const canQueue = Boolean(composerState.draft.trim() || composerState.attachments.length);
     return html`
       <button
         class="stop-btn"
@@ -756,7 +755,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
         type="submit"
         ${tip("Queue for after this turn")}
         aria-label="Queue for after this turn"
-        ?disabled=${!canQueue}
+        ?disabled=${!composerCanSend()}
       >
         ${icon(ArrowUp, 16)}
       </button>
@@ -1811,6 +1810,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
     return (
       Boolean(composerState.draft.trim() || composerState.attachments.length) &&
       !composerState.processingFiles &&
+      !ctx.chat.isStopping() &&
       getRuntimeConfig(scopeKey()) !== null &&
       ctx.chat.state.resolvingApprovals.size === 0 &&
       !ctx.chat.hasUnresolvedApproval()
@@ -1820,10 +1820,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   function syncComposerControls(agent: Agent): void {
     if (!ctx.chat.state.host || agent !== ctx.chat.state.agent) return;
     const send = ctx.chat.state.host.querySelector<HTMLButtonElement>(".send-btn");
-    if (send)
-      send.disabled = agent.state.isStreaming
-        ? !composerState.draft.trim() && !composerState.attachments.length
-        : !composerCanSend();
+    if (send) send.disabled = !composerCanSend();
   }
 
   function clearComposerDom(agent: Agent): void {
@@ -2082,15 +2079,10 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   async function sendPrompt(agent: Agent): Promise<void> {
-    if (!currentModelOption()) return;
-    if (composerState.processingFiles) return;
-    if (!getRuntimeConfig(scopeKey())) return;
+    if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
-    if (ctx.chat.state.resolvingApprovals.size > 0) return;
-    if (ctx.chat.hasUnresolvedApproval()) return;
     if (agent.state.isStreaming) return queueDraft(agent);
     const text = composerState.draft.trim();
-    if (!text && composerState.attachments.length === 0) return;
     if (ctx.chat.state.threadRef) {
       bumpSessionActivity(ctx.chat.state.threadRef);
       ctx.chat.state.pendingSend = ctx.chat.state.threadRef;
