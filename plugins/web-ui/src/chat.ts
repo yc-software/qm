@@ -1,4 +1,3 @@
-import { goalElapsedLabel } from "./goal-strip.ts";
 import { appEditSlug } from "./app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
