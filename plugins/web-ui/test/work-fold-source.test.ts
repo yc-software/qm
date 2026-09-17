@@ -6,9 +6,9 @@ const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 
 test("live and completed work share one chronological duration fold", () => {
-  assert.match(chat, /<details class="work work-fold work-/);
+  assert.match(chat, /class=\$\{stopped \? "stopped-work" : `work work-fold work-\$\{work.status\}`\}/);
   assert.match(chat, /messageWorkTimeline\(work, active \? "" : text\)/);
-  assert.match(chat, /const label = stopping \? "Stopping…" : workLabel\(work\)/);
+  assert.match(chat, /let label = stopping \? "Stopping…" : workLabel\(work\)/);
   assert.match(chat, /\?open=\$\{active \|\| !!work.pendingApprovals\?\.length\}/);
   assert.doesNotMatch(chat, /function segmentSummaryLabel/);
 });
@@ -71,4 +71,13 @@ test("activity previews use the row width before ellipsizing", () => {
   assert.match(chat, /const preview = firstLine\(text\.replace\(\/\\s\+\/g, " "\)\.trim\(\)\);/);
   assert.match(css, /\.tool-label \{[\s\S]{0,80}?flex: 1 1 auto;/);
   assert.match(css, /\.tool-label \{[\s\S]{0,180}?text-overflow: ellipsis;/);
+});
+
+test("stopped work shares posted reply rendering and shows one status without activity", () => {
+  assert.match(chat, /workBlock\(work, false, "", "", true\)/);
+  const block = chat.slice(chat.indexOf("  function workBlock("), chat.indexOf("  function approvalSummaryView("));
+  assert.match(block, /postSpeechText\(item.row\)/);
+  assert.match(block, /replies.map\(\(reply\) => html`<div class="streaming-text"/);
+  assert.match(block, /if \(stopped && fold === nothing\) fold = html`<div class="stopped-head">/);
+  assert.doesNotMatch(chat, /stopped-note|function stoppedWork/);
 });
