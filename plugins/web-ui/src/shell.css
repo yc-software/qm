@@ -2232,7 +2232,7 @@ qm-markdown .tok-in {
   margin: 10px 0;
 }
 .work-fold {
-  margin: 2px 0;
+  margin: 18px 0;
 }
 .work-message {
   color: color-mix(in srgb, var(--muted-foreground) 85%, var(--foreground));
@@ -2294,9 +2294,7 @@ qm-markdown .tok-in {
 }
 .work summary.work-head {
   list-style: none;
-  cursor: pointer;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+  cursor: default;
 }
 .work summary.work-head::-webkit-details-marker {
   display: none;
@@ -2311,21 +2309,27 @@ qm-markdown .tok-in {
   color: var(--muted-foreground);
 }
 .work-head .icon {
-  color: var(--muted-foreground);
-  transition: transform 140ms ease;
+  color: inherit;
 }
-.work[open] > summary.work-head .icon,
-.work-fold[open] > summary.work-head .icon {
+.activity-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.work[open] > summary > .activity-chevron,
+.work-fold[open] > summary > .activity-chevron,
+.tool-expandable[open] > summary > .activity-chevron {
   transform: rotate(90deg);
 }
 .work-divider {
-  height: 0;
-  margin: 0 0 10px;
+  height: 1px;
+  background: var(--border);
+  margin: 8px 0 10px;
 }
 .work-rows {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 2px;
+  margin-top: 8px;
 }
 
 .tool-row,
@@ -2334,16 +2338,16 @@ qm-markdown .tok-in {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.35;
-  color: color-mix(in srgb, var(--muted-foreground) 80%, var(--background));
+  color: var(--muted-foreground);
 }
 .tool-row.tool-running {
   color: var(--muted-foreground);
 }
 .tool-row .tool-summary {
-  cursor: pointer;
-  min-height: 24px;
+  cursor: default;
+  min-height: 26px;
 }
 .tool-icon {
   display: inline-flex;
@@ -2370,12 +2374,12 @@ qm-markdown .tok-in {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 24px;
+  min-height: 26px;
   min-width: 0;
   list-style: none;
-  cursor: pointer;
-  color: color-mix(in srgb, var(--muted-foreground) 80%, var(--background));
-  font-size: 13px;
+  cursor: default;
+  color: var(--muted-foreground);
+  font-size: 14px;
   line-height: 1.35;
 }
 .thinking-summary::-webkit-details-marker {
@@ -2383,9 +2387,9 @@ qm-markdown .tok-in {
 }
 .thinking-summary > .icon:last-child {
   flex: 0 0 auto;
-  transition: transform 140ms ease;
 }
-.thinking-row[open] > .thinking-summary > .icon:last-child {
+.thinking-row[open] > .thinking-summary > .icon:last-child,
+.thinking-row[open] > .thinking-summary > .activity-chevron {
   transform: rotate(90deg);
 }
 .thinking-body {
@@ -2393,8 +2397,37 @@ qm-markdown .tok-in {
   padding-left: 10px;
   border-left: 2px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
+}
+.thinking-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-action {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-chip {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 55%;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-message {
+  flex: 1 1 0;
+  margin-left: 4px;
 }
 .tool-row.tool-approval {
   color: var(--foreground);
@@ -2575,11 +2608,26 @@ qm-markdown .tok-in {
 .tool-expandable > summary::-webkit-details-marker {
   display: none;
 }
-.tool-expandable > summary .icon:last-child {
-  transition: transform 140ms ease;
+.work-head:hover,
+.tool-row .tool-summary:hover,
+.thinking-summary:hover {
+  color: var(--foreground);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--foreground) 12%, transparent);
 }
-.tool-expandable[open] > summary .icon:last-child {
-  transform: rotate(90deg);
+.work-head:focus-visible,
+.tool-summary:focus-visible,
+.thinking-summary:focus-visible {
+  outline: 1px solid var(--muted-foreground);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.tool-summary > .activity-chevron {
+  opacity: 0;
+}
+.tool-summary:hover > .activity-chevron,
+.tool-summary:focus-visible > .activity-chevron,
+.tool-expandable[open] > .tool-summary > .activity-chevron {
+  opacity: 1;
 }
 .tool-disclosure {
   display: grid;
@@ -2612,8 +2660,12 @@ qm-markdown .tok-in {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.tool-disclosure .code-card {
-  margin: 0;
+.tool-disclosure .code-card-foot {
+  font-family: var(--font-sans, inherit);
+  font-size: 11px;
+}
+.tool-disclosure .code-card-foot {
+  padding: 0 10px 7px;
 }
 
 .code-card {
@@ -11915,4 +11967,24 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-size: 11.5px;
   color: var(--muted-foreground);
   overflow-wrap: anywhere;
+}
+
+.dark .custom-chat {
+  --background: #181818;
+  --foreground: #eeeeee;
+  --muted-foreground: #a1a1a1;
+  --secondary: #232323;
+  --border: #303030;
+  background: var(--background);
+}
+
+:is(markdown-block, qm-markdown).markdown-content table {
+  font-size: 13px;
+  line-height: 1.65;
+}
+.activity-group > .work-head {
+  font-size: 14px;
+}
+.stopped-work[open] > .stopped-head > .activity-chevron {
+  transform: rotate(90deg);
 }

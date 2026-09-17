@@ -6,6 +6,14 @@ import { setupContent } from "./setup-widget";
 import { isWelcomeConversation } from "./welcome-session";
 import { ADMIN_BASE } from "./shell";
 import { connectorCard } from "./connector-widget";
+import {
+  activityDescription,
+  activityLabel,
+  activityGroupSummary,
+  activityGroups,
+  thinkingPresentation,
+  sessionPresentation,
+} from "./activity-presentation";
 import { loadGeneratedActivities } from "./generated-activities";
 import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
 import { Agent } from "@earendil-works/pi-agent-core";
@@ -16,10 +24,13 @@ import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { ref } from "lit/directives/ref.js";
 import {
   Activity,
-  Bot,
+  BookOpen,
+  Search,
   Brain,
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
@@ -41,7 +52,7 @@ import {
   Target,
   Rocket,
   ScrollText,
-  Terminal,
+  SquareTerminal as Terminal,
   Wrench,
   X,
   type IconNode,
@@ -104,7 +115,6 @@ import {
   postSpeechText,
   toolCategory,
   toolRowKind,
-  toolExecutionOutput,
   sessionToolView,
   type TimelineItem,
   type ToolPayload,
@@ -2296,7 +2306,7 @@ export function createChatSurface(
       const active = activeToolRow(work);
       const call = (active?.call?.payload ?? {}) as ToolPayload;
       const tool = call.tool ?? "";
-      const verb = active ? (TOOL_META[tool] ?? UNKNOWN_TOOL).active : null;
+      const verb = active ? (TOOL_META[toolCategory(call)] ?? UNKNOWN_TOOL).active : null;
       return {
         icon: RefreshCw,
         label: verb ? `${verb} interrupted, resuming…` : "Interrupted, resuming…",
@@ -2320,7 +2330,7 @@ export function createChatSurface(
     const call = (row.call?.payload ?? {}) as ToolPayload;
     const result = (row.result?.payload ?? {}) as ToolPayload;
     const tool = call.tool ?? result.tool ?? "unknown";
-    const meta = TOOL_META[tool] ?? UNKNOWN_TOOL;
+    const meta = TOOL_META[toolCategory({ ...result, ...call })] ?? UNKNOWN_TOOL;
     const secs = elapsedSeconds(row.call?.createdAt) || workSeconds(work);
     const posting = postSpeechText(row, true);
     if (posting) {
@@ -2355,6 +2365,12 @@ export function createChatSurface(
     return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
   }
 
+  function timelineKey(item: TimelineItem): string {
+    if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
+    if (item.kind === "approval") return `approval:${item.approval.requestId}`;
+    return `${item.kind}:${item.activity.seq}`;
+  }
+
   function workBlock(
     work: WorkBlock,
     isStreaming: boolean,
@@ -2384,19 +2400,27 @@ export function createChatSurface(
             ?open=${active || !!work.pendingApprovals?.length}
           >
             <summary class=${stopped ? "stopped-head" : "work-head"}>
-              ${sheenLabel(label, active)}${icon(ChevronRight, 14)}
+              ${sheenLabel(label, active)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
             </summary>
             ${stopped ? nothing : html`<div class="work-divider"></div>`}
             <div class="work-rows">
               ${repeat(
-                timeline,
-                (item) => {
-                  if (item.kind === "tool")
-                    return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
-                  if (item.kind === "approval") return `approval:${item.approval.requestId}`;
-                  return `${item.kind}:${item.activity.seq}`;
+                activityGroups(timeline),
+                (items) => timelineKey(items[0]!),
+                (items) => {
+                  if (items[0]?.kind === "text") return renderTimelineItem(items[0], work);
+                  const summary = activityGroupSummary(items, work.status);
+                  const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
+                    summary.category
+                  ];
+                  return html`<details class="activity-group work-fold" ?open=${active || summary.attention}>
+                    <summary class="work-head">
+                      ${icon(groupIcon, 15)}<span>${summary.label}</span
+                      ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+                    </summary>
+                    <div class="work-rows">${repeat(items, timelineKey, (item) => renderTimelineItem(item, work))}</div>
+                  </details>`;
                 },
-                (item) => renderTimelineItem(item, work),
               )}
               ${tail.trim() ? html`<div class="work-said streaming-text live-stream">${markdown(tail, true, streamingTextTail(baseline, work.activity))}</div>` : nothing}
             </div>
@@ -2455,23 +2479,19 @@ export function createChatSurface(
   function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {
     const status = work.status;
     const stale = work.stale === true;
-    if (item.kind === "thinking") return thinkingRow(item.activity);
+    if (item.kind === "thinking") {
+      const thought = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "");
+      return html`<details class="thinking-row">
+        <summary class="thinking-summary">
+          <span class="tool-icon">${icon(Brain, 15)}</span><span class="thinking-title">${thought.title}</span>
+          <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+        </summary>
+        <div class="thinking-body">${markdown(thought.body)}</div>
+      </details>`;
+    }
     if (item.kind === "text") return messageRow(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
-  }
-
-  function thinkingRow(activity: ToolActivity): TemplateResult {
-    const text = (activity.payload as { thinking?: string } | null)?.thinking ?? "";
-    const preview = firstLine(text.replace(/\s+/g, " ").trim());
-    return html`<details class="thinking-row">
-      <summary class="thinking-summary">
-        <span class="tool-icon">${icon(Brain, 13)}</span>
-        <span class="tool-label" title=${preview ? `Thinking: ${preview}` : "Thinking"}>${preview || "Thinking"}</span>
-        ${icon(ChevronRight, 14)}
-      </summary>
-      <div class="thinking-body">${markdown(text)}</div>
-    </details>`;
   }
 
   function messageRow(activity: ToolActivity): TemplateResult {
@@ -2481,7 +2501,7 @@ export function createChatSurface(
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
     execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
-    read: { icon: FileText, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
+    read: { icon: BookOpen, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
     write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
     publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
     recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
@@ -2511,20 +2531,6 @@ export function createChatSurface(
       .map((part) => names[part.toLowerCase()] ?? part[0]?.toUpperCase() + part.slice(1))
       .join(" ");
   }
-
-  const SESSION_ACTION_LABELS: Record<string, { active: string; done: string; attempted: string }> = {
-    open: { active: "Creating", done: "Created", attempted: "Tried creating" },
-    write: { active: "Messaging", done: "Messaged", attempted: "Tried messaging" },
-    send_message: { active: "Messaging", done: "Messaged", attempted: "Tried messaging" },
-    followup_task: { active: "Assigning", done: "Assigned", attempted: "Tried assigning" },
-    wait: { active: "Waiting", done: "Waited", attempted: "Tried waiting" },
-    interrupt: {
-      active: "Interrupting",
-      done: "Interrupted",
-      attempted: "Tried interrupting",
-    },
-    read: { active: "Checking", done: "Checked", attempted: "Tried checking" },
-  };
 
   const SUBAGENT_MAIL_NOTES: Record<string, string> = {
     final_answer: "finished",
@@ -2640,8 +2646,8 @@ export function createChatSurface(
     return {};
   }
 
-  function toolPayloadText(payload: ToolPayload, omitted: string[] = []): string {
-    const hidden = new Set(["tool", "callId", "workStartedAt", "workFinishedAt", ...omitted]);
+  function toolPayloadText(payload: ToolPayload): string {
+    const hidden = new Set(["tool", "callId", "workStartedAt", "workFinishedAt", "isError"]);
     const entries = Object.entries(payload as Record<string, unknown>).filter(
       ([key, value]) => !hidden.has(key) && value !== undefined,
     );
@@ -2650,11 +2656,12 @@ export function createChatSurface(
     return JSON.stringify(Object.fromEntries(entries), null, 2);
   }
 
-  function toolPayloadCard(label: string, text: string): TemplateResult | typeof nothing {
+  function toolPayloadCard(label: string | null, text: string, loadFull?: () => void): TemplateResult | typeof nothing {
     if (!text) return nothing;
     return html`<div class="tool-payload-card">
-      <div class="tool-payload-label">${label}</div>
+      ${label ? html`<div class="tool-payload-label">${label}</div>` : nothing}
       <pre class="tool-payload-body">${text}</pre>
+      ${loadFull ? html`<div class="code-card-foot"><button class="show-full-btn" type="button" @click=${loadFull}>Show full ${label?.toLowerCase() ?? "command"}</button></div>` : nothing}
     </div>`;
   }
 
@@ -2663,18 +2670,14 @@ export function createChatSurface(
     call: ToolPayload,
     result: ToolPayload,
     work: WorkBlock,
-    activity: ToolActivity | null,
+    row: ToolRowModel,
   ): TemplateResult {
-    const input = toolPayloadText(call);
-    const hasExecOutput =
-      toolCategory({ ...result, ...call, tool }) === "execute" && toolExecutionOutput(result) !== null;
-    const output = toolPayloadText(result, [
-      "isError",
-      ...(hasExecOutput ? ["stdout", "stderr", "code", "timedOut", "result"] : []),
-    ]);
+    const execution = toolCategory({ ...result, ...call, tool }) === "execute";
+    const input = execution ? (call.command ?? "") : toolPayloadText(call);
+    const output = execution ? "" : toolPayloadText(result);
     return html`<div class="tool-disclosure">
-      ${toolPayloadCard("Input", input)} ${hasExecOutput ? execOutputCard(result, work, activity) : nothing}
-      ${toolPayloadCard("Result", output)}
+      ${toolPayloadCard(execution ? null : "Input", input, row.call?.truncated ? () => void loadFullEntry(work, row.call!) : undefined)}
+      ${toolPayloadCard("Result", output, row.result?.truncated ? () => void loadFullEntry(work, row.result!) : undefined)}
     </div>`;
   }
 
@@ -2696,66 +2699,51 @@ export function createChatSurface(
     const meta = knownMeta ?? UNKNOWN_TOOL;
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
-    if (tool === "session") {
-      const view = sessionToolView(call, result, sessionsState.list);
-      const labels = SESSION_ACTION_LABELS[view.action] ?? UNKNOWN_TOOL;
-      let sessionLabel = labels.attempted;
-      if (kind === "running") sessionLabel = stale ? `${labels.active} (interrupted)` : labels.active;
-      else if (kind === "ok") sessionLabel = labels.done;
-      const sessionWhy = kind === "failed" ? firstLine(result.error ?? result.reason ?? "", 90) : "";
-      const sessionAttempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
-      const sessionDetail = [view.detail, sessionWhy, sessionAttempts].filter(Boolean).join(" · ");
-      return html`<div class="tool-row tool-${kind} tool-session">
-        <span class="tool-icon">${icon(Bot, 15)}</span>
-        <span class="tool-label"
-          >${sessionLabel}${view.chipTitle ? html` ${subagentChip(view.chipTitle, view.sessionId)}` : nothing}${
-            sessionDetail ? html` <span class="tool-detail">${sessionDetail}</span>` : nothing
-          }</span
-        >
-      </div>`;
-    }
     let label = knownMeta ? meta.attempted : `Tried ${name}`;
     if (kind === "approval") label = row.pending ? "Approval needed" : "Approval requested";
     else if (kind === "running") {
       const active = knownMeta ? meta.active : name;
       label = stale ? `${active} — interrupted` : active;
     } else if (kind === "ok") label = knownMeta ? meta.done : name;
+    else if (kind === "failed") label = `Failed ${name}`;
     let why = "";
     if (kind === "approval") why = firstLine(result.reason ?? "", 90);
     else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
     const base = kind === "approval" ? "" : toolDetail(tool, call, result);
     const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
     const detail = [base, why, attempts].filter(Boolean).join(" · ");
-    let statusLabel = "";
-    if (kind === "failed") statusLabel = "Failed";
-    else if (kind === "approval" && detail) statusLabel = label;
-    const visible = [statusLabel, detail || label].filter(Boolean).join(" · ");
+    const semantic = activityLabel(row, status);
+    const visible = semantic
+      ? [semantic, why, attempts, stale && kind === "running" ? "interrupted" : ""].filter(Boolean).join(" · ")
+      : [label, detail].filter(Boolean).join(" ");
+    const description = activityDescription(call, result);
+    const session = sessionPresentation(row, status);
+    const sessionView = session ? sessionToolView(call, result, sessionsState.list) : null;
+    const sessionDetail = [sessionView?.detail, session?.preview].filter(Boolean).join(" · ");
+    const rowIcon = session
+      ? Bot
+      : { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[description.category];
     const classes = ["tool-row", `tool-${kind}`].join(" ");
-    const head = html`<span class="tool-icon">${icon(meta.icon, 13)}</span>
-      <span class="tool-label" title=${detail ? `${label}: ${detail}` : label}>${visible}</span>`;
+    const head = html`<span class="tool-icon">${icon(rowIcon, 15)}</span>
+      ${session ? html`<span class="session-action">${session.label}</span>${sessionView?.chipTitle ? subagentChip(sessionView.chipTitle, sessionView.sessionId) : nothing}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${detail ? `${label}: ${detail}` : label}>${visible}</span>`}`;
     if (!row.call && !row.result) return html`<div class="${classes}">${head}</div>`;
-    return html`<details class="${classes} tool-expandable">
-      <summary class="tool-summary">${head}${icon(ChevronRight, 14)}</summary>
-      ${toolDisclosure(tool, call, result, work, row.result ?? null)}
+    const renderDisclosure = (details: HTMLDetailsElement): void => {
+      const host = details.querySelector<HTMLElement>(".tool-disclosure-host");
+      if (host) render(details.open ? toolDisclosure(tool, call, result, work, row) : nothing, host);
+    };
+    return html`<details
+      class="${classes} tool-expandable"
+      @toggle=${(event: Event) => renderDisclosure(event.currentTarget as HTMLDetailsElement)}
+    >
+      <summary class="tool-summary">${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span></summary>
+      <div
+        class="tool-disclosure-host"
+        ${ref((element) => {
+          const details = element?.closest<HTMLDetailsElement>("details");
+          if (details) renderDisclosure(details);
+        })}
+      ></div>
     </details>`;
-  }
-
-  function execOutputCard(result: ToolPayload, work: WorkBlock, activity: ToolActivity | null): TemplateResult {
-    const out = toolExecutionOutput(result) ?? "";
-    return html`<div class="code-card">
-      <div class="code-card-head"><span class="code-card-lang">bash</span></div>
-      <pre class="code-card-body">${out}</pre>
-      <div class="code-card-foot">
-        exit ${result.code ?? "unknown"}${result.timedOut ? " · timed out" : ""}
-        ${
-          activity?.truncated
-            ? html`<button class="show-full-btn" type="button" @click=${() => void loadFullEntry(work, activity)}>
-                Show full output
-              </button>`
-            : nothing
-        }
-      </div>
-    </div>`;
   }
 
   function redrawTranscript(): void {
