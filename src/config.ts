@@ -42,6 +42,7 @@ import {
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
 
 export interface Config {
+  productAnalytics?: { apiKey: string; host?: string };
   slackContextSource?: SlackContextSource;
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
@@ -1280,6 +1281,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
+    ...(env.POSTHOG_API_KEY?.trim()
+      ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
+      : {}),
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),

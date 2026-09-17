@@ -1,3 +1,4 @@
+import { captureMessage } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
 import { fetchServerSentEvents, StreamProcessor } from "@tanstack/ai-client";
@@ -1173,6 +1174,14 @@ async function drive(
     });
 
     if (submit.runId) {
+      if (!opener) {
+        const userMessages = agent.state.messages.filter(
+          (message) =>
+            (message.role === "user" || message.role === "user-with-attachments") &&
+            !(message as { opener?: boolean }).opener,
+        );
+        captureMessage(submit.runId, userMessages.length === 1);
+      }
       const message = agent.state.messages.find((message) => idempotencyKey && sendKeyOf(message) === idempotencyKey);
       if (message) (message as unknown as HistoryUserMessage).runId = submit.runId;
       await followRun(stream, partial, submit.runId, signal, notify, undefined, slot, gen);

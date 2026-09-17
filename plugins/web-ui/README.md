@@ -286,3 +286,21 @@ The welcome uses the organization's configured branding `orgName`, falling back 
 ### Setup widgets in agent replies
 
 In web chat, an assistant reply can include `::connect-apps{}` as a standalone paragraph to render the reusable app picker. The separate `::add-to-slack{}` directive renders the Slack setup action for administrators; include both to show both. It omits the welcome and animation and uses the signed-in viewer’s authorization routes. The Composio skill teaches this response for requests to connect apps or reopen setup. Code blocks, quotations, and inline examples remain ordinary text. The directive persists in the transcript and renders again when reopened. Connected-account status retains the same limitations as the onboarding picker and local return-flow preview.
+
+## Optional product analytics
+
+Set `POSTHOG_API_KEY` to a PostHog project ingestion token to enable browser
+analytics. `POSTHOG_HOST` defaults to `https://us.i.posthog.com` and must be an
+HTTPS origin. The authenticated `/me` response supplies this public configuration;
+the portal serves the same web application, so it needs no separate SDK.
+
+Events are explicit pageviews by navigation view, accepted `message_sent` events,
+and `session_started` for the first user message in a chat. Company grouping uses
+`CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
+analytics is disabled during impersonation. Autocapture, replay, exception capture,
+performance capture and feature flags are disabled. Event properties exclude chat
+content, URLs, query strings, titles and referrers. Delivery is best effort.
+
+Set the same variables on core to capture `app_published` after a successful new
+application or version deployment. Core events use the application's creator and
+company, matching browser identity. No key means no analytics requests.

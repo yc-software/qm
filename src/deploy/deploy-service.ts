@@ -113,6 +113,7 @@ export interface DeployServiceDeps {
   provider: DeployProvider;
   deployDir: string;
   auditLog: AuditLog;
+  appPublished?: (principal: string, deploymentId: string, version: number) => Promise<void>;
   acl: AclStore;
   leaderLease?: LeaderLease;
   advisoryLock?: AdvisoryLock;
@@ -371,6 +372,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
+      void deps.appPublished?.(input.createdBy, d.id, d.versions[0]!.version).catch(() => {});
       deps.auditLog.record({
         at: Date.now(),
         principalId: input.createdBy,
@@ -400,6 +402,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
+        void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
         deps.auditLog.record({
           at: Date.now(),
           principalId: before.createdBy,
@@ -590,6 +593,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           if (!v) return result;
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
           await markVersionRunning(id, v.version, endpoint);
+          void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
           deps.auditLog.record({
             at: Date.now(),
             principalId: before.createdBy,

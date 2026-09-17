@@ -1,4 +1,5 @@
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
+import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
@@ -1533,6 +1534,7 @@ export function buildApp(
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const deployService = createDeployService({
+    appPublished: createProductAnalytics(config.orgId, config.productAnalytics).appPublished,
     deployStore,
     provider: deployProvider,
     deployDir: join(config.dataDir, "deployments"),

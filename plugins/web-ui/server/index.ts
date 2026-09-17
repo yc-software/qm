@@ -174,13 +174,30 @@ const CONTENT_TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
+const analyticsKey = process.env.POSTHOG_API_KEY?.trim();
+if (analyticsKey && !/^phc_[A-Za-z0-9]+$/.test(analyticsKey))
+  throw new Error("POSTHOG_API_KEY must be a public project ingestion token");
+const analyticsHost = new URL((analyticsKey && process.env.POSTHOG_HOST?.trim()) || "https://us.i.posthog.com");
+if (
+  analyticsKey &&
+  (analyticsHost.protocol !== "https:" ||
+    analyticsHost.username ||
+    analyticsHost.password ||
+    analyticsHost.search ||
+    analyticsHost.hash ||
+    analyticsHost.pathname !== "/")
+) {
+  throw new Error("POSTHOG_HOST must be an HTTPS origin");
+}
+const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
+
 const SPA_CSP = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}`,
   "frame-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",
@@ -1226,6 +1243,7 @@ const apiRoutes: readonly WebRoute[] = [
         user,
         org: ORG,
         companyName: companyBranding.orgName?.trim() || null,
+        ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
         mode: AUTH_MODE,
         slackWorkspaceUrl: workspaceUrl,
         individualModelAuth: parsed.individualModelAuth === true,

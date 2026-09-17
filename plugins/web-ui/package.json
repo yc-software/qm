@@ -32,7 +32,8 @@
     "lru-cache": "^11.5.2",
     "lucide": "^0.544.0",
     "marked": "^18.0.5",
-    "morphdom": "2.7.8"
+    "morphdom": "2.7.8",
+    "posthog-js": "1.433.10"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.3",
