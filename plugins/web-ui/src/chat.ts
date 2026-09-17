@@ -2137,7 +2137,6 @@ export function createChatSurface(
           type="button"
           class="bg-activity-strip"
           aria-expanded=${String(bgPanel.open)}
-          ${tip(bgPanel.open ? "Hide background activity" : "Work continuing on the agent's computer. Click to inspect")}
           @click=${toggleBackgroundPanel}
         >
           ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
