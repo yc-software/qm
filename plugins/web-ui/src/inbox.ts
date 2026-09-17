@@ -9,6 +9,8 @@ import {
   resetSelectedSentEmail,
   selectedSentEmail,
   sentEmailPageTpl,
+  sentChatTpl,
+  updateSentChat,
   sentMailTpl,
 } from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -83,6 +85,7 @@ export interface LedgerItem {
 }
 
 export interface InboxItem {
+  sentChat?: boolean;
   id: string;
   loopId: string;
   source: InboxSource;
@@ -286,7 +289,7 @@ function viewSources(viewId: string): InboxSource[] {
 export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[] {
   const sources = viewSources(viewId);
   return inboxState.items.filter(
-    (i) => sources.includes(i.source) && (status === "open" ? i.status === "open" : i.status !== "open"),
+    (i) => !i.sentChat && sources.includes(i.source) && (status === "open" ? i.status === "open" : i.status !== "open"),
   );
 }
 
@@ -326,6 +329,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     source,
     sourceKey: entry.dedupeKey,
     status: resolved,
+    sentChat: payload.sentChat === true,
     title: str(payload.title) ?? "",
     from: str(payload.from) ?? "",
     snippet: str(payload.snippet) ?? "",
@@ -700,6 +704,7 @@ export async function askAgent(item: InboxItem, message: string): Promise<void> 
       method: "POST",
       body: JSON.stringify({ message: text }),
     });
+    updateSentChat(next);
     const mapped = toInboxItem(next);
     draftEdits.delete(item.id);
     replaceItem(mapped);
@@ -897,9 +902,9 @@ export function chatTpl(item: InboxItem): TemplateResult {
       ${
         empty
           ? html`<div class="inbox-chat-empty">
-              <h2 class="inbox-chat-cta">What should I change?</h2>
+              <h2 class="inbox-chat-cta">${item.sentChat ? "Ask about this email" : "What should I change?"}</h2>
               <div class="inbox-chat-suggestions">
-                ${DRAFT_SUGGESTIONS.map(
+                ${(item.sentChat ? ["Summarize this email", "What should I follow up on?"] : DRAFT_SUGGESTIONS).map(
                   (prompt) =>
                     html`<button
                       class="inbox-chat-suggestion"
@@ -1201,19 +1206,15 @@ function syncStatusLabel(cron: InboxSyncCron): string {
 function syncLineTpl(surface: InboxSurface): TemplateResult {
   if (surface.viewId === "sent") {
     const busy = isSentMailLoading();
-    return html`<span class="inbox-sync-line">
-      <button
-        class="icon-btn subtle compact"
-        type="button"
-        aria-label="Refresh sent mail"
-        ${tip("Refresh sent mail")}
-        ?disabled=${busy}
-        @click=${() => void loadSentMail(drawAll)}
-      >
-        ${icon(RefreshCw, 14)}
-      </button>
-      <span>${busy ? "Refreshing…" : "Refresh"}</span>
-    </span>`;
+    return html`<button
+      class="btn inbox-sync-setup"
+      type="button"
+      ${tip("Refresh sent mail")}
+      ?disabled=${busy}
+      @click=${() => void loadSentMail(drawAll)}
+    >
+      ${icon(RefreshCw, 13)}<span>${busy ? "Refreshing…" : "Refresh"}</span>
+    </button>`;
   }
   const cron = inboxState.syncCron;
   if (!cron) {
@@ -1377,22 +1378,6 @@ function itemPageTpl(item: InboxItem): TemplateResult {
   `;
 }
 
-function sentInboxItem(threadId: string, subject: string): InboxItem | undefined {
-  const normalizedSubject = subject
-    .replace(/^(?:re|fw|fwd):\s*/i, "")
-    .trim()
-    .toLowerCase();
-  return inboxState.items.find(
-    (item) =>
-      item.source === "gmail" &&
-      (item.gmail?.threadId === threadId ||
-        item.title
-          .replace(/^(?:re|fw|fwd):\s*/i, "")
-          .trim()
-          .toLowerCase() === normalizedSubject),
-  );
-}
-
 function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
   const logs = () => [...host.querySelectorAll<HTMLElement>(".inbox-chat-log")];
   const wasAtBottom = logs().map((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 24);
@@ -1449,8 +1434,10 @@ function drawFull(): void {
   let page: TemplateResult | typeof nothing;
   if (openItem) page = itemPageTpl(openItem);
   else if (openSentEmail) {
-    const relatedItem = sentInboxItem(openSentEmail.threadId, openSentEmail.subject);
-    page = sentEmailPageTpl(drawAll, relatedItem ? chatTpl(relatedItem) : undefined);
+    page = sentEmailPageTpl(
+      drawAll,
+      sentChatTpl(drawAll, (item) => chatTpl(toInboxItem(item))),
+    );
   } else
     page = html`
       <div class="pane-head">

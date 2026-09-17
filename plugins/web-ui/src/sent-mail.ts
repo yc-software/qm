@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ArrowUpRight, ChevronRight, Mail } from "lucide";
+import type { LedgerItem } from "./inbox";
 import { api } from "./core-bridge";
 import { listBackLink } from "./list-page";
 import { icon, initials, relTime } from "./ui";
@@ -40,10 +41,14 @@ let selected: SentEmail | null = null;
 let detail: (SentEmail & { from: string; cc: string; body: string; html: boolean; attachments: string[] }) | null =
   null;
 let detailError = "";
+let chatItem: LedgerItem | null = null;
+let chatError = "";
 let detailGeneration = 0;
 
 export async function openSentEmail(message: SentEmail, draw: () => void): Promise<void> {
   selected = message;
+  chatItem = null;
+  chatError = "";
   detail = null;
   detailError = "";
   const current = ++detailGeneration;
@@ -65,6 +70,8 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
       detail = result;
       selected = { ...message, ...result };
       if (seeded) accountEmail = local!.accountEmail;
+      draw();
+      await loadSentChat(draw, current);
     }
   } catch (cause) {
     if (current === detailGeneration)
@@ -72,6 +79,43 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
   } finally {
     if (current === detailGeneration) draw();
   }
+}
+
+async function loadSentChat(draw: () => void, current = detailGeneration): Promise<void> {
+  if (!detail) return;
+  chatError = "";
+  draw();
+  try {
+    let text = detail.html ? plainSnippet(detail.body) : detail.body;
+    if (detail.conversation?.length)
+      text = detail.conversation.map((entry) => `${entry.from} to ${entry.to}:\n${entry.body}`).join("\n\n");
+    const result = await api<{ item: LedgerItem }>("/api/inbox/sent-chat", {
+      method: "POST",
+      body: JSON.stringify({
+        threadId: detail.threadId,
+        subject: detail.subject,
+        from: detail.from,
+        text: text.slice(0, 50000),
+      }),
+    });
+    if (current === detailGeneration) chatItem = result.item;
+  } catch (cause) {
+    if (current === detailGeneration) chatError = cause instanceof Error ? cause.message : "Couldn't load chat.";
+  } finally {
+    if (current === detailGeneration) draw();
+  }
+}
+
+export function sentChatTpl(draw: () => void, renderChat: (item: LedgerItem) => TemplateResult): TemplateResult {
+  if (chatItem) return renderChat(chatItem);
+  return html`<div class="inbox-chat">
+    <h2 class="inbox-chat-cta">Ask about this email</h2>
+    ${chatError ? html`<div role="alert">${chatError}<button class="btn" @click=${() => void loadSentChat(draw)}>Try again</button></div>` : html`<div role="status">Loading chat…</div>`}
+  </div>`;
+}
+
+export function updateSentChat(item: LedgerItem): void {
+  if (chatItem?.id === item.id) chatItem = item;
 }
 
 export async function openSentEmailById(id: string, draw: () => void): Promise<void> {
@@ -92,6 +136,8 @@ export function resetSentMail(): void {
   generation++;
   detailGeneration++;
   selected = null;
+  chatItem = null;
+  chatError = "";
   detail = null;
   detailError = "";
   messages = [];
@@ -190,6 +236,8 @@ export function selectedSentEmail(): SentEmail | null {
 export function resetSelectedSentEmail(): void {
   detailGeneration++;
   selected = null;
+  chatItem = null;
+  chatError = "";
   detail = null;
   detailError = "";
 }

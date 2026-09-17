@@ -7,7 +7,7 @@ import { type ApiCtx, type Route } from "./route.ts";
 import { loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
 import { parseScopeId } from "../../types.ts";
 import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
-import type { IngestEntryInput } from "../../loops/item-ledger.ts";
+import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
 import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
 import {
   ensureInboxLoop,
@@ -401,6 +401,45 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
   sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });
 }
 
+export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
+  const owner = ctx.actor?.p;
+  if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const deps = loopDeps(ctx);
+  if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const threadId = typeof body.threadId === "string" ? body.threadId.trim() : "";
+  if (!threadId || threadId.length > 200 || jsonSize(body) > MAX_SOURCE_PAYLOAD_BYTES)
+    return sendJson(ctx.res, 400, { error: "bad_request" });
+  const text = (key: string, max: number): string => (typeof body[key] === "string" ? body[key].slice(0, max) : "");
+  const loop = await ensureInboxLoop(deps.store, owner);
+  const dedupeKey = `sent-chat:${threadId}`;
+  const id = loopItemId(loop.id, dedupeKey);
+  let item = await deps.items.get(id);
+  if (!item) {
+    await deps.items.ingest([
+      {
+        loopId: loop.id,
+        dedupeKey,
+        source: "gmail",
+        summary: text("subject", 300),
+        sourcePayload: {
+          title: text("subject", 300),
+          from: text("from", 500),
+          snippet: text("text", 50000),
+          gmail: { threadId, subject: text("subject", 300) },
+          sentChat: true,
+        },
+      },
+    ]);
+    item = await deps.items.get(id);
+  }
+  if (!item) return sendJson(ctx.res, 500, { error: "chat_unavailable" });
+  if (!item.actedAt)
+    item = (await deps.items.recordAction(id, { kind: "sent", outcome: "actioned", actorId: owner })) ?? item;
+  ctx.res.setHeader("Cache-Control", "no-store");
+  sendJson(ctx.res, 200, { item: ledgerItemView(item) });
+}
+
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   const deps = loopDeps(ctx);
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
@@ -449,6 +488,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
 }
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
   { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
   { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
   { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },

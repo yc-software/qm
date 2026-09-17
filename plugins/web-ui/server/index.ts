@@ -1498,6 +1498,15 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/inbox/sent-chat",
+    handle: async ({ req, res, user }) => {
+      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      res.setHeader("Cache-Control", "no-store");
+      return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
+    },
+  },
+  {
+    method: "POST",
     path: "/api/inbox/sync-cron",
     handle: async (c) => {
       const { req, res, user } = c;
