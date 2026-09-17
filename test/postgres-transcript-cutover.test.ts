@@ -157,7 +157,7 @@ test(
       assert.deepEqual(await store.visibleEntries(session.id, "late"), [third]);
       assert.deepEqual(
         (await db.pool.query("SELECT seq FROM session_entries WHERE session_id=$1", [session.id])).rows,
-        [{ seq: 2 }],
+        [],
       );
       const summary = (await store.scopeSessionSummaries(scope, false))[0]!;
       assert.equal(summary.messages, 3);
@@ -176,3 +176,34 @@ test(
     }
   },
 );
+
+test("normal writes and taint release leave the frozen legacy table untouched", { skip }, async () => {
+  const db = await isolated();
+  try {
+    const store = createPostgresSessionStore(db.url);
+    const scope = scopeId("personal", "frozen");
+    const session = await store.getOrCreateByThread("frozen", "dm", scope);
+    const lease = (await store.acquireLease(session.id)).lease!;
+    const original = await store.append(lease, {
+      type: "user",
+      payload: { text: "frozen history", securityTainted: true },
+      scopeLabel: scope,
+    });
+    await db.pool.query(
+      "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) SELECT session_id,seq,parent_seq,type,payload,scope_label,created_at FROM session_transcript_entries WHERE session_id=$1",
+      [session.id],
+    );
+    const before = (await db.pool.query("SELECT * FROM session_entries")).rows;
+    await db.pool
+      .query(`CREATE FUNCTION reject_legacy_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'legacy is frozen'; END $$;
+      CREATE TRIGGER reject_legacy_write BEFORE INSERT OR UPDATE ON session_entries FOR EACH ROW EXECUTE FUNCTION reject_legacy_write()`);
+    assert.equal(await store.clearSecurityTaint(session.id), true);
+    const next = await store.append(lease, { type: "assistant", payload: { text: "tape only" }, scopeLabel: scope });
+    assert.equal(next.seq, 1);
+    assert.deepEqual(await store.getEntries(session.id), [{ ...original, payload: { text: "frozen history" } }, next]);
+    assert.deepEqual((await db.pool.query("SELECT * FROM session_entries")).rows, before);
+    await store.releaseLease(lease);
+  } finally {
+    await db.close();
+  }
+});

@@ -2409,12 +2409,18 @@ test("pg transcript backfill is bounded, idempotent, and independent of model co
     const repeated = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: true });
     assert.deepEqual(repeated, { busy: false, scanned: 200, changed: 0, afterSeq: 199 });
     assert.equal((await s.getTape(session.id)).length, 620);
+    const frozen = (await client.query("SELECT * FROM session_entries WHERE session_id=$1 ORDER BY seq", [session.id]))
+      .rows;
     await s.clearSecurityTaint(session.id);
     assert.deepEqual(
+      (await client.query("SELECT * FROM session_entries WHERE session_id=$1 ORDER BY seq", [session.id])).rows,
+      frozen,
+    );
+    assert.deepEqual(
       await s.getEntries(session.id),
-      (await client.query("SELECT * FROM session_entries WHERE session_id=$1 ORDER BY seq", [session.id])).rows.map(
-        rowToEntry,
-      ),
+      frozen
+        .map(rowToEntry)
+        .map((entry) => ({ ...entry, payload: { text: (entry.payload as { text: string }).text } })),
     );
   } finally {
     await client.end();
@@ -2472,6 +2478,10 @@ test(
         for (let i = 0; i <= originalCount; i++)
           await s.append(lease, { type: "user", payload: { text: `row ${i}` }, scopeLabel: scope });
         await s.releaseLease(lease);
+        await client.query(
+          "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) SELECT session_id,seq,parent_seq,type,payload,scope_label,created_at FROM session_transcript_entries WHERE session_id=$1",
+          [session.id],
+        );
         await client.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=$2", [session.id, originalCount]);
         for (const apply of [false, true]) {
           await assert.rejects(
@@ -2500,6 +2510,10 @@ test("pg transcript migration preserves sparse legacy identities and parents", {
     for (let i = 0; i < 3; i++)
       await s.append(lease, { type: "user", payload: { text: `row ${i}` }, scopeLabel: scope });
     await s.releaseLease(lease);
+    await client.query(
+      "INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at) SELECT session_id,seq,parent_seq,type,payload,scope_label,created_at FROM session_transcript_entries WHERE session_id=$1",
+      [session.id],
+    );
     await client.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=1", [session.id]);
     await client.query("DELETE FROM session_tape WHERE session_id=$1", [session.id]);
     assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 1, apply: true }), {

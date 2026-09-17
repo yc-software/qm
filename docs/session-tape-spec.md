@@ -1,6 +1,8 @@
 # The Tape: one session log, model-view first
 
-_Phases 1–2 are implemented; tape serving is the default._
+_Historical model-tape design proposal. The transcript migration plan below is superseded by the [canonical transcript cutover guide](transcript-migration.md)._
+
+The current transcript source is exact `transcript_entry` annotations in `session_tape`, exposed through `session_transcript_entries`. Original entry sequence numbers, parents, payloads, scopes, and timestamps are preserved independently of the tape's append sequence. Native model rows do not reconstruct the displayed transcript. Eligible turns use native replay; other turns reconstruct model context from the canonical entries with the existing privacy and harness checks. Transcript annotations never advance model replay coverage. Normal legacy entry writes have stopped, and request capture remains available.
 
 ## The problem, in one paragraph
 

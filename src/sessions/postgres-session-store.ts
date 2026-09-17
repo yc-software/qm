@@ -876,10 +876,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           scopeLabel: entry.scopeLabel as ScopeId,
           createdAt: now(),
         };
-        await client.query(
-          "INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-          [full.sessionId, full.seq, full.parentSeq, full.type, stored, full.scopeLabel, full.createdAt],
-        );
         await insertTapeRow(client, full.sessionId, tapeTranscriptEntryRecord(full));
         await client.query(
           `UPDATE sessions
@@ -910,11 +906,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           const payload = { ...(entry.payload as Record<string, unknown>) };
           delete payload.securityTainted;
           await insertTapeRow(client, sessionId, tapeTranscriptEntryRecord({ ...entry, payload }));
-          await client.query("UPDATE session_entries SET payload=$3 WHERE session_id=$1 AND seq=$2", [
-            sessionId,
-            entry.seq,
-            JSON.stringify(payload),
-          ]);
         }
         if (updated.rows.length > 0) return true;
         return (await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).rows.length === 1;
