@@ -3,10 +3,12 @@ import type { ScopeId } from "../../types.ts";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import { type MemoryService, ccCaptureToPersonal } from "../memory-service.ts";
+import { runMemoryMaintenance } from "../maintenance.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import { bullets, capTail, dateStr, normalize } from "../notebook.ts";
 import { type Burst, createBurstBuffer, DEFAULT_CAPTURE_MAX_TURNS, extractFacts } from "./per-turn.ts";
 import { createKeyedQueue } from "../../util/async.ts";
+import { swallow } from "../../util/errors.ts";
 
 const LOG_DIR = "memory/log";
 const LOG_RETENTION_DAYS = 14;
@@ -54,6 +56,16 @@ function stripMarker(body: string): string {
     .trim();
 }
 
+function markerCount(body: string): number {
+  const marker = body.match(MARKER_RE);
+  return marker ? Number(marker[1]) : 0;
+}
+
+function withMarker(body: string, count: number): string {
+  const notebook = stripMarker(body) || "# Memory";
+  return count > 0 ? `${notebook}\n\n<!-- captures-since-promote: ${count} -->` : notebook;
+}
+
 function recentDates(now: number, days: number): string[] {
   const out: string[] = [];
   for (let i = days - 1; i >= 0; i--) out.push(dateStr(now - i * 86_400_000));
@@ -68,24 +80,22 @@ export interface ScratchPromoteDeps {
   captureQuietMs?: number;
   captureMaxTurns?: number;
   onCaptureError?: (e: unknown, scopeId: ScopeId) => void;
+  log?: (message: string) => void;
 }
 
 export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: MemoryStrategy; memory: MemoryService } {
   const base = deps.memory;
   const workspace = deps.workspace;
   const perScope = createKeyedQueue<ScopeId>();
+  const log = deps.log ?? ((message: string) => console.error(message));
 
   async function rewriteMarker(scopeId: ScopeId, edit: (body: string) => string | null): Promise<string | null> {
+    if (!base.readHead || !base.replaceIfRevision) return null;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const head = base.readHead && base.replaceIfRevision ? await base.readHead(scopeId) : null;
-      const body = head ? head.content : await base.read(scopeId);
-      const next = edit(body);
+      const head = await base.readHead(scopeId);
+      const next = edit(head.content);
       if (next === null) return null;
-      if (!head) {
-        await base.replace(scopeId, next);
-        return next;
-      }
-      if (await base.replaceIfRevision!(scopeId, next, head.revision)) return next;
+      if (await base.replaceIfRevision(scopeId, next, head.revision)) return next;
     }
     return null;
   }
@@ -93,21 +103,13 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
   async function bumpMarker(scopeId: ScopeId, by: number): Promise<number> {
     let count = 0;
     const committed = await rewriteMarker(scopeId, (body) => {
-      const m = body.match(MARKER_RE);
-      count = (m ? Number(m[1]) : 0) + by;
-      const marker = `<!-- captures-since-promote: ${count} -->`;
-      return m ? body.replace(MARKER_RE, marker) : `${body.trim() || "# Memory"}\n\n${marker}`;
+      count = markerCount(body) + by;
+      return withMarker(body, count);
     });
     if (committed !== null) return count;
     const body = await base.read(scopeId);
     const m = body.match(MARKER_RE);
     return m ? Number(m[1]) : 0;
-  }
-
-  async function resetMarker(scopeId: ScopeId): Promise<void> {
-    await rewriteMarker(scopeId, (body) =>
-      MARKER_RE.test(body) ? body.replace(MARKER_RE, "<!-- captures-since-promote: 0 -->") : null,
-    );
   }
 
   async function readLogWindow(
@@ -157,8 +159,9 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
 
         const count = await bumpMarker(scopeId, added.length);
         if (deps.consolidateAfter > 0 && count >= deps.consolidateAfter) {
-          await resetMarker(scopeId);
-          await strategy.maintain!(scopeId).catch(() => {});
+          await maintainScope(scopeId).catch((error) =>
+            swallow(`memory promotion for ${scopeId} failed; trigger remains armed`, error),
+          );
         }
         return added.length;
       });
@@ -187,6 +190,46 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
     await ccCaptureToPersonal(memory, burst.conversationScopeId, burst.actorId, facts, at, burst.conversationLabel);
   }
 
+  async function maintainScope(scopeId: ScopeId): Promise<void> {
+    const now = Date.now();
+    const window = await readLogWindow(scopeId, now, LOG_RETENTION_DAYS);
+    if (window.length && deps.harness.oneShot) {
+      const result = await runMemoryMaintenance({
+        memory: base,
+        scopeId,
+        author: "system",
+        async prepare(raw) {
+          const currentWindow = await readLogWindow(scopeId, Date.now(), LOG_RETENTION_DAYS);
+          const scratch = currentWindow.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
+          const out = (
+            (await deps.harness.oneShot!(
+              PROMOTION_PROMPT,
+              `Current notebook:\n${stripMarker(raw) || "(empty)"}\n\nScratch log:\n${scratch}`,
+            )) ?? ""
+          ).trim();
+          if (!out || out.length > MAX_PROMOTED_NOTEBOOK_CHARS) return undefined;
+          const promoted = /^none$/i.test(out) ? stripMarker(raw) : stripMarker(out);
+          return withMarker(promoted, 0);
+        },
+      });
+      if (result === "unsupported") {
+        log(`[memory] store for ${scopeId} does not support guarded rewrite; promotion disabled (capture-only)`);
+        return;
+      }
+      if (result === "conflict") {
+        log(`[memory] promotion for ${scopeId} lost concurrent writes; trigger remains armed`);
+        return;
+      }
+      if (result === "idle") return;
+    }
+    const cutoff = dateStr(now - LOG_RETENTION_DAYS * 86_400_000);
+    for (const abs of await workspace.list(scopeId)) {
+      const rel = relative(workspace.scopeDir(scopeId), abs);
+      const match = rel.match(/^memory\/log\/(\d{4}-\d\d-\d\d)\.md$/);
+      if (match && match[1]! < cutoff) await workspace.remove(scopeId, rel);
+    }
+  }
+
   const strategy: MemoryStrategy = {
     onTurnEnd: createBurstBuffer(
       deps.captureQuietMs ?? 0,
@@ -195,36 +238,7 @@ export function createScratchPromote(deps: ScratchPromoteDeps): { strategy: Memo
       (e, burst) => deps.onCaptureError?.(e, burst.scopeId),
     ),
 
-    async maintain(scopeId) {
-      const now = Date.now();
-      const window = await readLogWindow(scopeId, now, LOG_RETENTION_DAYS);
-      if (window.length && deps.harness.oneShot) {
-        const head = base.readHead && base.replaceIfRevision ? await base.readHead(scopeId) : null;
-        const raw = head ? head.content : await base.read(scopeId);
-        const longTerm = stripMarker(raw);
-        const scratch = window.map(({ date, body }) => `## ${date}\n${body}`).join("\n\n");
-        const out = (
-          (await deps.harness.oneShot(
-            PROMOTION_PROMPT,
-            `Current notebook:\n${longTerm || "(empty)"}\n\nScratch log:\n${scratch}`,
-          )) ?? ""
-        ).trim();
-        if (!out || out.length > MAX_PROMOTED_NOTEBOOK_CHARS) return;
-        if (!/^none$/i.test(out)) {
-          if (head) {
-            await base.replaceIfRevision!(scopeId, out, head.revision);
-          } else {
-            await base.replace(scopeId, out);
-          }
-        }
-      }
-      const cutoff = dateStr(now - LOG_RETENTION_DAYS * 86_400_000);
-      for (const abs of await workspace.list(scopeId)) {
-        const rel = relative(workspace.scopeDir(scopeId), abs);
-        const m = rel.match(/^memory\/log\/(\d{4}-\d\d-\d\d)\.md$/);
-        if (m && m[1]! < cutoff) await workspace.remove(scopeId, rel);
-      }
-    },
+    maintain: (scopeId) => perScope(scopeId, () => maintainScope(scopeId)),
 
     promptLines() {
       return SCRATCH_PROMOTE_PROMPT_LINES;

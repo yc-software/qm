@@ -1,7 +1,9 @@
 import type { ScopeId } from "../../types.ts";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import type { MemoryService } from "../memory-service.ts";
+import { runMemoryMaintenance } from "../maintenance.ts";
 import { createKeyedQueue } from "../../util/async.ts";
+import { swallow } from "../../util/errors.ts";
 import { bulletText, captureDate, dateStr, isBullet } from "../notebook.ts";
 
 export const DEFAULT_CONSOLIDATE_AFTER = 10;
@@ -138,31 +140,23 @@ export function createConsolidator(deps: {
   const degraded = new Set<ScopeId>();
   async function maintain(scopeId: ScopeId): Promise<void> {
     if (degraded.has(scopeId) || !deps.harness.oneShot) return;
-    const guarded = deps.memory.readHead && deps.memory.replaceIfRevision;
-    const head = guarded ? await deps.memory.readHead!(scopeId) : undefined;
-    const body = head?.content ?? (await deps.memory.read(scopeId));
-    const bullets = body.split("\n").filter(isBullet);
-    if (!bullets.length) return;
-
-    const numbered = bullets.map((l, i) => `${i + 1}. ${bulletText(l)}`).join("\n");
-    let out: string | undefined;
-    try {
-      out = await deps.harness.oneShot(MEMORY_CONSOLIDATION_PROMPT, numbered);
-    } catch {
-      out = "";
-    }
-    const at = now();
-    const next = applyConsolidationActions(body, parseConsolidationActions(out ?? ""), at);
-    if (head) {
-      await deps.memory.replaceIfRevision!(scopeId, next, head.revision, "system");
-      return;
-    }
-    await deps.memory.replace(scopeId, next, "system");
-
-    const after = await deps.memory.read(scopeId);
-    if (after.replace(/\s+$/, "") !== next.replace(/\s+$/, "")) {
+    const result = await runMemoryMaintenance({
+      memory: deps.memory,
+      scopeId,
+      author: "system",
+      async prepare(body) {
+        const bullets = body.split("\n").filter(isBullet);
+        if (!bullets.length) return undefined;
+        const numbered = bullets.map((line, index) => `${index + 1}. ${bulletText(line)}`).join("\n");
+        const out = await deps.harness.oneShot!(MEMORY_CONSOLIDATION_PROMPT, numbered);
+        return applyConsolidationActions(body, parseConsolidationActions(out ?? ""), now());
+      },
+    });
+    if (result === "unsupported") {
       degraded.add(scopeId);
-      log(`[memory] store for ${scopeId} does not support rewrite; consolidation disabled (capture-only)`);
+      log(`[memory] store for ${scopeId} does not support guarded rewrite; consolidation disabled (capture-only)`);
+    } else if (result === "conflict") {
+      log(`[memory] consolidation for ${scopeId} lost concurrent writes; trigger remains armed`);
     }
   }
 
@@ -185,7 +179,11 @@ export function createConsolidatingMemory(
     ...base,
     async capture(s, facts, at, author, context) {
       const added = await perScope(s, () => base.capture(s, facts, at, author, context));
-      if (added > 0) void perScope(s, () => consolidator.maybeMaintain(s)).catch(() => {});
+      if (added > 0) {
+        void perScope(s, () => consolidator.maybeMaintain(s)).catch((error) =>
+          swallow(`memory consolidation for ${s} failed; trigger remains armed`, error),
+        );
+      }
       return added;
     },
     replace: (s, content, author) => perScope(s, () => base.replace(s, content, author)),

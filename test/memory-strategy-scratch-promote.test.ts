@@ -143,31 +143,33 @@ test("query greps the scratch log window in addition to the notebook", async () 
   assert.deepEqual(hits, ["(2026-01-01) zebra notebook fact", "(2026-06-10) zebra scratch fact"]);
 });
 
-test("maintain with readHead but no replaceIfRevision falls back to plain read and replace", async () => {
+test("maintain without compare-and-set stays capture-only instead of blindly overwriting", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
   const base = createMemoryService(workspace);
-  let headReads = 0;
-  const partial: typeof base = {
-    ...base,
-    async readHead(scopeId) {
-      headReads += 1;
-      return base.readHead!(scopeId);
-    },
-  };
+  const partial: typeof base = { ...base };
+  delete (partial as { readHead?: unknown }).readHead;
   delete (partial as { replaceIfRevision?: unknown }).replaceIfRevision;
-  const promoted = "# Memory\n\n- (2026-06-10) Promoted without CAS";
+  let modelCalls = 0;
+  const logs: string[] = [];
   const { memory, strategy } = createScratchPromote({
-    harness: harnessOf(() => Promise.resolve(promoted)),
+    harness: harnessOf(() => {
+      modelCalls += 1;
+      return Promise.resolve("# Memory\n\n- unsafe replacement");
+    }),
     memory: partial,
     workspace,
     consolidateAfter: 0,
+    log: (message) => logs.push(message),
   });
-  await memory.capture(SCOPE, ["Promoted without CAS"], TODAY);
+  await memory.replace(SCOPE, "# Memory\n\n- user edit");
+  await memory.capture(SCOPE, ["scratch capture"], TODAY);
 
   await withNow(TODAY, () => strategy.maintain!(SCOPE));
 
-  assert.equal(headReads, 0, "a snapshot revision is never taken when it cannot be enforced");
-  assert.equal(await workspace.read(SCOPE, MEMORY_FILE), `${promoted}\n`);
+  assert.equal(modelCalls, 0);
+  assert.match(await base.read(SCOPE), /user edit/);
+  assert.match((await workspace.read(SCOPE, logPath(TODAY))) ?? "", /scratch capture/);
+  assert.match(logs[0] ?? "", /capture-only/);
 });
 
 test("maintain promotes: one-shot judges the window, rewrites MEMORY.md, leaves the log untouched", async () => {
@@ -294,15 +296,105 @@ test("strategy wiring: scratch-promote parses, wraps the store, and ships prompt
 });
 
 test("a save landing during promotion is not reverted by the promote write", async () => {
+  let calls = 0;
   const { base, strategy, memory } = fresh({
     oneShot: async () => {
-      await base.replace(SCOPE, "# Memory\n\n- (2026-06-10) the newer edit");
-      return "# Memory\n\n- (2026-06-10) promoted fact";
+      calls += 1;
+      if (calls === 1) {
+        await base.replace(SCOPE, "# Memory\n\n- (2026-06-10) the newer edit");
+        return "# Memory\n\n- (2026-06-10) stale promotion";
+      }
+      return "NONE";
     },
   });
   await withNow(TODAY, () => memory.capture(SCOPE, ["something recent"], TODAY));
   await withNow(TODAY, () => strategy.maintain!(SCOPE));
   const after = await base.read(SCOPE);
-  assert.match(after, /the newer edit/, "the mid-flight edit survives");
-  assert.doesNotMatch(after, /promoted fact/, "the stale promotion is dropped, not applied");
+  assert.equal(calls, 2);
+  assert.match(after, /the newer edit/, "the retry is based on the mid-flight edit");
+  assert.doesNotMatch(after, /stale promotion/, "the stale model result is never replayed");
+});
+
+test("promotion retries from a fresh snapshot and consumes every pending capture only after commit", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
+  const base = createMemoryService(workspace);
+  let started!: () => void;
+  const modelStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const prompts: string[] = [];
+  const first = createScratchPromote({
+    harness: harnessOf(async (_system, prompt) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        started();
+        await blocked;
+      }
+      return prompts.length === 1 ? "# Memory\n\n- stale promotion" : "# Memory\n\n- first capture\n- second capture";
+    }),
+    memory: base,
+    workspace,
+    consolidateAfter: 0,
+  });
+  const second = createScratchPromote({ harness: harnessOf(), memory: base, workspace, consolidateAfter: 0 });
+  await withNow(TODAY, () => first.memory.capture(SCOPE, ["first capture"], TODAY));
+
+  const maintenance = withNow(TODAY, () => first.strategy.maintain!(SCOPE));
+  await modelStarted;
+  await withNow(TODAY, () => second.memory.capture(SCOPE, ["second capture"], TODAY));
+  assert.match(await base.read(SCOPE), /captures-since-promote: 2/);
+  release();
+  await maintenance;
+
+  assert.equal(prompts.length, 2);
+  assert.doesNotMatch(prompts[0]!, /second capture/);
+  assert.match(prompts[1]!, /second capture/, "the retry rebuilds input instead of replaying a stale model result");
+  const after = await base.read(SCOPE);
+  assert.match(after, /first capture/);
+  assert.match(after, /second capture/);
+  assert.doesNotMatch(after, /stale promotion/);
+  assert.doesNotMatch(after, /captures-since-promote/, "the committed pass atomically consumes its trigger credit");
+});
+
+test("promotion provider and write failures retain pending trigger credit", async () => {
+  let providerCalls = 0;
+  const providerFailure = fresh({
+    oneShot() {
+      providerCalls += 1;
+      return providerCalls === 1
+        ? Promise.reject(new Error("provider unavailable"))
+        : Promise.resolve("# Memory\n\n- provider failure capture\n- retry capture");
+    },
+    consolidateAfter: 1,
+  });
+  await withNow(TODAY, () => providerFailure.memory.capture(SCOPE, ["provider failure capture"], TODAY));
+  assert.match(await providerFailure.base.read(SCOPE), /captures-since-promote: 1/);
+  await withNow(TODAY, () => providerFailure.memory.capture(SCOPE, ["retry capture"], TODAY));
+  const afterRetry = await providerFailure.base.read(SCOPE);
+  assert.match(afterRetry, /provider failure capture/);
+  assert.match(afterRetry, /retry capture/);
+  assert.doesNotMatch(afterRetry, /captures-since-promote/);
+
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "msp-")));
+  const base = createMemoryService(workspace);
+  const failingWrite: typeof base = {
+    ...base,
+    async replaceIfRevision(scopeId, content, revision, author) {
+      if (!/captures-since-promote: [1-9]/.test(content)) throw new Error("write unavailable");
+      return base.replaceIfRevision!(scopeId, content, revision, author);
+    },
+  };
+  const wrapped = createScratchPromote({
+    harness: harnessOf(() => Promise.resolve("# Memory\n\n- promoted")),
+    memory: failingWrite,
+    workspace,
+    consolidateAfter: 1,
+  });
+  await withNow(TODAY, () => wrapped.memory.capture(SCOPE, ["write failure capture"], TODAY));
+  assert.match(await base.read(SCOPE), /captures-since-promote: 1/);
+  assert.match((await workspace.read(SCOPE, logPath(TODAY))) ?? "", /write failure capture/);
 });

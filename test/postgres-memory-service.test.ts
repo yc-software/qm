@@ -1,6 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { runMemoryMaintenance } from "../src/memory/maintenance.ts";
 import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -132,6 +133,50 @@ test("pg memory: no-op capture/replace append no revision", { skip }, async () =
     "only the one real write is logged",
   );
   assert.deepEqual(await revisions(scopeId("personal", "U6b")), [], "clearing an empty notebook logs nothing");
+});
+
+test("pg memory: maintenance retries across service instances from the winning revision", { skip }, async () => {
+  const first = createPostgresMemoryService(URL!);
+  const second = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "maintenance-race");
+  await first.capture(sid, ["original fact"], at);
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const inputs: string[] = [];
+  const maintenance = runMemoryMaintenance({
+    memory: first,
+    scopeId: sid,
+    author: "system",
+    async prepare(content) {
+      inputs.push(content);
+      if (inputs.length === 1) {
+        started();
+        await blocked;
+        return "# Memory\n\n- stale result";
+      }
+      return `${content.replace(/\s+$/, "")}\n- fresh result`;
+    },
+  });
+
+  await waiting;
+  await second.capture(sid, ["concurrent capture"], at);
+  release();
+
+  assert.equal(await maintenance, "committed");
+  assert.equal(inputs.length, 2);
+  assert.doesNotMatch(inputs[0]!, /concurrent capture/);
+  assert.match(inputs[1]!, /concurrent capture/);
+  const after = await first.read(sid);
+  assert.match(after, /original fact/);
+  assert.match(after, /concurrent capture/);
+  assert.match(after, /fresh result/);
+  assert.doesNotMatch(after, /stale result/);
 });
 
 test("pg memory: metadata sizes every notebook from head revisions (matches read())", { skip }, async () => {
