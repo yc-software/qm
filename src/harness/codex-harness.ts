@@ -1,3 +1,4 @@
+import { documentsFallbackText } from "../core/document-inputs.ts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -1010,7 +1011,9 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         rejectCompleted = rejectTurn;
       });
       void completed.catch(() => undefined);
-      inputText = codexTurnInputText(turn);
+      inputText = [codexTurnInputText(turn), await documentsFallbackText(turn.documents ?? [], turn.cancel)].join(
+        "\n\n",
+      );
       input = [
         userInput(inputText),
         ...(turn.images ?? []).map((image) => ({
@@ -1054,7 +1057,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
             type: "message",
             role: "user",
             content: [
-              { type: "input_text", text: inputText },
+              { type: "input_text", text: codexTurnInputText(turn) },
               ...(turn.images ?? []).map((image) => ({
                 type: "input_image",
                 image_url: "[image bytes omitted]",

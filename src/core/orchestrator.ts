@@ -1,3 +1,4 @@
+import { documentText, historicalDocumentMetas, isTextDocument, loadDocumentInputs } from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope } from "../resolution/scope-membership.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
@@ -2653,25 +2654,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.harness.turns.resetSession?.(session.id);
         }
         const visibleHistory = filterHistory(forModelContext(rawEntries, { includeSecurityTainted: false }));
-        const rehydrateTape = (messages: readonly unknown[]) => {
-          let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
-          const mayReadArtifact = async (artifact: FileArtifact): Promise<boolean> => {
-            if (
-              conversation.audience.every((principal) =>
-                principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
-              )
+        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
+        const mayReadArtifact = async (artifact: FileArtifact): Promise<boolean> => {
+          if (
+            conversation.audience.every((principal) =>
+              principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
             )
-              return true;
-            readableHandles ??= await deps.acl.handlesForAudience(
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-              principalEntitledToScope,
-            );
-            return readableHandles.some(
-              (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.ownerPath === artifact.path,
-            );
-          };
+          )
+            return true;
+          readableHandles ??= await deps.acl.handlesForAudience(
+            conversation.audience,
+            scopeId,
+            resolution.orgScopeId,
+            principalEntitledToScope,
+          );
+          return readableHandles.some(
+            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.ownerPath === artifact.path,
+          );
+        };
+        const rehydrateTape = (messages: readonly unknown[]) => {
           return rehydrateFoldImages(
             messages,
             async (artifactRef, remainingBytes) => {
@@ -2685,6 +2686,68 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             MAX_HISTORY_IMAGE_BYTES,
           );
         };
+        const documentInputs = strictReadOnly
+          ? { documents: [], notices: [] }
+          : await loadDocumentInputs(
+              deps.files,
+              [
+                ...historicalDocumentMetas(
+                  filterHistory(
+                    forSearchView(
+                      contextWindow.totalEntries > rawEntries.length
+                        ? await deps.sessions.getEntries(session.id)
+                        : rawEntries,
+                    ),
+                  ),
+                ),
+                ...inbound.metas,
+              ],
+              mayReadArtifact,
+              undefined,
+              turnAbort.signal,
+            );
+        let documentsUnscreened = false;
+        if (securityPolicy.inboundScreening === "external") {
+          for (const document of [...documentInputs.documents]) {
+            documentsUnscreened ||= !isTextDocument(document);
+            if (!(deps.securityScreener || deps.harness.models.screenSecurity)) {
+              documentsUnscreened = true;
+              continue;
+            }
+            let content: string;
+            try {
+              content = await documentText(document, turnAbort.signal);
+            } catch {
+              turnAbort.signal.throwIfAborted();
+              documentsUnscreened = true;
+              continue;
+            }
+            const verdicts: Array<SecurityScreenVerdict | undefined> = [];
+            for (const chunk of securityScreenChunks("tool_result:inbound_document", content)) {
+              turnAbort.signal.throwIfAborted();
+              const verdict = await classifySecurityData(chunk, actor.id, scopeId, undefined, {
+                hook: "tool_response",
+                request: input.text,
+                surface: "inbound_file",
+                origin: input.origin.kind,
+              });
+              verdicts.push(verdict);
+              if (verdict?.decision === "strict") break;
+            }
+            const verdict =
+              verdicts.find((value) => value?.decision === "strict") ??
+              verdicts.find((value) => value?.unscreened) ??
+              verdicts[0];
+            if (verdict?.decision === "strict") {
+              documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
+              documentInputs.notices.push(`${document.name}: document withheld by the external-data security screen.`);
+            } else if (
+              !verdicts.every((value) => value?.decision === "auto" && !value.unscreened) ||
+              content.includes("[Document text truncated")
+            )
+              documentsUnscreened = true;
+          }
+        }
         const tapeRows = await (async () => {
           if (historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES) return undefined;
           try {
@@ -2743,7 +2806,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         })();
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef);
         const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
-        const unscreenedNote = inputUnscreened || inbound.unscreened.length ? unscreenedNotice("inbound content") : "";
+        const unscreenedNote =
+          inputUnscreened || inbound.unscreened.length || documentsUnscreened
+            ? unscreenedNotice("inbound content")
+            : "";
         const turnEnvironment = environmentNote(
           [manifest, principalDelivered, sender, unscreenedNote, input.conversationHeader?.trim(), volatileContext]
             .filter((s) => s && s.trim())
@@ -3123,11 +3189,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             input: harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
-            ...(turnEnvironment ? { environment: turnEnvironment } : {}),
+            ...([turnEnvironment, ...documentInputs.notices].filter(Boolean).length
+              ? { environment: [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n") }
+              : {}),
             ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
             ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
+            documents: documentInputs.documents,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,

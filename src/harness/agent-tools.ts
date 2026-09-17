@@ -1,3 +1,4 @@
+import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createGrindMeter, grindState } from "./grind.ts";
 import type { RuntimeHandoff, RuntimeRequest } from "./runtime-types.ts";
@@ -46,6 +47,7 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
 }
 
 export interface ToolContextRef {
+  documents?: DocumentInput[];
   runtimeHandoff?: RuntimeHandoff;
   runtimeRunId?: string;
   runtimeActorId?: string;

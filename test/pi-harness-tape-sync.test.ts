@@ -286,3 +286,32 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     await store.releaseLease(lease);
   }
 });
+
+test("native document bytes reach the provider on every step without entering the transcript tape", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [], tape: [] };
+  const realFetch = globalThis.fetch;
+  const requests: Array<Record<string, unknown>> = [];
+  const dataBase64 = Buffer.from("%PDF-document-fixture").toString("base64");
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return sse(textReplyEvents("read the document"));
+  }) as typeof fetch;
+  try {
+    await harness.turns.runTurn(
+      turnInput("native-documents", sink, {
+        documents: [{ name: "report.pdf", mimeType: "application/pdf", dataBase64, artifactId: "doc1" }],
+      }),
+    );
+    assert.match(JSON.stringify(requests), /"type":"document"/);
+    assert.ok(JSON.stringify(requests).includes(dataBase64));
+    assert.ok(!JSON.stringify(sink.tape).includes(dataBase64));
+    await harness.turns.runTurn(turnInput("native-documents", sink));
+    assert.ok(
+      !JSON.stringify(requests.at(-1)).includes(dataBase64),
+      "reused sessions must clear documents when the audience no longer supplies them",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

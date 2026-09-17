@@ -1,3 +1,4 @@
+import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -719,29 +720,46 @@ export function seedRawMessagesIntoSession(session: unknown, messages: readonly 
 const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
 export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX_LLM_REQUEST_BYTES): unknown {
   const p = payload as Record<string, unknown> | null;
-  let listKey: "messages" | "input" | undefined;
+  let listKey: "messages" | "input" | "contents" | undefined;
   if (Array.isArray(p?.messages)) listKey = "messages";
   else if (Array.isArray(p?.input)) listKey = "input";
+  else if (Array.isArray(p?.contents)) listKey = "contents";
   if (!p || !listKey) return payload;
   const totalBytes = Buffer.byteLength(JSON.stringify(payload));
   if (totalBytes <= maxBytes) return payload;
 
   const inlineImageChars = (b: unknown): number => {
-    const block = b as { type?: string; source?: { type?: string; data?: unknown }; image_url?: unknown };
-    if (block?.type === "image" && block.source?.type === "base64" && typeof block.source.data === "string") {
+    const block = b as {
+      type?: string;
+      source?: { type?: string; data?: unknown };
+      image_url?: unknown;
+      file_data?: string;
+      file?: { file_data?: string };
+      inlineData?: { data?: string };
+    };
+    if (
+      (block?.type === "image" || block?.type === "document") &&
+      block.source?.type === "base64" &&
+      typeof block.source.data === "string"
+    ) {
       return block.source.data.length;
     }
     if (block?.type === "input_image" && typeof block.image_url === "string" && block.image_url.startsWith("data:")) {
       return block.image_url.length;
     }
-    return 0;
+    return block?.file_data?.length ?? block?.file?.file_data?.length ?? block?.inlineData?.data?.length ?? 0;
   };
   const placeholder = (b: unknown) => {
     const block = b as { type?: string; cache_control?: unknown };
     const cache = block.cache_control !== undefined ? { cache_control: block.cache_control } : undefined;
-    return block.type === "input_image"
-      ? { type: "input_text", text: ELIDED_IMAGE_TEXT }
-      : { type: "text", text: ELIDED_IMAGE_TEXT, ...cache };
+    const text =
+      ["document", "input_file", "file"].includes(block.type ?? "") || (b as { inlineData?: unknown })?.inlineData
+        ? "[Document omitted because the model request exceeds its byte budget. Do not claim to have read it.]"
+        : ELIDED_IMAGE_TEXT;
+    if (listKey === "contents") return { text };
+    return block.type === "input_image" || block.type === "input_file"
+      ? { type: "input_text", text }
+      : { type: "text", text, ...cache };
   };
   let toShed = totalBytes - (maxBytes - LLM_REQUEST_TRIM_SLACK_BYTES);
   const trimContent = (content: unknown): unknown => {
@@ -769,10 +787,11 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
 
   const items = (p[listKey] as unknown[]).map((m) => {
     if (toShed <= 0) return m;
-    const msg = m as { content?: unknown };
-    if (!Array.isArray(msg?.content)) return m;
-    const content = trimContent(msg.content);
-    return content === msg.content ? m : { ...(m as Record<string, unknown>), content };
+    const msg = m as { content?: unknown; parts?: unknown };
+    const key = listKey === "contents" ? "parts" : "content";
+    if (!Array.isArray(msg?.[key])) return m;
+    const content = trimContent(msg[key]);
+    return content === msg[key] ? m : { ...(m as Record<string, unknown>), [key]: content };
   });
   return { ...p, [listKey]: items };
 }
@@ -781,7 +800,7 @@ function redactImageBytes(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(redactImageBytes);
   if (v && typeof v === "object") {
     const o = v as Record<string, unknown>;
-    if (o.type === "image" && o.source && typeof o.source === "object") {
+    if ((o.type === "image" || o.type === "document") && o.source && typeof o.source === "object") {
       const src = o.source as Record<string, unknown>;
       if (typeof src.data === "string") {
         return {
@@ -797,7 +816,15 @@ function redactImageBytes(v: unknown): unknown {
       return { ...o, data: `<redacted_thinking ${o.data.length} chars omitted>` };
     }
     const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(o)) out[k] = redactImageBytes(val);
+    for (const [k, val] of Object.entries(o)) {
+      out[k] =
+        typeof val === "string" &&
+        (k === "file_data" ||
+          (k === "image_url" && val.startsWith("data:")) ||
+          (k === "data" && typeof o.mimeType === "string"))
+          ? `<file bytes omitted: ${val.length} chars>`
+          : redactImageBytes(val);
+    }
     return out;
   }
   return v;
@@ -1627,14 +1654,19 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ref.pendingPrepareNextTurn = undefined;
           ref.pendingTransformContext = undefined;
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          const guarded = guardOutputBudget(payload, model);
+          const result = prior ? await prior(payload, model) : payload;
+          let finalPayload = await withDocumentInputs(
+            result ?? payload,
+            model as DocumentModel,
+            ref.documents ?? [],
+            ref.abortSignal,
+          );
+          const guarded = guardOutputBudget(finalPayload, model);
           if (guarded.kind === "raised") {
             console.error(
               `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
             );
           }
-          const result = prior ? await prior(payload, model) : payload;
-          let finalPayload = result ?? payload;
           try {
             finalPayload = trimPayloadToByteBudget(finalPayload);
           } catch (e) {
@@ -1738,6 +1770,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         try {
           const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
           entry.ref.current = turn.tools;
+          entry.ref.documents = turn.documents;
           entry.ref.runtimeHandoff = undefined;
           entry.ref.runtimeMutationPending = false;
           entry.ref.runtimeInFlight = new Set();

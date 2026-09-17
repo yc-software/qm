@@ -1,3 +1,4 @@
+import { documentBlocks } from "./document-inputs.ts";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chownSync, mkdtempSync, rmSync } from "node:fs";
@@ -261,6 +262,8 @@ function streamDelta(message: SDKMessage): { text?: string; textStart?: boolean 
 export function stripClaudeImageBytes(message: SDKMessage): unknown {
   return JSON.parse(
     JSON.stringify(message, function (key, value) {
+      if (value && typeof value === "object" && value.type === "document")
+        return { type: "text", text: "[document omitted; restored from attachments]" };
       return key === "data" && typeof value === "string" && (this as { type?: unknown }).type === "base64"
         ? "[image omitted]"
         : value;
@@ -288,6 +291,16 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
     if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    const preparedDocuments = await documentBlocks(
+      turn.documents ?? [],
+      {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        input: ["image"],
+      },
+      undefined,
+      turn.cancel,
+    );
     const jail = mkdtempSync(join(tmpdir(), "qm-claude-"));
     const processIdentity = claudeProcessIdentity();
     if (processIdentity) chownSync(jail, processIdentity.uid, processIdentity.gid);
@@ -348,6 +361,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const turnEffort = effort(turn.runtime?.effortLevel);
     const text = promptText(turn);
     const initial = userMessage(text, turn.images);
+    if (turn.documents?.length && Array.isArray(initial.message.content)) {
+      initial.message.content.push(...(preparedDocuments as unknown as typeof initial.message.content));
+    }
     let pendingPrompts = 1;
     let stopped = false;
     let interrupted = false;
@@ -544,7 +560,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     };
     try {
       await sdkQuery.initializationResult();
-      await appendTape(initial, true);
+      await appendTape(stripClaudeImageBytes(userMessage(text, turn.images)), true);
       queue.push(initial);
       const consume = (async () => {
         for await (const message of sdkQuery) {

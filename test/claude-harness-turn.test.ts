@@ -540,3 +540,31 @@ test("steering forwards prepared images and file paths while retaining the origi
   assert.equal((entry.payload as { text: string }).text, "check this");
   assert.equal((entry.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
 });
+
+test("Claude sends documents without persisting their contents in the tape", async () => {
+  const pdf = Buffer.from("private-pdf-bytes").toString("base64");
+  const secret = "private-document-text";
+  let sent = "";
+  currentScript = async function* (prompts) {
+    for await (const prompt of prompts) {
+      sent = JSON.stringify(prompt);
+      yield resultMessage("Read both");
+      return;
+    }
+  };
+  const tape: unknown[] = [];
+  const { turn } = harnessTurn({
+    documents: [
+      { name: "a.pdf", mimeType: "application/pdf", dataBase64: pdf },
+      { name: "a.txt", mimeType: "text/plain", dataBase64: Buffer.from(secret).toString("base64") },
+    ],
+    tape: async (entry) => {
+      tape.push(entry);
+    },
+  });
+  await createClaudeHarness({}).turns.runTurn(turn);
+  assert.ok(sent.includes(pdf));
+  assert.ok(sent.includes(secret));
+  assert.ok(!JSON.stringify(tape).includes(pdf));
+  assert.ok(!JSON.stringify(tape).includes(secret));
+});

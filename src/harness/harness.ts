@@ -1,3 +1,4 @@
+import type { DocumentInput } from "../core/document-inputs.ts";
 import type { RuntimeControl, RuntimeHandoff } from "./runtime-types.ts";
 import type { AttachmentMeta, ConversationTurn, ScopeId, Session, SessionEntry, TurnRequest } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
@@ -86,6 +87,7 @@ export interface HarnessTurnInput {
     text: string,
     request?: TurnRequest,
   ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[] }>;
+  documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;

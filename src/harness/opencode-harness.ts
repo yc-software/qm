@@ -1,3 +1,4 @@
+import { documentExtension, documentFallbackText } from "../core/document-inputs.ts";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -996,6 +997,26 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         url: `data:${image.mimeType};base64,${image.dataBase64}`,
       })),
     ];
+    const tapePromptParts = [...promptParts];
+    let remainingDocumentChars = 100_000;
+    for (const document of turn.documents ?? []) {
+      if (documentExtension(document) === "pdf" && ["anthropic", "openai", "google"].includes(model.providerID)) {
+        promptParts.push({
+          type: "file",
+          mime: "application/pdf",
+          filename: document.name,
+          url: `data:application/pdf;base64,${document.dataBase64}`,
+        });
+      } else {
+        const content = await documentFallbackText(document, turn.cancel);
+        const text =
+          content.length > remainingDocumentChars
+            ? `${content.slice(0, remainingDocumentChars)}\n[Document text truncated to fit the model context.]`
+            : content;
+        remainingDocumentChars = Math.max(0, remainingDocumentChars - content.length);
+        promptParts.push({ type: "text", text });
+      }
+    }
     const enabled = Object.fromEntries(definitions.map((tool) => [tool.name, false]));
     for (const tool of tools) enabled[bridgeToolName(tool.name)] = true;
     enabled.task = !turn.readOnly;
@@ -1043,7 +1064,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           await turn.tape({
             kind: "message",
             harness: "opencode",
-            payload: stripDataUrls(message),
+            payload: stripDataUrls(isTrigger ? { ...message, parts: tapePromptParts } : message),
             scopeLabel: turn.scopeLabel,
             ...(isTrigger
               ? {

@@ -138,6 +138,9 @@ export function createMockHarness(): Harness {
             ...(turn.images?.length
               ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
               : {}),
+            ...(turn.documents?.length
+              ? { documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })) }
+              : {}),
             ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
           },
           truncated: false,
@@ -842,6 +845,11 @@ export function createMockHarness(): Harness {
               messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
               ...(turn.images?.length
                 ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
+                : {}),
+              ...(turn.documents?.length
+                ? {
+                    documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })),
+                  }
                 : {}),
               ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
             },
