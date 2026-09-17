@@ -35,7 +35,6 @@ for (const ext of [
   "xls",
   "ppt",
   "odt",
-  "rtf",
   "txt",
   "md",
   "csv",
@@ -147,8 +146,8 @@ test("Google document parts preserve PDFs and use text for office files", async 
     { api: "google-generative-ai", input: ["image"] },
     [await fixture("pdf"), await fixture("docx")],
   )) as { contents: { parts: Record<string, unknown>[] }[] };
-  assert.ok(payload.contents[0]!.parts[2]!.inlineData);
-  assert.match(String(payload.contents[0]!.parts[3]!.text), /QUARTZ-731/);
+  assert.ok(payload.contents[0]!.parts.some((part) => part.inlineData));
+  assert.match(String(payload.contents[0]!.parts.at(-1)!.text), /QUARTZ-731/);
 });
 
 test("invalid binary documents and empty scans never masquerade as read documents", async () => {
@@ -294,7 +293,7 @@ test("extensionless documents use their MIME type for native and fallback input"
   assert.equal(nativeDocumentFormat(anthropic, pdf), "anthropic");
   assert.match(await documentFallbackText(pdf), /PDF-QUARTZ-731/);
   const blocks = await documentBlocks([pdf], openai);
-  assert.equal(blocks[0]?.filename, "download.pdf");
+  assert.equal(blocks.at(-1)?.filename, "download.pdf");
   const txt = {
     name: "download",
     mimeType: "text/plain; charset=utf-8",
@@ -309,4 +308,24 @@ test("scanned PDFs explicitly report unavailable text on a text-only route", asy
     await documentFallbackText({ name: "scan.pdf", mimeType: "application/pdf", dataBase64 }),
     /No extractable text/,
   );
+});
+
+test("native file inputs normalize text MIME types rejected by the provider", async () => {
+  for (const ext of ["xml", "ts", "yaml"]) {
+    const blocks = await documentBlocks([await fixture(ext)], openai);
+    assert.match(String(blocks.at(-1)?.file_data), /^data:text\/plain;base64,/);
+  }
+});
+
+test("unknown vision gateways do not assume native PDF support", async () => {
+  assert.equal(
+    nativeDocumentFormat({ api: "openai-completions", provider: "qm:gateway", input: ["image"] }, await fixture("pdf")),
+    undefined,
+  );
+});
+
+test("RTF uses reliable text extraction on Responses routes", async () => {
+  const blocks = await documentBlocks([await fixture("rtf")], openai);
+  assert.equal(blocks[0]?.type, "input_text");
+  assert.match(String(blocks[0]?.text), /RTF-QUARTZ-731/);
 });

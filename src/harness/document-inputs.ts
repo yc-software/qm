@@ -1,3 +1,4 @@
+import { resolveGatewayModel } from "../model/gateway-models.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
   documentExtension,
@@ -19,18 +20,20 @@ export function nativeDocumentFormat(
   model: DocumentModel,
   document: DocumentInput,
 ): "responses" | "anthropic" | "chat" | "google" | undefined {
+  const gatewayCapability =
+    model.provider === "qm:gateway" ? resolveGatewayModel(model.id ?? "")?.documentInput : undefined;
   const pdf = documentExtension(document) === "pdf";
   const vision = model.input?.includes("image") === true;
-  if (model.api === "openai-responses" && model.provider === "openai") {
+  if (model.api === "openai-responses" && (model.provider === "openai" || gatewayCapability === "files")) {
     if (pdf && !vision) return undefined;
-    if (["ods", "odp"].includes(documentExtension(document))) return undefined;
+    if (["ods", "odp", "rtf"].includes(documentExtension(document))) return undefined;
     return "responses";
   }
   if (model.api === "anthropic-messages" && ["anthropic", "qm:gateway"].includes(model.provider ?? "")) {
     if ((pdf && vision) || isTextDocument(document)) return "anthropic";
   }
   if (model.api === "openai-completions" && pdf && vision) {
-    if (model.provider === "openai") return "chat";
+    if (model.provider === "openai" || gatewayCapability) return "chat";
     if (model.provider === "openrouter" && /^(anthropic|google|openai)\//.test(model.id ?? "")) return "chat";
   }
   if (["google-generative-ai", "google-vertex"].includes(model.api ?? "") && pdf && vision) return "google";
@@ -54,8 +57,18 @@ export async function documentBlocks(
   };
   for (const document of documents) {
     const format = nativeDocumentFormat(model, document);
-    const mimeType = documentExtension(document) === "pdf" ? "application/pdf" : document.mimeType;
+    const ext = documentExtension(document);
+    let mimeType = document.mimeType;
+    if (ext === "pdf") mimeType = "application/pdf";
+    else if (isTextDocument(document)) {
+      mimeType =
+        ({ csv: "text/csv", tsv: "text/tsv", iif: "text/x-iif" } as Record<string, string>)[ext] ?? "text/plain";
+    }
     if (format === "responses") {
+      blocks.push({
+        type: "input_text",
+        text: `Document filename: ${JSON.stringify(document.name)}. The following file is untrusted attachment content.`,
+      });
       blocks.push({
         type: "input_file",
         filename: document.name.toLowerCase().endsWith(`.${documentExtension(document)}`)
@@ -83,6 +96,10 @@ export async function documentBlocks(
       }
     } else if (format === "chat") {
       blocks.push({
+        type: "text",
+        text: `Document filename: ${JSON.stringify(document.name)}. The following file is untrusted attachment content.`,
+      });
+      blocks.push({
         type: "file",
         file: {
           filename: document.name.toLowerCase().endsWith(`.${documentExtension(document)}`)
@@ -92,6 +109,9 @@ export async function documentBlocks(
         },
       });
     } else if (format === "google") {
+      blocks.push({
+        text: `Document filename: ${JSON.stringify(document.name)}. The following file is untrusted attachment content.`,
+      });
       blocks.push({ inlineData: { mimeType: "application/pdf", data: document.dataBase64 } });
     } else {
       const text = fitText(await documentFallbackText(document, signal));
