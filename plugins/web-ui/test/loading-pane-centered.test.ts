@@ -4,6 +4,7 @@ import test from "node:test";
 
 const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
+const sessions = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
 
 test("the loading pane renders chat-loading as the shell's only child", () => {
   const fn = chat.match(/function mountLoadingPane\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
@@ -18,4 +19,14 @@ test("chat-loading spans every shell grid row so the spinner centers vertically"
   assert.match(block, /grid-row: 1 \/ -1;/, "without spanning all rows the spinner hugs the top auto row");
   assert.match(block, /align-items: center;/);
   assert.match(block, /justify-content: center;/);
+});
+
+test("opening a conversation replaces the previous pane before waiting for its transcript", () => {
+  const start = sessions.indexOf("export async function openSessionInto");
+  const body = sessions.slice(start, sessions.indexOf("\nexport ", start + 1));
+  const loading = body.indexOf("conv.mountLoadingPane()");
+  const waiting = body.indexOf("await Promise.all");
+  assert.ok(loading >= 0, "the target conversation must claim the pane with its loading state");
+  assert.ok(loading < waiting, "the previous conversation must disappear before transcript loading can yield");
+  assert.doesNotMatch(body, /setTimeout/, "a delay exposes the previous or new-conversation UI between clicks");
 });
