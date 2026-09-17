@@ -33,10 +33,12 @@ The browser upload flow on the Codex text fallback route recovered all 26 format
 
 A real Claude SDK request using the same document-block builder recovered the native text-PDF and scanned-PDF markers, plus DOCX/XLSX/PPTX text fallback and a native plain-text document, in 8.0 seconds end to end. This is a small-fixture smoke test, not a latency guarantee.
 
-OpenRouter-specific native acceptance, encrypted/large provider inputs, and the Slack upload matrix remain release QA requirements. Local schema tests do not substitute for these checks.
+OpenRouter-specific native acceptance and the Slack upload matrix remain release QA requirements. Local schema tests do not substitute for these checks.
 
 The development Slack bot also passed a Firefox browser message/reply smoke test. The document upload matrix still needs to run through Slack; the native file chooser prevented completing that check in this session. Final affected validation: 162 passed, one skipped, zero failed; TypeScript, changed-file lint and lockfile dry-run checks passed. Independent review found no remaining code blockers.
 
 Authenticated LiteLLM checks verified scanned PDF comprehension on Anthropic Messages and OpenAI/Gemini Chat Completions. OpenAI Responses read 26 native fixtures across office, legacy office and text formats; RTF used text fallback after the provider accepted its file but returned no readable content. Explicit filename labels preserve attachment identity when provider extraction omits filename metadata. Text MIME types are normalized to accepted wire types; these checks caught rejected XML and TypeScript labels that serialization tests had missed. Gateway discovery selects Responses for OpenAI/Azure groups and retains provider-based document capabilities, so unknown vision models do not inherit assumed PDF support.
 
 A live Pi gateway session using discovered OpenAI metadata also passed a read-tool round trip, a follow-up retaining the tool result without another call, and native scanned-PDF comprehension without tools. The measured turns took 5.6, 1.6 and 2.2 seconds respectively. After the gateway fixes, 99 affected tests, TypeScript and changed-file lint passed.
+
+Encrypted PDF fallback was verified to report unavailable content without revealing its verification marker. Native OpenAI requests rejected encrypted and malformed PDFs with HTTP 400 `invalid_file`; they require an unlocked, valid replacement. Native validation errors currently fail the request, including when a bad attachment accompanies readable files.

@@ -329,3 +329,12 @@ test("RTF uses reliable text extraction on Responses routes", async () => {
   assert.equal(blocks[0]?.type, "input_text");
   assert.match(String(blocks[0]?.text), /RTF-QUARTZ-731/);
 });
+
+test("encrypted PDFs do not expose content through text fallback", async () => {
+  const dataBase64 = (await readFile(new URL("./fixtures/documents/encrypted.pdf", import.meta.url))).toString(
+    "base64",
+  );
+  const text = await documentFallbackText({ name: "encrypted.pdf", mimeType: "application/pdf", dataBase64 });
+  assert.match(text, /could not be included/);
+  assert.doesNotMatch(text, /QUARTZ-731/);
+});
