@@ -44,7 +44,8 @@ npm exec qm -- check --live
 
 `secrets push` ownership-marks service apps before delivering secrets. When
 storage credentials or `DATABASE_URL` are absent, deployment creates or reuses
-private Tigris and Managed Postgres.
+private Tigris and Managed Postgres. The core defaults to a
+2-CPU performance VM with 4 GB of memory for its 16 workers.
 `check --live` proves service health and durable object storage.
 
 After the first successful deployment, rerun `npm exec qm -- up` and confirm it

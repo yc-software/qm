@@ -18,6 +18,13 @@ test("acme fly config derives the checked-in deploy/<svc>/fly.toml byte-for-byte
   }
 });
 
+test("Fly core defaults can sustain the 16-worker baseline", () => {
+  const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
+  const core = derivedTomlFor(config, "core", repoRoot);
+  assert.match(core, /\[\[restart\]\]\n\s*policy = "always"/);
+  assert.match(core, /\[\[vm\]\]\n\s*size = "performance-2x"\n\s*memory = "4gb"/);
+});
+
 test("web-ui serves at the root in both shapes — publicUrl IS the web-ui URL (no /web-ui suffix)", () => {
   const url = "https://acme-web-ui.fly.dev";
   assert.equal(orgEnv("core", "acme", url, false).WEB_UI_PUBLIC_URL, url);
