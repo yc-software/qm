@@ -161,9 +161,6 @@ export function createMessagingMethods(
           throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
         if (!input.members?.length) throw new Error("scopeShared requires a member snapshot");
       }
-      if ((await deps.crons.list()).filter((cron) => cron.owner === input.owner).length >= 100) {
-        throw new Error("cron limit reached for this owner (100)");
-      }
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
         at: Date.now(),

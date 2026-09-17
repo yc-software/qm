@@ -192,6 +192,34 @@ test("cron create with a destinationKey resolves to that menu destination, and r
   assert.equal(r.cron.destination?.unfurlLinks, false);
 });
 
+for (const state of ["active", "paused", "archived", "completed"] as const) {
+  test(`cron creation is not limited by 101 ${state} tasks owned by the same person`, async () => {
+    const { built, control } = setup();
+    const firstFireAt = Date.now() + 60_000;
+    for (let i = 0; i < 101; i++) {
+      const cron = await built.crons.create({
+        owner: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        schedule: state === "completed" ? { firstFireAt } : { everyMs: 3_600_000 },
+        action: `existing task ${i}`,
+      });
+      if (state === "paused") await built.crons.setEnabled(cron.id, false);
+      if (state === "archived") await built.crons.update(cron.id, { archived: true });
+      if (state === "completed") await built.crons.markFired(cron.id, firstFireAt);
+    }
+    assert.equal((await built.crons.list()).length, 101);
+    const created = await control.createCron(
+      { title: "New task", schedule: { everyMs: 3_600_000 }, action: "new task" },
+      claims("U1"),
+    );
+    assert.ok(created.ok, JSON.stringify(created));
+    assert.equal(created.cron.owner, "U1");
+    assert.equal(created.cron.enabled, true);
+    assert.equal((await built.crons.list()).length, 102);
+  });
+}
+
 test("a calendar cron without an explicit timezone inherits the turn's timezone (not the global default)", async () => {
   const { built, control } = setup();
   const r = await control.createCron(
