@@ -202,16 +202,16 @@ test("the inbox stylesheet exists and scopes to inbox- classes", () => {
 test("the inbox list spans the same desktop content width as the item detail", () => {
   assert.match(
     css,
-    /--inbox-content-width: calc\(var\(--inbox-primary-width\) \+ var\(--inbox-content-gap\) \+ var\(--inbox-aside-width\)\);/,
+    /\.content-wide-page \{[\s\S]*--content-wide-width: calc\(var\(--content-primary-width\) \+ var\(--content-gap\) \+ var\(--content-aside-width\)\);/,
   );
-  assert.match(css, /\.inbox-page \.inbox-surface \{\s*width: min\(var\(--inbox-content-width\), 100%\);/);
+  assert.match(css, /\.inbox-page \.inbox-surface \{\s*width: min\(var\(--content-wide-width\), 100%\);/);
   assert.match(
     css,
-    /\.inbox-page:not\(:has\(\.inbox-item-aside\)\) > \.pane-head \{\s*width: min\(var\(--inbox-content-width\), 100%\);\s*max-width: none;/,
+    /\.content-wide-page:not\(:has\(\.inbox-item-aside\)\) > \.pane-head \{\s*width: min\(var\(--content-wide-width\), 100%\);\s*max-width: none;/,
   );
   assert.match(
     css,
-    /grid-template-columns: minmax\(0, var\(--inbox-primary-width\)\) minmax\(0, var\(--inbox-aside-width\)\);/,
+    /grid-template-columns: minmax\(0, var\(--content-primary-width\)\) minmax\(0, var\(--content-aside-width\)\);/,
   );
 });
 

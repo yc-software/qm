@@ -1452,7 +1452,7 @@ function drawFull(): void {
   if (appState.currentView !== "inbox" || !appState.mainEl) return;
   if (!fullSurface || !fullSurface.host.isConnected || fullSurface.host.parentElement !== appState.mainEl) {
     const host = document.createElement("div");
-    host.className = "pane inbox-page";
+    host.className = "pane inbox-page content-wide-page";
     fullSurface = {
       host,
       viewId: fullViewId,

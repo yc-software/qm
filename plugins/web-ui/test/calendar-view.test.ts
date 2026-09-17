@@ -12,6 +12,8 @@ test("calendar is a first-class empty view directly below Inbox", () => {
   assert.match(shellState, /"chats",\s*"inbox",\s*"calendar",\s*"contexts"/);
   assert.match(shell, /inboxNavRow\(\).*navRow\("calendar", ICON\.calendar, "Calendar"\)/s);
   assert.match(shell, /case "calendar":\s*renderCalendar\(\);/);
+  assert.match(calendar, /host\.className = "pane content-wide-page"/);
+  assert.match(calendar, /<div class="pane-head">/);
   assert.match(calendar, /<h1 class="pane-title">Calendar<\/h1>/);
   assert.match(calendar, /Coming soon\./);
 });
