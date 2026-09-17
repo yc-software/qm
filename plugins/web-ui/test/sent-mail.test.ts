@@ -45,6 +45,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
       openSentEmail,
       openSentEmailById,
       selectedSentEmail,
+      sentChatTpl,
     } = await vite.ssrLoadModule("/src/sent-mail.ts");
     const { html, render } = await vite.ssrLoadModule("lit");
     const host = document.getElementById("main")!;
@@ -74,6 +75,9 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     assert.equal(host.querySelector("a"), null);
     await loadSentMail(draw, true);
     assert.equal(host.querySelectorAll(".inbox-sent-row").length, 2);
+    const sentRow = host.querySelector(".inbox-sent-row")!;
+    assert.ok(sentRow.closest(".inbox-item")!.classList.contains("src-gmail"));
+    assert.equal(sentRow.querySelector(".inbox-item-glyph svg")!.getAttribute("width"), "14");
     assert.match(urls.at(-1)!, /pageToken=cursor/);
     assert.equal(host.querySelector(".inbox-sent-more"), null);
     globalThis.fetch = async () =>
@@ -118,6 +122,14 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     assert.match(host.textContent!, /Direct link/);
     assert.match(host.textContent!, /Loaded without listing/);
     assert.equal(selectedSentEmail().id, "unlisted");
+    render(
+      sentEmailPageTpl(
+        draw,
+        sentChatTpl(draw, (item: { id: string }) => html`<div class="verified-chat">Chat ${item.id}</div>`),
+      ),
+      host,
+    );
+    assert.equal(host.querySelector(".inbox-item-aside .verified-chat")!.textContent, "Chat chat");
     resetSentMail();
     const seeded = {
       accountEmail: "sam@example.com",

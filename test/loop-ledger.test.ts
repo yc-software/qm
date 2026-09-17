@@ -354,3 +354,32 @@ test("draft identity ignores key order, as stored JSON does not preserve it", as
   assert.equal(after.proposal!.at, at);
   assert.equal(after.agentDrafts!.length, 1);
 });
+
+test("continuing a sent reply clears the old draft without losing chat or allowing a second reset", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([
+    entry({ sourcePayload: { sentChat: true }, proposal: { data: { body: "First reply" }, by: "human" } }),
+  ]);
+  const item = (await ledger.byLoop(LOOP))[0]!;
+  await ledger.appendThread(item.id, [{ role: "human", text: "Help with this thread" }]);
+  await ledger.recordAction(item.id, { kind: "send", outcome: "actioned" });
+  assert.equal(await ledger.reopen(item.id), null);
+  const reply = await ledger.reopen(item.id, { sentReply: true });
+  assert.equal(reply!.proposal!.data.body, "");
+  assert.ok(reply!.proposal!.at > item.proposal!.at);
+  assert.equal(reply!.thread![0]!.text, "Help with this thread");
+  assert.equal(ledgerState(reply!), "held");
+  assert.equal(await ledger.reopen(item.id, { sentReply: true }), null);
+  assert.equal(
+    await ledger.setProposal(
+      item.id,
+      { data: { body: "Stale resend" }, by: "human" },
+      { expectedAt: item.proposal!.at },
+    ),
+    null,
+  );
+  await ledger.ingest([entry({ dedupeKey: "ordinary" })]);
+  const ordinary = (await ledger.byLoop(LOOP)).find((item) => item.sourceKey === "ordinary")!;
+  await ledger.recordAction(ordinary.id, { kind: "send", outcome: "actioned" });
+  assert.equal(await ledger.reopen(ordinary.id, { sentReply: true }), null);
+});

@@ -38,8 +38,16 @@ let loaded = false;
 let error = "";
 let generation = 0;
 let selected: SentEmail | null = null;
-let detail: (SentEmail & { from: string; cc: string; body: string; html: boolean; attachments: string[] }) | null =
-  null;
+let detail:
+  | (SentEmail & {
+      from: string;
+      cc: string;
+      body: string;
+      rfcMessageId?: string;
+      html: boolean;
+      attachments: string[];
+    })
+  | null = null;
 let detailError = "";
 let chatItem: LedgerItem | null = null;
 let chatError = "";
@@ -95,6 +103,9 @@ async function loadSentChat(draw: () => void, current = detailGeneration): Promi
         threadId: detail.threadId,
         subject: detail.subject,
         from: detail.from,
+        to: detail.to,
+        cc: detail.cc,
+        rfcMessageId: detail.rfcMessageId,
         text: text.slice(0, 50000),
       }),
     });
@@ -112,6 +123,10 @@ export function sentChatTpl(draw: () => void, renderChat: (item: LedgerItem) => 
     <h2 class="inbox-chat-cta">Ask about this email</h2>
     ${chatError ? html`<div role="alert">${chatError}<button class="btn" @click=${() => void loadSentChat(draw)}>Try again</button></div>` : html`<div role="status">Loading chat…</div>`}
   </div>`;
+}
+
+export function selectedSentChat(): LedgerItem | null {
+  return chatItem;
 }
 
 export function updateSentChat(item: LedgerItem): void {
@@ -263,7 +278,7 @@ export function sentMailTpl(
     <div class="inbox-list">
       ${messages.map(
         (message) =>
-          html`<div class="inbox-item">
+          html`<div class="inbox-item src-gmail">
             <div class="inbox-item-summary">
               <button
                 class="inbox-item-row inbox-sent-row"
@@ -271,7 +286,7 @@ export function sentMailTpl(
                 @click=${() => open(message)}
                 aria-label=${`Open sent email: ${message.subject || "No subject"}`}
               >
-                <span class="inbox-item-glyph">${icon(Mail, 16)}</span>
+                <span class="inbox-item-glyph">${icon(Mail, 14)}</span>
                 <span class="inbox-item-main">
                   <span class="inbox-item-top"
                     ><span class="inbox-item-heading">To: ${message.to || "Undisclosed recipients"}</span
@@ -314,7 +329,11 @@ function sentMessageTpl(entry: SentThreadMessage): TemplateResult {
   </div>`;
 }
 
-export function sentEmailPageTpl(draw: () => void, aside?: TemplateResult): TemplateResult | typeof nothing {
+export function sentEmailPageTpl(
+  draw: () => void,
+  aside?: TemplateResult,
+  draft?: TemplateResult,
+): TemplateResult | typeof nothing {
   if (!selected) return nothing;
   const message = selected;
   const body = detail?.html
@@ -361,6 +380,7 @@ export function sentEmailPageTpl(draw: () => void, aside?: TemplateResult): Temp
         }
         ${!detail && !detailError ? html`<div role="status" class="empty compact">Loading email…</div>` : nothing}
         ${entries.length ? html`<div class="inbox-context">${entries.map(sentMessageTpl)}</div>` : nothing}
+        ${draft ?? nothing}
         <div class="inbox-draft-head inbox-sent-actions">
           <a
             class="inbox-external-link"

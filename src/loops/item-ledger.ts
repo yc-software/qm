@@ -63,7 +63,7 @@ export interface LoopItemLedger {
   annotate(id: string, patch: LoopSourcePayload): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
-  reopen(id: string): Promise<LoopItem | null>;
+  reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;
   prune(loopId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
@@ -314,15 +314,22 @@ export function createLoopItemLedger(
       if (applied) emit(after, "action");
       return applied ? after : null;
     },
-    async reopen(id) {
+    async reopen(id, opts) {
       let applied = false;
       const after = await update(id, (item) => {
-        if (item.status !== "skipped" && item.status !== "failed") return item;
+        const sentReply = opts?.sentReply === true && item.source === "gmail" && item.sourcePayload?.sentChat === true;
+        if (item.status !== "skipped" && item.status !== "failed" && !(sentReply && item.status === "shipped"))
+          return item;
         applied = true;
         const now = Date.now();
         return {
           ...item,
-          status: item.proposal ? "ready" : "queued",
+          status: sentReply || item.proposal ? "ready" : "queued",
+          ...(sentReply
+            ? {
+                proposal: { data: { body: "" }, by: "human" as const, at: Math.max(now, (item.proposal?.at ?? 0) + 1) },
+              }
+            : {}),
           actedAt: undefined,
           actionKind: undefined,
           actionResult: undefined,

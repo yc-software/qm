@@ -10,6 +10,7 @@ import {
   selectedSentEmail,
   sentEmailPageTpl,
   sentChatTpl,
+  selectedSentChat,
   updateSentChat,
   sentMailTpl,
 } from "./sent-mail";
@@ -486,6 +487,20 @@ function ensureRealtime(): void {
   });
 }
 
+function inboxItemById(id: string): InboxItem | undefined {
+  const sent = selectedSentChat();
+  return sent?.id === id ? toInboxItem(sent) : inboxState.items.find((item) => item.id === id);
+}
+
+async function continueSentReply(item: InboxItem): Promise<void> {
+  try {
+    replaceItem(await postAction(item, "reply"));
+    drawAll();
+  } catch (error) {
+    notify(`Couldn't start a reply: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
 function replaceItem(next: InboxItem): void {
   inboxState.items = inboxState.items.map((i) => (i.id === next.id ? next : i));
 }
@@ -520,12 +535,13 @@ function effectiveDraft(item: InboxItem): InboxDraft {
     const { basedOnAt: _basedOnAt, ...draft } = edited;
     return draft;
   }
-  return (
-    item.draft ?? {
-      body: "",
-      ...(item.source === "gmail" ? { to: item.gmail?.to ?? [], subject: item.gmail?.subject } : {}),
-    }
-  );
+  return {
+    body: "",
+    ...(item.source === "gmail"
+      ? { to: item.gmail?.to ?? [], cc: item.gmail?.cc ?? [], subject: item.gmail?.subject }
+      : {}),
+    ...item.draft,
+  };
 }
 
 function editDraft(item: InboxItem, patch: Partial<InboxDraft>): void {
@@ -539,7 +555,7 @@ function isDraftConflict(e: unknown): boolean {
 
 async function explainDraftConflict(item: InboxItem, edited: boolean): Promise<void> {
   await refetchItem(item);
-  const fresh = inboxState.items.find((i) => i.id === item.id);
+  const fresh = inboxItemById(item.id);
   const overlay = draftEdits.get(item.id);
   if (overlay && fresh?.draftAt !== undefined) draftEdits.set(item.id, { ...overlay, basedOnAt: fresh.draftAt });
   const preview = (fresh?.draft?.body ?? "").trim().slice(0, 140);
@@ -566,6 +582,7 @@ async function refetchItem(item: InboxItem): Promise<void> {
     const { item: fresh } = await api<{ item: LedgerItem }>(
       `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}`,
     );
+    updateSentChat(fresh);
     replaceItem(toInboxItem(fresh));
     drawAll();
   } catch {
@@ -578,6 +595,7 @@ async function postAction(item: InboxItem, kind: string, args?: Record<string, u
     method: "POST",
     body: JSON.stringify({ kind, ...(args ? { args } : {}) }),
   });
+  updateSentChat(next);
   return toInboxItem(next);
 }
 
@@ -603,7 +621,7 @@ export function persistDraft(item: InboxItem): Promise<void> {
 }
 
 async function persistDraftNow(itemId: string): Promise<void> {
-  const item = inboxState.items.find((i) => i.id === itemId);
+  const item = inboxItemById(itemId);
   if (!item) return;
   const edited = draftEdits.get(item.id);
   if (!edited) return;
@@ -651,7 +669,7 @@ async function sendItem(item: InboxItem): Promise<void> {
 }
 
 async function sendItemNow(itemId: string): Promise<void> {
-  const item = inboxState.items.find((i) => i.id === itemId);
+  const item = inboxItemById(itemId);
   if (!item) return;
   const edited = draftEdits.get(item.id);
   const draft = effectiveDraft(item);
@@ -950,7 +968,7 @@ export function chatTpl(item: InboxItem): TemplateResult {
         <div class="inbox-chat-actions">
           <div class="inbox-chat-suggest">
             ${
-              item.status === "open"
+              item.status === "open" && !item.sentChat
                 ? html`
                     <button
                       class="inbox-suggest-chip primary"
@@ -1068,7 +1086,7 @@ export function draftEditorTpl(item: InboxItem, opts: { chat?: boolean } = {}): 
         <textarea
           class="inbox-draft-body"
           rows=${gmail ? 7 : 3}
-          placeholder=${item.draft ? "" : "No draft yet. The next sync writes one, or write your own."}
+          placeholder=${item.draft ? "Write a reply…" : "No draft yet. The next sync writes one, or write your own."}
           .value=${draft.body}
           @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
           @blur=${() => void persistDraft(item)}
@@ -1203,43 +1221,57 @@ function syncStatusLabel(cron: InboxSyncCron): string {
   return cron.lastFiredAt ? `Synced ${relTime(cron.lastFiredAt)}` : "First sync pending";
 }
 
+function syncActionTpl(opts: {
+  label: string;
+  busyLabel: string;
+  busy: boolean;
+  tooltip: string;
+  action: () => void;
+}): TemplateResult {
+  return html`<button
+    class="btn inbox-sync-action"
+    type="button"
+    ${tip(opts.tooltip)}
+    ?disabled=${opts.busy}
+    @click=${opts.action}
+  >
+    ${icon(RefreshCw, 13)}<span>${opts.busy ? opts.busyLabel : opts.label}</span>
+  </button>`;
+}
+
 function syncLineTpl(surface: InboxSurface): TemplateResult {
   if (surface.viewId === "sent") {
     const busy = isSentMailLoading();
-    return html`<button
-      class="btn inbox-sync-setup"
-      type="button"
-      ${tip("Refresh sent mail")}
-      ?disabled=${busy}
-      @click=${() => void loadSentMail(drawAll)}
-    >
-      ${icon(RefreshCw, 13)}<span>${busy ? "Refreshing…" : "Refresh"}</span>
-    </button>`;
+    return syncActionTpl({
+      label: "Refresh",
+      busyLabel: "Refreshing…",
+      busy,
+      tooltip: "Refresh sent mail",
+      action: () => void loadSentMail(drawAll),
+    });
   }
   const cron = inboxState.syncCron;
   if (!cron) {
-    return html`<button
-      class="btn inbox-sync-setup"
-      type="button"
-      ${tip("Create the inbox loop and the personal cron that scans your connected apps and drafts replies")}
-      ?disabled=${inboxState.syncBusy}
-      @click=${() => void setUpSync()}
-    >
-      ${icon(RefreshCw, 13)}<span>${inboxState.syncBusy ? "Setting up…" : "Set up sync"}</span>
-    </button>`;
+    return syncActionTpl({
+      label: "Set up sync",
+      busyLabel: "Setting up…",
+      busy: inboxState.syncBusy,
+      tooltip: "Create the inbox loop and the personal cron that scans your connected apps and drafts replies",
+      action: () => void setUpSync(),
+    });
   }
   return html`<span class="inbox-sync-line">
-    <button
-      class="icon-btn subtle compact"
-      type="button"
-      ${tip("Sync now")}
-      aria-label="Sync now"
-      ?disabled=${inboxState.syncBusy}
-      @click=${() => void syncNow()}
+    ${syncActionTpl({
+      label: "Sync",
+      busyLabel: "Syncing…",
+      busy: inboxState.syncBusy,
+      tooltip: "Sync now",
+      action: () => void syncNow(),
+    })}
+    <span
+      class="inbox-sync-status"
+      ${tip(cron.enabled ? "The sync cron is on" : "The sync cron is paused. Manage it under Crons")}
     >
-      ${icon(RefreshCw, 14)}
-    </button>
-    <span ${tip(cron.enabled ? "The sync cron is on" : "The sync cron is paused. Manage it under Crons")}>
       ${syncStatusLabel(cron)}
     </span>
   </span>`;
@@ -1378,6 +1410,24 @@ function itemPageTpl(item: InboxItem): TemplateResult {
   `;
 }
 
+function sentDraftTpl(): TemplateResult | undefined {
+  const saved = selectedSentChat();
+  if (!saved) return;
+  const item = toInboxItem(saved);
+  if (item.status !== "open")
+    return html`<div class="inbox-draft">
+      <p>Reply sent.</p>
+      <button class="btn" @click=${() => void continueSentReply(item)}>Write another reply</button>
+    </div>`;
+  return html`${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}${draftEditorTpl(item, { chat: false })}<button
+      class="btn primary"
+      ?disabled=${sending.has(item.id)}
+      @click=${() => void sendItem(item)}
+    >
+      ${sending.has(item.id) ? "Sending…" : "Send reply"}
+    </button>`;
+}
+
 function keepingChatLogsPinned(host: HTMLElement, draw: () => void): void {
   const logs = () => [...host.querySelectorAll<HTMLElement>(".inbox-chat-log")];
   const wasAtBottom = logs().map((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 24);
@@ -1437,6 +1487,7 @@ function drawFull(): void {
     page = sentEmailPageTpl(
       drawAll,
       sentChatTpl(drawAll, (item) => chatTpl(toInboxItem(item))),
+      sentDraftTpl(),
     );
   } else
     page = html`

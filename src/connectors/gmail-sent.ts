@@ -94,7 +94,9 @@ export async function getSentEmail(
   token: string,
   id: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<SentEmail & { from: string; cc: string; body: string; html: boolean; attachments: string[] }> {
+): Promise<
+  SentEmail & { from: string; cc: string; body: string; rfcMessageId: string; html: boolean; attachments: string[] }
+> {
   const response = await fetchImpl(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=full`,
     {
@@ -122,6 +124,7 @@ export async function getSentEmail(
     to: header("to"),
     from: header("from"),
     cc: header("cc"),
+    rfcMessageId: header("message-id"),
     subject: header("subject"),
     snippet: message.snippet ?? "",
     sentAt: Number(message.internalDate) || 0,

@@ -9766,7 +9766,7 @@ h3.ambient-field-label {
 .inbox-surface.compact .inbox-item-detail {
   padding: 2px 10px 12px;
 }
-.inbox-surface.compact .inbox-sync-line span:last-child {
+.inbox-surface.compact .inbox-sync-line > .inbox-sync-status {
   display: none;
 }
 .inbox-surface[data-density="min"] .inbox-item-sub,

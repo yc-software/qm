@@ -270,6 +270,13 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
   }
 
+  if (kind === "reply") {
+    if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
+    const next = await deps.items.reopen(item.id, { sentReply: true });
+    if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "a reply is already being drafted" });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next) });
+  }
+
   if (kind === "reopen") {
     const next = await deps.items.reopen(item.id);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
@@ -422,11 +429,18 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
         dedupeKey,
         source: "gmail",
         summary: text("subject", 300),
+        proposal: { data: { body: "" }, by: "human" },
         sourcePayload: {
           title: text("subject", 300),
           from: text("from", 500),
           snippet: text("text", 50000),
-          gmail: { threadId, subject: text("subject", 300) },
+          gmail: {
+            threadId,
+            subject: text("subject", 300),
+            to: [text("to", 2000)].filter(Boolean),
+            cc: [text("cc", 2000)].filter(Boolean),
+            rfcMessageId: text("rfcMessageId", 400),
+          },
           sentChat: true,
         },
       },
@@ -434,8 +448,17 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
     item = await deps.items.get(id);
   }
   if (!item) return sendJson(ctx.res, 500, { error: "chat_unavailable" });
-  if (!item.actedAt)
-    item = (await deps.items.recordAction(id, { kind: "sent", outcome: "actioned", actorId: owner })) ?? item;
+  item =
+    (await deps.items.annotate(id, {
+      gmail: {
+        threadId,
+        subject: text("subject", 300),
+        to: [text("to", 2000)].filter(Boolean),
+        cc: [text("cc", 2000)].filter(Boolean),
+        rfcMessageId: text("rfcMessageId", 400),
+      },
+    })) ?? item;
+  if (item.actionKind === "sent") item = (await deps.items.reopen(id, { sentReply: true })) ?? item;
   ctx.res.setHeader("Cache-Control", "no-store");
   sendJson(ctx.res, 200, { item: ledgerItemView(item) });
 }
