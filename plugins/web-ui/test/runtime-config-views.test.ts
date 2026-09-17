@@ -84,6 +84,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
           state: { scopeId, threadRef: `thread-${i}`, sessionId: `session-${i}`, agent, resolvingApprovals: new Set() },
           activePendingApprovals: () => [],
           hasUnresolvedApproval: () => false,
+          isStopping: () => false,
           drawActiveChat: () => render(composer.composerForm(agent), host),
         },
       } as unknown as ConvCtx;
