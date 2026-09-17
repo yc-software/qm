@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { zstdDecompressSync } from "node:zlib";
+import { buildModelRuntime } from "../src/harness/pi-harness.ts";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
 import { summarizeHistory } from "../src/harness/history-summary.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
@@ -104,4 +106,46 @@ test("compaction propagates transport failures and rejects empty output", async 
     summarizeHistory([], model, () => response("")),
     /empty summary/,
   );
+});
+
+for (const modelId of ["gpt-6-astra", "claude-opus-5", "gpt-4.1"]) {
+  test(`compaction enables low reasoning only when supported by ${modelId}`, async () => {
+    const summaryModel = getRequiredModel(modelId);
+    await summarizeHistory([], summaryModel, (_model, _context, options) => {
+      assert.equal(options?.reasoning, summaryModel.reasoning ? "low" : undefined);
+      return response();
+    });
+  });
+}
+
+test("Astra compaction serializes a supported reasoning effort through the provider adapter", async (t) => {
+  const runtime = await buildModelRuntime({ openai: "sk-offline-test-key" });
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let request: { model?: string; reasoning?: { effort?: string } } | undefined;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const encoded = new Headers(init?.headers).get("content-encoding") === "zstd";
+    const text = encoded ? zstdDecompressSync(init?.body as Uint8Array).toString() : String(init?.body);
+    request = JSON.parse(text);
+    if (request?.reasoning?.effort !== "low") {
+      return new Response(JSON.stringify({ error: { message: "unsupported reasoning effort" } }), { status: 400 });
+    }
+    const events = [
+      { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_summary" } },
+      { type: "response.output_text.delta", output_index: 0, delta: summary },
+      { type: "response.completed", response: { id: "resp_summary", status: "completed", output: [] } },
+    ];
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch;
+  const result = await summarizeHistory([], getRequiredModel("gpt-6-astra"), (model, context, options) =>
+    runtime.streamSimple(model, context, { ...options, transport: "sse", maxRetries: 0 }),
+  );
+  assert.equal(result, summary);
+  assert.ok(request, "compaction must reach the provider's HTTP transport");
+  assert.equal(request.model, "gpt-6-astra");
+  assert.equal(request.reasoning?.effort, "low");
 });

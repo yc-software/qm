@@ -37,7 +37,7 @@ export async function summarizeHistory(
     undefined,
     SUMMARY_INSTRUCTIONS,
     previousSummary?.text,
-    "off",
+    "low",
     async (summaryModel, context, options) => {
       const stream = await streamFn(summaryModel, context, options);
       const result = await stream.result();

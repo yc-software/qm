@@ -2442,7 +2442,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
           modelGateway,
           signal,
-          thinkingLevel: "off",
+          thinkingLevel: "low",
         });
       },
 
