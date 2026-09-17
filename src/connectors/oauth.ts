@@ -53,6 +53,12 @@ export interface OAuthProviderConfig {
   exchange?: OAuthExchangeAdapter;
   refresh?: OAuthRefreshAdapter | null;
   pkce?: boolean;
+  /** Env var naming the tenant to substitute into a `{tenant}` placeholder in
+   * authUrl/tokenUrl (Microsoft's per-tenant identity endpoints). Unset
+   * providers have no placeholder to fill. Falls back to "common" — the
+   * multi-tenant default — when the provider declares this but the
+   * deployment hasn't set it. */
+  tenantEnv?: string;
 }
 
 export type FetchLike = (
@@ -116,7 +122,7 @@ function makeTokenAdapters(opts: {
   };
   return {
     async exchange({ provider, client, code, redirectUri, fetchImpl, now, codeVerifier }) {
-      const res = await fetchImpl(provider.tokenUrl, {
+      const res = await fetchImpl(resolveTenantUrl(provider.tokenUrl, client), {
         method: "POST",
         headers: headers(client),
         body: new URLSearchParams({
@@ -133,7 +139,7 @@ function makeTokenAdapters(opts: {
       return { hosts: provider.hosts, token: toToken(raw, undefined, now), raw };
     },
     async refresh({ provider, client, token, fetchImpl, now }) {
-      const res = await fetchImpl(provider.tokenUrl, {
+      const res = await fetchImpl(resolveTenantUrl(provider.tokenUrl, client), {
         method: "POST",
         headers: headers(client),
         body: new URLSearchParams({
@@ -176,6 +182,8 @@ const googleExchange: OAuthExchangeAdapter = async (args) => {
 const github = makeTokenAdapters({ acceptJson: true, rejectErrorBody: true, label: "github" });
 
 const x = makeTokenAdapters({ acceptJson: true, rejectErrorBody: true, label: "x", clientAuth: "basic" });
+
+const microsoft = makeTokenAdapters({ acceptJson: true, rejectErrorBody: true, label: "microsoft" });
 
 const slackExchange: OAuthExchangeAdapter = async ({ provider, client, code, redirectUri, fetchImpl }) => {
   const res = await fetchImpl(provider.tokenUrl, {
@@ -441,6 +449,34 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
         "tweet.read/users.read back reads; tweet.write lets the connecting user post as themselves; offline.access issues a refresh token so the 2-hour access token renews.",
     },
   },
+
+  microsoft: {
+    hosts: ["graph.microsoft.com"],
+    authUrl: "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
+    tokenUrl: "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+    scopes: ["offline_access", "Mail.Read", "Sites.Read.All", "Files.Read"],
+    clientIdEnv: "MICROSOFT_OAUTH_CLIENT_ID",
+    clientSecretEnv: "MICROSOFT_OAUTH_CLIENT_SECRET",
+    redirectPath: "microsoft/callback",
+    consentMode: "standard",
+    egressRule: ["graph.microsoft.com", "login.microsoftonline.com"],
+    pkce: true,
+    tenantEnv: "MICROSOFT_OAUTH_TENANT",
+    exchange: microsoft.exchange,
+    refresh: microsoft.refresh,
+    setupGuide: {
+      console: "Entra admin center → App registrations → your app → API permissions / Certificates & secrets",
+      url: "https://entra.microsoft.com/",
+      steps: [
+        "Confirm the app registration's redirect URI matches the one shown below.",
+        "Under API permissions, add the delegated Microsoft Graph scopes: Mail.Read, Sites.Read.All, Files.Read, offline_access.",
+        "Paste the Client ID + Client secret below.",
+        'Set MICROSOFT_OAUTH_TENANT to your Entra tenant ID or verified domain to restrict sign-in to your own tenant; leave unset for the multi-tenant "common" endpoint.',
+      ],
+      scopesRationale:
+        "Mail.Read/Sites.Read.All/Files.Read back the Outlook, SharePoint, and OneDrive read tools as the connecting user, each the narrowest delegated scope covering that tool's read; offline_access issues a refresh token so the flow doesn't re-prompt every access-token lifetime.",
+    },
+  },
 };
 
 export interface ResolvedClient {
@@ -449,6 +485,7 @@ export interface ResolvedClient {
   scopes?: string[];
   redirectAllowlist?: string[];
   hostedDomain?: string;
+  tenant?: string;
   clientRef: string;
 }
 
@@ -458,14 +495,25 @@ export function createSecretClientResolver(secrets: SecretSource = createEnvSecr
   return async (providerName) => {
     const p = PROVIDERS[providerName];
     if (!p) throw new Error(`unknown OAuth provider: ${providerName}`);
-    const [id, secret, hostedDomain] = await Promise.all([
+    const [id, secret, hostedDomain, tenant] = await Promise.all([
       secrets.get(p.clientIdEnv),
       secrets.get(p.clientSecretEnv),
       providerName === "google" ? secrets.get("GOOGLE_WORKSPACE_DOMAIN") : undefined,
+      p.tenantEnv ? secrets.get(p.tenantEnv) : undefined,
     ]);
     if (!id || !secret) throw new Error(`provider not configured — set ${p.clientIdEnv} and ${p.clientSecretEnv}`);
-    return { id, secret, clientRef: `env:${providerName}`, ...(hostedDomain ? { hostedDomain } : {}) };
+    return {
+      id,
+      secret,
+      clientRef: `env:${providerName}`,
+      ...(hostedDomain ? { hostedDomain } : {}),
+      ...(tenant ? { tenant } : {}),
+    };
   };
+}
+
+function resolveTenantUrl(url: string, client: ResolvedClient): string {
+  return url.includes("{tenant}") ? url.replace("{tenant}", client.tenant ?? "common") : url;
 }
 
 export interface OAuthState {
@@ -563,7 +611,7 @@ export function authorizeUrl(
   q.set(p.scopeParam ?? "scope", scopes.join(" "));
   for (const [k, v] of Object.entries(p.authParams ?? {})) q.set(k, v);
   if (accountType === "company" && opts.client.hostedDomain) q.set("hd", opts.client.hostedDomain);
-  return `${p.authUrl}?${q.toString()}`;
+  return `${resolveTenantUrl(p.authUrl, opts.client)}?${q.toString()}`;
 }
 
 export async function exchangeCode(

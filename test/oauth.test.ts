@@ -30,10 +30,13 @@ const env = {
   GITHUB_OAUTH_CLIENT_SECRET: "ghsecret",
   X_OAUTH_CLIENT_ID: "xid",
   X_OAUTH_CLIENT_SECRET: "xsecret",
+  MICROSOFT_OAUTH_CLIENT_ID: "msid",
+  MICROSOFT_OAUTH_CLIENT_SECRET: "mssecret",
 } as NodeJS.ProcessEnv;
 
 const resolve = createSecretClientResolver(createEnvSecretSource(env));
 const googleClient = (): Promise<ResolvedClient> => resolve("google", {});
+const microsoftClient = (): Promise<ResolvedClient> => resolve("microsoft", {});
 
 test("authorizeUrl builds a consent URL with client id, scopes, redirect, state", async () => {
   const url = authorizeUrl("google", { redirectUri: "https://app/cb", state: "st-1", client: await googleClient() });
@@ -386,9 +389,10 @@ test("authorizeUrl adds code_challenge + S256 only when a challenge is supplied"
   assert.equal(without.searchParams.get("code_challenge_method"), null);
 });
 
-test("only X opts into PKCE; the other providers leave the seam inert (regression guard)", () => {
+test("only X and Microsoft opt into PKCE; the other providers leave the seam inert (regression guard)", () => {
+  const pkceProviders = new Set(["x", "microsoft"]);
   for (const [name, p] of Object.entries(PROVIDERS)) {
-    if (name === "x") assert.equal(p.pkce, true, "X requires PKCE");
+    if (pkceProviders.has(name)) assert.equal(p.pkce, true, `${name} requires PKCE`);
     else assert.notEqual(p.pkce, true, `${name} must not enable PKCE`);
   }
 });
@@ -484,6 +488,105 @@ test("X refresh captures the ROTATED refresh token (single-use) — the connecti
   assert.equal(fresh.accessToken, "xat2");
   assert.equal(fresh.refreshToken, "new-rt", "the rotated refresh token replaces the old one");
   assert.equal(fresh.expiresAt, 5_000 + 7200_000);
+});
+
+test("Microsoft authorize/token URLs fall back to the common tenant when MICROSOFT_OAUTH_TENANT is unset", async () => {
+  const u = new URL(
+    authorizeUrl("microsoft", {
+      redirectUri: "https://app/cb",
+      state: "s",
+      client: await microsoftClient(),
+      codeChallenge: "CH",
+    }),
+  );
+  assert.equal(u.origin + u.pathname, "https://login.microsoftonline.com/common/oauth2/v2.0/authorize");
+  assert.equal(u.searchParams.get("code_challenge"), "CH");
+  assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+  const scope = u.searchParams.get("scope") ?? "";
+  for (const s of ["offline_access", "Mail.Read", "Sites.Read.All", "Files.Read"]) assert.match(scope, new RegExp(s));
+
+  let seenUrl = "";
+  const fetchImpl: FetchLike = async (url) => {
+    seenUrl = url;
+    return { ok: true, status: 200, json: async () => ({ access_token: "at" }) };
+  };
+  await exchangeCode("microsoft", "code-1", "https://app/cb", { client: await microsoftClient(), fetchImpl, now: 0 });
+  assert.equal(seenUrl, "https://login.microsoftonline.com/common/oauth2/v2.0/token");
+});
+
+test("Microsoft authorize/token URLs use the configured tenant when MICROSOFT_OAUTH_TENANT is set", async () => {
+  const tenantResolve = createSecretClientResolver(
+    createEnvSecretSource({ ...env, MICROSOFT_OAUTH_TENANT: "contoso.com" }),
+  );
+  const client = await tenantResolve("microsoft", {});
+  const u = new URL(authorizeUrl("microsoft", { redirectUri: "https://app/cb", state: "s", client }));
+  assert.equal(u.origin + u.pathname, "https://login.microsoftonline.com/contoso.com/oauth2/v2.0/authorize");
+
+  let seenUrl = "";
+  const fetchImpl: FetchLike = async (url) => {
+    seenUrl = url;
+    return { ok: true, status: 200, json: async () => ({ access_token: "at" }) };
+  };
+  await exchangeCode("microsoft", "code-1", "https://app/cb", { client, fetchImpl, now: 0 });
+  assert.equal(seenUrl, "https://login.microsoftonline.com/contoso.com/oauth2/v2.0/token");
+});
+
+test("Microsoft exchange sends the PKCE verifier and rejects an OAuth error body even on HTTP 200", async () => {
+  const okButError: FetchLike = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ error: "invalid_grant", error_description: "AADSTS70000: consent revoked" }),
+  });
+  const badCodeClient = await microsoftClient();
+  await assert.rejects(
+    () =>
+      exchangeCode("microsoft", "bad-code", "https://app/cb", {
+        client: badCodeClient,
+        fetchImpl: okButError,
+        now: 0,
+        codeVerifier: "verif",
+      }),
+    /AADSTS70000: consent revoked/,
+  );
+
+  let seen: { body: string } | null = null;
+  const fetchImpl: FetchLike = async (_url, init) => {
+    seen = { body: init.body };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "msat", refresh_token: "msrt", expires_in: 3600 }),
+    };
+  };
+  const { hosts, token } = await exchangeCode("microsoft", "code-2", "https://app/cb", {
+    client: await microsoftClient(),
+    fetchImpl,
+    now: 1_000,
+    codeVerifier: "verif",
+  });
+  assert.match(seen!.body, /code_verifier=verif/, "PKCE verifier is sent");
+  assert.match(seen!.body, /client_id=msid/);
+  assert.match(seen!.body, /client_secret=mssecret/);
+  assert.deepEqual(hosts, ["graph.microsoft.com"]);
+  assert.equal(token.accessToken, "msat");
+  assert.equal(token.refreshToken, "msrt");
+  assert.equal(token.expiresAt, 1_000 + 3600_000);
+});
+
+test("Microsoft refresh — a revoked consent fails the refresh cleanly instead of retrying forever", async () => {
+  const revoked: FetchLike = async () => ({
+    ok: false,
+    status: 400,
+    json: async () => ({ error: "invalid_grant" }),
+  });
+  await assert.rejects(
+    () =>
+      makeRefresh({ resolveClient: resolve, fetchImpl: revoked })("graph.microsoft.com", {
+        accessToken: "old",
+        refreshToken: "revoked-rt",
+      }),
+    /microsoft token refresh failed \(400\)/,
+  );
 });
 
 test("oauth flow store — a short opaque state resolves once, then expires", async () => {

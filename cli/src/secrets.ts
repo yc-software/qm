@@ -265,6 +265,12 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Linear OAuth client secret.",
   },
   {
+    name: "MICROSOFT_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "MICROSOFT_OAUTH_CLIENT_ID" } },
+    description: "Microsoft OAuth client secret.",
+  },
+  {
     name: "SLACK_BOT_TOKEN",
     service: "slack",
     required: false,
