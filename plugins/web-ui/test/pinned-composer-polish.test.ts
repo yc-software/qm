@@ -16,7 +16,7 @@ test("transcript top spacing and prompt gap stay compact at every density", () =
 test("background activity shares the queued inset above the composer", () => {
   assert.match(
     chat,
-    /backgroundActivityStrip\(\)\} \$\{ctx\.composer\.queuedStrip\(agent\)\}\s*\$\{ctx\.composer\.composerForm\(agent\)\}/,
+    /ctx\.composer\.queuedStrip\(agent\)\} \$\{backgroundActivityStrip\(\)\}\s*\$\{ctx\.composer\.composerForm\(agent\)\}/,
   );
   assert.match(css, /\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{/);
   assert.doesNotMatch(css, /\.composer-wrap > \.bg-activity/);

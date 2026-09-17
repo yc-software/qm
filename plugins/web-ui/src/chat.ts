@@ -1433,7 +1433,7 @@ export function createChatSurface(
                   )
                 : nothing
             }
-            ${goalStrip(agent)} ${backgroundActivityStrip()} ${ctx.composer.queuedStrip(agent)}
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
             ${ctx.composer.composerForm(agent)}
           </div>
         </div>
