@@ -1101,9 +1101,9 @@ export async function boot(): Promise<void> {
     if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
     if (wanted === "crons" && wantedItem) openCronById(wantedItem);
     if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    if (wanted === "inbox") routeInboxHistory(wantedItem);
     if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
     switchView(wanted as View);
+    if (wanted === "inbox") routeInboxHistory(wantedItem);
   } else if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();

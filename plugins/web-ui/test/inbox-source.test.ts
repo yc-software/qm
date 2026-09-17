@@ -63,9 +63,10 @@ test("email items edit like an email; slack items like slack", () => {
 test("the address keeps naming the open item, even after switchView writes the bare view path", () => {
   assert.match(
     inbox,
-    /if \(fullSurface\.selectedId && !openItem && inboxState\.loaded\) fullSurface\.selectedId = null;\s*(\/\*[\s\S]*?\*\/\s*)?syncInboxUrl\(fullSurface\.selectedId\);/,
+    /syncInboxUrl\(openSentEmail\?\.id \?\? fullSurface\.selectedId\);/,
     "every draw re-states the URL from the selection it just rendered",
   );
+  assert.match(inbox, /void openSentEmailById\(sentId, drawAll\);/, "unknown inbox ids resolve through sent mail");
   assert.match(
     shell,
     /const next = deepLinkPath\(UI_BASE, appState\.currentView, sessionId, contextsState\.selected\);/,
@@ -84,6 +85,10 @@ test("inbox pills own stable routes that survive refresh and history navigation"
   assert.match(inbox, /export function routeInboxHistory\(segment: string \| null\)/);
   assert.match(shell, /if \(wanted === "inbox"\) routeInboxHistory\(wantedItem\)/);
   assert.match(shell, /else routeInboxHistory\(item\)/);
+});
+
+test("initial inbox selection is restored after the shell resets the active view", () => {
+  assert.match(shell, /switchView\(wanted as View\);\s*if \(wanted === "inbox"\) routeInboxHistory\(wantedItem\);/);
 });
 
 test("every draft links back to the session that produced it", () => {
@@ -270,4 +275,9 @@ test("conversation messages use the containing view's scroll instead of clipping
   const context = css.match(/\.inbox-context \{[^}]*\}/)?.[0] ?? "";
   assert.match(context, /flex: none;/);
   assert.doesNotMatch(context, /max-height:|overflow-y:/);
+});
+
+test("single email pages keep bottom breathing room", () => {
+  const surface = css.match(/\.inbox-item-surface \.inbox-scroll \{[^}]*\}/)?.[0] ?? "";
+  assert.match(surface, /padding-bottom: calc\(64px \+ env\(safe-area-inset-bottom\)\);/);
 });

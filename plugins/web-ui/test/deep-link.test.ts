@@ -128,3 +128,15 @@ test("/c/<id> is accepted as an alias for /s/<id> (links shared from Slack)", ()
     item: null,
   });
 });
+
+test("sent and pending email URLs use the same id route shape", () => {
+  for (const base of ["", "/web-ui"]) {
+    const path = deepLinkPath(base, "inbox", null, null, "96e58b52e75bf97f");
+    assert.equal(path, `${base}/inbox/96e58b52e75bf97f`);
+    assert.deepEqual(parseDeepLink(base, path, ""), {
+      view: "inbox",
+      session: null,
+      item: "96e58b52e75bf97f",
+    });
+  }
+});

@@ -13,7 +13,7 @@ interface SentThreadMessage {
   attachments?: string[];
 }
 
-interface SentEmail {
+export interface SentEmail {
   id: string;
   threadId: string;
   to: string;
@@ -61,13 +61,31 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
           attachments: [],
         }
       : await api<NonNullable<typeof detail>>(`/api/inbox/sent/${encodeURIComponent(message.id)}`);
-    if (current === detailGeneration) detail = result;
+    if (current === detailGeneration) {
+      detail = result;
+      selected = { ...message, ...result };
+      if (seeded) accountEmail = local!.accountEmail;
+    }
   } catch (cause) {
     if (current === detailGeneration)
       detailError = cause instanceof Error ? cause.message : "Couldn't load this email.";
   } finally {
     if (current === detailGeneration) draw();
   }
+}
+
+export async function openSentEmailById(id: string, draw: () => void): Promise<void> {
+  await openSentEmail(
+    messages.find((message) => message.id === id) ?? {
+      id,
+      threadId: "",
+      to: "",
+      subject: "",
+      snippet: "",
+      sentAt: 0,
+    },
+    draw,
+  );
 }
 
 export function resetSentMail(): void {
@@ -176,8 +194,9 @@ export function resetSelectedSentEmail(): void {
   detailError = "";
 }
 
-export function closeSentEmail(draw: () => void): void {
+function closeSentEmail(draw: () => void): void {
   resetSelectedSentEmail();
+  ensureSentMail(draw);
   draw();
 }
 
@@ -186,7 +205,10 @@ function plainSnippet(value: string): string {
   return doc.body.textContent ?? "";
 }
 
-export function sentMailTpl(draw: () => void): TemplateResult {
+export function sentMailTpl(
+  draw: () => void,
+  open: (message: SentEmail) => void = (message) => void openSentEmail(message, draw),
+): TemplateResult {
   return html`
     ${error ? html`<div class="inbox-notice" role="alert">${error} <button class="btn" ?disabled=${loading} @click=${() => void loadSentMail(draw, Boolean(nextPageToken))}>Try again</button></div>` : nothing}
     ${!messages.length && !error ? html`<div class="empty compact">${loading ? "Loading sent mail…" : "No sent emails in this account."}</div>` : nothing}
@@ -198,7 +220,7 @@ export function sentMailTpl(draw: () => void): TemplateResult {
               <button
                 class="inbox-item-row inbox-sent-row"
                 type="button"
-                @click=${() => void openSentEmail(message, draw)}
+                @click=${() => open(message)}
                 aria-label=${`Open sent email: ${message.subject || "No subject"}`}
               >
                 <span class="inbox-item-glyph">${icon(Mail, 16)}</span>
@@ -282,6 +304,15 @@ export function sentEmailPageTpl(draw: () => void, aside?: TemplateResult): Temp
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
+        ${
+          detailError
+            ? html`<div class="inbox-notice" role="alert">
+                ${detailError} <button class="btn" @click=${() => void openSentEmail(message, draw)}>Try again</button>
+              </div>`
+            : nothing
+        }
+        ${!detail && !detailError ? html`<div role="status" class="empty compact">Loading email…</div>` : nothing}
+        ${entries.length ? html`<div class="inbox-context">${entries.map(sentMessageTpl)}</div>` : nothing}
         <div class="inbox-draft-head inbox-sent-actions">
           <a
             class="inbox-external-link"
@@ -292,15 +323,6 @@ export function sentEmailPageTpl(draw: () => void, aside?: TemplateResult): Temp
             ${icon(ArrowUpRight, 12)}<span>Open in Gmail</span>
           </a>
         </div>
-        ${
-          detailError
-            ? html`<div class="inbox-notice" role="alert">
-                ${detailError} <button class="btn" @click=${() => void openSentEmail(message, draw)}>Try again</button>
-              </div>`
-            : nothing
-        }
-        ${!detail && !detailError ? html`<div role="status" class="empty compact">Loading email…</div>` : nothing}
-        ${entries.length ? html`<div class="inbox-context">${entries.map(sentMessageTpl)}</div>` : nothing}
       </div>
     </div>
     ${aside ? html`<aside class="inbox-item-aside">${aside}</aside>` : nothing}

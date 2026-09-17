@@ -38,14 +38,11 @@ test("arriving from another view and re-pressing the nav entry share one reset",
   }
 });
 
-test("a deep link still wins: the reset clears the selection but never the pending item", () => {
+test("a deep link still wins after the view switch resets its selection", () => {
   const reset = inbox.match(/export function resetActiveInboxItem\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(reset, /fullSurface\.selectedId = null;/);
   assert.doesNotMatch(reset, /pendingItemId/);
-  assert.match(
-    shell,
-    /if \(wanted === "inbox" && wantedItem\) openInboxItemById\(wantedItem\);\s*\n\s*.*\n?\s*switchView\(wanted as View\);/,
-  );
+  assert.match(shell, /switchView\(wanted as View\);\s*if \(wanted === "inbox"\) routeInboxHistory\(wantedItem\);/);
 });
 
 test("closing an item from the page and from the nav both persist the draft first", () => {

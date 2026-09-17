@@ -37,8 +37,15 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     await vite.ssrLoadModule("/src/shell.ts");
-    const { loadSentMail, sentMailTpl, sentEmailPageTpl, resetSentMail, openSentEmail } =
-      await vite.ssrLoadModule("/src/sent-mail.ts");
+    const {
+      loadSentMail,
+      sentMailTpl,
+      sentEmailPageTpl,
+      resetSentMail,
+      openSentEmail,
+      openSentEmailById,
+      selectedSentEmail,
+    } = await vite.ssrLoadModule("/src/sent-mail.ts");
     const { html, render } = await vite.ssrLoadModule("lit");
     const host = document.getElementById("main")!;
     const draw = () => render(sentMailTpl(draw), host);
@@ -80,10 +87,37 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     assert.ok(host.querySelector(".pane-head.inbox-item-head"));
     assert.ok(host.querySelector(".inbox-surface.inbox-item-surface"));
     assert.equal(host.querySelector(".inbox-item-aside")!.textContent, "Assistant");
+    assert.ok(host.querySelector(".inbox-item-thread > :last-child")!.classList.contains("inbox-sent-actions"));
     assert.match(host.querySelector("a")!.href, /authuser=sam%40example.com/);
     (host.querySelector(".context-back") as HTMLButtonElement).click();
     render(sentMailTpl(draw), host);
     assert.equal(host.querySelectorAll(".inbox-sent-row").length, 2);
+    resetSentMail();
+    let detailRequest = "";
+    globalThis.fetch = async (input) => {
+      if (String(input).endsWith("/sent-seed.local.json")) return new Response(null, { status: 404 });
+      if (String(input).endsWith("/inbox/sent-chat")) return Response.json({ item: { id: "chat", thread: [] } });
+      detailRequest = String(input);
+      return Response.json({
+        id: "unlisted",
+        threadId: "thread-unlisted",
+        to: "Alex",
+        subject: "Direct link",
+        snippet: "",
+        sentAt: 2000,
+        from: "Sam",
+        cc: "",
+        body: "Loaded without listing",
+        html: false,
+        attachments: [],
+      });
+    };
+    await openSentEmailById("unlisted", draw);
+    assert.match(detailRequest, /\/api\/inbox\/sent\/unlisted$/);
+    render(sentEmailPageTpl(draw), host);
+    assert.match(host.textContent!, /Direct link/);
+    assert.match(host.textContent!, /Loaded without listing/);
+    assert.equal(selectedSentEmail().id, "unlisted");
     resetSentMail();
     const seeded = {
       accountEmail: "sam@example.com",

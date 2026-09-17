@@ -9145,6 +9145,7 @@ h3.ambient-field-label {
   flex-direction: column;
   gap: 14px;
   padding-top: 14px;
+  padding-bottom: calc(64px + env(safe-area-inset-bottom));
 }
 .inbox-item-thread,
 .inbox-item-aside {

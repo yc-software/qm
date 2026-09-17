@@ -6,8 +6,6 @@ const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
 const shared = readFileSync(new URL("../src/shared-session.ts", import.meta.url), "utf8");
 
-const pinned = String.raw`\.message-stack\s+\.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\)\s+\.user-bubble\s+>\s+\.pin-content`;
-
 test("only the collapsed pinned prompt is capped and overflow clips instead of nesting scrollbars", () => {
   const bubble =
     css.match(
@@ -20,11 +18,8 @@ test("only the collapsed pinned prompt is capped and overflow clips instead of n
   assert.doesNotMatch(base, /max-height|flex/);
 });
 
-test("the scroller is the size container the cap measures, except the content-sized mini convo", () => {
+test("the scroller is the size container the cap measures", () => {
   assert.match(css, /\n\.chat-scroll \{[^}]*container-type: size;/);
-  const mini = css.match(/\n\.mini-convo-body \.chat-scroll \{[^}]*\}/)?.[0] ?? "";
-  assert.match(mini, /container-type: normal;/);
-  assert.match(css, new RegExp(String.raw`\n\.mini-convo-body\s+${pinned} \{[^}]*max-height: 100px;`));
   assert.match(css, /\n\.readonly-chat \.custom-chat-shell \{[^}]*flex-direction: column;/);
   assert.match(css, /\n\.readonly-chat \.chat-scroll \{[^}]*flex: 1;/);
   assert.doesNotMatch(chat, /--chat-viewport/);

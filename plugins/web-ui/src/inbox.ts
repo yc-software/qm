@@ -1,5 +1,7 @@
 import {
   ensureSentMail,
+  openSentEmail,
+  openSentEmailById,
   isSentMailEmpty,
   isSentMailLoading,
   loadSentMail,
@@ -1331,7 +1333,18 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
         ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl(surface)}` : nothing}
       </div>
       ${inboxState.notice ? html`<div class="inbox-notice" role="status">${inboxState.notice}</div>` : nothing}
-      <div class="inbox-scroll">${surface.viewId === "sent" ? sentMailTpl(drawAll) : list}</div>
+      <div class="inbox-scroll">
+        ${
+          surface.viewId === "sent"
+            ? sentMailTpl(drawAll, (message) => {
+                fullViewId = "sent";
+                if (fullSurface) fullSurface.selectedId = null;
+                syncInboxUrl(message.id, true);
+                void openSentEmail(message, drawAll);
+              })
+            : list
+        }
+      </div>
     </div>
   `;
 }
@@ -1423,8 +1436,14 @@ function drawFull(): void {
   }
   const openItem = fullSurface.selectedId ? inboxState.items.find((i) => i.id === fullSurface?.selectedId) : undefined;
   const openSentEmail = selectedSentEmail();
-  if (fullSurface.selectedId && !openItem && inboxState.loaded) fullSurface.selectedId = null;
-  syncInboxUrl(fullSurface.selectedId);
+  if (fullSurface.selectedId && !openItem && inboxState.loaded) {
+    const sentId = fullSurface.selectedId;
+    fullSurface.selectedId = null;
+    fullViewId = "sent";
+    void openSentEmailById(sentId, drawAll);
+    return;
+  }
+  syncInboxUrl(openSentEmail?.id ?? fullSurface.selectedId);
   const host = fullSurface.host;
   const surface = fullSurface;
   let page: TemplateResult | typeof nothing;
