@@ -353,6 +353,10 @@ export function deploymentSecretValue(name: string, fileValue: string | undefine
 
 export function which(bin: string): boolean {
   try {
+    if (process.platform === "win32") {
+      execFileSync("where.exe", [bin], { stdio: "ignore" });
+      return true;
+    }
     execFileSync("/bin/sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
     return true;
   } catch {

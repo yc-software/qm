@@ -190,3 +190,9 @@ test("async inherited processes reject spawn errors and signal termination", asy
   await assert.rejects(runInheritAsync("/definitely-missing-qm-command", []), /ENOENT/);
   await assert.rejects(runInheritAsync(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")']), /SIGTERM/);
 });
+
+test("which() returns true for a binary on PATH and false for one that is not", async () => {
+  const { which } = await import("../src/util.ts");
+  assert.equal(which("git"), true, "git must be available on PATH in this environment");
+  assert.equal(which("definitely-missing-qm-binary-xyz"), false, "non-existent binary must return false");
+});
