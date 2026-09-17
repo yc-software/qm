@@ -18,6 +18,105 @@ function names(): { id: string; table: string } {
   return { id: `test/integration/${suffix}/0001`, table: `migration_test_${suffix}` };
 }
 
+test("concurrent index migrations adopt prebuilt indexes and serialize retries", { skip }, async () => {
+  const a = new pg.Pool({ connectionString: databaseUrl });
+  const b = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const index = `${table}_idx`;
+  const migration = definePgMigration(id, [`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${index} ON ${table}(value)`]);
+  try {
+    await a.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
+    await a.query(`CREATE INDEX CONCURRENTLY ${index} ON ${table}(value)`);
+    const original = await a.query("SELECT to_regclass($1)::oid AS oid", [index]);
+    await Promise.all([applyPgMigrations(a, [migration]), applyPgMigrations(b, [migration])]);
+    const adopted = await a.query("SELECT to_regclass($1)::oid AS oid", [index]);
+    assert.deepEqual(adopted.rows, original.rows);
+    const ledger = await a.query(`SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+    assert.deepEqual(ledger.rows, [{ checksum: migration.checksum }]);
+  } finally {
+    await a.query(`DROP TABLE IF EXISTS ${table}`);
+    await a.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+    await Promise.all([a.end(), b.end()]);
+  }
+});
+
+test("failed concurrent index builds are unrecorded and rebuild invalid indexes on retry", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const index = `${table}_idx`;
+  const migration = definePgMigration(id, [
+    `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${index} ON ${table}(value)`,
+  ]);
+  try {
+    await pool.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
+    await pool.query(`INSERT INTO ${table} VALUES (1), (1)`);
+    await assert.rejects(applyPgMigrations(pool, [migration]), /could not create unique index/);
+    const failed = await pool.query("SELECT indisvalid FROM pg_index WHERE indexrelid=to_regclass($1)", [index]);
+    assert.deepEqual(failed.rows, [{ indisvalid: false }]);
+    assert.equal((await pool.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id=$1`, [id])).rowCount, 0);
+    await pool.query(`DELETE FROM ${table}`);
+    await pool.query(`INSERT INTO ${table} VALUES (1), (2)`);
+    await applyPgMigrations(pool, [migration]);
+    const repaired = await pool.query("SELECT indisvalid FROM pg_index WHERE indexrelid=to_regclass($1)", [index]);
+    assert.deepEqual(repaired.rows, [{ indisvalid: true }]);
+    assert.equal((await pool.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id=$1`, [id])).rowCount, 1);
+  } finally {
+    await pool.query(`DROP TABLE IF EXISTS ${table}`);
+    await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+    await pool.end();
+  }
+});
+
+test("concurrent index migrations reject mixed transactional statements before execution", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  try {
+    await assert.rejects(
+      applyPgMigrations(pool, [
+        definePgMigration(id, [
+          `CREATE TABLE ${table}(value INT)`,
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_idx ON ${table}(value)`,
+        ]),
+      ]),
+      /must contain only concurrent indexes/,
+    );
+    assert.equal((await pool.query("SELECT to_regclass($1) AS name", [table])).rows[0].name, null);
+  } finally {
+    await pool.end();
+  }
+});
+
+test("concurrent index retry resolves indexes in the target table schema", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const schema = `s_${table}`;
+  const index = `${table}_idx`;
+  const migration = definePgMigration(id, [
+    `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${index} ON ${schema}.events(value)`,
+  ]);
+  try {
+    await pool.query(`CREATE SCHEMA ${schema}`);
+    await pool.query(`CREATE TABLE ${schema}.events(value INT)`);
+    await pool.query(`CREATE TABLE ${table}(value INT)`);
+    await pool.query(`CREATE INDEX ${index} ON ${table}(value)`);
+    const original = await pool.query("SELECT to_regclass($1)::oid AS oid", [index]);
+    await pool.query(`INSERT INTO ${schema}.events VALUES (1), (1)`);
+    await assert.rejects(applyPgMigrations(pool, [migration]), /could not create unique index/);
+    await pool.query(`DELETE FROM ${schema}.events`);
+    await applyPgMigrations(pool, [migration]);
+    assert.deepEqual((await pool.query("SELECT to_regclass($1)::oid AS oid", [index])).rows, original.rows);
+    const repaired = await pool.query("SELECT indisvalid FROM pg_index WHERE indexrelid=to_regclass($1)", [
+      `${schema}.${index}`,
+    ]);
+    assert.deepEqual(repaired.rows, [{ indisvalid: true }]);
+  } finally {
+    await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await pool.query(`DROP TABLE IF EXISTS ${table}`);
+    await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id=$1`, [id]);
+    await pool.end();
+  }
+});
+
 test("concurrent migrators apply one version exactly once", { skip }, async () => {
   const a = new pg.Pool({ connectionString: databaseUrl });
   const b = new pg.Pool({ connectionString: databaseUrl });

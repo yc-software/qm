@@ -68,3 +68,27 @@ test("pg credential-usage sink: survives a fresh sink over the same table (durab
   const rows = await reopened.list({ limit: 100 });
   assert.ok(rows.length >= 2, "calls written by a prior sink instance are still readable");
 });
+
+test("pg credential-usage sink: sparse and absent credentials use an ordered index", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const p = new pg.Pool({ connectionString: URL });
+  try {
+    await p.query(`INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
+      SELECT n, 'unrelated-' || n, 'example.com', 'ok', 'personal:other', 'other'
+      FROM generate_series(1, 20000) n`);
+    await p.query("ANALYZE credential_usage");
+    for (const slug of ["serp", "missing-credential"]) {
+      const result = await p.query(
+        "EXPLAIN (ANALYZE, FORMAT JSON) SELECT ts, slug, host, status, upstream_status, scope_label, principal_id FROM credential_usage WHERE slug = $1 ORDER BY ts DESC, id DESC LIMIT 20",
+        [slug],
+      );
+      const plan = result.rows[0]["QUERY PLAN"][0].Plan;
+      const scan = plan.Plans[0];
+      assert.equal(scan["Node Type"], "Index Scan");
+      assert.equal(scan["Index Name"], "credential_usage_by_slug_ts_id");
+      assert.equal(scan["Rows Removed by Filter"] ?? 0, 0);
+    }
+  } finally {
+    await p.end();
+  }
+});
