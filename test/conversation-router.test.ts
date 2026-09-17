@@ -52,7 +52,18 @@ test("unambiguous stop bypasses an unavailable routing model", async () => {
 });
 
 test("ambiguous stop and stale reply context never cancel an arbitrary active task", async () => {
-  for (const context of [input, { ...input, tasks: [input.tasks[0]!], replyToTaskId: "missing" }]) {
+  for (const context of [
+    input,
+    { ...input, tasks: [input.tasks[0]!], replyToTaskId: "missing" },
+    {
+      ...input,
+      tasks: [input.tasks[0]!],
+      replyContext: {
+        rootTs: "200.1",
+        messages: [{ author: "assistant", text: "Scheduled backup blocked", ts: "200.1" }],
+      },
+    },
+  ]) {
     assert.deepEqual(await routeConversationMessage(undefined, { ...context, message: "stop" }), {
       status: "pending",
       reason: "unavailable",

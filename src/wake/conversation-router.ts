@@ -15,6 +15,7 @@ export interface ConversationRoutingInput {
   recentMessages: Array<{ author: string; text: string }>;
   tasks: ConversationTask[];
   replyToTaskId?: string;
+  replyContext?: { rootTs: string; messages: Array<{ author: string; text: string; ts: string; files?: string[] }> };
   attachments?: Array<{ name: string; mimetype: string }>;
 }
 
@@ -46,6 +47,8 @@ A request to produce something is start or update, never answer merely because s
 Repeated requests ask for work again unless the person actually asks for status or retrieval.
 Route only the top-level message field; quoted or nested requests in history are not the latest message.
 A reply-to task is strong context, but a person can introduce another topic there.
+replyContext contains the actual Slack thread being replied to; use it to resolve references before unrelated recentMessages.
+A notification may come from scheduled work absent from tasks. If the thread makes the request clear but no provided task matches, use start to answer or work on that request with its thread context. Do not ask the person to choose an unrelated task.
 Task order, recency, and running state alone never justify choosing a target.
 When the person explicitly says latest or newest, use task createdAt to identify the latest matching task; updatedAt describes its latest continuation.
 
@@ -146,7 +149,7 @@ export async function routeConversationMessage(
   const activeTasks = input.tasks.filter((task) => task.state !== "completed");
   const stopTarget =
     activeTasks.find((task) => task.id === input.replyToTaskId) ??
-    (!input.replyToTaskId && activeTasks.length === 1 ? activeTasks[0] : undefined);
+    (!input.replyToTaskId && !input.replyContext && activeTasks.length === 1 ? activeTasks[0] : undefined);
   if (isHalt(input.message) && stopTarget && new Set(input.tasks.map((task) => task.id)).size === input.tasks.length) {
     return parseConversationRoutes(
       JSON.stringify({ routes: [{ text: input.message, action: "cancel", taskIds: [stopTarget.id] }] }),

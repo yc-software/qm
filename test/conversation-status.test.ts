@@ -389,3 +389,71 @@ test("a clarification reply sees the completed question without treating the asi
   });
   assert.deepEqual(result, { target: email, cancel: true });
 });
+
+test("notification replies carry their Slack parent into routing despite unrelated completed DM tasks", async () => {
+  const notification = "Scheduled backup blocked: credential loading returned HTTP 403 before any storage request.";
+  const text = "why would this happen?";
+  const followup = {
+    ...request,
+    text,
+    deliveryTarget: "D1:200.1",
+    gatewayContext: { location: "DM", details: { thread_ts: "200.1" } },
+    overheard: [{ ts: "200.1", role: "self" as const, text: notification }],
+  };
+  const result = await conversationStatusRequest({
+    ...base,
+    request: followup,
+    live: { ...live, status: "done", request: { ...request, text: "Find a contact" } },
+    judge: async (system, prompt) => {
+      const input = JSON.parse(prompt);
+      assert.equal(input.message, text);
+      assert.equal(input.replyToTaskId, undefined);
+      assert.deepEqual(input.replyContext, {
+        rootTs: "200.1",
+        messages: [{ author: "assistant", text: notification, ts: "200.1" }],
+      });
+      assert.match(system, /scheduled work absent from tasks/);
+      return JSON.stringify({ routes: [{ text, action: "start" }] });
+    },
+  });
+  assert.ok(result);
+  assert.equal(result.deliveryTarget, followup.deliveryTarget);
+  assert.equal(result.overheard, followup.overheard);
+  assert.match(result.text, /Scheduled backup blocked/);
+  assert.match(result.text, /why would this happen\?/);
+});
+
+test("thread routing retains the parent and recent replies without losing speaker or attachment context", async () => {
+  const text = "what about this?";
+  const result = await conversationStatusRequest({
+    ...base,
+    request: {
+      ...request,
+      text,
+      gatewayContext: { location: "DM", details: { thread_ts: "200.1" } },
+      overheard: [
+        { ts: "200.1", role: "self", text: "Original notification" },
+        ...Array.from({ length: 30 }, (_, i) => ({
+          ts: `201.${i}`,
+          role: "user" as const,
+          name: "Alex",
+          text: `Reply ${i}`,
+          files: ["report.csv"],
+        })),
+      ],
+    },
+    judge: async (_system, prompt) => {
+      const messages = JSON.parse(prompt).replyContext.messages;
+      assert.equal(messages.length, 20);
+      assert.equal(messages[0].text, "Original notification");
+      assert.deepEqual(messages[19], { author: "Alex", text: "Reply 29", ts: "201.29", files: ["report.csv"] });
+      return JSON.stringify({ routes: [{ text, action: "clarify", question: "Which old task?" }] });
+    },
+  });
+  assert.ok(result);
+  assert.match(result.text, /Person's original request:\n\nwhat about this\?/);
+  assert.match(result.text, /Answer directly if the context establishes the answer/);
+  assert.match(result.text, /Original notification/);
+  assert.doesNotMatch(result.text, /Ask this clarification question without performing any work/);
+  assert.equal(result.readOnly, true);
+});
