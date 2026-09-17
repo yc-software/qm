@@ -850,11 +850,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async getTranscriptEntries(sessionId, opts?: GetEntriesOptions) {
-      const rows = await q(
-        "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq DESC" +
-          (opts?.limit === undefined ? "" : " LIMIT $3"),
-        [sessionId, opts?.sinceSeq ?? 0, ...(opts?.limit === undefined ? [] : [opts.limit])],
-      );
+      const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
+      let sql = "SELECT * FROM session_transcript_entries WHERE session_id = $1 AND seq >= $2";
+      if (opts?.beforeSeq !== undefined) {
+        params.push(opts.beforeSeq);
+        sql += ` AND seq < $${params.length}`;
+      }
+      sql += " ORDER BY seq DESC";
+      if (opts?.limit !== undefined) {
+        params.push(opts.limit);
+        sql += ` LIMIT $${params.length}`;
+      }
+      const rows = await q(sql, params);
       return rows.map(rowToEntry).reverse();
     },
 
@@ -905,19 +912,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
-      const since = opts?.sinceSeq ?? 0;
-      if (opts?.limit !== undefined) {
-        const rows = await q(
-          "SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq DESC LIMIT $3",
-          [sessionId, since, opts.limit],
-        );
-        return rows.map(rowToEntry).reverse();
+      const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
+      let sql = "SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2";
+      if (opts?.beforeSeq !== undefined) {
+        params.push(opts.beforeSeq);
+        sql += ` AND seq < $${params.length}`;
       }
-      const rows = await q("SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2 ORDER BY seq ASC", [
-        sessionId,
-        since,
-      ]);
-      return rows.map(rowToEntry);
+      sql += " ORDER BY seq DESC";
+      if (opts?.limit !== undefined) {
+        params.push(opts.limit);
+        sql += ` LIMIT $${params.length}`;
+      }
+      return (await q(sql, params)).map(rowToEntry).reverse();
     },
 
     async getContextWindow(sessionId) {

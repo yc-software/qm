@@ -123,6 +123,7 @@ export function createTranscriptViewport() {
 
   function onScroll(): void {
     if (!scroller || contentUpdates.size > 0) return;
+    const movingUp = scroller.scrollTop < lastTop;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
     const reachedPreviousBottom =
       scroller.scrollTop > lastTop &&
@@ -134,6 +135,15 @@ export function createTranscriptViewport() {
     lastTop = scroller.scrollTop;
     measureBottom();
     syncSticky();
+    if (movingUp) loadEarlier();
+  }
+
+  function loadEarlier(): void {
+    if (!scroller || scroller.scrollTop > 400) return;
+    const button = scroller.querySelector<HTMLButtonElement>(".earlier-messages-btn:not(:disabled)");
+    if (!button) return;
+    cancelFollow();
+    button.click();
   }
 
   function measureBottom(): void {
@@ -172,6 +182,7 @@ export function createTranscriptViewport() {
 
   function onWheel(event: WheelEvent): void {
     if (!scroller) return;
+    if (event.deltaY < 0) loadEarlier();
     if (event.deltaY < 0 && scroller.scrollTop > 0) cancelFollow();
     if (event.deltaY > 0) {
       clearInput();

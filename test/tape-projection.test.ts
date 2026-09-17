@@ -1044,6 +1044,38 @@ test("forViewer with a limit reads a bounded tape suffix for an active participa
   );
 });
 
+test("an earlier-page tape fallback keeps its full prefix without repeated dense-turn reads", async () => {
+  const sim = await simSession();
+  await sim.store.addParticipant(sim.session.id, "viewer", undefined, { includeHistory: true });
+  await simTurn(sim, {
+    input: "a dense turn",
+    reply: "done",
+    steps: Array.from({ length: 90 }, (_, i) => ({
+      calls: [
+        {
+          id: `c${i}`,
+          name: "execute",
+          args: { command: "work" },
+          result: "done",
+        },
+      ],
+    })),
+  });
+  const expected = (await sim.store.getEntries(sim.session.id)).filter((entry) => entry.seq < 181);
+  const { store, calls } = tapeSpy(sim);
+  const source = createTranscriptSource(store);
+  for (const read of [
+    () => source.forRender(sim.session.id, { beforeSeq: 181, limit: 40 }),
+    () => source.forViewer(sim.session.id, "viewer", { beforeSeq: 181, limit: 40 }),
+  ]) {
+    calls.length = 0;
+    const page = await read();
+    assert.deepEqual(page.entries, expected);
+    assert.equal(page.earlier, 0);
+    assert.deepEqual(calls, [undefined]);
+  }
+});
+
 test("forViewer refetches in full when a late joiner's window under-fills the limit", async () => {
   const sim = await simSession();
   await simTurn(sim, { input: "before the join", reply: "old reply" });

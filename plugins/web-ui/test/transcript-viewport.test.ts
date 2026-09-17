@@ -169,6 +169,65 @@ function fixture() {
   };
 }
 
+test("scrolling toward earlier messages loads before reaching the top and pauses following", () => {
+  const f = fixture();
+  try {
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    f.s.querySelector(".message-stack")!.prepend(button);
+    let loads = 0;
+    button.onclick = () => {
+      loads++;
+      button.disabled = true;
+    };
+    f.viewport.sync(f.s);
+    assert.equal(loads, 0);
+    f.scroll(500);
+    assert.equal(loads, 0);
+    f.scroll(350);
+    assert.equal(loads, 1);
+    f.scroll(100);
+    f.wheelUp();
+    assert.equal(loads, 1);
+    f.grow();
+    f.viewport.follow();
+    f.flush();
+    assert.equal(f.s.scrollTop, 100);
+    button.disabled = false;
+    f.scroll(300);
+    assert.equal(loads, 1);
+    f.scroll(200);
+    assert.equal(loads, 2);
+  } finally {
+    f.close();
+  }
+});
+
+test("upward wheel loads history even when the transcript cannot scroll", () => {
+  const f = fixture();
+  try {
+    f.fit();
+    const button = f.s.ownerDocument.createElement("button");
+    button.className = "earlier-messages-btn";
+    f.s.querySelector(".message-stack")!.prepend(button);
+    let loads = 0;
+    button.onclick = () => {
+      loads++;
+    };
+    f.wheelUp();
+    assert.equal(loads, 1);
+    f.grow();
+    f.viewport.follow();
+    f.flush();
+    assert.equal(f.s.scrollTop, 0);
+    f.viewport.dispose();
+    f.wheelUp();
+    assert.equal(loads, 1);
+  } finally {
+    f.close();
+  }
+});
+
 test("a bottom-pinned stream follows growth instantly and coalesces frames", () => {
   const f = fixture();
   try {
