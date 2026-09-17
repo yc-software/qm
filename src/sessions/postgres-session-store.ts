@@ -1355,6 +1355,33 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Boolean(rows[0]?.present);
     },
 
+    async countPersonalConversations(scope, limit = 3): Promise<number> {
+      const boundedLimit = Math.max(0, Math.floor(limit));
+      if (!boundedLimit) return 0;
+      const rows = await q(
+        `SELECT COUNT(*) AS n FROM (
+           SELECT s.id FROM sessions s
+           WHERE s.scope_id = $1 AND s.type = 'dm' AND s.parent_session_id IS NULL
+             AND ${hasOrigin("s", "conversation")}
+             AND EXISTS (
+               SELECT 1 FROM (
+                 SELECT DISTINCT ON (seq) seq, type, payload FROM (
+                   SELECT seq, type, payload, 1 AS priority FROM session_transcript_entries WHERE session_id = s.id
+                   UNION ALL
+                   SELECT seq, type, payload, 0 AS priority FROM session_entries WHERE session_id = s.id
+                 ) sources ORDER BY seq, priority DESC
+               ) e
+               WHERE e.seq > COALESCE(s.fork_boundary_seq, -1) AND e.type = 'user'
+                 AND (safe_json(replace(e.payload, '\\u0000', ''))->'hidden')::text IS DISTINCT FROM 'true'
+                 AND (safe_json(replace(e.payload, '\\u0000', ''))->'overheard')::text IS DISTINCT FROM 'true'
+             )
+           LIMIT $2
+         ) conversations`,
+        [scope, boundedLimit],
+      );
+      return Number(rows[0]?.n ?? 0);
+    },
+
     async sessionsByThreadRefs(threadRefs): Promise<SessionRef[]> {
       if (threadRefs.length === 0) return [];
       const rows = await q("SELECT id, thread_ref, scope_id, type, title FROM sessions WHERE thread_ref = ANY($1)", [

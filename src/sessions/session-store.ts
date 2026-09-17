@@ -759,6 +759,8 @@ export interface SessionStore {
 
   scopeHasSessions(scope: ScopeId): Promise<boolean>;
 
+  countPersonalConversations(scope: ScopeId, limit?: number): Promise<number>;
+
   sessionsByThreadRefs(threadRefs: readonly string[]): Promise<SessionRef[]>;
 
   distinctScopes(): Promise<DistinctScope[]>;

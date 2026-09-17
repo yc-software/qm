@@ -1,5 +1,7 @@
-import type { TurnRequest } from "../types.ts";
+import type { ScopeId, TurnRequest } from "../types.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
+import type { MemoryService } from "../memory/memory-service.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 
 const ONBOARDING_SKILL_NAME = "onboarding";
 const ONBOARDING_VERSION = "v2";
@@ -55,6 +57,26 @@ export function setOnboardingStatus(
 
 export function onboardingSkillVisible(skills: SkillResolution[]): boolean {
   return skills.some((r) => r.skill?.manifest.name === ONBOARDING_SKILL_NAME);
+}
+
+export async function resolveOnboardingStatus(
+  memory: MemoryService,
+  sessions: SessionStore,
+  scope: ScopeId,
+): Promise<OnboardingStatus> {
+  const status = detectOnboardingStatus(await memory.read(scope));
+  if (status === "completed" || status === "dismissed") return status;
+  if (!scope.startsWith("personal:") || (await sessions.countPersonalConversations(scope, 3)) < 3) return status;
+  if (memory.readHead && memory.replaceIfRevision) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const head = await memory.readHead(scope);
+      const current = detectOnboardingStatus(head.content);
+      if (current === "completed" || current === "dismissed") return current;
+      const next = setOnboardingStatus(head.content, "dismissed", new Date().toISOString().slice(0, 10));
+      if (await memory.replaceIfRevision(scope, next, head.revision, "system:onboarding")) break;
+    }
+  }
+  return "dismissed";
 }
 
 export function renderPendingOnboardingPrompt(status: OnboardingStatus, version = ONBOARDING_VERSION): string {

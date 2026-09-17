@@ -105,7 +105,7 @@ import { createMemoryMap } from "../persistence/durable-map.ts";
 import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
 import { createSkillMaterializer, skillsIndex, SKILLS_DIR } from "../skills/materialize.ts";
 import {
-  detectOnboardingStatus,
+  resolveOnboardingStatus,
   onboardingSkillVisible,
   isIdeasConversation,
   PROACTIVE_OPENER_PROMPT,
@@ -1218,8 +1218,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."
         : "";
       if (!onboardingBlock && useMemory && conversation.kind === "dm" && onboardingSkillVisible(visibleSkills)) {
-        const fullMemory = await deps.memory.read(memoryScopeId).catch(swallowAs("orchestrator: memory read", ""));
-        onboardingBlock = renderPendingOnboardingPrompt(detectOnboardingStatus(fullMemory));
+        onboardingBlock = await resolveOnboardingStatus(deps.memory, deps.sessions, memoryScopeId)
+          .then(renderPendingOnboardingPrompt)
+          .catch(swallowAs("orchestrator: onboarding status", ""));
       }
 
       let type: SessionType = "channel";
