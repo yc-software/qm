@@ -1682,7 +1682,9 @@ export function createChatSurface(
             (msg as AssistantWork).streamingBaseline ?? "",
           )
         : nothing;
-      if (msg.stopReason === "aborted") workView = stoppedWork(work);
+      if (msg.stopReason === "aborted") {
+        workView = work ? workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
+      }
       const deliveredFiles = (msg as AssistantWork).deliveredFiles;
       const hasVisibleContent =
         showWork ||
@@ -2353,19 +2355,13 @@ export function createChatSurface(
     return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
   }
 
-  function stoppedWork(work: WorkBlock | null | undefined): TemplateResult {
-    const seconds = work ? workSeconds(work) : 0;
-    const label = work ? `You stopped after ${goalElapsedLabel(0, seconds * 1000)}` : "You stopped";
-    const timeline = work ? messageWorkTimeline(work, "") : [];
-    return work && timeline.length
-      ? html`<details class="stopped-work">
-          <summary class="stopped-head">${label}${icon(ChevronRight, 14)}</summary>
-          <div class="work-rows">${timeline.map((item) => renderTimelineItem(item, work))}</div>
-        </details>`
-      : html`<div class="stopped-head">${label}</div>`;
-  }
-
-  function workBlock(work: WorkBlock, isStreaming: boolean, text: string, baseline: string): TemplateResult {
+  function workBlock(
+    work: WorkBlock,
+    isStreaming: boolean,
+    text: string,
+    baseline: string,
+    stopped = false,
+  ): TemplateResult {
     const active =
       isStreaming &&
       currentTextPhase(work)?.phase !== "final_answer" &&
@@ -2379,12 +2375,18 @@ export function createChatSurface(
     });
     const tail = active ? streamingTextTail(text, work.activity) : "";
     const stopping = active && runSlot.stopGeneration === runSlot.generation;
-    const label = stopping ? "Stopping…" : workLabel(work);
-    const fold =
+    let label = stopping ? "Stopping…" : workLabel(work);
+    if (stopped) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
+    let fold =
       timeline.length || tail.trim() || work.pendingApprovals?.length
-        ? html`<details class="work work-fold work-${work.status}" ?open=${active || !!work.pendingApprovals?.length}>
-            <summary class="work-head">${sheenLabel(label, active)}${icon(ChevronRight, 14)}</summary>
-            <div class="work-divider"></div>
+        ? html`<details
+            class=${stopped ? "stopped-work" : `work work-fold work-${work.status}`}
+            ?open=${active || !!work.pendingApprovals?.length}
+          >
+            <summary class=${stopped ? "stopped-head" : "work-head"}>
+              ${sheenLabel(label, active)}${icon(ChevronRight, 14)}
+            </summary>
+            ${stopped ? nothing : html`<div class="work-divider"></div>`}
             <div class="work-rows">
               ${repeat(
                 timeline,
@@ -2400,6 +2402,7 @@ export function createChatSurface(
             </div>
           </details>`
         : nothing;
+    if (stopped && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
     return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
   }
 
