@@ -1123,6 +1123,7 @@ a.chat-row-open {
   min-height: 0;
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   position: relative;
 }
@@ -1982,7 +1983,8 @@ qm-markdown .tok-in {
   gap: 6px;
   margin-top: 9px;
 }
-.queued-strip {
+.queued-strip,
+.chat-bottom-dock > .bg-activity {
   position: relative;
   z-index: 0;
   display: flex;
@@ -2212,19 +2214,6 @@ qm-markdown .tok-in {
   cursor: pointer;
   font-weight: 600;
 }
-.thinking-placeholder {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  color: var(--muted-foreground);
-  font-size: 13px;
-  line-height: 1.65;
-}
-.thinking-placeholder .wl-swell {
-  flex: 0 0 auto;
-  color: inherit;
-}
 .work-said {
   color: var(--foreground);
   font-size: 15px;
@@ -2288,9 +2277,6 @@ qm-markdown .tok-in {
 
 .work {
   margin: 2px 0 10px;
-}
-.work-thinking {
-  margin-bottom: 0;
 }
 .work summary.work-head {
   list-style: none;
@@ -2794,34 +2780,23 @@ qm-markdown .tok-in {
 }
 
 .bg-activity {
-  width: min(var(--content-w), calc(100% - 32px));
-  margin: 0 auto 8px;
   color: var(--muted-foreground);
   font-size: 12.5px;
 }
-.composer-wrap > .live-work-status,
-.composer-wrap > .bg-activity {
-  flex: 0 0 calc(100% + var(--composer-pad-inline) + var(--composer-pad-end));
-  width: auto;
-  min-width: 0;
-  margin: calc(-1 * var(--composer-pad-block)) calc(-1 * var(--composer-pad-end)) 8px
-    calc(-1 * var(--composer-pad-inline));
-  padding: 8px var(--composer-pad-end) 8px var(--composer-pad-inline);
-  border-radius: inherit;
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--secondary) 40%, var(--background));
+.chat-bottom-dock > .bg-activity {
+  padding: 6px 10px 13px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 14px 14px 10px 10px;
+  background: color-mix(in srgb, var(--background) 88%, var(--secondary));
 }
-.composer-wrap > .live-work-status:has(+ .bg-activity) {
-  margin-bottom: 0;
-}
-.composer-wrap > .live-work-status + .bg-activity {
-  margin-top: 0;
-  border-radius: 0;
+.chat-bottom-dock > .bg-activity > .bg-activity-strip {
+  min-height: 20px;
+  padding: 0;
+  font-size: 12px;
 }
 .readonly-chat .bg-activity {
-  margin-top: 8px;
+  width: min(var(--content-w), calc(100% - 32px));
+  margin: 8px auto;
 }
 .bg-activity-strip {
   appearance: none;
@@ -8388,7 +8363,8 @@ h3.ambient-field-label {
     margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
     margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
   }
-  .queued-strip {
+  .queued-strip,
+  .chat-bottom-dock > .bg-activity {
     width: auto;
     margin-right: max(28px, calc(22px + env(safe-area-inset-right)));
     margin-left: max(28px, calc(22px + env(safe-area-inset-left)));
@@ -8411,7 +8387,8 @@ h3.ambient-field-label {
     margin-left: calc(10px + env(safe-area-inset-left));
     border-radius: 18px;
   }
-  .queued-strip {
+  .queued-strip,
+  .chat-bottom-dock > .bg-activity {
     margin-right: calc(22px + env(safe-area-inset-right));
     margin-left: calc(22px + env(safe-area-inset-left));
   }

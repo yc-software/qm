@@ -184,13 +184,10 @@ test("the strip renders core's queue, refreshed from the same read that names th
 });
 
 test("the queued strip sits behind and outside the composer form", () => {
-  assert.match(
-    chat,
-    /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent, html`\$\{glanceTier \? nothing : liveWorkStatus\(agent\)\} \$\{backgroundActivityStrip\(\)\}`\)/,
-  );
+  assert.match(chat, /ctx\.composer\.queuedStrip\(agent\)[\s\S]*?ctx\.composer\.composerForm\(agent\)/);
   const composerMarkup = composer.slice(composer.indexOf('<form class="composer-wrap"'), composer.indexOf("</form>"));
   assert.doesNotMatch(composerMarkup, /queuedStrip\(agent\)/);
-  const queuedRule = shell.match(/(?:^|\n)\.queued-strip \{[^}]*\}/)?.[0] ?? "";
+  const queuedRule = shell.match(/(?:^|\n)\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{[^}]*\}/)?.[0] ?? "";
   const composerRule = shell.match(/(?:^|\n)\.composer-wrap \{[^}]*\}/)?.[0] ?? "";
   assert.match(queuedRule, /z-index: 0;/);
   assert.match(queuedRule, /width: min\(calc\(var\(--content-w\) - 24px\), calc\(100% - 56px\)\);/);
@@ -202,11 +199,11 @@ test("the queued strip sits behind and outside the composer form", () => {
   const narrow = shell.slice(narrowStart, shell.indexOf('[data-density="card"]', narrowStart));
   assert.match(
     midWidth,
-    /\.queued-strip \{[^}]*margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);[^}]*margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);[^}]*\}/,
+    /\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{[^}]*margin-right: max\(28px, calc\(22px \+ env\(safe-area-inset-right\)\)\);[^}]*margin-left: max\(28px, calc\(22px \+ env\(safe-area-inset-left\)\)\);[^}]*\}/,
   );
   assert.match(
     narrow,
-    /\.queued-strip \{[^}]*margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);[^}]*margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);[^}]*\}/,
+    /\.queued-strip,\s*\.chat-bottom-dock > \.bg-activity \{[^}]*margin-right: calc\(22px \+ env\(safe-area-inset-right\)\);[^}]*margin-left: calc\(22px \+ env\(safe-area-inset-left\)\);[^}]*\}/,
   );
 });
 

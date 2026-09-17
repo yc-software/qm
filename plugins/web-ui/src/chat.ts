@@ -1407,6 +1407,7 @@ export function createChatSurface(
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
               ${chatState.earlierCount > 0 ? earlierNotice(agent) : nothing} ${messageContent}
+              ${glanceTier ? nothing : liveWorkStatus(agent)}
               ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
             </div>
@@ -1432,8 +1433,8 @@ export function createChatSurface(
                   )
                 : nothing
             }
-            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)}
-            ${ctx.composer.composerForm(agent, html`${glanceTier ? nothing : liveWorkStatus(agent)} ${backgroundActivityStrip()}`)}
+            ${goalStrip(agent)} ${backgroundActivityStrip()} ${ctx.composer.queuedStrip(agent)}
+            ${ctx.composer.composerForm(agent)}
           </div>
         </div>
       `,
@@ -1904,14 +1905,6 @@ export function createChatSurface(
         );
       }
     }
-    if (
-      parts.length === 0 &&
-      message.stopReason !== "error" &&
-      message.stopReason !== "aborted" &&
-      !hasWork &&
-      !(message as AssistantWork).deliveredFiles?.length
-    )
-      parts.push(typingRow());
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
     }
@@ -1935,12 +1928,6 @@ export function createChatSurface(
         .join("\n");
     }
     return "";
-  }
-
-  function typingRow(): TemplateResult {
-    return html`<div class="thinking-placeholder">
-      ${waveLoader({ width: 14.1, label: "Thinking" })}${sheenLabel("Thinking", true)}
-    </div>`;
   }
 
   function syncWorkTicker(): void {
