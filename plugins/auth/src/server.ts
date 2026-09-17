@@ -1,3 +1,4 @@
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { createHmac } from "node:crypto";
 import { coreRememberedSessions, type RememberedSessions, type RememberedSession } from "./sessions.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -299,6 +300,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       }
     } catch (e) {
       if (!(e instanceof ClaimStoreUnavailableError)) throw e;
+      reportBackendError(e);
       console.error(
         "[auth] sign-in link suppressed: core is unreachable, so rate limits cannot be enforced — sign-in fails closed until core is healthy (this is a core outage, not a rate limit)",
       );
@@ -312,6 +314,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       );
       console.log(`[auth] sign-in link sent to ${email} (${receipt})`);
     } catch (e) {
+      reportBackendError(e);
       console.error(`[auth] sign-in link to ${email} could not be delivered: ${errMessage(e)}`);
     }
   }
@@ -392,6 +395,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       linkClaimed = await claimOnce(claims, `link:${opened.jti}`, opened.expiresAtMs);
     } catch (e) {
       if (!(e instanceof ClaimStoreUnavailableError)) throw e;
+      reportBackendError(e);
       return problem(
         res,
         503,
@@ -458,6 +462,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       codeClaimed = await claimOnce(claims, `code:${opened.jti}`, opened.expiresAtMs);
     } catch (e) {
       if (!(e instanceof ClaimStoreUnavailableError)) throw e;
+      reportBackendError(e);
       return sendJson(res, 503, { error: "temporarily_unavailable" });
     }
     if (!codeClaimed) return sendJson(res, 400, { error: "invalid_grant" });

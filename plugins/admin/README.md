@@ -48,7 +48,7 @@ CORE_API_URL=http://localhost:8080 CORE_ORG_ID=acme PORT=8090 npm start
 
 ```
 
-No build step, no runtime dependencies (pure `node:http` + native TS). Node 24+.
+No build step, an optional Sentry backend error reporter (pure `node:http` + native TS). Node 24+.
 
 Env: `CORE_API_URL` (default `http://localhost:8080`), `CORE_ORG_ID` (default `acme`),
 `PORT` (default `8090`) and `CORE_SIGNING_SECRET` (required outside isolated development). The

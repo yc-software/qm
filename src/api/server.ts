@@ -1,3 +1,4 @@
+import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -337,6 +338,7 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     else res.destroy();
     return;
   }
+  reportBackendError(err);
   console.error("[server] 500 %s %s: %s", req.method ?? "?", req.url ?? "?", errMessage(err));
   if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "internal server error" });
   else res.destroy();
@@ -406,6 +408,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   fastify.decorateRequest("gate", undefined);
 
   fastify.setErrorHandler((err, request, reply) => {
+    reportBackendError(err);
     console.error("%s", `[server] 500 ${request.raw.method ?? "?"} ${request.raw.url ?? "?"}:`, errMessage(err));
     return reply.code(500).send({ error: "internal_error", message: "internal server error" });
   });

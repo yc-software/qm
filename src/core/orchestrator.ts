@@ -312,12 +312,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       ]);
       return summary?.trim() || undefined;
     } catch (e) {
-      deps.errors?.record({
-        category: "command_policy",
-        code: "summary_failed",
-        message: errMessage(e),
-        scopeLabel: scopeId,
-      });
+      deps.errors?.record(
+        {
+          category: "command_policy",
+          code: "summary_failed",
+          message: errMessage(e),
+          scopeLabel: scopeId,
+        },
+        e,
+      );
       return undefined;
     }
   }
@@ -342,13 +345,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     try {
       title = await deps.harness.models.generateTitle?.(transcript);
     } catch (e) {
-      deps.errors?.record({
-        category: "session_title",
-        code: e instanceof TitleRejected ? `rejected_${e.rule}` : "generation_failed",
-        message: errMessage(e),
-        scopeLabel: scopeId,
-        sessionId,
-      });
+      deps.errors?.record(
+        {
+          category: "session_title",
+          code: e instanceof TitleRejected ? `rejected_${e.rule}` : "generation_failed",
+          message: errMessage(e),
+          scopeLabel: scopeId,
+          sessionId,
+        },
+        e,
+      );
     }
     title ??= fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
     if (title) {
@@ -2213,13 +2219,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           onError: (e) =>
-            deps.errors?.record({
-              category: "file_store",
-              code: "register_failed",
-              message: errMessage(e),
-              scopeLabel: scopeId,
-              sessionId: session.id,
-            }),
+            deps.errors?.record(
+              {
+                category: "file_store",
+                code: "register_failed",
+                message: errMessage(e),
+                scopeLabel: scopeId,
+                sessionId: session.id,
+              },
+              e,
+            ),
         };
         const postProvenance = (deliveryKey: string): DeliveryProvenance =>
           turnDeliveryProvenance({
@@ -3562,13 +3571,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });
             } catch (e) {
-              deps.errors?.record({
-                category: "memory",
-                code: "capture_failed",
-                message: errMessage(e),
-                scopeLabel: scopeId,
-                sessionId: session.id,
-              });
+              deps.errors?.record(
+                {
+                  category: "memory",
+                  code: "capture_failed",
+                  message: errMessage(e),
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                },
+                e,
+              );
             } finally {
               deps.metrics?.record({
                 totalMs: 0,
@@ -3610,13 +3622,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       }),
                   });
                 } catch (e) {
-                  deps.errors?.record({
-                    category: "keychain",
-                    code: "device_flow_capture_failed",
-                    message: errMessage(e),
-                    scopeLabel: scopeId,
-                    sessionId: session.id,
-                  });
+                  deps.errors?.record(
+                    {
+                      category: "keychain",
+                      code: "device_flow_capture_failed",
+                      message: errMessage(e),
+                      scopeLabel: scopeId,
+                      sessionId: session.id,
+                    },
+                    e,
+                  );
                 }
               }
             }
@@ -3800,13 +3815,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
           return { status: "refused", sessionId: session.id, reason: err.message };
         }
-        deps.errors?.record({
-          category: "turn",
-          code: "error",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        });
+        deps.errors?.record(
+          {
+            category: "turn",
+            code: "error",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
         markErrorRecorded(err);
         if ((err instanceof NonRetryableTurnError || input.finalAttempt) && !input.cancel?.aborted) {
           const mirrorFailureEntry = async (entry: SessionEntry | undefined): Promise<void> => {

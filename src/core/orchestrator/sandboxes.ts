@@ -257,13 +257,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           await deps.deviceFlowCutover?.markResidentReset(memoryScopeId, service, generation, handle.resourceId);
         }
       } catch (err) {
-        deps.errors?.record({
-          category: "keychain",
-          code: "device_flow_restore_failed",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        });
+        deps.errors?.record(
+          {
+            category: "keychain",
+            code: "device_flow_restore_failed",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
       }
       emit("creds", deviceFlowStart, Date.now());
       perf.credsMs += Date.now() - deviceFlowStart;
@@ -291,13 +294,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       try {
         await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId);
       } catch (err) {
-        deps.errors?.record({
-          category: "process_session",
-          code: "reconcile_failed",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        });
+        deps.errors?.record(
+          {
+            category: "process_session",
+            code: "reconcile_failed",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
       } finally {
         emit("proc_reconcile", procReconcileStart, Date.now());
       }
@@ -348,13 +354,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       if (r.skill && deps.skills)
         void deps.skills.recordUse(r.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
     } catch (err) {
-      deps.errors?.record({
-        category: "skills",
-        code: "tree_materialize_failed",
-        message: errMessage(err),
-        scopeLabel: scopeId,
-        sessionId: session.id,
-      });
+      deps.errors?.record(
+        {
+          category: "skills",
+          code: "tree_materialize_failed",
+          message: errMessage(err),
+          scopeLabel: scopeId,
+          sessionId: session.id,
+        },
+        err,
+      );
     } finally {
       emitGapWork("skills_materialize", start, Date.now());
     }
@@ -483,24 +492,30 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           if (pendingHandle) {
             try {
               await scrubOwnerAuthHandle(pendingHandle).catch((scrubErr) => {
-                deps.errors?.record({
-                  category: "sandbox",
-                  code: "owner_auth_scrub_failed",
-                  message: errMessage(scrubErr),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                });
+                deps.errors?.record(
+                  {
+                    category: "sandbox",
+                    code: "owner_auth_scrub_failed",
+                    message: errMessage(scrubErr),
+                    scopeLabel: scopeId,
+                    sessionId: session.id,
+                  },
+                  scrubErr,
+                );
               });
               await destroyOwnerAuthHandle(pendingHandle);
               if (ownerAuthBox.pending === pendingHandle) ownerAuthBox.pending = null;
             } catch (cleanupErr) {
-              deps.errors?.record({
-                category: "sandbox",
-                code: "owner_auth_init_cleanup_failed",
-                message: errMessage(cleanupErr),
-                scopeLabel: scopeId,
-                sessionId: session.id,
-              });
+              deps.errors?.record(
+                {
+                  category: "sandbox",
+                  code: "owner_auth_init_cleanup_failed",
+                  message: errMessage(cleanupErr),
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                },
+                cleanupErr,
+              );
             }
           }
           throw err;
@@ -587,26 +602,32 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (ownerHandle) {
       try {
         await scrubOwnerAuthHandle(ownerHandle).catch((scrubErr) => {
-          deps.errors?.record({
-            category: "sandbox",
-            code: "owner_auth_scrub_failed",
-            message: errMessage(scrubErr),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          });
+          deps.errors?.record(
+            {
+              category: "sandbox",
+              code: "owner_auth_scrub_failed",
+              message: errMessage(scrubErr),
+              scopeLabel: scopeId,
+              sessionId: session.id,
+            },
+            scrubErr,
+          );
         });
         await destroyOwnerAuthHandle(ownerHandle);
         ownerAuthBox.handle = null;
         ownerAuthBox.pending = null;
       } catch (err) {
         ownerCleanupError = err;
-        deps.errors?.record({
-          category: "sandbox",
-          code: "owner_auth_destroy_failed",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        });
+        deps.errors?.record(
+          {
+            category: "sandbox",
+            code: "owner_auth_destroy_failed",
+            message: errMessage(err),
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          err,
+        );
       }
     }
     const scratchHandle = scratchBox.handle;

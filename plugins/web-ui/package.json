@@ -21,6 +21,7 @@
     "@earendil-works/pi-ai": "0.77.0",
     "@earendil-works/pi-web-ui": "0.75.3",
     "@mariozechner/mini-lit": "^0.2.0",
+    "@sentry/node": "10.75.0",
     "@tanstack/ai": "0.54.0",
     "@tanstack/ai-client": "0.31.1",
     "date-fns": "^4.4.0",

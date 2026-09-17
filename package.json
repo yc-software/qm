@@ -78,6 +78,7 @@
     "@openai/codex": "0.144.5",
     "@opencode-ai/plugin": "1.17.18",
     "@opencode-ai/sdk": "1.17.18",
+    "@sentry/node": "10.75.0",
     "@slack/bolt": "^4.7.3",
     "@slack/socket-mode": "^2.0.7",
     "@slack/web-api": "^7.19.0",

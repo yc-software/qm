@@ -1,3 +1,5 @@
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import "./instrument.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
@@ -150,6 +152,7 @@ async function forward(
     res.writeHead(r.status, { "content-type": "application/json", vary: "accept-encoding" });
     pipeBody(res, r.body);
   } catch (err) {
+    reportBackendError(err);
     console.error("[admin] core request failed:", String(err));
     json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
@@ -185,6 +188,7 @@ async function forwardDownload(res: ServerResponse, principal: string, corePath:
     res.writeHead(r.status, headers);
     pipeBody(res, r.body);
   } catch (err) {
+    reportBackendError(err);
     console.error("[admin] core download failed:", String(err));
     json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
@@ -245,6 +249,7 @@ async function uploadFileFromRequest(
     });
     return forward(req, res, principal, "POST", corePath, body);
   } catch (err) {
+    reportBackendError(err);
     console.error("[admin] upload failed:", String(err));
     return json(res, 502, { error: "core_unreachable", message: "core unavailable" });
   }
@@ -332,6 +337,7 @@ export async function handler(req: IncomingMessage, res: ServerResponse): Promis
   await portalTokenStore
     .run(token, () => handle(req, res))
     .catch((err: unknown) => {
+      reportBackendError(err);
       console.error("[admin] unhandled request error:", String(err));
       json(res, 500, { error: "internal_error", message: "internal server error" });
     });
@@ -451,6 +457,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         res.writeHead(r.status, { "content-type": "application/json" });
         res.end(text);
       } catch (err) {
+        reportBackendError(err);
         console.error("[admin] core request failed:", String(err));
         json(res, 502, { error: "core_unreachable", message: "core unavailable" });
       }

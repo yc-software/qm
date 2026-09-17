@@ -90,12 +90,15 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
     stopBeat();
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyRecorded(err))
-      deps.errors?.record({
-        category: "turn",
-        code: "error",
-        message: `run ${run.id}: ${errMessage(err)}`,
-        scopeLabel: conversationScope(run.request.conversation, run.request.actor.id),
-      });
+      deps.errors?.record(
+        {
+          category: "turn",
+          code: "error",
+          message: `run ${run.id}: ${errMessage(err)}`,
+          scopeLabel: conversationScope(run.request.conversation, run.request.actor.id),
+        },
+        err,
+      );
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !(err instanceof NonRetryableTurnError),
       retryAfterMs: retryDelay(run.errorAttempts),

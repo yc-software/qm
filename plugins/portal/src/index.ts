@@ -1,3 +1,5 @@
+import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -911,6 +913,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): void {
 
 const server = createServer((req, res) => {
   void handle(req, res).catch((err: unknown) => {
+    reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
     if (!res.headersSent) json(res, 500, { error: "internal_error" });
     else res.end();
@@ -1666,6 +1669,7 @@ export { handle, server };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   startServer().catch((error: unknown) => {
+    reportBackendError(error);
     console.error("[portal] failed to start:", errMessage(error));
     process.exitCode = 1;
   });

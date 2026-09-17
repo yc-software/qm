@@ -49,7 +49,9 @@ jobs:
           platforms: linux/amd64
           provenance: false
           push: true
-          build-args: ${{ matrix.build-args }}
+          build-args: |
+            ${{ matrix.build-args }}
+            GIT_SHA=${{ github.sha }}
           tags: ghcr.io/yc-software/qm/${{ matrix.name }}:${{ github.sha }}
           cache-from: type=gha,scope=qm-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=qm-${{ matrix.name }}

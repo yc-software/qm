@@ -1,3 +1,4 @@
+import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
@@ -368,7 +369,7 @@ import { createAdminService, bootAdminGrantSeed, type AdminService } from "./adm
 import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
-import { createErrorLog, type ErrorLog } from "./admin/error-log.ts";
+import { withErrorReporting, createErrorLog, type ErrorLog } from "./admin/error-log.ts";
 import { createMemoryReplayDedupe, createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
   emptyDeploymentLayer,
@@ -410,11 +411,15 @@ export function stopWithBackstop(
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(() => process.exit());
+    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
+      await flushErrorReporting();
+      process.exit();
+    });
   }, shutdownDrainMs + 5_000);
   hardExit.unref();
   void runtime.stop().then(
-    () => {
+    async () => {
+      await flushErrorReporting();
       clearTimeout(hardExit);
       beforeExit?.();
       process.exit();
@@ -422,7 +427,10 @@ export function stopWithBackstop(
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(() => process.exit(1));
+      void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
+        await flushErrorReporting();
+        process.exit(1);
+      });
     },
   );
 }
@@ -792,7 +800,7 @@ export function buildApp(
     },
   });
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const errors = config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog();
+  const errors = withErrorReporting(config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog());
   const sandboxOnError = (e: { category: string; code: string; message: string; scopeLabel?: string }) =>
     errors.record({
       category: e.category,
@@ -1503,7 +1511,7 @@ export function buildApp(
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
     onCaptureError: (e, scope) =>
-      errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }),
+      errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
   const directory = config.databaseUrl ? createPostgresDirectoryStore(config.databaseUrl) : createDirectoryStore();
   const projects = createProjectStore(artifactMap<Project>("projects"), {

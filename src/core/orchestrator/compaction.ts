@@ -222,24 +222,30 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
           await writeCompaction({ session, lease, summarized });
         }
       } catch (e) {
-        deps.errors?.record({
+        deps.errors?.record(
+          {
+            category: "turn",
+            code: "background_compaction_failed",
+            message: errMessage(e),
+            scopeLabel: input.scopeId as ScopeId,
+            sessionId: input.sessionId,
+          },
+          e,
+        );
+      } finally {
+        if (lease) await deps.sessions.releaseLease(lease);
+      }
+    }).catch((e) => {
+      deps.errors?.record(
+        {
           category: "turn",
           code: "background_compaction_failed",
           message: errMessage(e),
           scopeLabel: input.scopeId as ScopeId,
           sessionId: input.sessionId,
-        });
-      } finally {
-        if (lease) await deps.sessions.releaseLease(lease);
-      }
-    }).catch((e) => {
-      deps.errors?.record({
-        category: "turn",
-        code: "background_compaction_failed",
-        message: errMessage(e),
-        scopeLabel: input.scopeId as ScopeId,
-        sessionId: input.sessionId,
-      });
+        },
+        e,
+      );
     });
   }
 

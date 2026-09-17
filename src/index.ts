@@ -1,3 +1,4 @@
+import "./instrument.ts";
 import { createBackgroundController } from "./runs/background-controller.ts";
 import { backgroundTaskArn } from "./runs/background-task-identity.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
