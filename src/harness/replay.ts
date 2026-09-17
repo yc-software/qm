@@ -245,7 +245,7 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
   return out;
 }
 
-export function coverageImportViable(entries: readonly SessionEntry[]): boolean {
+function coverageImportViable(entries: readonly SessionEntry[]): boolean {
   if (!entries.length || entries.length > TAPE_IMPORT_MAX_ENTRIES) return false;
   if (entries.some((e) => (e.payload as { securityTainted?: unknown } | null)?.securityTainted === true)) return false;
   return coverageImportEvent(entries).messages.length > 0;

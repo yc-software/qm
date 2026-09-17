@@ -134,11 +134,11 @@ export function createMockHarness(): Harness {
           promptEnvelope: {
             model: "mock",
             system: turn.systemPrompt,
+            tapeSeeded: !!turn.tapeRows,
             messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
             ...(turn.images?.length
               ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
               : {}),
-            ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
           },
           truncated: false,
           usage: callUsage(0),
@@ -839,11 +839,11 @@ export function createMockHarness(): Harness {
             promptEnvelope: {
               model: "mock",
               system: turn.systemPrompt,
+              tapeSeeded: !!turn.tapeRows,
               messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
               ...(turn.images?.length
                 ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
                 : {}),
-              ...(turn.tapeMode ? { tapeMode: turn.tapeMode } : {}),
             },
             truncated: false,
             usage: callUsage(1),

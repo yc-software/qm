@@ -10,8 +10,7 @@ import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord } from "../sessions/session-store.ts";
-import { swallow } from "../util/errors.ts";
+import { tapeCheckpointPayload } from "../sessions/session-store.ts";
 
 export interface HarnessToolPlumbing {
   scratchExec?: boolean;
@@ -38,33 +37,15 @@ export type BridgedTool = {
 
 export async function tapeReplyCheckpoint(
   turn: Pick<HarnessTurnInput, "tape" | "scopeLabel">,
-  entry: Pick<SessionEntry, "seq" | "createdAt" | "payload">,
+  entry: Pick<SessionEntry, "seq">,
 ): Promise<void> {
   if (!turn.tape) return;
   await turn.tape({
     kind: "annotation",
-    payload: tapeCheckpointPayload("subturnEnd", { type: "assistant", payload: entry.payload, at: entry.createdAt }),
+    payload: tapeCheckpointPayload("subturnEnd"),
     scopeLabel: turn.scopeLabel,
     entrySeq: entry.seq,
   });
-}
-
-export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput {
-  const tape = turn.tape;
-  if (!tape) return turn;
-  const emit = turn.emit;
-  return {
-    ...turn,
-    emit: async (entry) => {
-      const saved = await emit(entry);
-      try {
-        await tape(tapeEntryMirrorRecord(saved));
-      } catch (error) {
-        swallow("harness: entry mirror", error);
-      }
-      return saved;
-    },
-  };
 }
 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {

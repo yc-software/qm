@@ -99,7 +99,6 @@ export interface HarnessTurnInput {
   emit(entry: NewEntry): Promise<SessionEntry>;
   tape?(rec: NewTapeRecord): Promise<unknown>;
   tapeRows?: TapeRecord[];
-  tapeMode?: "shadow" | "serve";
   tapeFold?: unknown[];
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;

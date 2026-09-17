@@ -74,6 +74,8 @@ Use `npm run dev-instance:both` when testing both surfaces together. Bare
 `npm run dev-instance` defaults to web for new instances and preserves the surface
 on reload. Switch an existing instance with an explicit surface command.
 
+Existing PostgreSQL deployments must follow the [canonical transcript cutover](docs/transcript-migration.md) before upgrading past the transcript compatibility release.
+
 ## Architecture
 
 Every turn runs through a central core, which can use a variety of models and harnesses

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import { sleep } from "../util/async.ts";
+import { pgTextSafe } from "../util/text.ts";
+import { entrySearchText } from "./entry-search.ts";
 
 export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
   if (envelope == null) return null;
@@ -144,48 +146,40 @@ export interface SessionPin extends NewSessionPin {
 
 type TapeKind = "message" | "context_event" | "annotation";
 
-export const TAPE_RENDER_VERSION = 1;
-
-export interface TapeCheckpointEntry {
-  type: EntryType;
-  payload: unknown;
-  at: number;
+export function tapeCheckpointPayload(bound: "turnEnd" | "subturnEnd"): Record<string, unknown> {
+  return { [bound]: true };
 }
 
-export function tapeCheckpointPayload(
-  bound: "turnEnd" | "subturnEnd",
-  entry?: TapeCheckpointEntry,
-  spanStart?: number,
-): Record<string, unknown> {
-  return {
-    [bound]: true,
-    render: TAPE_RENDER_VERSION,
-    ...(entry ? { entry } : {}),
-    ...(spanStart !== undefined ? { spanStart } : {}),
-  };
+export function transcriptEntryAttributes(payload: unknown): Record<string, unknown> {
+  const value = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const attributes: Record<string, unknown> = {};
+  if ("overheard" in value) attributes.overheard = value.overheard === true;
+  if ("securityTainted" in value) attributes.securityTainted = value.securityTainted === true;
+  if (value.kind === CONTEXT_SUMMARY_KIND) attributes.kind = CONTEXT_SUMMARY_KIND;
+  if (typeof value.throughSeq === "number") attributes.throughSeq = value.throughSeq;
+  if (typeof value.text === "string") attributes.text = "";
+  if (typeof value.name === "string") attributes.name = pgTextSafe(value.name);
+  const text = entrySearchText(payload);
+  if (text !== null && /\\u(?:0000|d[89a-f][0-9a-f]{2})/i.test(JSON.stringify(payload)))
+    attributes.searchText = pgTextSafe(text);
+  return attributes;
 }
 
-export function tapeEntryMirrorRecord(entry: {
-  seq: number;
-  createdAt: number;
-  type: string;
-  payload: unknown;
-  scopeLabel: ScopeId;
-}): NewTapeRecord {
-  return {
-    kind: "annotation",
-    payload: { entry: { type: entry.type, payload: entry.payload, at: entry.createdAt } },
-    scopeLabel: entry.scopeLabel,
-    entrySeq: entry.seq,
-  };
-}
-
-export function tapeTranscriptEntryRecord(entry: SessionEntry): NewTapeRecord {
+export function tapeTranscriptEntryRecord(
+  entry: SessionEntry,
+  payloadJson: string | null = JSON.stringify(entry.payload ?? null),
+): NewTapeRecord {
   return {
     kind: "annotation",
     payload: {
       event: "transcript_entry",
-      entry: { type: entry.type, payload: entry.payload, at: entry.createdAt, parentSeq: entry.parentSeq },
+      entry: {
+        type: entry.type,
+        payloadJson,
+        attributes: transcriptEntryAttributes(payloadJson === null ? null : JSON.parse(payloadJson)),
+        at: entry.createdAt,
+        parentSeq: entry.parentSeq,
+      },
     },
     scopeLabel: entry.scopeLabel,
     entrySeq: entry.seq,
@@ -196,7 +190,7 @@ export function transcriptEntryFromTape(row: TapeRecord): SessionEntry | null {
   if (row.kind !== "annotation" || row.entrySeq === undefined) return null;
   const payload = row.payload as {
     event?: unknown;
-    entry?: { type?: unknown; payload?: unknown; at?: unknown; parentSeq?: unknown };
+    entry?: { type?: unknown; payload?: unknown; payloadJson?: unknown; at?: unknown; parentSeq?: unknown };
   } | null;
   const entry = payload?.entry;
   if (
@@ -212,7 +206,7 @@ export function transcriptEntryFromTape(row: TapeRecord): SessionEntry | null {
     seq: row.entrySeq,
     parentSeq: entry.parentSeq,
     type: entry.type as EntryType,
-    payload: entry.payload ?? null,
+    payload: typeof entry.payloadJson === "string" ? JSON.parse(entry.payloadJson) : (entry.payload ?? null),
     scopeLabel: row.scopeLabel,
     createdAt: entry.at,
   };
@@ -240,7 +234,7 @@ export async function appendEntryOutsideTurn(
   }
   await sessions.appendTape(lease, {
     kind: "annotation",
-    payload: tapeCheckpointPayload("turnEnd", { type: entry.type, payload: entry.payload, at: appended.createdAt }),
+    payload: tapeCheckpointPayload("turnEnd"),
     scopeLabel: entry.scopeLabel,
     entrySeq: appended.seq,
   });
@@ -713,7 +707,7 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
-  getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  countEntries(sessionId: string, opts?: { sinceSeq?: number; beforeSeq?: number }): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;

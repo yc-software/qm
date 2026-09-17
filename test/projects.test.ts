@@ -745,10 +745,10 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as {
-    tapeMode?: string;
+    tapeSeeded: boolean;
     messages?: unknown[];
   };
-  assert.equal(request.tapeMode, "shadow", "roster-scoped history must use the entry reconstruction path");
+  assert.equal(request.tapeSeeded, false, "roster-scoped history must use the entry reconstruction path");
   assert.match(JSON.stringify(request.messages), /PRE_JOIN_SECRET/);
 });
 

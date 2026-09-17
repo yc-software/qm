@@ -12,7 +12,6 @@ import {
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
 import type { Harness, HarnessTurnInput, RuntimeChoice } from "./harness.ts";
-import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 
 function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
@@ -156,9 +155,7 @@ export function createHarnessRouter(
             ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }
             : input.tools,
         };
-        return adapter.turns.runTurn(
-          adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched),
-        );
+        return adapter.turns.runTurn(dispatched);
       },
       async resetSession(sessionId) {
         lastHarness.delete(sessionId);

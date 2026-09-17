@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { searchRowsFromEntries } from "../src/harness/tape-projection.ts";
-import { TAPE_RENDER_VERSION, type Lease, type SessionStore } from "../src/sessions/session-store.ts";
+import { type Lease, type SessionStore } from "../src/sessions/session-store.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 
 const scope = "personal:viewer@example.com" as ScopeId;
@@ -92,7 +92,7 @@ async function simTurn(
     kind: "annotation",
     payload: {
       subturnEnd: true,
-      render: TAPE_RENDER_VERSION,
+      render: 1,
       entry: { type: "assistant", payload: { text: turn.reply }, at: finalEntry.createdAt },
     },
     scopeLabel: scope,
@@ -100,7 +100,7 @@ async function simTurn(
   });
   await tape({
     kind: "annotation",
-    payload: { turnEnd: true, render: TAPE_RENDER_VERSION },
+    payload: { turnEnd: true, render: 1 },
     scopeLabel: scope,
     entrySeq: finalEntry.seq,
   });
@@ -224,7 +224,7 @@ test("a foreign-harness turn indexes its trigger and reply from the coarse proje
     kind: "annotation",
     payload: {
       subturnEnd: true,
-      render: TAPE_RENDER_VERSION,
+      render: 1,
       entry: { type: "assistant", payload: { text: "Here is the summary." }, at: finalEntry.createdAt },
     },
     scopeLabel: scope,
@@ -232,7 +232,7 @@ test("a foreign-harness turn indexes its trigger and reply from the coarse proje
   });
   await sim.store.appendTape(sim.lease, {
     kind: "annotation",
-    payload: { turnEnd: true, render: TAPE_RENDER_VERSION },
+    payload: { turnEnd: true, render: 1 },
     scopeLabel: scope,
     entrySeq: finalEntry.seq,
   });

@@ -121,13 +121,13 @@ test(
     await store.releaseLease(lease!);
 
     await pool.query(
-      `UPDATE session_entries SET payload = ((payload::jsonb) - 'securityTainted')::text WHERE session_id = $1 AND seq = $2`,
+      `UPDATE session_tape SET payload = (jsonb_set(payload::jsonb, '{entry,payloadJson}', to_jsonb(((payload::jsonb #>> '{entry,payloadJson}')::jsonb - 'securityTainted')::text)) #- '{entry,attributes,securityTainted}')::text WHERE session_id = $1 AND entry_seq = $2 AND kind='annotation' AND safe_json(payload)->>'event'='transcript_entry'`,
       [s.id, summary.seq],
     );
-    const rewritten = await pool.query(`SELECT payload FROM session_entries WHERE session_id = $1 AND seq = $2`, [
-      s.id,
-      summary.seq,
-    ]);
+    const rewritten = await pool.query(
+      `SELECT payload FROM session_transcript_entries WHERE session_id = $1 AND seq = $2`,
+      [s.id, summary.seq],
+    );
     assert.match(rewritten.rows[0].payload, /"kind": "context_summary"/, "round-trip produced the spaced format");
 
     const window = await store.getContextWindow(s.id);

@@ -92,6 +92,7 @@ const LIVE_COLUMNS = [
 ];
 const HISTORY_COLUMNS = [
   ["session_entries", ["scope_label", "payload"]],
+  ["session_tape", ["scope_label", "payload"]],
   ["session_llm_requests", ["scope_label", "request"]],
   ["runs", ["request", "result"]],
   ["tool_calls", ["output"]],
@@ -113,7 +114,8 @@ export async function runMigration({
 }) {
   const { rewriteString, rewriteJson } = makeRewriter(mapping);
   const problems = [];
-  const q = async (text, params) => (await pool.query(text, params)).rows;
+  let historyClient;
+  const q = async (text, params) => (await (historyClient ?? pool).query(text, params)).rows;
 
   const others = await q(
     `SELECT pid, application_name FROM pg_stat_activity
@@ -122,7 +124,8 @@ export async function runMigration({
   if (others.length) {
     const who = others.map((r) => `pid=${r.pid}${r.application_name ? ` (${r.application_name})` : ""}`).join(", ");
     const msg = `${others.length} other client(s) connected to the database: ${who} — stop the core before --apply`;
-    if (apply && !allowLive) throw new Error(`${msg} (or pass --allow-live to proceed anyway)`);
+    if (apply && (rewriteHistory || !allowLive))
+      throw new Error(rewriteHistory ? msg : `${msg} (or pass --allow-live to proceed anyway)`);
     log(`WARNING: ${msg}`);
   }
 
@@ -138,21 +141,22 @@ export async function runMigration({
     ).length > 0;
 
   async function forEachRow(sql, fn) {
-    const client = await pool.connect();
+    const client = historyClient ?? (await pool.connect());
     try {
-      await client.query("BEGIN");
+      if (!historyClient) await client.query("BEGIN");
       await client.query(`DECLARE migrate_cur NO SCROLL CURSOR FOR ${sql}`);
       for (;;) {
         const { rows } = await client.query(`FETCH ${BATCH_SIZE} FROM migrate_cur`);
         if (rows.length === 0) break;
         for (const row of rows) await fn(row, client);
       }
-      await client.query("COMMIT");
+      await client.query("CLOSE migrate_cur");
+      if (!historyClient) await client.query("COMMIT");
     } catch (e) {
-      await client.query("ROLLBACK").catch(() => {});
+      if (!historyClient) await client.query("ROLLBACK").catch(() => {});
       throw e;
     } finally {
-      client.release();
+      if (!historyClient) client.release();
     }
   }
 
@@ -266,7 +270,18 @@ export async function runMigration({
   for (const [table, columns] of LIVE_COLUMNS) await rewriteColumns(table, columns);
   if (rewriteHistory) {
     log("history tables:");
-    for (const [table, columns] of HISTORY_COLUMNS) await rewriteColumns(table, columns);
+    historyClient = await pool.connect();
+    try {
+      await historyClient.query("BEGIN");
+      for (const [table, columns] of HISTORY_COLUMNS) await rewriteColumns(table, columns);
+      await historyClient.query("COMMIT");
+    } catch (error) {
+      await historyClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      historyClient.release();
+      historyClient = undefined;
+    }
   }
   log("durable-map tables:");
   await rewriteKvTables();

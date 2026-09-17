@@ -120,7 +120,7 @@ test("a session whose tape is already behind gets the entry but no orphan tape r
     tape.every((row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry"),
   );
   assert.equal(await sessions.tapeCoverage(session.id), -1, "transcript annotations do not advance model coverage");
-  assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
+  assert.deepEqual(await sessions.getEntries(session.id), entries);
 });
 
 test("repeated drains and a restarted decorator never duplicate the transcript entry", async () => {

@@ -37,6 +37,17 @@ const report = (event: string) =>
   console.log(JSON.stringify({ event, apply: values.apply, cursor, throughCreatedAt: through, ...summary }));
 report("start");
 try {
+  if (
+    !(await client.query("SELECT 1 FROM qm_schema_migrations WHERE id='sessions/store/0017-transcript-payload-json'"))
+      .rowCount
+  )
+    throw new Error("Prepare the transcript payload format before migrating histories");
+  if (
+    values.apply &&
+    (await client.query("SELECT 1 FROM qm_schema_migrations WHERE id='sessions/store/0018-transcript-authority'"))
+      .rowCount
+  )
+    throw new Error("Transcript authority is already established; legacy histories can no longer be applied");
   for (;;) {
     const batch = (
       await client.query("SELECT id FROM sessions WHERE id>$1 AND created_at<=$2 ORDER BY id LIMIT $3", [

@@ -287,7 +287,7 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
     1,
     "exactly one turnEnd checkpoint keeps model coverage intact",
   );
-  assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
+  assert.deepEqual(await sessions.getEntries(session.id), entries);
   assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");

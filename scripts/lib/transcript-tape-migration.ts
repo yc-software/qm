@@ -1,6 +1,6 @@
 import type { Client } from "pg";
+import { tapeTranscriptEntryRecord, transcriptEntryAttributes } from "../../src/sessions/session-store.ts";
 import { rowToEntry } from "../../src/sessions/postgres-session-store.ts";
-import { tapeTranscriptEntryRecord } from "../../src/sessions/session-store.ts";
 import { canonicalJson } from "../../src/util/objects.ts";
 import { jsonbSafeStringify } from "../../src/util/text.ts";
 
@@ -22,15 +22,21 @@ export async function migrateTranscriptPage(
       await client.query("ROLLBACK");
       return { busy: true };
     }
-    const source = (
+    if (options.afterSeq < 0) {
+      const invalid = await client.query("SELECT 1 FROM session_entries WHERE session_id=$1 AND seq<0 LIMIT 1", [
+        sessionId,
+      ]);
+      if (invalid.rows.length) throw new Error("Legacy history has an invalid sequence");
+    }
+    const sourceRows = (
       await client.query("SELECT * FROM session_entries WHERE session_id=$1 AND seq>$2 ORDER BY seq LIMIT $3", [
         sessionId,
         options.afterSeq,
         options.limit,
       ])
-    ).rows.map(rowToEntry);
-    if (source.some((entry, index) => entry.seq !== options.afterSeq + index + 1))
-      throw new Error("Legacy history has a sequence gap");
+    ).rows;
+    const source = sourceRows.map(rowToEntry);
+    const rawPayloads = new Map(sourceRows.map((row) => [Number(row.seq), row.payload as string | null]));
     if (source.length < options.limit) {
       const tail = source.at(-1)?.seq ?? options.afterSeq;
       const extra = await client.query(
@@ -50,19 +56,34 @@ export async function migrateTranscriptPage(
           "SELECT * FROM session_transcript_entries WHERE session_id=$1 AND seq>$2 AND seq<=$3 ORDER BY seq",
           [sessionId, options.afterSeq, afterSeq],
         )
-      ).rows.map(rowToEntry);
-    const before = await readCanonical();
+      ).rows;
+    const beforeRows = await readCanonical();
+    const before = beforeRows.map(rowToEntry);
+    const invalidRepresentation = new Set(
+      beforeRows
+        .filter(
+          (row) =>
+            (row.payload === null) !== (rawPayloads.get(Number(row.seq)) === null) ||
+            (row.encoded_payload &&
+              (row.payload !== rawPayloads.get(Number(row.seq)) ||
+                canonicalJson(row.attributes) !==
+                  canonicalJson(transcriptEntryAttributes(row.payload === null ? null : JSON.parse(row.payload))))),
+        )
+        .map((row) => Number(row.seq)),
+    );
     const bySeq = new Map(before.map((entry) => [entry.seq, entry]));
     const sourceSeqs = new Set(source.map((entry) => entry.seq));
     if (before.some((entry) => !sourceSeqs.has(entry.seq))) throw new Error("Canonical history has an extra entry");
-    const missing = source.filter((entry) => canonicalJson(entry) !== canonicalJson(bySeq.get(entry.seq)));
+    const missing = source.filter(
+      (entry) => canonicalJson(entry) !== canonicalJson(bySeq.get(entry.seq)) || invalidRepresentation.has(entry.seq),
+    );
     if (options.apply && missing.length) {
       const next = (
         await client.query("SELECT COALESCE(MAX(seq),-1)+1 AS seq FROM session_tape WHERE session_id=$1", [sessionId])
       ).rows[0].seq;
       const records = missing.map((entry, ordinal) => ({
         ordinal,
-        payload: jsonbSafeStringify(tapeTranscriptEntryRecord(entry).payload),
+        payload: jsonbSafeStringify(tapeTranscriptEntryRecord(entry, rawPayloads.get(entry.seq)).payload),
         scope_label: entry.scopeLabel,
         entry_seq: entry.seq,
       }));
@@ -72,7 +93,18 @@ export async function migrateTranscriptPage(
          FROM jsonb_to_recordset($3::jsonb) AS r(ordinal int,payload text,scope_label text,entry_seq int)`,
         [sessionId, Number(next), jsonbSafeStringify(records), Date.now()],
       );
-      if (canonicalJson(await readCanonical()) !== canonicalJson(source))
+      const verified = await readCanonical();
+      if (
+        canonicalJson(verified.map(rowToEntry)) !== canonicalJson(source) ||
+        verified.some(
+          (row) =>
+            (row.payload === null) !== (rawPayloads.get(Number(row.seq)) === null) ||
+            (row.encoded_payload &&
+              (row.payload !== rawPayloads.get(Number(row.seq)) ||
+                canonicalJson(row.attributes) !==
+                  canonicalJson(transcriptEntryAttributes(row.payload === null ? null : JSON.parse(row.payload))))),
+        )
+      )
         throw new Error("Canonical transcript verification failed");
     }
     await client.query("COMMIT");
@@ -80,5 +112,32 @@ export async function migrateTranscriptPage(
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
+  }
+}
+
+export async function verifyTranscriptAttributes(client: Client): Promise<number> {
+  await client.query(
+    "DECLARE transcript_metadata NO SCROLL CURSOR FOR SELECT session_id,seq,payload,attributes FROM session_transcript_entries WHERE encoded_payload",
+  );
+  let entries = 0;
+  try {
+    for (;;) {
+      const page = (await client.query("FETCH FORWARD 250 FROM transcript_metadata")).rows;
+      for (const row of page) {
+        try {
+          if (
+            canonicalJson(row.attributes) !==
+            canonicalJson(transcriptEntryAttributes(row.payload === null ? null : JSON.parse(row.payload)))
+          )
+            throw new Error("Invalid metadata");
+        } catch {
+          throw new Error(`Transcript metadata differs for ${row.session_id}:${row.seq}`);
+        }
+      }
+      entries += page.length;
+      if (page.length < 250) return entries;
+    }
+  } finally {
+    await client.query("CLOSE transcript_metadata");
   }
 }

@@ -300,7 +300,6 @@ function healLegacyAssistantVoice(messages: readonly unknown[]): unknown[] {
 export function planTapeSeed(
   rows: readonly TapeRecord[],
   harness: string,
-  mode: "shadow" | "serve" | undefined,
   folded?: readonly unknown[],
 ): { seed: unknown[] | null; skip?: "foreign-harness"; lint?: FoldLint; fold?: unknown[] } {
   if (rows.some((r) => r.kind === "message" && r.harness !== undefined && r.harness !== harness)) {
@@ -308,7 +307,7 @@ export function planTapeSeed(
   }
   const fold = folded ? [...folded] : foldTape(rows);
   const lint = lintFold(fold);
-  return { seed: mode === "serve" && lint.ok && fold.length ? fold : null, lint, fold };
+  return { seed: lint.ok && fold.length ? fold : null, lint, fold };
 }
 
 export function tapeNeedsInterruptHeal(rows: readonly TapeRecord[], folded?: readonly unknown[]): boolean {

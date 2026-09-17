@@ -97,6 +97,9 @@ test("answerWebContextRequest reads the log as the asking viewer, refuses gracef
     async getEntries() {
       return entries;
     },
+    async countEntries() {
+      return entries.length;
+    },
     async getTape() {
       return [];
     },

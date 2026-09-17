@@ -14,7 +14,7 @@ import { parseSlackThreadRef, slackThreadRefCandidates } from "../src/slack/mess
 import { sleep } from "../src/util/async.ts";
 import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
-import { projectTapeEntries } from "../src/harness/tape-projection.ts";
+import { createTranscriptSource } from "../src/harness/tape-projection.ts";
 import { tapeCheckpointPayload, type SessionStore } from "../src/sessions/session-store.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
@@ -94,15 +94,14 @@ test("an edit of a recorded DM message appends one marker entry and mirrors it o
   );
   assert.ok(messageRow, "a user-voice tape message row carries the marker for the model");
   const bound = tape.find((row) => {
-    const p = row.payload as { turnEnd?: unknown; entry?: { payload?: { kind?: unknown } } } | null;
-    return row.kind === "annotation" && p?.turnEnd === true && p.entry?.payload?.kind === "message_revision";
+    const p = row.payload as { turnEnd?: unknown } | null;
+    return row.kind === "annotation" && p?.turnEnd === true && row.entrySeq === entries.at(-1)!.seq;
   });
-  assert.ok(bound, "a turnEnd annotation keeps the tape projection covering the marker entry");
+  assert.ok(bound, "a turnEnd annotation keeps model coverage at the marker entry");
   assert.equal(await sessions.tapeCoverage(session.id), await sessions.latestEntrySeq(session.id));
 
-  const projection = projectTapeEntries(session.id, tape);
-  assert.ok(projection, "the tape stays projectable after the marker lands");
-  const projected = projection!.entries.flatMap((e) => {
+  const transcript = await createTranscriptSource(sessions).forRender(session.id);
+  const projected = transcript.entries.flatMap((e) => {
     const r = messageRevision(e);
     return r ? [r] : [];
   });
@@ -211,12 +210,11 @@ test("when model tape is not contiguous the revision is mirrored without advanci
   await recordMessageRevisions(sessions, [edit()]);
 
   assert.equal(revisions(await sessions.getEntries(session.id)).length, 1);
-  assert.deepEqual(await sessions.getTranscriptEntries(session.id), await sessions.getEntries(session.id));
   assert.equal(await sessions.tapeCoverage(session.id), -1);
+  const tape = await sessions.getTape(session.id);
+  assert.equal(tape.length, 2);
   assert.ok(
-    (await sessions.getTape(session.id)).every(
-      (row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry",
-    ),
+    tape.every((row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry"),
   );
 });
 

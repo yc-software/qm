@@ -430,20 +430,19 @@ test("lintFold flags duplicate tool call ids", () => {
   assert.ok(!lintFold([{ role: "user", content: [] }, call, result, call, result]).ok);
 });
 
-test("planTapeSeed serves a clean fold only in serve mode, falls back on defects", () => {
+test("planTapeSeed serves a clean fold and falls back on defects", () => {
   seq = 0;
   const clean = [user("q"), assistant([{ type: "text", text: "a" }]), turnEnd(1)];
   const cleanRows = clean.map((r) => ({ ...r, harness: r.kind === "message" ? "pi" : undefined })) as TapeRecord[];
-  assert.equal(planTapeSeed(cleanRows, "pi", "shadow").seed, null, "shadow never serves");
-  const served = planTapeSeed(cleanRows, "pi", "serve");
+  const served = planTapeSeed(cleanRows, "pi");
   assert.ok(served.seed && served.seed.length === 2, "serve mode seeds a clean fold");
   seq = 0;
   const dangling = [user("q"), assistant([{ type: "toolCall", id: "c1", name: "t", arguments: {} }])] as TapeRecord[];
-  assert.equal(planTapeSeed(dangling, "pi", "serve").seed, null, "lint failure falls back");
+  assert.equal(planTapeSeed(dangling, "pi").seed, null, "lint failure falls back");
   assert.ok(tapeNeedsInterruptHeal(dangling), "trailing dangling call is heal-able");
   seq = 0;
   const foreign = [row({ kind: "message", harness: "opencode", payload: { info: { role: "user" }, parts: [] } })];
-  const skipped = planTapeSeed(foreign, "pi", "serve");
+  const skipped = planTapeSeed(foreign, "pi");
   assert.equal(skipped.seed, null);
   assert.equal(skipped.skip, "foreign-harness");
 });
@@ -456,7 +455,7 @@ test("interrupt heal converts a heal-able tape into a servable one", () => {
     row({ kind: "context_event", payload: { event: "interrupt" } }),
   ];
   assert.ok(!tapeNeedsInterruptHeal(rows), "healed tape needs no further heal");
-  const plan = planTapeSeed(rows, "pi", "serve");
+  const plan = planTapeSeed(rows, "pi");
   assert.ok(plan.seed, "healed tape serves");
 });
 
@@ -531,7 +530,7 @@ test("image artifact refs rehydrate into a servable fold without mutating tape r
   const block = (hydrated[0] as { content: Array<Record<string, unknown>> }).content[1]!;
   assert.deepEqual(block, { type: "image", mimeType: "image/png", data: "aGk=" });
   assert.equal((image as { data?: string }).data, undefined, "durable tape payload stays byte-free");
-  assert.ok(planTapeSeed(rows, "pi", "serve", hydrated).seed, "rehydrated image history serves");
+  assert.ok(planTapeSeed(rows, "pi", hydrated).seed, "rehydrated image history serves");
   assert.equal(loads, 1);
 });
 
@@ -564,7 +563,7 @@ test("image rehydration memoizes storage reads but charges duplicate blocks to t
   const content = (hydrated[0] as { content: Array<{ type: string; data?: string; text?: string }> }).content;
   assert.equal(content[1]!.data, "aGk=", "the newest duplicate gets the budget");
   assert.equal(content[0]!.type, "text", "the older duplicate is evicted to a placeholder, not left byteless");
-  assert.notEqual(planTapeSeed(rows, "pi", "serve", hydrated).seed, null, "a budget-evicted fold still serves");
+  assert.notEqual(planTapeSeed(rows, "pi", hydrated).seed, null, "a budget-evicted fold still serves");
 });
 
 test("image rehydration stops loading unique refs once the aggregate budget is exhausted", async () => {
@@ -621,7 +620,7 @@ test("an image larger than the REMAINING budget is evicted to a placeholder, not
   assert.equal(content[1]!.data, "AAAA", "second-newest hydrated");
   assert.equal(content[0]!.type, "text", "oldest evicted to placeholder");
   assert.match(content[0]!.text ?? "", /image removed/);
-  assert.notEqual(planTapeSeed(rows, "pi", "serve", hydrated).seed, null, "fold still serves");
+  assert.notEqual(planTapeSeed(rows, "pi", hydrated).seed, null, "fold still serves");
 });
 
 test("a never-captured image (omitted, no ref) folds to the placeholder — reconstruction wouldn't replay it either", async () => {
@@ -656,7 +655,7 @@ test("image rehydration leaves missing artifacts fail-closed", async () => {
     }),
   ];
   const hydrated = await rehydrateFoldImages(foldTape(rows), async () => null, 10);
-  assert.equal(planTapeSeed(rows, "pi", "serve", hydrated).seed, null);
+  assert.equal(planTapeSeed(rows, "pi", hydrated).seed, null);
 });
 
 test("image rehydration preserves the taped MIME identity", async () => {
@@ -710,7 +709,7 @@ test("compacted-away image refs consume no reads or hydration budget", async () 
     2,
   );
   assert.deepEqual(loaded, ["kept"]);
-  assert.ok(planTapeSeed(rows, "pi", "serve", hydrated).seed);
+  assert.ok(planTapeSeed(rows, "pi", hydrated).seed);
 });
 
 test("dangling calls heal only after every image is rehydrated", async () => {

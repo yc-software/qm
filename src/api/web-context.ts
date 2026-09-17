@@ -78,7 +78,13 @@ export function webConversationWindow(
 export async function answerWebContextRequest(
   sessions: Pick<
     SessionStore,
-    "sessionsByThreadRefs" | "visibleEntries" | "getEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
+    | "sessionsByThreadRefs"
+    | "visibleEntries"
+    | "getEntries"
+    | "countEntries"
+    | "getTape"
+    | "latestEntrySeq"
+    | "participantWindowsOf"
   >,
   query: SurfaceContextQuery,
 ): Promise<{ result?: SurfaceContextResult; error?: string }> {

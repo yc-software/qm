@@ -199,3 +199,38 @@ test("workspace dirs: rename when free, merge without overwrite when the email d
   const second = await runMigration({ pool: pool!, mapping: MAPPING, apply: true, dataDir, log: silent });
   assert.equal(second.problems.length, 1, "a re-run reports the same conflict instead of throwing");
 });
+
+test("history rewrite rolls back both representations when the tape rewrite fails", { skip }, async () => {
+  await reset();
+  await pool!.query(`CREATE TABLE session_entries(payload TEXT,scope_label TEXT);
+    CREATE TABLE session_tape(payload TEXT,scope_label TEXT CHECK(scope_label NOT LIKE '%@%'));
+    INSERT INTO session_entries VALUES('{"actor":"U9MIGA"}','personal:U9MIGA');
+    INSERT INTO session_tape VALUES('{"actor":"U9MIGA"}','personal:U9MIGA')`);
+  try {
+    await assert.rejects(
+      runMigration({ pool: pool!, mapping: MAPPING, apply: true, rewriteHistory: true, log: silent }),
+      /check constraint/,
+    );
+    for (const table of ["session_entries", "session_tape"]) {
+      assert.deepEqual((await pool!.query(`SELECT * FROM ${table}`)).rows, [
+        { payload: '{"actor":"U9MIGA"}', scope_label: "personal:U9MIGA" },
+      ]);
+    }
+    await pool!.query("ALTER TABLE session_tape DROP CONSTRAINT session_tape_scope_label_check");
+    const result = await runMigration({
+      pool: pool!,
+      mapping: MAPPING,
+      apply: true,
+      rewriteHistory: true,
+      log: silent,
+    });
+    assert.deepEqual(result.problems, []);
+    for (const table of ["session_entries", "session_tape"]) {
+      assert.deepEqual((await pool!.query(`SELECT * FROM ${table}`)).rows, [
+        { payload: '{"actor":"alice@x.com"}', scope_label: "personal:alice@x.com" },
+      ]);
+    }
+  } finally {
+    await pool!.query("DROP TABLE session_entries,session_tape");
+  }
+});

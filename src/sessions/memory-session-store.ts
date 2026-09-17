@@ -72,7 +72,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
   const sessions = new Map<string, Session>();
-  const entries = new Map<string, SessionEntry[]>();
   const tape = new Map<string, TapeRecord[]>();
   const searchIndex = new Map<string, NewSearchEntry[]>();
   const llmRequests = new Map<string, LlmRequestRecord[]>();
@@ -100,11 +99,33 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   >();
   const leases = new Map<string, { token: string; expiresAt: number; acquiredAt: number; holder?: LeaseHolder }>();
 
+  const transcriptEntries = (sessionId: string): SessionEntry[] => {
+    const projected = new Map<number, SessionEntry>();
+    for (const row of tape.get(sessionId) ?? []) {
+      const entry = transcriptEntryFromTape(row);
+      if (entry) projected.set(entry.seq, entry);
+    }
+    return [...projected.values()].sort((a, b) => a.seq - b.seq);
+  };
+
+  const syncSearchEntry = (entry: SessionEntry) => {
+    const index = (searchIndex.get(entry.sessionId) ?? []).filter((row) => row.seq !== entry.seq);
+    const text = SEARCHABLE_ENTRY_TYPES.has(entry.type) ? entrySearchText(entry.payload) : null;
+    if (text?.trim()) {
+      const author = entrySearchAuthor(entry);
+      index.push({ seq: entry.seq, type: entry.type, text, createdAt: entry.createdAt, ...(author ? { author } : {}) });
+    }
+    searchIndex.set(
+      entry.sessionId,
+      index.sort((a, b) => a.seq - b.seq),
+    );
+  };
+
   const participantSession = (sessionId: string, principalId: string): Session | null => {
     const s = sessions.get(sessionId);
     if (!s) return null;
     const view = windows.get(sessionId)?.get(principalId);
-    const all = entries.get(sessionId) ?? [];
+    const all = transcriptEntries(sessionId);
     const log = all.filter((e) => e.type === "user");
     const lastActivityAt = log.length ? Math.max(s.createdAt, ...log.map((e) => e.createdAt)) : s.createdAt;
     const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
@@ -141,7 +162,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         ...(surface ? { surface } : {}),
       };
       sessions.set(session.id, session);
-      entries.set(session.id, []);
       byThread.set(threadRef, session.id);
       return session;
     },
@@ -227,7 +247,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         participants.get(principalId)?.delete(sessionId);
       }
       sessions.delete(sessionId);
-      entries.delete(sessionId);
       tape.delete(sessionId);
       searchIndex.delete(sessionId);
       llmRequests.delete(sessionId);
@@ -238,7 +257,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
     async deleteSessionIfEmpty(sessionId) {
       if (!sessions.has(sessionId)) return false;
-      if ((entries.get(sessionId)?.length ?? 0) > 0) return false;
+      if (transcriptEntries(sessionId).length > 0) return false;
       const held = leases.get(sessionId);
       if (held && now() < held.expiresAt) return false;
       await this.deleteSession(sessionId);
@@ -255,9 +274,9 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         throw new Error("append without a valid session lease");
       }
       held.expiresAt = now() + leaseTtlMs;
-      const log = entries.get(lease.sessionId);
-      if (!log) throw new Error(`unknown session: ${lease.sessionId}`);
-      const seq = log.length;
+      const log = transcriptEntries(lease.sessionId);
+      if (!sessions.has(lease.sessionId)) throw new Error(`unknown session: ${lease.sessionId}`);
+      const seq = (log.at(-1)?.seq ?? -1) + 1;
       const full: SessionEntry = {
         sessionId: lease.sessionId,
         seq,
@@ -268,7 +287,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         createdAt: now(),
       };
       const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
-      log.push(full);
       const tapeLog = tape.get(lease.sessionId) ?? [];
       tapeLog.push({
         ...mirrored,
@@ -277,54 +295,39 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         createdAt: now(),
       });
       tape.set(lease.sessionId, tapeLog);
-      const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
-      if (text?.trim()) {
-        const index = searchIndex.get(full.sessionId) ?? [];
-        const author = entrySearchAuthor(full);
-        index.push({ seq: full.seq, type: full.type, text, createdAt: full.createdAt, ...(author ? { author } : {}) });
-        searchIndex.set(full.sessionId, index);
-      }
+      syncSearchEntry(full);
       return full;
     },
 
     async getEntries(sessionId, opts?: GetEntriesOptions) {
-      const log = entries.get(sessionId) ?? [];
+      const log = transcriptEntries(sessionId);
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
+      if (opts?.limit === 0) return [];
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
-    async getTranscriptEntries(sessionId, opts?: GetEntriesOptions) {
-      const projected = new Map<number, SessionEntry>();
-      for (const row of tape.get(sessionId) ?? []) {
-        const entry = transcriptEntryFromTape(row);
-        if (entry) projected.set(entry.seq, entry);
-      }
-      const filtered = [...projected.values()]
-        .filter(
-          (entry) =>
-            entry.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq),
-        )
-        .sort((a, b) => a.seq - b.seq);
-      if (opts?.limit === 0) return [];
-      return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
+    async countEntries(sessionId, opts) {
+      return transcriptEntries(sessionId).filter(
+        (entry) => entry.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq),
+      ).length;
     },
 
     async getContextWindow(sessionId) {
-      return contextWindowFromEntries(entries.get(sessionId) ?? []);
+      return contextWindowFromEntries(transcriptEntries(sessionId));
     },
 
     async getEntry(sessionId, seq) {
-      return (entries.get(sessionId) ?? []).find((e) => e.seq === seq);
+      return transcriptEntries(sessionId).find((e) => e.seq === seq);
     },
 
     async latestEntrySeq(sessionId) {
-      return (entries.get(sessionId)?.length ?? 0) - 1;
+      return transcriptEntries(sessionId).at(-1)?.seq ?? -1;
     },
 
     async clearSecurityTaint(sessionId) {
-      const log = entries.get(sessionId);
-      if (!log) return false;
+      const log = transcriptEntries(sessionId);
+      if (!sessions.has(sessionId)) return false;
       for (const entry of log) {
         if (!entry.payload || typeof entry.payload !== "object") continue;
         const payload = { ...(entry.payload as Record<string, unknown>) };
@@ -352,6 +355,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       tape.set(lease.sessionId, log);
       const full: TapeRecord = { ...rec, sessionId: lease.sessionId, seq: log.length, createdAt: now() };
       log.push(full);
+      const entry = transcriptEntryFromTape(full);
+      if (entry) syncSearchEntry(entry);
       return full;
     },
 
@@ -472,7 +477,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         w.set(principalId, {
           validFrom: includeHistory ? 0 : now(),
           validTo: null,
-          validFromSeq: includeHistory ? 0 : (entries.get(sessionId)?.length ?? 0),
+          validFromSeq: includeHistory ? 0 : (transcriptEntries(sessionId).at(-1)?.seq ?? -1) + 1,
           validToSeq: null,
           ...(retainedTitle != null ? { title: retainedTitle } : {}),
           ...(existing?.archived ? { archived: existing.archived } : {}),
@@ -492,7 +497,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const win = windows.get(sessionId)?.get(principalId);
       if (win && win.validTo === null) {
         win.validTo = now();
-        win.validToSeq = entries.get(sessionId)?.length ?? 0;
+        win.validToSeq = (transcriptEntries(sessionId).at(-1)?.seq ?? -1) + 1;
       }
     },
 
@@ -551,7 +556,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async visibleEntries(sessionId, principalId) {
       const win = windows.get(sessionId)?.get(principalId);
       if (!win) return [];
-      const log = entries.get(sessionId) ?? [];
+      const log = transcriptEntries(sessionId);
       return log.filter((e) => entryWithinTenure(e, win));
     },
 
@@ -611,14 +616,14 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
     async missingSearchEntries(sessionId): Promise<number> {
       const indexed = new Set((searchIndex.get(sessionId) ?? []).map((row) => row.seq));
-      return (entries.get(sessionId) ?? []).filter(
+      return transcriptEntries(sessionId).filter(
         (entry) =>
           SEARCHABLE_ENTRY_TYPES.has(entry.type) && entrySearchText(entry.payload)?.trim() && !indexed.has(entry.seq),
       ).length;
     },
 
     async lastSearchableEntrySeq(sessionId): Promise<number> {
-      const log = entries.get(sessionId) ?? [];
+      const log = transcriptEntries(sessionId);
       for (let i = log.length - 1; i >= 0; i--) {
         const e = log[i]!;
         if (!SEARCHABLE_ENTRY_TYPES.has(e.type)) continue;
@@ -677,7 +682,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         )
           continue;
         if (page?.cronId && cronIdOf(s.threadRef) !== page.cronId) continue;
-        const log = entries.get(s.id) ?? [];
+        const log = transcriptEntries(s.id);
         const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
         out.push({
           id: s.id,
@@ -709,7 +714,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async lastUserMessages(sessionIds): Promise<Map<string, string>> {
       const out = new Map<string, string>();
       for (const id of sessionIds) {
-        const log = entries.get(id) ?? [];
+        const log = transcriptEntries(id);
         const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
         if (userEntries.length) out.set(id, userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100));
       }
@@ -722,7 +727,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!orgWide && s.scopeId !== scope) continue;
         const cronId = cronIdOf(s.threadRef);
         if (!cronId) continue;
-        const log = entries.get(s.id) ?? [];
+        const log = transcriptEntries(s.id);
         const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
         const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
         const g = groups.get(cronId) ?? {
@@ -754,7 +759,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const winners = new Map<string, { at: number; id: string }>();
       for (const s of sessions.values()) {
         if (!orgWide && s.scopeId !== scope) continue;
-        const log = entries.get(s.id) ?? [];
+        const log = transcriptEntries(s.id);
         const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
         const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
         const r = rollups.get(s.scopeId) ?? {
@@ -809,7 +814,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           continue;
         if (cronId && sessionCronId !== cronId) continue;
         total++;
-        const log = entries.get(s.id) ?? [];
+        const log = transcriptEntries(s.id);
         turns += log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
         byType[bucket] = (byType[bucket] ?? 0) + 1;
       }
@@ -820,7 +825,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const DAY = 86_400_000;
       const out: AttributedTurn[] = [];
       for (const [sessionId, byPrincipal] of windows) {
-        const log = (entries.get(sessionId) ?? []).filter((e) => e.type === "user" && !isOverheardEntry(e));
+        const log = transcriptEntries(sessionId).filter((e) => e.type === "user" && !isOverheardEntry(e));
         for (const [principalId, w] of byPrincipal) {
           const buckets = new Map<number, { turns: number; firstAt: number; lastAt: number }>();
           for (const e of log) {

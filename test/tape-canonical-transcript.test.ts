@@ -31,26 +31,20 @@ test("exact tape annotations retain tool fields without advancing model coverage
       result: "denied",
     },
   });
-  assert.deepEqual(await store.getTranscriptEntries(session.id), [entry]);
+  assert.deepEqual(await store.getEntries(session.id), [entry]);
   assert.equal(await store.tapeCoverage(session.id), -1);
   assert.deepEqual(foldTape(await store.getTape(session.id)), []);
-  const source = createTranscriptSource({
-    ...store,
-    getEntries: async () => {
-      throw new Error("legacy read");
-    },
-  });
+  const source = createTranscriptSource(store);
   assert.deepEqual((await source.forRender(session.id)).entries, [entry]);
 });
 
 test("taint release supersedes the exact annotation without changing identity or native model history", async () => {
   const { store, session, lease } = await scenario();
   await store.append(lease, { type: "user", payload: { text: "reviewed", securityTainted: true }, scopeLabel: scope });
-  const before = await store.getTranscriptEntries(session.id);
+  const before = await store.getEntries(session.id);
   const beforeRows = await store.getTape(session.id);
   assert.equal(await store.clearSecurityTaint(session.id), true);
-  assert.deepEqual(await store.getTranscriptEntries(session.id), await store.getEntries(session.id));
-  assert.deepEqual(await store.getTranscriptEntries(session.id), [{ ...before[0]!, payload: { text: "reviewed" } }]);
+  assert.deepEqual(await store.getEntries(session.id), [{ ...before[0]!, payload: { text: "reviewed" } }]);
   assert.equal((await store.getTape(session.id)).length, beforeRows.length + 1);
   assert.equal(await store.tapeCoverage(session.id), -1);
   assert.deepEqual(foldTape(await store.getTape(session.id)), []);
@@ -70,18 +64,9 @@ test("canonical transcript reads preserve full histories, bounded tails and part
   const calls: Array<number | undefined> = [];
   const source = createTranscriptSource({
     ...store,
-    getEntries: async () => {
-      throw new Error("legacy read");
-    },
-    visibleEntries: async () => {
-      throw new Error("legacy viewer read");
-    },
-    getTape: async () => {
-      throw new Error("native tape read");
-    },
-    getTranscriptEntries: (id, opts) => {
+    getEntries: (id, opts) => {
       calls.push(opts?.limit);
-      return store.getTranscriptEntries(id, opts);
+      return store.getEntries(id, opts);
     },
   });
   assert.deepEqual((await source.forRender(session.id)).entries, entries);
@@ -92,15 +77,13 @@ test("canonical transcript reads preserve full histories, bounded tails and part
   assert.deepEqual((await source.forViewer(session.id, "stranger")).entries, []);
 });
 
-test("partial canonical coverage uses legacy history until every sequence is present", async () => {
+test("transcript adapter reads the authoritative store once", async () => {
   const { store, session, lease } = await scenario();
   for (let i = 0; i < 3; i++) await store.append(lease, { type: "user", payload: { text: `${i}` }, scopeLabel: scope });
   const entries = await store.getEntries(session.id);
   let reads = 0;
   const source = createTranscriptSource({
     ...store,
-    getTranscriptEntries: async () => entries.slice(1),
-    getTape: async () => [],
     getEntries: async () => {
       reads++;
       return entries;
@@ -115,5 +98,5 @@ test("historical canonical annotations preserve original parent, scope and times
   const entry = await store.append(lease, { type: "user", payload: { text: "original" }, scopeLabel: scope });
   const historical = { ...entry, parentSeq: null, createdAt: 123, scopeLabel: "org:historic" as ScopeId };
   await store.appendTape(lease, tapeTranscriptEntryRecord(historical));
-  assert.deepEqual(await store.getTranscriptEntries(session.id), [historical]);
+  assert.deepEqual(await store.getEntries(session.id), [historical]);
 });

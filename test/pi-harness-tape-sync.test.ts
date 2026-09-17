@@ -253,3 +253,62 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     await store.releaseLease(lease);
   }
 });
+
+test("Pi requests use valid tape and reconstruct only when the tape cannot seed", async () => {
+  const realFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    requests.push(String(init?.body));
+    return sse(textReplyEvents("done"));
+  }) as typeof globalThis.fetch;
+  try {
+    for (const variant of ["valid", "invalid", "foreign", "absent"] as const) {
+      const sessionId = `seed-${variant}`;
+      const scopeLabel = "personal:tester" as ScopeId;
+      const harness = createPiHarness({ apiKey: "sk-test" });
+      const history: SessionEntry[] = [
+        {
+          sessionId,
+          seq: 0,
+          parentSeq: null,
+          type: "user",
+          payload: { text: "LEGACY_ONLY_MARKER" },
+          scopeLabel,
+          createdAt: 1,
+        },
+      ];
+      const turn = turnInput(
+        sessionId,
+        { entries: [], tape: [] },
+        {
+          history,
+          ...(variant === "absent"
+            ? {}
+            : {
+                tapeRows: [
+                  {
+                    sessionId,
+                    seq: 0,
+                    kind: "message" as const,
+                    harness: variant === "foreign" ? "codex" : "pi",
+                    payload: {
+                      role: variant === "invalid" ? "assistant" : "user",
+                      content: [{ type: "text", text: "TAPE_ONLY_MARKER" }],
+                      timestamp: 1,
+                    },
+                    scopeLabel,
+                    createdAt: 1,
+                  },
+                ],
+              }),
+        },
+      );
+      await harness.turns.runTurn(turn);
+      assert.equal(requests.length, ["valid", "invalid", "foreign", "absent"].indexOf(variant) + 1);
+      assert.equal(requests.at(-1)!.includes("TAPE_ONLY_MARKER"), variant === "valid");
+      assert.equal(requests.at(-1)!.includes("LEGACY_ONLY_MARKER"), variant !== "valid");
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
