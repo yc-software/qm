@@ -2477,7 +2477,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       desiredLayerBody = deploymentLayerBody(opts.sandboxDir);
       desiredLayer = putDeploymentLayerArtifact(config, desiredLayerBody);
       layerChanged = desiredLayer.sha256 !== current?.layer?.sha256;
-      if (!layerChanged) {
+      if (!layerChanged && before.counts.core !== 0) {
         const state = await currentDeploymentLayerState({
           config,
           transport: awsDeploymentLayerTransport,
