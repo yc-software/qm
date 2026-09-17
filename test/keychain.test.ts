@@ -1324,7 +1324,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     );
   });
 
-  it("overview joins owned credential metadata to grants and recent audited use without secret values", async () => {
+  it("overview returns metadata and grants without querying usage history or exposing secrets", async (t) => {
     const owner = "OVERVIEW_OWNER";
     const { credential } = (await (
       await post(
@@ -1341,12 +1341,17 @@ describe("/v1/keychain routes (capability-authed)", () => {
     const { grant } = (await granted.json()) as any;
     await post("/v1/keychain/use", { grant: grant.id }, await capFor(owner, "channel:C_OVERVIEW"));
 
+    const usage = t.mock.method(built.credentialUsage, "list", async () => {
+      throw new Error("usage history is unavailable");
+    });
+
     const overview = await get("/v1/keychain/overview", await capFor(owner));
     assert.equal(overview.status, 200);
     const body = (await overview.json()) as any;
     assert.equal(body.credentials[0].id, credential.id);
     assert.equal(body.grants[0].purpose, "deploy the reporting app");
-    assert.equal(body.usage[0].credentialId, credential.id);
+    assert.equal(usage.mock.callCount(), 0);
+    assert.ok(!Object.hasOwn(body, "usage"));
     assert.ok(!JSON.stringify(body).includes("never-return-this"));
   });
 

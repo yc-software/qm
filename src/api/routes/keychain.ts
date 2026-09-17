@@ -165,28 +165,11 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
       const connectorCredentials = (await kc.listConnectorsByOwners([actorId])).get(actorId) ?? [];
       const grants = await kc.listGrants({ ownerId: actorId });
       const asks = (await kc.listAsks({ ownerId: actorId })).filter((ask) => ask.status === "pending");
-      const usage = deps.credentialUsage
-        ? (
-            await Promise.all(
-              credentials.map(async (credential) => {
-                const rows = await deps.credentialUsage!.list({
-                  slug: `keychain:${credential.service}:${credential.id}`,
-                  limit: 20,
-                });
-                return rows.map((row) => ({ ...row, credentialId: credential.id }));
-              }),
-            )
-          )
-            .flat()
-            .sort((a, b) => b.ts - a.ts)
-            .slice(0, 50)
-        : [];
       const scopeNames = await resolveScopeNames(app, deps, [
         ...grants.map((grant) => grant.audienceScopeId),
         ...asks.map((ask) => ask.requesterScopeId),
-        ...usage.map((row) => row.scopeLabel),
       ]);
-      return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, usage, scopeNames });
+      return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
     }
 
     if (method === "DELETE" && pathname.startsWith("/v1/keychain/credentials/")) {

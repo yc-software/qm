@@ -592,8 +592,7 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET",
         path: "/v1/keychain/overview",
-        summary:
-          "list this user's credential metadata, grants, pending asks, and recent audited use (never secret values)",
+        summary: "list this user's credential metadata, grants, and pending asks (never secret values)",
       },
       { method: "DELETE", path: "/v1/keychain/credentials/:id", summary: "remove a registered login" },
       {
