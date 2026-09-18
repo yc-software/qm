@@ -170,6 +170,62 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   });
 }
 
+test("Codex RPC replies settle while a notification callback is still held", { timeout: 3000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-notification-queue-"));
+  const binary = join(dir, "codex");
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const readline = require("node:readline");
+const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "start") {
+    send({ method: "progress", params: 1 });
+    send({ method: "progress", params: 2 });
+    send({ id: message.id, result: "started" });
+  }
+});
+`,
+  );
+  chmodSync(binary, 0o755);
+  const releaseFirst = Promise.withResolvers<void>();
+  const releaseSecond = Promise.withResolvers<void>();
+  const firstStarted = Promise.withResolvers<void>();
+  const secondStarted = Promise.withResolvers<void>();
+  const notifications: unknown[] = [];
+  const server = new CodexAppServer({
+    binaryPath: binary,
+    cwd: dir,
+    onNotification: async (_method, params) => {
+      notifications.push(params);
+      if (params === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      } else {
+        secondStarted.resolve();
+        await releaseSecond.promise;
+      }
+    },
+    onRequest: async () => ({}),
+  });
+  t.after(async () => {
+    releaseFirst.resolve();
+    releaseSecond.resolve();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(await server.request("start", {}, AbortSignal.timeout(1000)), "started");
+  await firstStarted.promise;
+  assert.deepEqual(notifications, [1]);
+  assert.equal(server.error(), null);
+  releaseFirst.resolve();
+  await secondStarted.promise;
+  assert.deepEqual(notifications, [1, 2]);
+  releaseSecond.resolve();
+  assert.equal(server.error(), null);
+});
+
 test("a waiting tool cannot block another thread's RPC response or tool call", { timeout: 5000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-wait-"));
   const binary = join(dir, "codex");
