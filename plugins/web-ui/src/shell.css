@@ -1198,7 +1198,7 @@ a.chat-row-open {
   grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
 .custom-chat-shell.in-pane.empty-chat {
-  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 .drop-overlay {
   position: absolute;
@@ -7892,12 +7892,10 @@ h3.ambient-field-label {
   background: var(--background);
 }
 
-/* The dock fills the canvas with the old canvas's 5px edge gutter (panes carried their own
-   5px padding before; the theme's 10px gap reproduces the inter-pane spacing). */
 .split-dock {
   position: absolute;
   inset: 0;
-  padding: 5px;
+  padding: 0;
   box-sizing: border-box;
 }
 
@@ -7946,12 +7944,9 @@ h3.ambient-field-label {
   height: 100%;
 }
 
-/* ── Group chrome: the old pane head/body, drawn on dockview's group. The old head was a
-   1px outline (no bottom) over a separator; here the group carries the outline and the
-   strip a bottom border — same colors, same widths, same pixels. ── */
 .dockview-theme-qm {
-  --dv-tabs-and-actions-container-height: 43px; /* 42px content + 1px separator (border-box) */
-  --dv-separator-border: transparent;
+  --dv-tabs-and-actions-container-height: 35px;
+  --dv-separator-border: var(--border);
   --dv-floating-box-shadow: none;
   --dv-tabs-and-actions-container-font-size: 12.5px;
   --dv-drag-over-background-color: color-mix(in srgb, var(--primary) 20%, transparent);
@@ -7973,14 +7968,10 @@ h3.ambient-field-label {
 
 .dockview-theme-qm .dv-groupview {
   box-sizing: border-box;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: 0;
   background: var(--background);
   overflow: hidden;
-}
-
-.dockview-theme-qm .dv-groupview.dv-active-group {
-  border-color: color-mix(in srgb, var(--brand-accent) 20%, var(--border));
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container {
@@ -8012,12 +8003,8 @@ h3.ambient-field-label {
   background: var(--background);
 }
 
-/* Panel bodies render into overlay layers parented to the shell, not into the group, so the
-   group's rounded `overflow: hidden` never clips them and their square bottom corners paint
-   over its border arc. Round them to the group's inner radius; their `contain: paint` clips. */
 .dockview-theme-qm .dv-render-overlay {
-  border-bottom-left-radius: calc(var(--radius-md) - 1px);
-  border-bottom-right-radius: calc(var(--radius-md) - 1px);
+  border-radius: 0;
 }
 
 .dockview-theme-qm .dv-void-container {
@@ -8261,11 +8248,37 @@ h3.ambient-field-label {
 }
 
 .split-pane-chat {
+  --chat-pad: 13px;
+  --composer-inset: 10px;
+  --meta-lane: 19px;
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
+  font-size: 12px;
   overflow: hidden;
+}
+
+.split-pane-chat .assistant-body,
+.split-pane-chat .message-bubble,
+.split-pane-chat .message-stack {
+  font-size: 12px;
+}
+
+.split-pane-chat .chat-cta {
+  font-size: 21px;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container .icon-btn {
+  width: 27px;
+  height: 27px;
+  min-width: 27px;
+  border-radius: 0;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
+  height: 27px;
+  border-radius: 0;
 }
 
 .split-canvas.resizing .split-pane-chat {
@@ -8523,6 +8536,18 @@ h3.ambient-field-label {
 }
 [data-density="strip"] .chat-bottom-dock {
   display: none;
+}
+
+.split-pane-chat .custom-chat-shell .composer-wrap {
+  --composer-font-size: 12px;
+  --composer-pad-block: 10px;
+  --composer-pad-inline: 10px;
+  width: 100%;
+  margin: 0;
+  padding-bottom: max(var(--composer-pad-block), env(safe-area-inset-bottom));
+  border-width: 1px 0 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 [data-density] .composer-toolbar .icon-btn,

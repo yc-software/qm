@@ -15,11 +15,12 @@ test("pane composers default to the full-width input above a separate toolbar", 
   assert.match(composer, /Math\.max\(ctx\.pane \? 0 : 48, content\)/);
 });
 
-test("a pane's composer inherits the shared transcript column and surface gutters", () => {
-  const block = css.match(/^\.composer-wrap \{[^}]*\}/m)?.[0] ?? "";
-  assert.match(block, /width: min\(var\(--content-w\), calc\(100% - 32px\)\);/);
-  assert.match(block, /margin: 0 auto max\(18px, calc\(10px \+ env\(safe-area-inset-bottom\)\)\);/);
-  assert.match(css, /@container chat \(max-width: 860px\) \{[^]*?\.composer-wrap \{[^}]*width: auto;/);
+test("a pane's composer fills the surface with square edges and no outer gutter", () => {
+  const block = css.match(/\.split-pane-chat \.custom-chat-shell \.composer-wrap \{[^}]*\}/)?.[0] ?? "";
+  assert.match(block, /width: 100%;/);
+  assert.match(block, /margin: 0;/);
+  assert.match(block, /border-radius: 0;/);
+  assert.match(block, /box-shadow: none;/);
 });
 
 test("phone touch layout cannot inflate a pane's composer controls", () => {

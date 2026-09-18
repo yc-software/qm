@@ -191,7 +191,7 @@ function buildDock(): DockviewApi {
   toastEl.className = "split-toast-layer";
   host.appendChild(toastEl);
   const api = createDockview(dockEl, {
-    theme: { name: "qm", className: "dockview-theme-qm", gap: 10 },
+    theme: { name: "qm", className: "dockview-theme-qm", gap: 1 },
     createComponent: () => new PaneContent(),
     createTabComponent: () => new PaneTab(),
     createRightHeaderActionComponent: () => new GroupActions(),
