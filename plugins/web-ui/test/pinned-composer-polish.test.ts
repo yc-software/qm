@@ -28,7 +28,7 @@ test("thinking shares input sizing while background activity stays compact", () 
     [...rule[2].matchAll(/--composer-font-size: (\d+)px/g)].map((match) => [rule[1].trim(), Number(match[1])]),
   );
   assert.deepEqual(sizes, [
-    [".composer-wrap", 15],
+    [".composer-wrap", 14],
     [".split-pane-chat .custom-chat-shell .composer-wrap", 12],
     [".composer-wrap", 16],
     ["body.app-edit-embed .composer-wrap", 13],

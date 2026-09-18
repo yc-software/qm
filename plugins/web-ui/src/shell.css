@@ -1644,7 +1644,7 @@ a.chat-row-open {
   padding-bottom: 24px;
 }
 .welcome-greeting .assistant-body {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.55;
 }
 .welcome-greeting h1 {
@@ -1878,7 +1878,7 @@ button.subagent-chip:hover {
 .assistant-body {
   min-width: 0;
   color: var(--foreground);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.65;
 }
 .assistant-body :is(markdown-block, qm-markdown),
@@ -1988,7 +1988,7 @@ qm-markdown .tok-in {
   max-width: min(72%, 620px);
   padding: 10px 14px;
   border-radius: 18px;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.55;
 }
 .user-bubble {
@@ -3059,7 +3059,7 @@ qm-markdown .tok-in {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: var(--composer-font-size, 15px);
+  font-size: var(--composer-font-size, 14px);
   line-height: 1.4;
   cursor: pointer;
   border-radius: 6px;
@@ -3143,7 +3143,7 @@ qm-markdown .tok-in {
 .assistant-body :is(markdown-block, qm-markdown) pre code,
 .user-bubble :is(markdown-block, qm-markdown) pre code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.55;
   background: none;
   padding: 0;
@@ -3230,7 +3230,7 @@ qm-markdown .tok-in {
 }
 
 .composer-wrap {
-  --composer-font-size: 15px;
+  --composer-font-size: 14px;
   --composer-pad-block: 12px;
   --composer-pad-inline: 12px;
   --composer-pad-end: var(--composer-pad-inline);
