@@ -431,6 +431,7 @@ else if (a.includes("ecs list-tasks") && s.taskInventory?.[after("--service-name
 else if (a.includes("ecs describe-tasks") && Object.values(s.taskInventory || {}).flat().some(task => args.includes(task.taskArn))) console.log(JSON.stringify({ tasks: Object.values(s.taskInventory).flat().filter(task => args.includes(task.taskArn)), failures: [] }));
 else if (a.includes("ecs list-tasks")) console.log(JSON.stringify({ taskArns: process.env.AWS_FAKE_NO_RUNNING_TASK ? [] : [...(process.env.AWS_FAKE_LARGE_ROLLOUT ? Array.from({ length: 100 }, (_, i) => "arn:aws:ecs:us-west-2:123456789012:task/old-core-" + i) : []), "arn:aws:ecs:us-west-2:123456789012:task/live-core"] }));
 else if (a.includes("ecs describe-tasks") && s.stoppedTasks?.[after("--tasks")]) console.log(JSON.stringify({tasks: [s.stoppedTasks[after("--tasks")]], failures: []}));
+else if (a.includes("ecs describe-tasks") && s.missingTasks?.[after("--tasks")]) console.log(JSON.stringify({tasks: [], failures: [s.missingTasks[after("--tasks")]]}));
 else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) console.log(JSON.stringify({ tasks: [] }));
 else if (a.includes("ecs describe-tasks") && a.includes("task/live-core")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/live-core", taskDefinitionArn: process.env.AWS_FAKE_STALE_CORE ? "stale-task-definition" : s.services["acme-core"].taskDefinition, lastStatus: "RUNNING", healthStatus: "HEALTHY", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
@@ -6049,7 +6050,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
         [{ config: single, configDir: dir }],
         [{ instanceId: "instance-one", taskArn, generation: 3 }],
       ),
-      /STOPPED evidence/,
+      /STOPPED or MISSING evidence/,
     );
     const stoppedArn = "arn:aws:ecs:us-west-2:123456789012:task/stopped-core";
     ownership.members.push({
@@ -6073,6 +6074,45 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     );
     assert.equal(retired.generation, 3);
     assert.equal(retired.members.at(-1)!.retired, true);
+    const expiredArn = "arn:aws:ecs:us-west-2:123456789012:task/acme-qm/expired-core";
+    const foreignClusterArn = "arn:aws:ecs:us-west-2:123456789012:task/other-cluster/expired-core";
+    const legacyFormatArn = "arn:aws:ecs:us-west-2:123456789012:task/expired-legacy-format";
+    for (const [arn, failure] of [
+      [expiredArn, { arn: stoppedArn, reason: "MISSING" }],
+      [expiredArn, { arn: expiredArn, reason: "SERVICE_NOT_ACTIVE" }],
+      [foreignClusterArn, { arn: foreignClusterArn, reason: "MISSING" }],
+      [legacyFormatArn, { arn: legacyFormatArn, reason: "MISSING" }],
+    ] as const) {
+      ownership.members.push({ ...ownership.members[0]!, instanceId: `expired-${arn}`, taskArn: arn, generation: 1 });
+      const state = JSON.parse(readFileSync(fake.state, "utf8"));
+      state.missingTasks = { [arn]: failure };
+      writeFileSync(fake.state, JSON.stringify(state));
+      await assert.rejects(
+        awsRetireBackgroundWorkMembers(
+          [{ config: single, configDir: dir }],
+          [{ instanceId: `expired-${arn}`, taskArn: arn, generation: 1 }],
+        ),
+        /STOPPED or MISSING evidence/,
+      );
+      ownership.members.pop();
+    }
+    ownership.members.push({
+      ...ownership.members[0]!,
+      instanceId: "expired-instance",
+      taskArn: expiredArn,
+      generation: 1,
+    });
+    const expiredState = JSON.parse(readFileSync(fake.state, "utf8"));
+    expiredState.missingTasks = { [expiredArn]: { arn: expiredArn, reason: "MISSING" } };
+    writeFileSync(fake.state, JSON.stringify(expiredState));
+    writeFileSync(fake.log, "");
+    const retiredExpired = await awsRetireBackgroundWorkMembers(
+      [{ config: single, configDir: dir }],
+      [{ instanceId: "expired-instance", taskArn: expiredArn, generation: 1 }],
+    );
+    assert.equal(retiredExpired.generation, 3);
+    assert.equal(retiredExpired.members.at(-1)!.retired, true);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs describe-tasks --cluster acme-qm --tasks arn:[^\n]*expired-core/);
     await awsSetBackgroundWork(single, dir, false);
     await assert.rejects(awsUp(single, dir, { yes: true, restart: ["core"] }), /every member to drain/);
     await assert.rejects(awsRollback(single, manifest.id), /every member to drain/);
@@ -6116,7 +6156,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
     writeFileSync(fake.state, JSON.stringify(replacement));
     ownership.deploymentId = "stale-cohort";
     await assert.rejects(awsSetBackgroundWork(single, dir, false), /requested deployment/);
-    assert.equal(mutations.length, 6);
+    assert.equal(mutations.length, 7);
     ownership.deploymentId = replacementManifest.backgroundDeploymentId;
     await awsRollback(single, manifest.id);
     const rolledBack = JSON.parse(readFileSync(fake.state, "utf8"));

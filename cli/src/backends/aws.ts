@@ -3401,6 +3401,23 @@ export async function awsBootstrapBackgroundWork(
   });
 }
 
+function ecsTaskMissing(
+  response: { tasks?: Array<{ taskArn?: string }>; failures?: Array<{ arn?: string; reason?: string }> },
+  taskArn: string,
+): boolean {
+  return (
+    !response.tasks?.length &&
+    response.failures?.length === 1 &&
+    response.failures[0]!.arn === taskArn &&
+    response.failures[0]!.reason === "MISSING"
+  );
+}
+
+function ecsTaskArnCluster(taskArn: string): string | undefined {
+  const segments = taskArn.split(":task/")[1]?.split("/") ?? [];
+  return segments.length === 2 ? segments[0] : undefined;
+}
+
 export async function awsRetireBackgroundWorkMembers(
   peers: AwsBackgroundWorkPeer[],
   terminatedMembers: Array<Pick<BackgroundWorkMember, "instanceId" | "taskArn" | "generation">>,
@@ -3424,8 +3441,12 @@ export async function awsRetireBackgroundWorkMembers(
         if (!member.deploymentId.startsWith(`${aws.services.core!.ecsService}:`)) continue;
         const response = awsJson<{
           tasks?: Array<{ taskArn?: string; taskDefinitionArn?: string; lastStatus?: string; group?: string }>;
-          failures?: unknown[];
+          failures?: Array<{ arn?: string; reason?: string }>;
         }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", member.taskArn]);
+        if (ecsTaskMissing(response, member.taskArn) && ecsTaskArnCluster(member.taskArn) === aws.cluster) {
+          proved = true;
+          continue;
+        }
         const task = response.tasks?.find((item) => item.taskArn === member.taskArn);
         if (
           response.failures?.length ||
@@ -3447,7 +3468,7 @@ export async function awsRetireBackgroundWorkMembers(
       }
       if (!proved)
         throw new CliError(
-          "task retirement requires ECS STOPPED evidence bound to the exact service, task and deployment identity",
+          "task retirement requires ECS STOPPED or MISSING evidence bound to the exact service, task and deployment identity",
         );
     }
     return mutateBackgroundWork(awsBackgroundWorkTransport(peers[0]!.config), first.deploymentId, {
