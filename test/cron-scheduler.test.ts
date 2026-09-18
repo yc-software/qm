@@ -1706,3 +1706,36 @@ test("manual cron preparation and detached fire retain admission across pause", 
   if (resumed.started) await resumed.settled;
   await scheduler.stop();
 });
+
+test("scheduler rechecks durable Open authorization on each marked shared fire", async () => {
+  const crons = createCronStore();
+  const calls: TurnRequest[] = [];
+  let open = true;
+  const scheduler = createScheduler({
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
+    isOpenScopeMember: async () => open,
+    run: async (request) => {
+      calls.push(request);
+      return { status: "ok", reply: "done" };
+    },
+  });
+  const cron = await crons.create({
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("group", "G1"),
+    runAs: "scopeShared",
+    ownerResourcesRequireOpen: true,
+    members: [member("U1")],
+    action: "digest",
+    schedule: { everyMs: 60_000 },
+  });
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls[0]?.ownerResourcesRequireOpen, true);
+  open = false;
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.length, 1);
+  assert.equal((await crons.get(cron.id))?.enabled, false);
+});

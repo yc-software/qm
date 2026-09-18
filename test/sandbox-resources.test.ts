@@ -70,7 +70,8 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     backends: { local: backend },
     defaultBackend: "local",
     lock: createMemoryAdvisoryLock(),
-    canUseScope: async (actor: string, scope: string) => actor === "admin" || scope === `personal:${actor}`,
+    canUseScope: async (actor: string, scope: string) =>
+      actor === "admin" || scope === `personal:${actor}` || (actor === "alice" && scope === "channel:team"),
   } satisfies Parameters<typeof createSandboxResources>[0];
   const resources = createSandboxResources(options);
   const router = createSandboxRouter({ routes, backends: { local: backend }, defaultBackend: "local", resources });

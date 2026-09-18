@@ -277,6 +277,7 @@ export interface Cron extends TriggerBase {
   loopId?: string;
   createdAt: number;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
+  ownerResourcesRequireOpen?: boolean;
   members?: Principal[];
   unattendedGrants?: string[];
 
@@ -598,7 +599,13 @@ export interface OverheardMessage {
 export type TurnOrigin =
   | { kind: "human"; messageTs?: string; entryTs?: string }
   | { kind: "ambient"; entryTs?: string; live?: boolean }
-  | { kind: "automation"; screenData?: string; destination?: Destination; useOwnerKeychain?: boolean }
+  | {
+      kind: "automation";
+      screenData?: string;
+      destination?: Destination;
+      useOwnerKeychain?: boolean;
+      ownerResourcesRequireOpen?: boolean;
+    }
   | { kind: "direct" };
 
 export interface TurnRequest {
@@ -630,6 +637,7 @@ export interface TurnRequest {
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
+  ownerResourcesRequireOpen?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;
   botActor?: boolean;

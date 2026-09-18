@@ -32,6 +32,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   action?: string;
   message?: string;
   runAs?: Cron["runAs"];
+  ownerResourcesRequireOpen?: boolean;
   members?: Principal[];
   unattendedGrants?: string[];
   loopId?: string;
@@ -47,6 +48,7 @@ export interface CronPatch {
   destination?: Destination;
   members?: Principal[];
   runAs?: Cron["runAs"];
+  ownerResourcesRequireOpen?: boolean;
   unattendedGrants?: string[];
 }
 
@@ -118,6 +120,7 @@ export function createCronStore(
         contentPart(input.unattendedGrants),
         contentPart(title),
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
+        ...(input.ownerResourcesRequireOpen ? [contentPart("owner-resources-require-open")] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -128,6 +131,7 @@ export function createCronStore(
         ...(input.action !== undefined ? { action: input.action } : {}),
         ...(input.message !== undefined ? { message: input.message } : {}),
         ...(input.runAs ? { runAs: input.runAs } : {}),
+        ...(input.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
         ...(input.members ? { members: input.members } : {}),
         ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
         ...(input.loopId ? { loopId: input.loopId } : {}),
@@ -151,6 +155,7 @@ export function createCronStore(
       if (patch.archived === true) fields.enabled = false;
       if (patch.members !== undefined) fields.members = patch.members;
       if (patch.runAs !== undefined) fields.runAs = patch.runAs;
+      if (patch.ownerResourcesRequireOpen === true) fields.ownerResourcesRequireOpen = true;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
       return backing.merge(id, fields);
     },

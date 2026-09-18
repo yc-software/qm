@@ -18,7 +18,7 @@ import { consentRequiredRecipient, recipientConsentSatisfied } from "./trigger-s
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
-import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
+import { createIsCurrentSharedScopeMember, type CurrentScopeMembers } from "../resolution/scope-membership.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -30,8 +30,9 @@ export interface TriggerDeps {
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
+  isOpenScopeMember?: (actorId: string, scope: ScopeId) => Promise<boolean>;
   directory?: VisibilityDirectory & {
-    get(principalId: string): Promise<{ displayName: string } | null>;
+    get(principalId: string): Promise<{ displayName: string; principalId?: string; slackId?: string } | null>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     conversationMembers?: DirectoryStore["conversationMembers"];
@@ -51,6 +52,7 @@ export interface TriggerSpec {
   message?: string;
   threadRef?: string;
   runAs?: "owner" | "scopeFloor" | "scopeShared";
+  ownerResourcesRequireOpen?: boolean;
   unattendedGrants?: string[];
   members?: Principal[];
   recipientConsent?: RecipientConsent;
@@ -195,8 +197,25 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (owner.type !== "internal") {
       return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
     }
-    if (isScopeShared && currentMembers && !currentMembers.some((member) => samePerson(member.id, spec.owner))) {
-      return { authzFailed: true, ran: false, note: "scopeShared owner is no longer a current scope member" };
+    if (isScopeShared) {
+      if (spec.ownerResourcesRequireOpen && !(await deps.isOpenScopeMember?.(spec.owner, spec.ownerScopeId))) {
+        return {
+          authzFailed: true,
+          ran: false,
+          note: "scopeShared owner resource access requires current Open membership",
+        };
+      }
+      let sharedOwnerIsMember = spec.members?.some((member) => samePerson(member.id, spec.owner)) === true;
+      if (currentMembers) sharedOwnerIsMember = currentMembers.some((member) => samePerson(member.id, spec.owner));
+      else if (deps.directory) {
+        sharedOwnerIsMember = await createIsCurrentSharedScopeMember({
+          directory: deps.directory,
+          identity: deps.identity,
+        })(spec.owner, spec.ownerScopeId);
+      }
+      if (!sharedOwnerIsMember) {
+        return { authzFailed: true, ran: false, note: "scopeShared owner is no longer a current scope member" };
+      }
     }
   }
 
@@ -209,10 +228,12 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
   if (ownerKind === "channel" || ownerKind === "group") {
     const roster = await deps.directory?.conversationMembers?.(ownerKind, ownerRef).catch(() => undefined);
+    const isPrivate = ownerKind === "channel" ? await deps.directory?.channelPrivacy?.(ownerRef) : undefined;
     conversation = {
       kind: ownerKind,
       channelRef: ownerRef,
       threadRef,
+      ...(isPrivate !== undefined ? { isPrivate } : {}),
       ...(audience ? { audience } : {}),
       ...(roster ? { publishMembers: roster.map((m) => ({ externalId: m.principalId })) } : {}),
     };
@@ -316,6 +337,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
         ...(isScopeShared ? { ownerKeychainUnion: true } : {}),
+        ...(isScopeShared && spec.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
         idempotencyKey: spec.fireKey,
       });
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();

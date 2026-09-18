@@ -73,6 +73,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
     return {
       membershipControlsScope: async () => false,
       managesScope: async () => false,
+      isCurrentSharedScopeMember: async () => false,
       samePerson: (a: string, b: string) => samePersonInDirectory(dir, a, b),
     };
   }
@@ -178,14 +179,20 @@ describe("resolveRunAsChange: the owner gate is same-person, not raw id equality
     await dir.replace([
       { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
     ]);
-    const app = { samePerson: (a: string, b: string) => samePersonInDirectory(dir, a, b) };
+    const app = {
+      isOpenScopeMember: async () => false,
+      samePerson: (a: string, b: string) => samePersonInDirectory(dir, a, b),
+    };
     const r = await resolveRunAsChange(app, shared(), "owner", capability);
     assert.equal(r.ok, true);
     if (r.ok) assert.equal(r.patch.runAs, "owner");
   });
 
   it("without the roster the bridge fails closed — forbidden", async () => {
-    const app = { samePerson: (a: string, b: string) => samePersonInDirectory(createDirectoryStore(), a, b) };
+    const app = {
+      isOpenScopeMember: async () => false,
+      samePerson: (a: string, b: string) => samePersonInDirectory(createDirectoryStore(), a, b),
+    };
     const r = await resolveRunAsChange(app, shared(), "owner", capability);
     assert.equal(r.ok, false);
     if (!r.ok) assert.equal(r.code, "forbidden");

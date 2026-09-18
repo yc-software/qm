@@ -2882,7 +2882,10 @@ test("unified exec and process approvals preserve intent and action identity", a
     const entries: Array<Record<string, unknown>> = [];
     const tc = fakeToolContext();
     tc.execute = tc.backgroundStart = async () => {
-      throw new NeedsApproval("danger", "Review this", "approval");
+      throw new NeedsApproval("danger", "Review this", "approval", undefined, "sandbox:synthetic", {
+        session: false,
+        always: false,
+      });
     };
     const ref: ToolContextRef = {
       current: tc,
@@ -2901,6 +2904,7 @@ test("unified exec and process approvals preserve intent and action identity", a
     assert.equal(ref.pendingApprovals?.[0]?.command, "danger");
     assert.ok(entries.every((e) => e.tool === "sandbox" && e.action === action));
     assert.equal(ref.pendingApprovals?.[0]?.purpose, "Verify protected operation");
+    assert.deepEqual(ref.pendingApprovals?.[0]?.grantModes, { session: false, always: false });
   }
 });
 

@@ -210,6 +210,13 @@ import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
+import {
+  addCommandApprovalUse,
+  consumeCommandApprovalUse,
+  type CommandApprovalUses,
+} from "../policy/command-policy.ts";
+import type { ApprovalGrantModes, EgressPolicy } from "../types.ts";
+import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
@@ -1313,28 +1320,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeLabel: scopeId,
       });
 
-      const commandUses = new Map<string, number>();
+      const commandUses = new Map<string, CommandApprovalUses>();
       for (const grant of await approvalGrants.all()) {
         if (!samePerson(grant.actorId, actor.id)) continue;
         if (grant.scope === "session" && grant.sessionId !== session.id) continue;
         if (!resolution.approvalGrantModes[grant.scope]) continue;
-        commandUses.set(grant.approvalKey ?? grant.command, Infinity);
+        addCommandApprovalUse(commandUses, grant.approvalKey ?? grant.command, grant.scope);
       }
       const authorizeToolCall = (tool: string): boolean => {
         const key = `tool:${tool}`;
-        const n = commandUses.get(key) ?? 0;
-        if (n <= 0) return false;
-        commandUses.set(key, n - 1);
-        return true;
+        return consumeCommandApprovalUse(commandUses, key);
       };
-      const authorizeCommand = (command: string, approvalKey?: string): boolean => {
+      const authorizeCommand = (
+        command: string,
+        approvalKey?: string,
+        exactApprovalKey = false,
+        grantModes?: ApprovalGrantModes,
+      ): boolean => {
         let key = approvalKey ?? command;
         if (approvalKey !== undefined && commandUses.has(approvalKey)) key = approvalKey;
-        else if (commandUses.has(command)) key = command;
-        const n = commandUses.get(key) ?? 0;
-        if (n <= 0) return false;
-        commandUses.set(key, n - 1);
-        return true;
+        else if (!exactApprovalKey && commandUses.has(command)) key = command;
+        return consumeCommandApprovalUse(commandUses, key, grantModes);
       };
       const quarantineReleaseApprovals: Array<{
         command: string;
@@ -1377,12 +1383,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const credentialCutoverServices = credentialServices.filter((service) => cutoverModeOf(service) !== "legacy");
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
+      const openAutomationKeychain =
+        input.origin.kind === "automation" &&
+        input.origin.useOwnerKeychain === true &&
+        conversation.kind !== "dm" &&
+        !!deps.config &&
+        !!deps.isCurrentSharedScopeMember &&
+        (await isOpenScopeMember({
+          actorId: actor.id,
+          scope: scopeId,
+          config: deps.config,
+          isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
+        }));
+      if (
+        input.origin.kind === "automation" &&
+        input.origin.useOwnerKeychain === true &&
+        (input.origin.ownerResourcesRequireOpen === true ||
+          (conversation.kind === "channel" && conversation.isPrivate !== true)) &&
+        !openAutomationKeychain
+      )
+        return { status: "refused", reason: "owner-authorized automation requires current Open membership" };
       const isolateOwnerKeychain =
         openSpeakerKeychain ||
-        (deps.sharedOwnerAuthIsolation === true &&
-          conversation.kind !== "dm" &&
-          input.origin.kind === "automation" &&
-          input.origin.useOwnerKeychain === true);
+        (conversation.kind !== "dm" && input.origin.kind === "automation" && input.origin.useOwnerKeychain === true);
       let ownerAuthAvailable = isolateOwnerKeychain;
       if (
         deps.sharedOwnerAuthIsolation === true &&
@@ -1439,19 +1462,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           keychainInjected.push(m);
         }
       }
-      if (!strictReadOnly && deps.connectorTokens && (conversation.kind === "dm" || openSpeakerKeychain)) {
+      if (
+        !strictReadOnly &&
+        deps.connectorTokens &&
+        (conversation.kind === "dm" || openSpeakerKeychain || openAutomationKeychain)
+      ) {
         for (const host of CONNECTOR_HOSTS) {
           const token =
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
-          if (token) (openSpeakerKeychain ? ownerAuthEnv : connectorEnv)[envKey(host)] = token;
+          if (token) (isolateOwnerKeychain ? ownerAuthEnv : connectorEnv)[envKey(host)] = token;
         }
       }
       perf.credsMs += Date.now() - credsStart;
       let sharedCredsBlock = "";
       const envCredLines: string[] = [];
-      let egressTokenForTurn: string | undefined;
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       let serviceCredRecords: PublicServiceCredential[] = [];
@@ -1628,21 +1654,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
-      if (!strictReadOnly && egressSecret) {
-        egressTokenForTurn = await mintCapabilityToken(
+      const egressTokenForPolicy = async (egress: EgressPolicy): Promise<string | undefined> => {
+        if (strictReadOnly || !egressSecret) return undefined;
+        return mintCapabilityToken(
           {
             ...scopeAttestation,
             aud: EGRESS_PROXY_AUD,
-            egress: egressClaimAllowingControlPlane(
-              resolution.egress,
-              deps.apiBaseUrl ?? "",
-              securityPolicy.denyPrivateNetworks,
-            ),
+            egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", securityPolicy.denyPrivateNetworks),
             exp: Date.now() + SANDBOX_CAPABILITY_TTL_MS,
           },
           egressSecret,
         );
-      }
+      };
+      const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
       if (!strictReadOnly && actor.type === "internal") {
         for (const tool of brokeredTools) {
           const mode = cutoverModeOf(tool.service);
@@ -1715,6 +1739,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provision,
         provisionScratch,
         provisionResource,
+        canUseSandboxScope,
         provisionOwnerAuth,
         useSkill,
         provisionForReach,
@@ -1734,10 +1759,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         turnFilesDir,
         connectorEnv,
         egressTokenForTurn,
+        egressTokenForPolicy,
         isolateOwnerKeychain,
-        openSpeakerKeychain,
+        openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
+        openResourceAccess:
+          liveAuthorTurn || (input.origin.kind === "automation" && input.origin.useOwnerKeychain === true),
         ownerAuthAvailable,
         ownerAuthEnv,
+        ownerEnvForTarget: async () => {
+          const env: Record<string, string> = {};
+          for (const credential of (await deps.keychain?.materializeOwn(actor.id)) ?? [])
+            for (const { key, value } of credential.env) if (!(key in env)) env[key] = value;
+          if (deps.connectorTokens) {
+            for (const host of CONNECTOR_HOSTS) {
+              const token =
+                (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
+                (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
+                (await deps.connectorTokens.connectorAccessToken(host, actor.id, "company"));
+              if (token) env[envKey(host)] = token;
+            }
+          }
+          return env;
+        },
         ownerEnvCredentialIds,
         credentialTools,
         credentialServices,
@@ -1857,10 +1900,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             };
           } else {
             const scope = input.approval.scope ?? "once";
+            if (p.approvalKey?.startsWith("sandbox:")) {
+              const targetScope = JSON.parse(p.approvalKey.slice("sandbox:".length))[0] as ScopeId;
+              const currentModes = await deps.config?.getApprovalGrantModesDurable(targetScope);
+              p.grantModes = {
+                session: (p.grantModes?.session ?? true) && (currentModes?.session ?? false),
+                always: (p.grantModes?.always ?? true) && (currentModes?.always ?? false),
+              };
+            }
             const recordDisallowsScope =
               scope !== "once" &&
               p.grantModes?.[scope] === false &&
-              p.approvalKey?.startsWith("security-screen-release:") === true;
+              (p.approvalKey?.startsWith("security-screen-release:") === true ||
+                p.approvalKey?.startsWith("sandbox:") === true);
             if (scope !== "once" && (!resolution.approvalGrantModes[scope] || recordDisallowsScope)) {
               deps.auditLog.record({
                 at: Date.now(),
@@ -1875,7 +1927,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 status: "pending_approval",
                 sessionId: session.id,
                 reason: recordDisallowsScope
-                  ? `quarantined content can only be released once — approve once or deny`
+                  ? `this approval does not allow the "${scope}" option — approve once or deny`
                   : `the "${scope}" approval option is disabled by an admin here — approve once or deny`,
                 pendingApprovals: [
                   {
@@ -1909,7 +1961,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 .catch(swallowAs("clearSecurityTaint on input approval", false));
             }
             const useKey = p.approvalKey ?? p.command;
-            commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" ? 1 : Infinity));
+            addCommandApprovalUse(commandUses, useKey, scope);
             if (scope === "session" || scope === "always") {
               const grant: CommandApprovalGrant = {
                 actorId: actor.id,
@@ -2315,6 +2367,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provision,
           provisionScratch,
           provisionResource,
+          canUseSandboxScope,
           ...(provisionOwnerAuth ? { provisionOwnerAuth } : {}),
           ...(ownerAuthCommand ? { ownerAuthCommand } : {}),
           ...(scopedCommand ? { scopedCommand } : {}),
@@ -3833,6 +3886,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           > = [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals];
           for (const pa of turnApprovals) {
             const blocks = approvalBlocksInput(pa.kind, outcome);
+            const grantModes = pa.grantModes
+              ? {
+                  grantModes: {
+                    session: resolution.approvalGrantModes.session && pa.grantModes.session,
+                    always: resolution.approvalGrantModes.always && pa.grantModes.always,
+                  },
+                }
+              : grantModesField;
             const command = pa.command;
             const requestId = commandApprovalId(session.id, command);
             const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
@@ -3845,7 +3906,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 reason: pa.reason,
                 request,
                 blocksInput: blocks,
-                ...(pa.grantModes ? { grantModes: pa.grantModes } : grantModesField),
+                ...grantModes,
                 ...(pa.matched ? { matched: pa.matched } : {}),
                 ...(pa.purpose ? { purpose: pa.purpose } : {}),
                 ...(summary ? { summary } : {}),
@@ -3858,7 +3919,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 command,
                 reason: pa.reason,
                 blocksInput: blocks,
-                ...(pa.grantModes ? { grantModes: pa.grantModes } : grantModesField),
+                ...grantModes,
                 ...(pa.matched ? { matched: pa.matched } : {}),
                 ...(pa.purpose ? { purpose: pa.purpose } : {}),
                 ...(summary ? { summary } : {}),
@@ -3926,10 +3987,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         if (err instanceof NeedsApproval) {
           const requestId = commandApprovalId(session.id, err.command);
-          const grantModesField =
-            resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
-              ? {}
-              : { grantModes: resolution.approvalGrantModes };
+          const grantModesField = {
+            grantModes: {
+              session: resolution.approvalGrantModes.session && (err.grantModes?.session ?? true),
+              always: resolution.approvalGrantModes.always && (err.grantModes?.always ?? true),
+            },
+          };
           const summary = await approvalSummary(scopeId, err.command, err.approvalReason);
           try {
             await withManagedRosterVersion(async () => {

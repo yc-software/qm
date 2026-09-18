@@ -61,6 +61,7 @@ export interface ToolContextRef {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
@@ -625,6 +626,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       matched: e.matched,
       ...(purpose ? { purpose } : {}),
       ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+      ...(e.grantModes ? { grantModes: e.grantModes } : {}),
     });
     ref.pausedOnApproval = true;
     return recordResult(
@@ -1955,6 +1957,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             matched: e.matched,
             ...(params.purpose ? { purpose: params.purpose } : {}),
             ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+            ...(e.grantModes ? { grantModes: e.grantModes } : {}),
           });
           ref.pausedOnApproval = true;
           return recordResult(
@@ -3602,6 +3605,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             kind: error.kind,
             matched: error.matched,
             ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
+            ...(error.grantModes ? { grantModes: error.grantModes } : {}),
           });
           ref.pausedOnApproval = true;
           return recordResult(

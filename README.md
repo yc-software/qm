@@ -125,11 +125,19 @@ Sharing posture is independent:
 
 The organization value is a ceiling, and personal and room scopes can opt out; Isolated
 wins. “Follow organization” removes a personal or room override. Disabled memory recall
-and writable-only recall still apply. Open does not mount a personal workspace into a room, carry credentials or message
-history, widen writes, run in automation or ambient turns, cross organizations, add a
-teammate's entitlement, or weaken screening, command approvals, or egress. It can still
-reveal private information in a shared reply, so cross-context reads are provenance-labelled
-and audited.
+and writable-only recall still apply. Authenticated human-authored ambient turns use the same
+Open access as direct requests. The speaker can use their own connections on an isolated
+owner-auth computer and target their authorized sandboxes across conversations.
+Open shared crons can retain the owner's resource access and allow member edits, with a brief
+private notification to the owner. Membership and posture are rechecked rather than treating
+a saved conversation reference as permanent access. Scheduled owner access authorized through
+Open stops when Open is withdrawn; changing a job's text does not reset that requirement.
+
+Open does not mount a personal workspace into the shared computer, expose credentials to
+other participants, carry message history, cross organizations, or weaken screening, command
+approvals, or egress. File read/write and publication retain their own permissions.
+It can still reveal private information in a shared reply, so cross-context reads are
+provenance-labelled and audited.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.

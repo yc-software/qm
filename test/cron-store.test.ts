@@ -894,3 +894,23 @@ test("backfillFires survives a cron deleted mid-loop: entries still reach the ta
   assert.equal((await store.listFires("stays")).total, 1);
   assert.equal((await backing.get("stays"))!.fireLog, undefined, "the surviving cron is still stripped");
 });
+
+test("Open owner authorization is durable, distinct from legacy mode, and cannot be cleared by a patch", async () => {
+  const backing = createMemoryMap<Cron>();
+  const store = createCronStore(backing);
+  const input = {
+    ...base,
+    ownerScopeId: scopeId("group", "g1"),
+    runAs: "scopeShared" as const,
+    schedule: { everyMs: 60_000 },
+  };
+  const legacy = await store.create(input);
+  const open = await store.create({ ...input, ownerResourcesRequireOpen: true });
+  assert.notEqual(open.id, legacy.id);
+  const restored = createCronStore(backing);
+  assert.equal((await restored.get(open.id))?.ownerResourcesRequireOpen, true);
+  await restored.update(open.id, { title: "edited", runAs: "owner", ownerResourcesRequireOpen: false });
+  await restored.update(open.id, { runAs: "scopeShared" });
+  assert.equal((await restored.get(open.id))?.ownerResourcesRequireOpen, true);
+  assert.equal((await restored.get(legacy.id))?.ownerResourcesRequireOpen, undefined);
+});

@@ -12,6 +12,7 @@ import { ROUTE_CACHE_TTL_MS, type SandboxBackendName } from "../sandbox/sandbox-
 import type { SandboxMigrationRunner } from "../sandbox/sandbox-migration-runner.ts";
 import { CapabilityUnsupportedError, hasParentPathSegment, supportsAgentComputerExport } from "../sandbox/sandbox.ts";
 import type {
+  ApprovalGrantModes,
   CommandPolicy,
   CommandRule,
   ConversationKind,
@@ -113,7 +114,15 @@ export class NeedsApproval extends Error {
   kind: "approval";
   matched?: string;
   approvalKey?: string;
-  constructor(command: string, reason: string, kind: "approval" = "approval", matched?: string, approvalKey?: string) {
+  grantModes?: ApprovalGrantModes;
+  constructor(
+    command: string,
+    reason: string,
+    kind: "approval" = "approval",
+    matched?: string,
+    approvalKey?: string,
+    grantModes?: ApprovalGrantModes,
+  ) {
     super(`command requires approval: ${command}`);
     this.name = "NeedsApproval";
     this.command = command;
@@ -121,6 +130,7 @@ export class NeedsApproval extends Error {
     this.kind = kind;
     this.matched = matched;
     this.approvalKey = approvalKey;
+    this.grantModes = grantModes;
   }
 }
 
@@ -426,9 +436,10 @@ export interface ToolContextDeps {
   provision: () => Promise<SandboxHandle>;
   provisionScratch?: () => Promise<SandboxHandle>;
   provisionResource?: (id: string) => Promise<SandboxHandle>;
+  canUseSandboxScope?: (scope: ScopeId) => Promise<boolean>;
   provisionOwnerAuth?: () => Promise<SandboxHandle>;
   ownerAuthCommand?: (command: string) => string;
-  scopedCommand?: (command: string) => string;
+  scopedCommand?: (command: string, env?: Record<string, string>) => string;
   useSkill?: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>;
   reach?: {
     resolveChannel(query: string): Promise<ReachResolution>;
@@ -437,7 +448,12 @@ export interface ToolContextDeps {
   layers: WorkspaceLayer[];
   commandPolicy: () => CommandPolicy;
   layerCommandRules?: () => readonly CommandRule[];
-  authorizeCommand: (command: string, approvalKey?: string) => boolean;
+  authorizeCommand: (
+    command: string,
+    approvalKey?: string,
+    exactApprovalKey?: boolean,
+    grantModes?: ApprovalGrantModes,
+  ) => boolean;
   grantedHandles: GrantedHandle[];
   context?: TurnContext;
   sharedMaterializeDir?: string;
@@ -495,6 +511,59 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
   const persistExclude = deps.persistWritesToStore?.excludeDirs;
   const orgScopeId = deps.layers.find((l) => l.mountPath === "global")?.scopeId ?? null;
+
+  const canUseSandboxScope = async (scope: ScopeId): Promise<boolean> =>
+    scope === writableScopeId || (await deps.canUseSandboxScope?.(scope)) === true;
+  const accessSandbox = async (id: string) => {
+    if (!deps.sandboxResources) throw new Error("sandbox inventory unavailable");
+    const record = await deps.sandboxResources.access(deps.createdBy, id);
+    if (!(await canUseSandboxScope(record.ownerScopeId)))
+      throw new Error("sandbox access is not authorized in this conversation");
+    return record;
+  };
+
+  const authorizeExecution = async (command: string, ownerScopeId?: ScopeId): Promise<void> => {
+    const source = evaluateCommandWithLayer(command, deps.commandPolicy(), deps.layerCommandRules?.() ?? []);
+    if (source.decision === "deny") throw new CommandDenied(command, source.reason ?? "denied by policy");
+    const crossScope = ownerScopeId !== undefined && ownerScopeId !== writableScopeId;
+    if (!crossScope) {
+      if (source.decision === "require_approval" && !deps.authorizeCommand(command, source.approvalKey))
+        throw new NeedsApproval(
+          command,
+          source.reason ?? "requires approval",
+          "approval",
+          source.matched,
+          source.approvalKey,
+        );
+      return;
+    }
+    if (!deps.config) throw new Error("target sandbox policy unavailable");
+    await deps.config.refreshSecurity([ownerScopeId]);
+    const policy = deps.config.getCommandPolicy(ownerScopeId);
+    const target = policy ? evaluateCommandWithLayer(command, policy, []) : { decision: "allow" as const };
+    if (target.decision === "deny")
+      throw new CommandDenied(command, target.reason ?? "denied by target sandbox policy");
+    if (source.decision !== "require_approval" && target.decision !== "require_approval") return;
+    const targetModes = await deps.config.getApprovalGrantModesDurable(ownerScopeId);
+    const sourceModes = writableScopeId
+      ? await deps.config.getApprovalGrantModesDurable(writableScopeId)
+      : { session: false, always: false };
+    const grantModes = {
+      session: sourceModes.session && targetModes.session,
+      always: sourceModes.always && targetModes.always,
+    };
+    const approvalKey = `sandbox:${JSON.stringify([ownerScopeId, source.approvalKey ?? command, target.approvalKey ?? command])}`;
+    const required = target.decision === "require_approval" ? target : source;
+    if (!deps.authorizeCommand(command, approvalKey, true, grantModes))
+      throw new NeedsApproval(
+        command,
+        required.reason ?? "requires sandbox approval",
+        "approval",
+        required.matched,
+        approvalKey,
+        grantModes,
+      );
+  };
 
   const ledger = deps.ledger ?? createNullLedger();
   const runId = deps.runId;
@@ -562,13 +631,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               const listed = await resources.list(deps.createdBy, writableScopeId);
               return {
                 ...listed,
-                sandboxes: listed.sandboxes.filter((record) => record.ownerScopeId === writableScopeId),
+                sandboxes: (
+                  await Promise.all(
+                    listed.sandboxes.map(async (record) =>
+                      (await canUseSandboxScope(record.ownerScopeId)) ? record : null,
+                    ),
+                  )
+                ).filter((record) => record !== null),
               };
             }
             if (action === "retire") {
               if (!input?.sandboxId) throw new Error("retire requires sandbox_id");
-              const record = await resources.access(deps.createdBy, input.sandboxId);
-              if (record.ownerScopeId !== writableScopeId) throw new Error("retire this sandbox from its owning scope");
+              const record = await accessSandbox(input.sandboxId);
               await resources.retire(deps.createdBy, record.id);
               return { retired: record.id };
             }
@@ -589,8 +663,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (sandboxId) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
-        const record = await resources.access(deps.createdBy, sandboxId);
-        if (record.ownerScopeId !== writableScopeId) throw new Error("inspect this sandbox from its owning scope");
+        await accessSandbox(sandboxId);
         return resources.status(deps.createdBy, sandboxId);
       }
       if (!deps.sandbox.computerStatus) {
@@ -611,8 +684,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (sandboxId) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
-        const record = await resources.access(deps.createdBy, sandboxId);
-        if (record.ownerScopeId !== writableScopeId) throw new Error("restart this sandbox from its owning scope");
+        await accessSandbox(sandboxId);
         return resources.restart(deps.createdBy, sandboxId);
       }
       if (!deps.sandbox.restartComputer) {
@@ -745,28 +817,21 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         if (target.kind === "error") throw new Error(target.message);
         reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
       }
-      const { decision, reason, matched, approvalKey } = evaluateCommandWithLayer(
-        command,
-        deps.commandPolicy(),
-        deps.layerCommandRules?.() ?? [],
-      );
-      if (decision === "deny") {
-        throw new CommandDenied(command, reason ?? "denied by policy");
-      }
-      if (decision === "require_approval" && !deps.authorizeCommand(command, approvalKey)) {
-        throw new NeedsApproval(command, reason ?? "requires approval", "approval", matched, approvalKey);
-      }
       let handle;
       if (execOpts?.sandboxId) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
-        const resource = await deps.sandboxResources.access(deps.createdBy, execOpts.sandboxId);
-        if (resource.ownerScopeId !== writableScopeId)
-          throw new Error("execute on this sandbox from its owning scope to preserve conversation isolation");
+        const resource = await accessSandbox(execOpts.sandboxId);
+        await authorizeExecution(command, resource.ownerScopeId);
+        if (resource.ownerScopeId !== writableScopeId && Object.keys(commandEnv).length)
+          throw new Error("command credentials cannot be copied to another scope's computer");
         handle = await deps.provisionResource(execOpts.sandboxId);
-      } else if (reached) handle = await deps.reach!.provisionFor(reached.scopeId);
-      else if (scratch) handle = await deps.provisionScratch!();
-      else if (ownerAuth) handle = await deps.provisionOwnerAuth!();
-      else handle = await deps.provision();
+      } else {
+        await authorizeExecution(command);
+        if (reached) handle = await deps.reach!.provisionFor(reached.scopeId);
+        else if (scratch) handle = await deps.provisionScratch!();
+        else if (ownerAuth) handle = await deps.provisionOwnerAuth!();
+        else handle = await deps.provision();
+      }
       const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
       const timeoutMs =
         resolvedMs != null && deps.execTimeoutCeilingMs != null
@@ -792,7 +857,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return timed("exec", async () => {
           const sandboxCommand = ownerAuth
             ? (deps.ownerAuthCommand?.(command) ?? command)
-            : (deps.scopedCommand?.(command) ?? command);
+            : (deps.scopedCommand?.(command, handle.env) ?? command);
           const commandHandle = Object.keys(commandEnv).length
             ? { ...handle, env: { ...handle.env, ...commandEnv } }
             : handle;
@@ -1145,24 +1210,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       let handle: SandboxHandle;
       if (opts?.sandboxId) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
-        const record = await deps.sandboxResources.access(deps.createdBy, opts.sandboxId);
-        if (record.ownerScopeId !== writableScopeId) throw new Error("start work from the sandbox's owning scope");
+        const resource = await accessSandbox(opts.sandboxId);
+        await authorizeExecution(command, resource.ownerScopeId);
         handle = await deps.provisionResource(opts.sandboxId);
-      } else handle = await deps.provision();
-      const { decision, reason, matched, approvalKey } = evaluateCommandWithLayer(
-        command,
-        deps.commandPolicy(),
-        deps.layerCommandRules?.() ?? [],
-      );
-      if (decision === "deny") throw new CommandDenied(command, reason ?? "denied by policy");
-      if (decision === "require_approval" && !deps.authorizeCommand(command, approvalKey)) {
-        throw new NeedsApproval(command, reason ?? "requires approval", "approval", matched, approvalKey);
+      } else {
+        await authorizeExecution(command);
+        handle = await deps.provision();
       }
       return once(
         () =>
           deps.backgroundBroker!.start(
             handle,
-            deps.scopedCommand?.(command) ?? command,
+            deps.scopedCommand?.(command, handle.env) ?? command,
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
           ),
         () => true,

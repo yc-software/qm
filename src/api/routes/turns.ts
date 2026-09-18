@@ -18,7 +18,7 @@ function isTurnRequest(body: unknown): body is TurnRequest {
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ...safe } = origin;
+  const { useOwnerKeychain: _internalOnly, ownerResourcesRequireOpen: _requireOpen, ...safe } = origin;
   return safe;
 }
 
@@ -39,6 +39,7 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   const {
     ownerKeychainUnion: _ownerKeychainUnion,
+    ownerResourcesRequireOpen: _ownerResourcesRequireOpen,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     redeliveryKey: _redeliveryKey,
