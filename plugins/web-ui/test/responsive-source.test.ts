@@ -65,7 +65,7 @@ test("the sidebar's quick actions share the navrow treatment", () => {
   assert.doesNotMatch(css, /split-new-session/);
 });
 
-test("the quick nav is home, search, browse; create sits under the divider with the sessions it starts", () => {
+test("the quick nav is home, search, browse; create sits under the divider", () => {
   assert.match(
     shell,
     /<nav class="nav quick-nav"[\s\S]*?navRow\("chats", ICON\.home, "Home"\)[\s\S]*?actionRow\(Search, "Search"[\s\S]*?actionRow\(ICON\.browse, "Browse"[\s\S]*?<\/nav>/,
@@ -75,11 +75,8 @@ test("the quick nav is home, search, browse; create sits under the divider with 
     /<nav class="nav quick-nav"[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/nav>/,
     "create belongs below the quick-nav divider, not inside it",
   );
-  assert.match(
-    shell,
-    /<div class="nav new-chat-nav">[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/div>[\s\S]*?section-label recents-label/,
-    "create sits between the divider and the Sessions header",
-  );
+  assert.match(shell, /<div class="nav new-chat-nav">[\s\S]*?actionRow\(ICON\.newChat[\s\S]*?<\/div>/);
+  assert.doesNotMatch(shell, /<span>Sessions<\/span>/);
   assert.doesNotMatch(shell, /navRow\("chats", ICON\.chats/);
   assert.doesNotMatch(shell, /nav-section-toggle|nav-group|navWorkspaceOpen/);
   assert.doesNotMatch(css, /\.nav-section-toggle|\.nav-group/);
