@@ -854,7 +854,8 @@ export function createTurnMethods(
       if (signal.queuedRunId) {
         if (!(await deps.runs.steerQueued(signal.queuedRunId, runId, outbound, deps.signals))) {
           if (await deps.signals.hasDedupeKey(queuedKey!)) return { accepted: true };
-          return { accepted: false, reason: "queued_started" };
+          const queued = await deps.runs.get(signal.queuedRunId);
+          return { accepted: false, reason: queued?.status === "pending" ? "queued_changed" : "queued_started" };
         }
       } else await deps.signals.send(runId, outbound);
       const after = await deps.runs.get(runId);

@@ -51,6 +51,15 @@ for (const backend of ["memory", "postgres"] as const) {
         const pending = await signals.takePending(target.id);
         assert.equal(pending.length, 1);
         assert.deepEqual(pending[0]?.request?.attachments, attachments);
+        const { run: edited } = await runs.enqueue({ sessionId, request: { ...request, attachments } });
+        assert.equal(await runs.editPendingText(edited.id, "new caption", ""), true);
+        assert.equal(
+          await runs.steerQueued(edited.id, target.id, { ...signal, dedupeKey: randomUUID() }, signals),
+          false,
+        );
+        assert.equal((await runs.get(edited.id))?.request.text, "new caption");
+        assert.equal((await signals.pending(target.id)).length, 0);
+        await runs.withdraw(edited.id);
         const lease = await runs.claimById(target.id, "test", 10000);
         assert.ok(lease?.leaseToken);
         await runs.complete(target.id, lease.leaseToken, { status: "ok", reply: "done" });

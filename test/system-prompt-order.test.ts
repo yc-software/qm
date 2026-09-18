@@ -1,3 +1,4 @@
+import type { Harness, HarnessTurnInput } from "../src/harness/harness.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
@@ -92,6 +93,7 @@ const skills = {
 function buildOrchestrator(
   extra: {
     blobTransfer?: BlobTransferStore;
+    harness?: Harness;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
     sandbox?: Sandbox;

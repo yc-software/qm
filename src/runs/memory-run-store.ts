@@ -248,6 +248,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const target = runs.get(targetRunId);
       if (!queued || queued.status !== "pending" || !target || isTerminal(target.status) || queuedRunId === targetRunId)
         return false;
+      if ((queued.request.displayText ?? queued.request.text) !== signal.request?.text) return false;
       runs.delete(queuedRunId);
       try {
         await signals.send(targetRunId, signal);

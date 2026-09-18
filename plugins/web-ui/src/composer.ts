@@ -2026,6 +2026,9 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
             ...(outcome.ok ? { steered: true } : {}),
           } as unknown as AgentMessage);
         }
+      } else if (outcome.reason === "queued_changed") {
+        if (agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef)
+          composerState.error = "The queued message changed. Try steering it again.";
       } else if (outcome.reason === "queued_started" || outcome.reason === "not_found") {
         forgetQueuedRun(threadRef, queued.runId);
       }
