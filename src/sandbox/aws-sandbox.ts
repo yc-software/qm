@@ -44,6 +44,7 @@ const HOME_TAR = "/tmp/agent-home.tar";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const SNAPSHOT_PRUNE = [...HOME_SNAPSHOT_PRUNE, "./.npm", "./.aws"];
+const ROTATION_HOLD_MS = 10 * 60_000;
 
 const DEFAULT_INGRESS = (region: string) =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:ALL_INGRESS`;
@@ -132,6 +133,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   const scopeByMicrovm = new Map<string, string>();
   const scratchByKey = new Map<string, BodyRef>();
   const activeByMicrovm = new Map<string, number>();
+  const rotationHoldUntil = new Map<string, number>();
 
   function reportError(category: string, code: string, message: string, scopeLabel?: string): void {
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
@@ -254,7 +256,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
+        const stale =
+          Date.now() - stored.createdAtMs > rotateAfterMs && Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
         if (alive && stored.provisioning)
           throw new Error(`AWS sandbox ${stored.microvmId} has incomplete provisioning; retire it before retrying`);
         if (alive && !stale) {
@@ -266,9 +269,14 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         if (alive && stale) {
           endpointById.set(stored.microvmId, stored.endpoint);
           await ensureRunning(stored.microvmId).catch(() => {});
-          await snapshotHome(scope, stored.microvmId).catch((e) =>
-            reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope),
-          );
+          try {
+            await snapshotHome(scope, stored.microvmId);
+          } catch (e) {
+            reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope);
+            rotationHoldUntil.set(scope, Date.now() + ROTATION_HOLD_MS);
+            scopeByMicrovm.set(stored.microvmId, scope);
+            return { id: stored.microvmId, endpoint: stored.endpoint, coldStart: false };
+          }
           await api.terminate(stored.microvmId).catch(() => {});
         }
       }
@@ -525,6 +533,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
             try {
               await snapshotHome(scope, handle.id);
               await store.merge(scope, { lastSnapshotMs: Date.now(), lastActivityMs: Date.now(), homeDirty: false });
+              rotationHoldUntil.delete(scope);
             } catch (e) {
               reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
               await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
