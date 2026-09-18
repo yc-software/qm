@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import {
@@ -14,33 +16,52 @@ import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
+import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import type { AgentComputerProfile, ExecResult, Sandbox } from "./sandbox.ts";
+import type { AgentComputerProfile, ComputerStatus, ExecResult, Sandbox, TeardownOptions } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
-const INLINE_LIMIT = 256 * 1024;
+const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const FILE_TRANSFER_TIMEOUT_MS = 300_000;
 const EXEC_SYNC_MAX_SEC = 240;
 const EXEC_POLL_MS = 2_000;
 const EXIT_GRACE_MS = 60_000;
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_MS = 1_000;
+const GUEST_PROBE_TIMEOUT_SEC = 15;
+const SCRATCH_TTL_SEC = 24 * 3600;
 const DEFAULT_SMOLMACHINES_BASE_URL = "https://api.smolmachines.com";
 const DEFAULT_IMAGE = "codex";
+const DEFAULT_CPUS = 4;
+const DEFAULT_MEMORY_MB = 8192;
 const RUNNING_STATES = new Set(["running", "started", "ready"]);
+
+type MachineNetwork =
+  { mode: "open" } | { mode: "blocked" } | { mode: "allowCidrs"; cidrs?: string[]; hosts?: string[] };
 
 interface MachineInfo {
   id: string;
   name?: string | null;
   state: string;
+  ready?: boolean;
+  error?: string | null;
+  network?: MachineNetwork;
 }
 
 interface MachineExecResponse {
   stdout: string;
   stderr: string;
   exitCode: number;
+  stdoutB64?: string;
+  stderrB64?: string;
   stdoutTruncated?: boolean;
   stderrTruncated?: boolean;
+}
+
+export interface StoredSmolmachinesSandbox {
+  lastSnapshotMs?: number;
+  homeDirty?: boolean;
+  snapshotError?: string;
 }
 
 export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
@@ -51,8 +72,12 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   cpus?: number;
   memoryMb?: number;
   diskGb?: number;
+  autoStopSec?: number;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
+  snapshotIntervalMs?: number;
+  store?: DurableMap<StoredSmolmachinesSandbox>;
+  snapshots?: HomeSnapshotStore;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
@@ -72,11 +97,19 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
+  const store = opts.store ?? createMemoryMap<StoredSmolmachinesSandbox>();
+  const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
+  const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
 
   const idByName = new Map<string, string>();
+  const egressVerified = new Set<string>();
+
+  const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
+  const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
 
   async function api(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<Response> {
-    const res = await fetchImpl(`${baseUrl}${path}`, {
+    return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${opts.token ?? ""}`,
@@ -85,7 +118,6 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return res;
   }
 
   async function apiJson<T>(method: string, path: string, body?: unknown, timeoutMs = 60_000): Promise<T> {
@@ -101,13 +133,17 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     return machines.find((m) => m.name === name) ?? null;
   }
 
-  async function awaitRunning(id: string): Promise<void> {
+  async function awaitReady(id: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     for (;;) {
-      const info = await apiJson<MachineInfo>("GET", `/v1/machines/${encodeURIComponent(id)}`);
-      if (RUNNING_STATES.has(info.state.toLowerCase())) return;
-      if (Date.now() > deadline)
-        throw new Error(`smolmachines machine ${id}: not running after ${READY_TIMEOUT_MS}ms (state=${info.state})`);
+      const info = await apiJson<MachineInfo>("GET", machinePath(id));
+      if (info.state.toLowerCase() === "error") {
+        throw new Error(`smolmachines machine ${id}: entered error state${info.error ? `: ${info.error}` : ""}`);
+      }
+      if (info.ready === true || (info.ready === undefined && isRunning(info))) return;
+      if (Date.now() > deadline) {
+        throw new Error(`smolmachines machine ${id}: not ready after ${READY_TIMEOUT_MS}ms (state=${info.state})`);
+      }
       await sleep(READY_POLL_MS);
     }
   }
@@ -117,9 +153,11 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       name,
       source: { type: "image", reference: image },
       ...(Object.keys(resources).length ? { resources } : {}),
-      network: { mode: "open" },
+      network,
       workdir: HOME_DIR,
       ephemeral,
+      ...(ephemeral ? { ttlSeconds: SCRATCH_TTL_SEC } : {}),
+      ...(opts.autoStopSec ? { autoStopSeconds: opts.autoStopSec } : {}),
     });
     if (res.status === 409) {
       const existing = await findMachine(name);
@@ -136,11 +174,11 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   }
 
   async function startMachine(id: string): Promise<void> {
-    const res = await api("POST", `/v1/machines/${encodeURIComponent(id)}/start`);
+    const res = await api("POST", `${machinePath(id)}/start`);
     if (!res.ok && res.status !== 409) {
       throw new Error(`smolmachines start ${id}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
     }
-    await awaitRunning(id);
+    await awaitReady(id);
   }
 
   async function machineIdFor(name: string): Promise<string> {
@@ -158,27 +196,34 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       idByName.delete(name);
       return;
     }
-    const res = await api("DELETE", `/v1/machines/${encodeURIComponent(found)}`);
+    const res = await api("DELETE", machinePath(found));
     if (!res.ok && res.status !== 404) {
       throw new Error(`smolmachines delete ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
     }
     idByName.delete(name);
   }
 
-  async function postExec(
+  function decodeStream(
     name: string,
-    script: string,
-    timeoutSec: number,
-    stdinB64?: string,
-  ): Promise<MachineExecResponse> {
+    label: string,
+    b64: string | undefined,
+    text: string,
+    truncated?: boolean,
+  ): string {
+    if (b64 !== undefined) return Buffer.from(b64, "base64").toString("utf8");
+    if (truncated) throw new Error(`smolmachines exec ${name}: ${label} truncated and no byte-exact stream returned`);
+    return text;
+  }
+
+  async function postExec(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     const id = await machineIdFor(name);
     const body = {
       command: ["sh", "-c", script],
       timeoutSeconds: timeoutSec + Math.ceil(EXIT_GRACE_MS / 1000),
-      ...(stdinB64 !== undefined ? { stdin: stdinB64 } : {}),
     };
     const timeoutMs = timeoutSec * 1000 + 2 * EXIT_GRACE_MS;
-    const first = await api("POST", `/v1/machines/${encodeURIComponent(id)}/exec`, body, timeoutMs);
+    const execPath = (machineId: string): string => `${machinePath(machineId)}/exec?output=b64`;
+    const first = await api("POST", execPath(id), body, timeoutMs);
     let res = first;
     if (!first.ok) {
       const detail = (await first.text()).slice(0, 200);
@@ -188,93 +233,45 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       }
       const retryId = await machineIdFor(name);
       await startMachine(retryId);
-      res = await api("POST", `/v1/machines/${encodeURIComponent(retryId)}/exec`, body, timeoutMs);
+      res = await api("POST", execPath(retryId), body, timeoutMs);
       if (!res.ok) {
         throw new Error(`smolmachines exec ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
       }
     }
-    const parsed = (await res.json()) as MachineExecResponse;
-    if (parsed.stdoutTruncated || parsed.stderrTruncated) {
-      throw new Error(`smolmachines exec ${name}: output truncated by the API — chunk the read instead`);
-    }
-    return parsed;
+    const r = (await res.json()) as MachineExecResponse;
+    return {
+      stdout: decodeStream(name, "stdout", r.stdoutB64, r.stdout, r.stdoutTruncated),
+      stderr: decodeStream(name, "stderr", r.stderrB64, r.stderr, r.stderrTruncated),
+      code: r.exitCode,
+      timedOut: r.exitCode === 124,
+    };
   }
 
   const filesUrl = (id: string, absPath: string): string =>
-    `/v1/machines/${encodeURIComponent(id)}/files${absPath.split("/").map(encodeURIComponent).join("/")}`;
-
-  async function readSpooled(name: string, absPath: string, declared: number): Promise<Buffer> {
-    const data = await readAbsBytes(name, absPath);
-    if (!data || data.length !== declared) {
-      throw new Error(`smolmachines read ${absPath}: truncated (${data?.length ?? 0}/${declared})`);
-    }
-    return Buffer.from(data);
-  }
+    `${machinePath(id)}/files${absPath.split("/").map(encodeURIComponent).join("/")}`;
 
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
+    const guarded = `timeout ${timeoutSec} sh -c ${shq(script)}`;
+    if (timeoutSec <= EXEC_SYNC_MAX_SEC) return postExec(name, guarded, timeoutSec);
     const uid = randomUUID();
     const out = `${HOME_DIR}/.qm-exec-${uid}.out`;
     const err = `${HOME_DIR}/.qm-exec-${uid}.err`;
     const rcf = `${HOME_DIR}/.qm-exec-${uid}.rc`;
-    const envelope =
-      `__o=$(wc -c < ${out}); __e=$(wc -c < ${err}); printf '%s %s %s\\n' "$__rc" "$__o" "$__e"; ` +
-      `if [ "$__o" -le ${INLINE_LIMIT} ] && [ "$__e" -le ${INLINE_LIMIT} ]; then base64 < ${out}; base64 < ${err}; rm -f ${out} ${err} ${rcf}; fi`;
-    let r: MachineExecResponse;
-    if (timeoutSec <= EXEC_SYNC_MAX_SEC) {
-      r = await postExec(
-        name,
-        `timeout ${timeoutSec} sh -c ${shq(script)} > ${out} 2> ${err}; __rc=$?; ${envelope}`,
-        timeoutSec,
-      );
-    } else {
-      const body = `timeout ${timeoutSec} sh -c ${shq(script)} > ${out} 2> ${err}; echo $? > ${rcf}`;
-      const start = await postExec(name, `nohup sh -c ${shq(body)} >/dev/null 2>&1 & echo launched`, 30);
-      if (start.exitCode !== 0 || !/launched/.test(start.stdout)) {
-        throw new Error(`smolmachines exec ${name}: background launch failed (rc=${start.exitCode})`);
-      }
-      const deadline = Date.now() + timeoutSec * 1000 + EXIT_GRACE_MS;
-      for (;;) {
-        const p = await postExec(name, `[ -f ${rcf} ] && echo settled || echo running`, 30);
-        if (/settled/.test(p.stdout)) break;
-        if (Date.now() > deadline) {
-          throw new Error(`smolmachines exec ${name}: no exit after ${timeoutSec}s (+grace); leaving ${rcf}`);
-        }
-        await sleep(EXEC_POLL_MS);
-      }
-      r = await postExec(name, `__rc=$(cat ${rcf}); ${envelope}`, 60);
+    const body = `${guarded} > ${out} 2> ${err}; echo $? > ${rcf}`;
+    const start = await postExec(name, `nohup sh -c ${shq(body)} >/dev/null 2>&1 & echo launched`, 30);
+    if (start.code !== 0 || !/launched/.test(start.stdout)) {
+      throw new Error(`smolmachines exec ${name}: background launch failed (rc=${start.code})`);
     }
-    const text = r.stdout;
-    const nl = text.indexOf("\n");
-    const header = text
-      .slice(0, nl < 0 ? undefined : nl)
-      .trim()
-      .split(/\s+/);
-    if (r.exitCode !== 0 || nl < 0 || header.length !== 3) {
-      throw new Error(`smolmachines exec ${name}: bad envelope (rc=${r.exitCode}): ${text.slice(0, 120)}`);
-    }
-    const code = Number.parseInt(header[0]!, 10);
-    const outLen = Number.parseInt(header[1]!, 10);
-    const errLen = Number.parseInt(header[2]!, 10);
-    let outBuf: Buffer;
-    let errBuf: Buffer;
-    if (outLen <= INLINE_LIMIT && errLen <= INLINE_LIMIT) {
-      const b64 = text.slice(nl + 1).replace(/\s+/g, "");
-      const outB64 = Math.ceil(outLen / 3) * 4;
-      outBuf = Buffer.from(b64.slice(0, outB64), "base64");
-      errBuf = Buffer.from(b64.slice(outB64), "base64");
-      if (outBuf.length !== outLen || errBuf.length !== errLen) {
-        throw new Error(
-          `smolmachines exec ${name}: truncated stream (${outBuf.length}/${outLen} out, ${errBuf.length}/${errLen} err)`,
-        );
+    const deadline = Date.now() + timeoutSec * 1000 + EXIT_GRACE_MS;
+    for (;;) {
+      const p = await postExec(name, `[ -f ${rcf} ] && echo settled || echo running`, 30);
+      if (/settled/.test(p.stdout)) break;
+      if (Date.now() > deadline) {
+        throw new Error(`smolmachines exec ${name}: no exit after ${timeoutSec}s (+grace); leaving ${rcf}`);
       }
-    } else {
-      outBuf = await readSpooled(name, out, outLen);
-      errBuf = await readSpooled(name, err, errLen);
-      await postExec(name, `rm -f ${shq(out)} ${shq(err)} ${shq(rcf)}`, 60).catch(
-        swallowAs("smolmachines-sandbox: spool cleanup", undefined),
-      );
+      await sleep(EXEC_POLL_MS);
     }
-    return { stdout: outBuf.toString("utf8"), stderr: errBuf.toString("utf8"), code, timedOut: code === 124 };
+    return postExec(name, `__rc=$(cat ${rcf}); cat ${out}; cat ${err} >&2; rm -f ${out} ${err} ${rcf}; exit $__rc`, 60);
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
@@ -303,6 +300,99 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  async function ensureEgress(name: string): Promise<void> {
+    const id = await machineIdFor(name);
+    if (egressVerified.has(id)) return;
+    const info = await apiJson<MachineInfo>("GET", machinePath(id));
+    const got = info.network;
+    const hosts = got?.mode === "allowCidrs" ? (got.hosts ?? []).map((h) => h.toLowerCase()) : [];
+    const cidrs = got?.mode === "allowCidrs" ? (got.cidrs ?? []) : [];
+    const bound = hosts.length === 1 && hosts[0] === egressProxyHost!.toLowerCase() && cidrs.length === 0;
+    if (!bound) {
+      throw new Error(
+        `smolmachines egress ${name}: machine network is ${JSON.stringify(got)}, expected ${JSON.stringify(network)}; destroy the sandbox so it is recreated with the allow list`,
+      );
+    }
+    egressVerified.add(id);
+  }
+
+  const homeSnapshots = opts.snapshots
+    ? createHomeSnapshotOps<string>({
+        label: "smolmachines",
+        homeDir: HOME_DIR,
+        homeTarPath: HOME_TAR,
+        prunePaths: [
+          ...HOME_SNAPSHOT_PRUNE,
+          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+        ],
+        store: opts.snapshots,
+        io: {
+          runCommand: async (name, script, timeoutMs) => {
+            const r = await execRaw(name, script, Math.ceil(timeoutMs / 1000));
+            return { exitCode: r.code, stdout: r.stdout, stderr: r.stderr };
+          },
+          readFileBytes: readAbsBytes,
+          writeFileBytes: writeAbsBytes,
+        },
+      })
+    : undefined;
+
+  async function mergeStored(scope: string, patch: Partial<StoredSmolmachinesSandbox>): Promise<void> {
+    await store.putIfAbsent(scope, {});
+    await store.merge(scope, patch);
+  }
+
+  async function snapshotHome(scope: string, name: string): Promise<void> {
+    try {
+      await homeSnapshots!.snapshotHome(scope, name);
+      await mergeStored(scope, { lastSnapshotMs: Date.now(), homeDirty: false, snapshotError: undefined });
+    } catch (e) {
+      await mergeStored(scope, { snapshotError: errMessage(e) });
+      throw e;
+    }
+  }
+
+  async function ensureMachine(
+    name: string,
+    scope: string,
+    onStatus?: (text: string) => void,
+  ): Promise<{ coldStart: boolean }> {
+    if (idByName.has(name)) return { coldStart: false };
+    const existing = await findMachine(name);
+    if (existing) {
+      idByName.set(name, existing.id);
+      if (!isRunning(existing)) await startMachine(existing.id);
+      return { coldStart: false };
+    }
+    try {
+      onStatus?.("Creating the sandbox…");
+    } catch (error) {
+      void error;
+    }
+    const { info, created } = await createMachine(name, false);
+    idByName.set(name, info.id);
+    if (!created || !homeSnapshots) return { coldStart: created };
+    try {
+      const hydrated = await homeSnapshots.hydrateHome(scope, name);
+      if (hydrated) await mergeStored(scope, { homeDirty: false });
+      return { coldStart: !hydrated };
+    } catch (e) {
+      opts.onError?.({
+        category: "sandbox_hydrate",
+        code: "hydrate_failed",
+        message: errMessage(e),
+        scopeLabel: scope,
+      });
+      await deleteMachine(name).catch(swallowAs("smolmachines-sandbox: delete after failed hydration", undefined));
+      throw new Error(
+        `smolmachines provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`,
+        {
+          cause: e,
+        },
+      );
+    }
+  }
+
   const base = createExecSandboxBase({
     workspace,
     label: "smolmachines",
@@ -317,23 +407,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     exec: execRaw,
     writeAbsBytes,
     readAbsBytes,
-    async ensureResident(name, onStatus) {
-      if (idByName.has(name)) return { coldStart: false };
-      const existing = await findMachine(name);
-      if (existing) {
-        idByName.set(name, existing.id);
-        if (!RUNNING_STATES.has(existing.state.toLowerCase())) await startMachine(existing.id);
-        return { coldStart: false };
-      }
-      try {
-        onStatus?.("Creating the sandbox…");
-      } catch (error) {
-        void error;
-      }
-      const { info, created } = await createMachine(name, false);
-      idByName.set(name, info.id);
-      return { coldStart: created };
-    },
+    ensureResident: (name, onStatus) => ensureMachine(name, base.scopeFor(name) ?? "default", onStatus),
     isProvisioned: (name) => idByName.has(name),
     async recreateScratch(name) {
       await deleteMachine(name).catch(swallowAs("smolmachines-sandbox: stale scratch delete", undefined));
@@ -341,15 +415,17 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       idByName.set(name, info.id);
     },
     deleteInstance: deleteMachine,
+    ...(egressProxyHost ? { ensureEgress } : {}),
   });
 
+  const idleNote = opts.autoStopSec ? `; stops after ${opts.autoStopSec}s idle and restarts on the next command` : "";
   const profile: AgentComputerProfile = {
     backend: "smolmachines",
     writablePersistence: "resident_disk",
     processSessions: true,
-    egressEnforcement: "none",
+    egressEnforcement: egressProxyHost ? "domain" : "none",
     spec: {
-      os: "Debian 12 — smolmachines microVM (auto-stops when idle; the whole disk persists)",
+      os: `smolmachines microVM booted from the ${image} image (the whole disk persists across stops${idleNote})`,
       runtimes: ["Node", "Python 3"],
       get tools() {
         return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
@@ -357,8 +433,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       get notInstalled() {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
-      ...(opts.cpus ? { cpus: opts.cpus } : {}),
-      ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
+      cpus: opts.cpus ?? DEFAULT_CPUS,
+      memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
       ...(opts.diskGb ? { diskGb: opts.diskGb } : {}),
       homeDir: HOME_DIR,
       workdir: base.workspaceDir,
@@ -389,6 +465,18 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
+  async function recoveryFor(scopeId: string): Promise<Pick<ComputerStatus, "recovery">> {
+    if (!homeSnapshots) return {};
+    const stored = await store.get(scopeId);
+    return {
+      recovery: {
+        strategy: "workspace_snapshot",
+        ...(stored?.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
+        ...(stored?.snapshotError ? { error: stored.snapshotError } : {}),
+      },
+    };
+  }
+
   return {
     profile,
     startProcess: procSessions.startProcess,
@@ -406,11 +494,86 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     readFile: base.readFile,
     exportFiles: execExport.exportFiles,
 
+    ...(homeSnapshots
+      ? {
+          async persistHomeSnapshot(scopeId: string): Promise<void> {
+            const name = sandboxScopeName(prefix, scopeId);
+            await base.provisionQueue(scopeId, async () => {
+              await ensureMachine(name, scopeId);
+              await snapshotHome(scopeId, name);
+            });
+          },
+        }
+      : {}),
+
+    async computerStatus(scopeId: string): Promise<ComputerStatus> {
+      const name = sandboxScopeName(prefix, scopeId);
+      const recovery = await recoveryFor(scopeId);
+      let info: MachineInfo | null;
+      try {
+        info = await findMachine(name);
+      } catch (e) {
+        return { ...recovery, machine: `lookup failed: ${errMessage(e)}`, guestResponsive: false };
+      }
+      if (!info)
+        return { ...recovery, machine: "no machine provisioned yet", provisioned: false, guestResponsive: false };
+      idByName.set(name, info.id);
+      const machine = `machine ${info.id} ${info.state}${info.error ? `: ${info.error}` : ""}`;
+      if (!isRunning(info)) {
+        return {
+          ...recovery,
+          machine,
+          listed: info.state,
+          lifecycleState: "paused",
+          provisioned: true,
+          guestResponsive: false,
+        };
+      }
+      let guestResponsive = false;
+      let probeError: string | undefined;
+      try {
+        guestResponsive = (await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC)).code === 0;
+      } catch (e) {
+        probeError = errMessage(e);
+      }
+      return {
+        ...recovery,
+        machine,
+        listed: info.state,
+        lifecycleState: "running",
+        provisioned: true,
+        guestResponsive,
+        ...(probeError ? { probeError } : {}),
+      };
+    },
+
     async destroyScope(scopeId: string): Promise<void> {
       return base.provisionQueue(scopeId, async () => {
         await deleteMachine(sandboxScopeName(prefix, scopeId));
+        await store.delete(scopeId);
       });
     },
-    teardown: base.teardown,
+
+    async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
+      if (homeSnapshots && !handle.scratch && !tdOpts?.destroy) {
+        const scope = base.scopeFor(handle.id) ?? "default";
+        await base.provisionQueue(scope, async () => {
+          const stored = await store.get(scope);
+          if (!tdOpts?.homeUnchanged) await mergeStored(scope, { homeDirty: true });
+          if (!snapshotDue(stored, tdOpts, snapshotIntervalMs)) return;
+          try {
+            await snapshotHome(scope, handle.id);
+          } catch (e) {
+            opts.onError?.({
+              category: "sandbox_snapshot",
+              code: "teardown_snapshot_failed",
+              message: errMessage(e),
+              scopeLabel: scope,
+            });
+          }
+        });
+      }
+      return base.teardown(handle, tdOpts);
+    },
   };
 }
