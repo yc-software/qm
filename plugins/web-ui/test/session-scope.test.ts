@@ -132,8 +132,18 @@ test("desktop and mobile put Crons and Apps first and badge only those tools", (
   }
   assert.deepEqual(queried, ["crons", "apps", "crons", "apps"]);
   assert.deepEqual(clicked, [
-    ...["crons", "apps", "files", "skills", "memory", "keychain"],
-    ...["crons", "apps", "files", "skills", "memory", "keychain"],
+    "crons",
+    "apps",
+    "files",
+    "skills",
+    "memory",
+    "keychain",
+    "crons",
+    "apps",
+    "files",
+    "skills",
+    "memory",
+    "keychain",
   ]);
 });
 
