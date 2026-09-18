@@ -14,7 +14,7 @@ import {
   type OAuthState,
 } from "../../connectors/oauth.ts";
 import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../credentials/connector-status.ts";
-import type { OAuthTokenStatus } from "../../credentials/keychain.ts";
+import type { DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
@@ -506,18 +506,30 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
   const principal = ctx.actor?.p;
   ctx.res.setHeader("Cache-Control", "no-store");
   if (!principal) return sendJson(ctx.res, 403, { error: "forbidden", message: "Sign in to read sent mail." });
-  const accountType = ctx.url.searchParams.get("accountType") ?? "default";
-  if (!["default", "personal", "company"].includes(accountType))
+  const requestedAccountType = ctx.url.searchParams.get("accountType");
+  if (requestedAccountType !== null && !["default", "personal", "company"].includes(requestedAccountType))
     return sendJson(ctx.res, 400, { error: "bad_request" });
   const pageToken = ctx.url.searchParams.get("pageToken") ?? undefined;
   if (pageToken && pageToken.length > 2048) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
-    const auth = await ctx.deps.connectorTokens?.connectorDerivedAuth(
-      "gmail.googleapis.com",
-      principal,
-      accountType as AccountType,
-    );
-    if (!auth)
+    let accountType: AccountType | undefined;
+    let auth: DerivedOAuthAuth | null | undefined;
+    let authError: unknown;
+    for (const candidate of requestedAccountType
+      ? [requestedAccountType as AccountType]
+      : (["default", "personal", "company"] satisfies AccountType[])) {
+      try {
+        auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
+        if (auth) {
+          accountType = candidate;
+          break;
+        }
+      } catch (error) {
+        authError ??= error;
+      }
+    }
+    if (!auth && authError) throw authError;
+    if (!auth || !accountType)
       return sendJson(ctx.res, 409, {
         error: "not_connected",
         message: "Connect this Google account in Settings to see sent mail.",

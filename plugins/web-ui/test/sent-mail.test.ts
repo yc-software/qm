@@ -57,6 +57,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
       const next = String(input).includes("pageToken=");
       return Response.json({
         accountEmail: "sam@example.com",
+        accountType: "company",
         messages: [
           {
             id: next ? "older" : "newer",
@@ -71,6 +72,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
       });
     };
     await loadSentMail(draw);
+    assert.doesNotMatch(urls.at(-1)!, /accountType=/);
     assert.match(host.textContent!, /A & B/);
     assert.equal(host.querySelector("a"), null);
     await loadSentMail(draw, true);
@@ -78,7 +80,7 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     const sentRow = host.querySelector(".inbox-sent-row")!;
     assert.ok(sentRow.closest(".inbox-item")!.classList.contains("src-gmail"));
     assert.equal(sentRow.querySelector(".inbox-item-glyph svg")!.getAttribute("width"), "14");
-    assert.match(urls.at(-1)!, /accountType=default/);
+    assert.match(urls.at(-1)!, /accountType=company/);
     assert.match(urls.at(-1)!, /pageToken=cursor/);
     assert.equal(host.querySelector(".inbox-sent-more"), null);
     let chatRequest: Record<string, unknown> = {};

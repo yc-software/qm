@@ -67,6 +67,19 @@ test("GET /api/inbox resolves the signed-in person's inbox loop, never someone e
   assert.equal(coreQuery(call.url, "principalId"), "alice");
 });
 
+test("sent mail routes preserve Gmail account affinity", async () => {
+  await fetch(`${base}/api/inbox/sent?pageToken=next&accountType=company`, { headers });
+  const list = lastCallTo("/v1/connectors/gmail/sent");
+  assert.ok(list);
+  assert.equal(coreQuery(list.url, "pageToken"), "next");
+  assert.equal(coreQuery(list.url, "accountType"), "company");
+
+  await fetch(`${base}/api/inbox/sent/message-1?accountType=company`, { headers });
+  const detail = lastCallTo("/v1/connectors/gmail/sent/message-1");
+  assert.ok(detail);
+  assert.equal(coreQuery(detail.url, "accountType"), "company");
+});
+
 test("POST /api/inbox/sync-cron carries the caller, not the body's claim", async () => {
   await fetch(`${base}/api/inbox/sync-cron`, {
     method: "POST",

@@ -35,6 +35,7 @@ interface SentMailPage {
 let messages: SentEmail[] = [];
 let nextPageToken: string | undefined;
 let accountEmail = "";
+let accountType: SentEmail["accountType"];
 let loading = false;
 let loaded = false;
 let error = "";
@@ -170,6 +171,7 @@ export function resetSentMail(): void {
   messages = [];
   nextPageToken = undefined;
   accountEmail = "";
+  accountType = undefined;
   loading = false;
   loaded = false;
   error = "";
@@ -180,18 +182,25 @@ export async function loadSentMail(draw: () => void, more = false): Promise<void
   loading = true;
   error = "";
   const current = ++generation;
-  const params = new URLSearchParams({ accountType: "default" });
-  if (more && nextPageToken) params.set("pageToken", nextPageToken);
+  const params = new URLSearchParams();
+  if (more) {
+    if (nextPageToken) params.set("pageToken", nextPageToken);
+    if (accountType) params.set("accountType", accountType);
+  }
   draw();
   try {
     const local = more ? null : await fetchLocalSentMail();
     const page = local ?? (await api<SentMailPage>(`/api/inbox/sent?${params}`));
     if (current !== generation) return;
+    accountType = page.accountType ?? (more ? accountType : "default");
     messages = [
       ...new Map(
         [
           ...(more ? messages : []),
-          ...page.messages.map((message) => ({ ...message, accountType: page.accountType ?? ("default" as const) })),
+          ...page.messages.map((message) => ({
+            ...message,
+            accountType: page.accountType ?? accountType ?? "default",
+          })),
         ].map((message) => [message.id, message]),
       ).values(),
     ].sort((a, b) => b.sentAt - a.sentAt);

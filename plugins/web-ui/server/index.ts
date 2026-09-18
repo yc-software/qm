@@ -2518,10 +2518,17 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/inbox/sent/:messageId",
-    handle: async ({ res, user, params }) => {
+    handle: async ({ res, user, params, url }) => {
       if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+      const query = new URLSearchParams();
+      const accountType = url.searchParams.get("accountType");
+      if (accountType) query.set("accountType", accountType);
       res.setHeader("Cache-Control", "no-store");
-      return relayCore(res, "GET", `/v1/connectors/gmail/sent/${encodeURIComponent(params.messageId!)}`);
+      return relayCore(
+        res,
+        "GET",
+        `/v1/connectors/gmail/sent/${encodeURIComponent(params.messageId!)}${query.size ? `?${query}` : ""}`,
+      );
     },
   },
   {
