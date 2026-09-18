@@ -32,7 +32,7 @@ Limits the API enforces (don't offer what it will refuse):
   (re-checked live — revoking their admin grant closes it). Other mutations work
   anywhere; the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
-- **Bulk configuration imports require a DM or the portal**, even with Open sharing.
+- Bulk configuration import is not supported. Use the individual configuration resources instead.
 
 All calls share one shape — only method/path/body vary:
 

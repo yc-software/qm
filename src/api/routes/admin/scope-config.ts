@@ -46,7 +46,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
-  if (["base-model", "runtime", "webui-models", "browse-model", "auto-flagger", "import"].includes(resource))
+  if (["base-model", "runtime", "webui-models", "browse-model", "auto-flagger"].includes(resource))
     await deps.refreshModels?.();
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();

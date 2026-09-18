@@ -62,13 +62,6 @@ async function capabilityAdminDenied(
   if (pathname.startsWith("/v1/admin/impersonate")) {
     return "impersonating a user is portal-only — the agent cannot act as another person";
   }
-  if (
-    method === "PUT" &&
-    /^\/v1\/admin\/scopes\/[^/]+\/import$/.test(pathname) &&
-    parseScopeId(claims.scopeId).kind !== "personal"
-  ) {
-    return "bulk configuration imports may contain credentials — run them from a DM or the portal";
-  }
   if (method === "GET" && isAdminContentRead(pathname) && parseScopeId(claims.scopeId).kind !== "personal") {
     let target = "";
     if (pathname.startsWith("/v1/admin/scopes/"))
