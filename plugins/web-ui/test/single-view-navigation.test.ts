@@ -149,14 +149,24 @@ test("single and multiview headers render mutually exclusive tools and pane cont
     Shrink: "",
     Expand: "",
   }) as { init: (props: unknown) => void; draw: () => void; menuOpen: boolean };
+  let activePanelChanged: (() => void) | undefined;
   actions.init({
-    group: { id: "group", api: { onDidActivePanelChange: () => ({ dispose() {} }) } },
+    group: {
+      id: "group",
+      api: {
+        onDidActivePanelChange: (listener: () => void) => {
+          activePanelChanged = listener;
+          return { dispose() {} };
+        },
+      },
+    },
     api: { isMaximized: () => false },
   });
   assert.equal((output.match(/class="session-tool"/g) ?? []).length, 6);
   assert.doesNotMatch(output, /split-tools-btn|Split this pane|Open full screen|Close pane/);
   dockApi.panels.push({});
-  actions.draw();
+  assert.ok(activePanelChanged);
+  activePanelChanged();
   assert.doesNotMatch(output, /class="session-tool"/);
   for (const label of ["Tools", "Split this pane with a new session", "Open full screen", "Close pane"])
     assert.ok(output.includes(`aria-label="${label}"`) || output.includes(`aria-label=${label}`));
