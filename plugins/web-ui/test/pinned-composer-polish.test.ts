@@ -51,8 +51,18 @@ test("queued cards tuck beneath the next card just as the queue tucks beneath th
 test("collapsed prompt content uses a readable two-line cutoff", () => {
   const selector = ".message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content";
   const rule = css.slice(css.indexOf(`${selector} {`)).split("}")[0] ?? "";
-  assert.match(rule, /max-height: 2lh;/);
+  assert.match(rule, /display: -webkit-box;/);
+  assert.match(rule, /-webkit-box-orient: vertical;/);
+  assert.match(rule, /-webkit-line-clamp: 2;/);
+  assert.doesNotMatch(rule, /max-height:/);
   assert.match(rule, /overflow: hidden;/);
   assert.doesNotMatch(rule, /mask-image|blur/);
   assert.equal(css.includes(`${selector}::after`), false);
+});
+
+test("collapsed rich prompts retain a height bound across nested formatting contexts", () => {
+  assert.match(
+    css,
+    /> \.pin-content:has\(code-block, pre, table, img, svg, math, .katex-display, video, iframe\) \{\s*max-height: 2lh;/,
+  );
 });
