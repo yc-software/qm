@@ -320,7 +320,7 @@ function resolvedStatus(entry: LedgerItem): InboxItem["status"] {
 
 export function toInboxItem(entry: LedgerItem): InboxItem {
   const payload = entry.sourcePayload;
-  const source: InboxSource = entry.source === "gmail" ? "gmail" : "slack";
+  const source: InboxSource = (entry.source ?? payload.source) === "gmail" ? "gmail" : "slack";
   const draft = draftOf(entry);
   const resolved = resolvedStatus(entry);
   const reactions = Array.isArray(payload.reactions) ? (payload.reactions as string[]) : undefined;
