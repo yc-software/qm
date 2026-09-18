@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   FACTORY_DRAIN_EMPTY_READS,
-  FACTORY_READ_RETRIES,
+  FACTORY_READ_OUTAGE_MS,
   FACTORY_READ_WAIT_MS,
   FACTORY_STDOUT_CAP_BYTES,
   FACTORY_TERM_GRACE_MS,
@@ -179,6 +179,13 @@ function fakeSandbox(opts: {
   return { sandbox: sandbox as unknown as Sandbox, calls };
 }
 
+const CLOCK_STEP_MS = 60_000;
+const FAILURES_TO_OUTAGE = FACTORY_READ_OUTAGE_MS / CLOCK_STEP_MS + 1;
+const stepping = (stepMs = CLOCK_STEP_MS) => {
+  let t = 0;
+  return () => (t += stepMs);
+};
+
 const baseInput = (fake: Fake, extra: Partial<FactoryProcessInput> = {}): FactoryProcessInput => ({
   sandbox: fake.sandbox,
   scopeId: SCOPE_ID,
@@ -186,6 +193,7 @@ const baseInput = (fake: Fake, extra: Partial<FactoryProcessInput> = {}): Factor
   factorySourceDir: SOURCE_DIR,
   ticketId: TICKET,
   env: { IO_LINEAR_API_KEY: "lin_api_secret" },
+  now: stepping(),
   ...extra,
 });
 
@@ -200,7 +208,7 @@ const SUCCESS_READS: ReadStep[] = [
 const SUCCESS_STDOUT = "line one\nBRANCH:qm-12-s99\nMR:41\n";
 
 const persistentReadFailure = (error: Error): ReadStep[] =>
-  Array.from({ length: FACTORY_READ_RETRIES + 1 }, () => ({ error }));
+  Array.from({ length: FAILURES_TO_OUTAGE }, () => ({ error }));
 
 async function rejection(promise: Promise<unknown>): Promise<Error> {
   try {
@@ -445,7 +453,7 @@ test("a sandbox failure propagates after teardown, with no partial result", asyn
   assert.deepEqual(read.calls.teardown, [{ handle: HANDLE, opts: { keepWarm: true } }]);
 });
 
-test("a read that keeps throwing terminates the wrapper once after the retry budget, before the unchanged teardown", async () => {
+test("a read that keeps throwing terminates the wrapper once after the outage deadline, before the unchanged teardown", async () => {
   const readBoom = new Error("boom-read");
   const fake = fakeSandbox({ reads: [{ chunks: "line one\n", cursor: 9 }, ...persistentReadFailure(readBoom)] });
   assert.equal(await rejection(runFactoryProcess(baseInput(fake, { readRetryMs: 0 }))), readBoom);
@@ -454,7 +462,7 @@ test("a read that keeps throwing terminates the wrapper once after the retry bud
   assert.deepEqual(fake.calls.order, [
     "provision",
     "startProcess",
-    ...Array.from({ length: FACTORY_READ_RETRIES + 2 }, () => "readProcess"),
+    ...Array.from({ length: FAILURES_TO_OUTAGE + 1 }, () => "readProcess"),
     "signalProcess",
     "teardown",
   ]);
@@ -463,7 +471,7 @@ test("a read that keeps throwing terminates the wrapper once after the retry bud
 test("a transient read failure is retried and the run completes with no signal", async () => {
   const timeout = new Error("The operation was aborted due to timeout");
   const fake = fakeSandbox({ reads: [SUCCESS_READS[0]!, { error: timeout }, ...SUCCESS_READS.slice(1)] });
-  const result = await runFactoryProcess(baseInput(fake, { readRetryMs: 0 }));
+  const result = await runFactoryProcess(baseInput(fake, { readRetryMs: 0, now: undefined }));
   assert.equal(result.stdout, SUCCESS_STDOUT);
   assert.equal(result.exitCode, 3);
   assert.equal(fake.calls.readProcess.length, SUCCESS_READS.length + 1);
@@ -471,15 +479,42 @@ test("a transient read failure is retried and the run completes with no signal",
   assert.deepEqual(fake.calls.signalProcess, []);
 });
 
-test("a successful read resets the failure count, so two separate streaks under the budget both survive", async () => {
+test("a successful read resets the outage clock, so two separate streaks under the deadline both survive", async () => {
   const flaky = new Error("The operation was aborted due to timeout");
-  const streak = (): ReadStep[] => Array.from({ length: FACTORY_READ_RETRIES }, () => ({ error: flaky }));
+  const streak = (): ReadStep[] => Array.from({ length: FAILURES_TO_OUTAGE - 1 }, () => ({ error: flaky }));
   const fake = fakeSandbox({
     reads: [...streak(), SUCCESS_READS[0]!, ...streak(), ...SUCCESS_READS.slice(1)],
   });
   const result = await runFactoryProcess(baseInput(fake, { readRetryMs: 0 }));
   assert.equal(result.stdout, SUCCESS_STDOUT);
   assert.deepEqual(fake.calls.signalProcess, []);
+});
+
+test("a long streak of fast failures inside the deadline is ridden out, however many reads it takes", async () => {
+  const flaky = new Error("sprites exec box: http 503 service temporarily unavailable");
+  const fake = fakeSandbox({
+    reads: [SUCCESS_READS[0]!, ...Array.from({ length: 50 }, () => ({ error: flaky })), ...SUCCESS_READS.slice(1)],
+  });
+  const result = await runFactoryProcess(baseInput(fake, { readRetryMs: 0, now: stepping(10_000) }));
+  assert.equal(result.stdout, SUCCESS_STDOUT);
+  assert.deepEqual(fake.calls.signalProcess, []);
+});
+
+test("a failing read stops retrying as soon as the run is aborted", async () => {
+  const flaky = new Error("sprites exec box: http 503 service temporarily unavailable");
+  const controller = new AbortController();
+  controller.abort();
+  const fake = fakeSandbox({ reads: [{ chunks: "line one\n", cursor: 9 }, { error: flaky }, { error: flaky }] });
+  assert.equal(
+    await rejection(runFactoryProcess(baseInput(fake, { readRetryMs: 0, signal: controller.signal }))),
+    flaky,
+  );
+  assert.equal(fake.calls.readProcess.length, 2);
+  assert.equal(fake.calls.signalProcess[0]?.signal, "TERM");
+});
+
+test("the outage deadline covers at least ten minutes", () => {
+  assert.ok(FACTORY_READ_OUTAGE_MS >= 10 * 60_000);
 });
 
 test("a vanished process session is not retried", async () => {
@@ -540,7 +575,7 @@ test("an aborting signal sends one TERM, one KILL after the grace, and still dra
   });
   const chunks: string[] = [];
   const result = await runFactoryProcess(
-    baseInput(fake, { signal: controller.signal, termGraceMs: 5, onChunk: (c) => void chunks.push(c) }),
+    baseInput(fake, { now: Date.now, signal: controller.signal, termGraceMs: 5, onChunk: (c) => void chunks.push(c) }),
   );
 
   assert.deepEqual(
@@ -566,7 +601,7 @@ test("a process that exits inside the grace window is terminated but never kille
     ],
   });
   const result = await runFactoryProcess(
-    baseInput(fake, { signal: controller.signal, termGraceMs: FACTORY_TERM_GRACE_MS }),
+    baseInput(fake, { now: Date.now, signal: controller.signal, termGraceMs: FACTORY_TERM_GRACE_MS }),
   );
   assert.deepEqual(
     fake.calls.signalProcess.map((c) => c.signal),
@@ -588,7 +623,7 @@ test("a signal aborted before the call terminates on the first pass and the defa
       { chunks: "", cursor: 23, status: { state: "exited", code: 143 } },
     ],
   });
-  const result = await runFactoryProcess(baseInput(fake, { signal: controller.signal }));
+  const result = await runFactoryProcess(baseInput(fake, { now: Date.now, signal: controller.signal }));
   assert.deepEqual(
     fake.calls.signalProcess.map((c) => c.signal),
     ["TERM"],
@@ -701,7 +736,7 @@ test("an abort that lands during the drain terminates once and never escalates t
     { chunks: "", cursor: 1, status: { state: "exited", code: 0 } },
   ];
   const fake = fakeSandbox({ reads: script });
-  const result = await runFactoryProcess(baseInput(fake, { signal: controller.signal, termGraceMs: 0 }));
+  const result = await runFactoryProcess(baseInput(fake, { now: Date.now, signal: controller.signal, termGraceMs: 0 }));
   assert.equal(fake.calls.readProcess.length, script.length);
   assert.deepEqual(fake.calls.signalProcess, [{ handle: HANDLE, processId: "p-7", signal: "TERM" }]);
   assert.equal(result.stdout, "x");

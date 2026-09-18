@@ -9,8 +9,9 @@ export const FACTORY_READ_WAIT_MS = 5_000;
 export const FACTORY_STDOUT_CAP_BYTES = 4 * 1024 * 1024;
 export const FACTORY_TERM_GRACE_MS = 30_000;
 export const FACTORY_DRAIN_EMPTY_READS = 2;
-export const FACTORY_READ_RETRIES = 6;
-const FACTORY_READ_RETRY_MS = 2_000;
+// The wrapper keeps running through a sandbox API outage, so reads retry for this long before the run counts as lost.
+export const FACTORY_READ_OUTAGE_MS = 10 * 60_000;
+const FACTORY_READ_RETRY_MS = 5_000;
 const FACTORY_READ_MAX_BYTES = 65_536;
 const TICKET_RE = /^[A-Z][A-Z0-9]*-\d+$/;
 
@@ -91,6 +92,8 @@ export interface FactoryProcessInput {
   signal?: AbortSignal;
   readWaitMs?: number;
   readRetryMs?: number;
+  readOutageMs?: number;
+  now?: () => number;
   termGraceMs?: number;
 }
 
@@ -112,6 +115,8 @@ export async function runFactoryProcess(input: FactoryProcessInput): Promise<Fac
 
   const waitMs = input.readWaitMs ?? FACTORY_READ_WAIT_MS;
   const retryMs = input.readRetryMs ?? FACTORY_READ_RETRY_MS;
+  const outageMs = input.readOutageMs ?? FACTORY_READ_OUTAGE_MS;
+  const now = input.now ?? Date.now;
   const grace = input.termGraceMs ?? FACTORY_TERM_GRACE_MS;
   const handle = await sandbox.provision([{ scopeId, mode: "rw", mountPath: "" }]);
   try {
@@ -133,7 +138,7 @@ export async function runFactoryProcess(input: FactoryProcessInput): Promise<Fac
       let killSent = false;
       let killAt = 0;
       let emptyExitedReads = 0;
-      let readFailures = 0;
+      let firstFailureAt: number | undefined;
       for (;;) {
         let read;
         try {
@@ -143,12 +148,14 @@ export async function runFactoryProcess(input: FactoryProcessInput): Promise<Fac
             waitMs,
           });
         } catch (e) {
-          // A saturated sandbox can push one poll past the exec timeout; one slow read must not end a multi-hour run.
-          if (processIsGone(e) || ++readFailures > FACTORY_READ_RETRIES) throw e;
+          if (processIsGone(e) || signal?.aborted) throw e;
+          const at = now();
+          firstFailureAt ??= at;
+          if (at - firstFailureAt >= outageMs) throw e;
           await sleep(retryMs);
           continue;
         }
-        readFailures = 0;
+        firstFailureAt = undefined;
         cursor = read.cursor;
         if (read.chunks !== "") {
           stdout += read.chunks;
@@ -167,8 +174,8 @@ export async function runFactoryProcess(input: FactoryProcessInput): Promise<Fac
         if (signal?.aborted && !termSent) {
           await sandbox.signalProcess(handle, processId, "TERM");
           termSent = true;
-          killAt = Date.now() + grace;
-        } else if (termSent && !killSent && read.status.state === "running" && Date.now() >= killAt) {
+          killAt = now() + grace;
+        } else if (termSent && !killSent && read.status.state === "running" && now() >= killAt) {
           await sandbox.signalProcess(handle, processId, "KILL");
           killSent = true;
         }
