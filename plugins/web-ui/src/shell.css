@@ -8246,7 +8246,7 @@ h3.ambient-field-label {
 }
 
 .split-pane-content {
-  container-type: size;
+  container: split-pane / size;
   position: relative;
   width: 100%;
   height: 100%;
@@ -12072,4 +12072,87 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .settings-ai-controls .settings-choice {
   flex-wrap: wrap;
+}
+
+.composer-account-icon {
+  display: none;
+}
+
+@container split-pane (max-height: 480px) {
+  .composer-wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 16px;
+  }
+  .composer-wrap > * {
+    grid-column: 1 / -1;
+  }
+  .composer-wrap .composer-input {
+    grid-column: 1;
+    min-width: 0;
+    min-height: 34px;
+    max-height: 120px;
+    padding: 6px 8px;
+  }
+  .composer-wrap .composer-input::placeholder {
+    white-space: nowrap;
+  }
+  .composer-wrap .composer-toolbar {
+    grid-column: 2;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+  .composer-wrap .composer-left,
+  .composer-wrap .composer-right {
+    width: auto;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+  .composer-wrap .composer-account {
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
+    padding: 0;
+    flex: none;
+    justify-content: center;
+  }
+  .composer-wrap .composer-account-label {
+    display: none;
+  }
+  .composer-wrap .composer-account-icon {
+    display: inline-flex;
+  }
+  .composer-wrap .composer-toolbar .menu-button.loadout-button {
+    max-width: 180px;
+  }
+}
+
+@container split-pane (max-height: 480px) and (max-width: 470px) {
+  .composer-wrap .loadout-button .menu-label,
+  .composer-wrap .loadout-button .menu-suffix {
+    display: none;
+  }
+  .composer-wrap .composer-toolbar .menu-button.loadout-button {
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+
+@container split-pane (max-height: 480px) and (max-width: 300px) {
+  .composer-wrap .composer-toolbar .icon-btn,
+  .composer-wrap .composer-toolbar .menu-button.loadout-button,
+  .composer-wrap .composer-toolbar .send-btn,
+  .composer-wrap .composer-toolbar .stop-btn,
+  .composer-wrap .composer-toolbar .composer-account {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+  }
+  .composer-wrap .composer-attach {
+    transform: none;
+  }
 }

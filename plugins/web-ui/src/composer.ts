@@ -19,6 +19,7 @@ import {
   FileText,
   Paperclip,
   Square,
+  Settings,
   Star,
   X,
   Zap,
@@ -636,8 +637,17 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
               ${icon(Paperclip, 18)}
             </button>
             ${showRuntimeControls ? runtimeControls : nothing}
-            <button type="button" class="btn" @click=${() => switchView("settings")}>
-              ${appState.me?.individualModelAuth ? "My account" : "Company access"}
+            <button
+              type="button"
+              class="btn composer-account"
+              aria-label=${appState.me?.individualModelAuth ? "My account" : "Company access"}
+              ${tip(appState.me?.individualModelAuth ? "My account" : "Company access")}
+              @click=${() => switchView("settings")}
+            >
+              <span class="composer-account-icon" aria-hidden="true">${icon(Settings, 18)}</span>
+              <span class="composer-account-label">
+                ${appState.me?.individualModelAuth ? "My account" : "Company access"}
+              </span>
             </button>
           </div>
           <div class="composer-right">${sendControls(agent)}</div>
