@@ -234,12 +234,9 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         return sendJson(res, 200, {
           grant,
           ask,
-          use:
-            grant.audienceScopeId === capability.scopeId
-              ? useBlock(grant)
-              : {
-                  note: `Grant is active in ${grant.audienceScopeId} — the asking conversation. It cannot be used from here; that conversation resumes on its own.`,
-                },
+          use: {
+            note: `Grant is active in ${grant.audienceScopeId} — the asking conversation resumes automatically. Do not load or consume the grant on this approval turn.`,
+          },
         });
       }
       let granter = actorId;
@@ -298,12 +295,6 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
     }
 
     if (method === "POST" && pathname === "/v1/keychain/asks") {
-      if (capability.triggered) {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "asks can only be sent on a turn a person sent — this turn was fired by a trigger",
-        });
-      }
       const b = body as { credential?: unknown; purpose?: unknown; requestedMode?: unknown; expiresAt?: unknown };
       const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
       if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
@@ -318,32 +309,50 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         });
       }
       const scope = parseScopeId(capability.scopeId);
-      if (scope.kind !== "channel") {
+      if (capability.triggered && scope.kind !== "personal") {
         return sendJson(res, 403, {
           error: "forbidden",
-          message: "asks can only be sent from a channel — in a DM or group, ask the owner directly",
+          message: "background credential requests require the owner's personal conversation",
+        });
+      }
+      if (scope.kind !== "channel" && scope.kind !== "personal") {
+        return sendJson(res, 403, {
+          error: "forbidden",
+          message: "asks require a channel or your own personal conversation",
         });
       }
       const cred = await kc.getCredential(b.credential);
       if (!cred) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
-      const ch = await app.resolveChannel(scope.ref);
-      if (ch.kind !== "one") {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "this channel isn't in the directory yet — try again in a minute",
-        });
-      }
-      const ownerIsMember = ch.channel.isPrivate
-        ? await app.channelMember(ch.channel.channelId, cred.ownerId)
-        : (await app.directoryMember(cred.ownerId))?.type === "internal";
-      if (!ownerIsMember) {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "the credential's owner isn't a verified member of this conversation",
-        });
+      let channelName: string | undefined;
+      if (scope.kind === "personal") {
+        if (!samePerson(scope.ref, actorId) || !samePerson(cred.ownerId, actorId)) {
+          return sendJson(res, 403, {
+            error: "forbidden",
+            message: "personal requests can only ask for your own credential in your own conversation",
+          });
+        }
+      } else {
+        const ch = await app.resolveChannel(scope.ref);
+        if (ch.kind !== "one") {
+          return sendJson(res, 403, {
+            error: "forbidden",
+            message: "this channel isn't in the directory yet — try again in a minute",
+          });
+        }
+        const ownerIsMember = ch.channel.isPrivate
+          ? await app.channelMember(ch.channel.channelId, cred.ownerId)
+          : (await app.directoryMember(cred.ownerId))?.type === "internal";
+        if (!ownerIsMember) {
+          return sendJson(res, 403, {
+            error: "forbidden",
+            message: "the credential's owner isn't a verified member of this conversation",
+          });
+        }
+        channelName = ch.channel.name;
       }
       const dest = resolveCapabilityDestination(capability, undefined);
       const { ask, existing } = await kc.createAsk({
+        ...(capability.triggered ? { triggered: true } : {}),
         credentialId: cred.id,
         requesterId: actorId,
         requesterScopeId: capability.scopeId,
@@ -358,7 +367,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ask,
         credential: cred,
         ...(requester?.displayName ? { requesterName: requester.displayName } : {}),
-        channelName: ch.channel.name,
+        ...(channelName ? { channelName } : {}),
       });
       await deps.deliveries?.enqueue({
         destination: principalDestination(cred.ownerId, actorId),
@@ -425,7 +434,7 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
           return sendJson(res, 403, {
             error: "forbidden",
             message:
-              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use a grant instead",
+              "own-credential use is implied only on a turn its owner themself sent live — this turn wasn't; use an existing grant or POST /v1/keychain/asks to request owner approval, then wait",
           });
         }
         m = await kc.materializeOwnById(actorId, b.credential as string, capability.scopeId);

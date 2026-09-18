@@ -61,10 +61,16 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
     k.createAsk({ credentialId: "nope", requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "x" }),
     (e: KeychainError) => e.status === 404,
   );
+  const self = await k.createAsk({
+    credentialId: cred.id,
+    requesterId: "U_ALICE",
+    requesterScopeId: "personal:U_ALICE",
+    purpose: "scheduled check",
+  });
+  assert.equal(self.ask.status, "pending");
   await assert.rejects(
-    k.createAsk({ credentialId: cred.id, requesterId: "U_ALICE", requesterScopeId: "channel:C1", purpose: "x" }),
-    (e: KeychainError) => e.status === 400,
-    "asking for your own credential is a grant, not an ask",
+    k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "personal:U_BOB", purpose: "x" }),
+    (e: KeychainError) => e.status === 403,
   );
 
   const { ask, existing } = await k.createAsk({
@@ -97,6 +103,41 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
     purpose: "other room",
   });
   assert.equal(elsewhere.existing, false, "a different scope is a different ask");
+});
+
+test("personal cron asks deduplicate recurring fires without combining jobs or re-asking after denial", async () => {
+  let now = 1000000;
+  const k = kcAt(() => now++);
+  const cred = await k.save(GH);
+  const base = {
+    credentialId: cred.id,
+    requesterId: "U_ALICE",
+    requesterScopeId: "personal:U_ALICE" as const,
+    purpose: "first task",
+    triggered: true,
+  };
+  const first = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:one" });
+  const second = await k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:one", purpose: "second task" });
+  assert.notEqual(first.ask.id, second.ask.id);
+  const retry = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:two" });
+  assert.equal(retry.ask.id, first.ask.id);
+  assert.equal(retry.ask.requesterThreadRef, "cron:first:fire:one");
+  assert.equal(retry.existing, true);
+  await k.declineAsk({ askId: first.ask.id, ownerId: "U_ALICE", note: "no" });
+  await assert.rejects(
+    k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:three" }),
+    (e: KeychainError) => e.status === 409,
+  );
+  const revived = await k.createAsk({ ...base, triggered: false, requesterThreadRef: "cron:first:fire:four" });
+  const waiting = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:five" });
+  assert.equal(waiting.ask.id, revived.ask.id);
+  await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "yes" });
+  assert.equal((await k.getAsk(second.ask.id))?.status, "pending");
+  now += ASK_TTL_MS + 1;
+  await assert.rejects(
+    k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:two" }),
+    (e: KeychainError) => e.status === 409,
+  );
 });
 
 test("approveAsk: same createGrant owner gate, audience from the record, single resolution", async () => {
@@ -606,7 +647,7 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("gates creation: channels only, owner must be a directory-verified member (fail closed)", async () => {
+  it("gates creation: personal ownership and directory-verified channel membership", async () => {
     const { credential } = (await (
       await post(
         "/v1/keychain/credentials",
@@ -889,7 +930,123 @@ describe("/v1/keychain/asks — the consent ladder end to end", async () => {
       { credential: gh.id, purpose: "p" },
       await capFor("U_BOB", "channel:C_INFRA", { triggered: true }),
     );
-    assert.equal(send.status, 403);
+    assert.equal(send.status, 403, "shared background requests remain blocked");
+  });
+
+  for (const mode of ["once", "standing"] as const) {
+    it(`personal scheduled request waits for approval, resumes its original thread, and respects ${mode} grants`, async () => {
+      const threadRef = `dm:U_ALICE-cron-${mode}`;
+      const personal = scopeId("personal", "U_ALICE");
+      const token = await capFor("U_ALICE", personal, { triggered: true, threadRef });
+      const live = await capFor("U_ALICE", personal, { liveActor: true });
+      const { credential } = (await (
+        await post(
+          "/v1/keychain/credentials",
+          { service: `cron-${mode}`, secret: "dummy-cron-value", envKey: "CRON_QA_TOKEN" },
+          live,
+        )
+      ).json()) as any;
+      const seed = await built.app.turn({
+        surface: "slack",
+        actor: { externalId: "U_ALICE" },
+        conversation: { kind: "dm", threadRef },
+        text: "waiting for scheduled credential approval",
+      } as TurnRequest);
+      assert.equal(seed.status, "ok");
+      const session = await built.sessions.getByThread(threadRef);
+      assert.ok(session);
+      const denied = await post("/v1/keychain/use", { credential: credential.id }, token);
+      assert.equal(denied.status, 403);
+      assert.match(((await denied.json()) as any).message, /keychain\/asks/);
+      const requested = await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "read-only dummy scheduled check", requestedMode: mode },
+        token,
+      );
+      assert.equal(requested.status, 200);
+      const { ask } = (await requested.json()) as any;
+      assert.equal(ask.status, "pending");
+      assert.equal(
+        (await built.keychain!.listGrants({ audienceScopeId: personal })).filter(
+          (g) => g.credentialId === credential.id,
+        ).length,
+        0,
+      );
+      const duplicate = (await (
+        await post("/v1/keychain/asks", { credential: credential.id, purpose: "retry" }, token)
+      ).json()) as any;
+      assert.equal(duplicate.ask.id, ask.id);
+      assert.equal(duplicate.existing, true);
+      const notices = (await built.deliveries.pending("principal")).filter(
+        (d) => d.idempotencyKey === `ask:${ask.id}:notice`,
+      );
+      assert.equal(notices.length, 1);
+      assert.equal(notices[0]!.destination.target, "U_ALICE");
+      assert.match(notices[0]!.text, /A task in your personal conversation is asking/);
+      assert.ok(!notices[0]!.text.includes("dummy-cron-value"));
+      assert.equal(
+        (await post("/v1/keychain/grants", { ask: ask.id, mode, purpose: "approve myself" }, token)).status,
+        403,
+      );
+      assert.equal(
+        (await post("/v1/keychain/grants", { ask: ask.id, mode, purpose: "Alice said yes" }, await capFor("U_BOB")))
+          .status,
+        403,
+      );
+      const approval = await post(
+        "/v1/keychain/grants",
+        { ask: ask.id, mode, purpose: "yes, run this dummy check" },
+        live,
+      );
+      assert.equal(approval.status, 200);
+      const approved = (await approval.json()) as any;
+      assert.equal(approved.grant.audienceScopeId, personal);
+      assert.equal(approved.use.command, undefined);
+      assert.match(approved.use.note, /Do not load or consume/);
+      const resumed = await waitFor(async () =>
+        (await built.sessions.getEntries(session.id)).filter(
+          (e) => e.type === "user" && JSON.stringify(e.payload).includes(`Keychain ask \`${ask.id}\` was approved`),
+        ),
+      );
+      assert.equal(resumed.length, 1);
+      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, await capFor("U_BOB"))).status, 403);
+      assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 200);
+      const second = await post("/v1/keychain/use", { grant: approved.grant.id }, token);
+      assert.equal(second.status, mode === "standing" ? 200 : 410);
+      if (mode === "standing") {
+        assert.equal((await post(`/v1/keychain/grants/${approved.grant.id}/revoke`, {}, live)).status, 200);
+        assert.equal((await post("/v1/keychain/use", { grant: approved.grant.id }, token)).status, 410);
+      }
+    });
+  }
+
+  it("a scheduled personal request can be declined without granting access", async () => {
+    const live = await capFor("U_ALICE", "personal:U_ALICE", { liveActor: true });
+    const token = await capFor("U_ALICE", "personal:U_ALICE", { triggered: true });
+    const { credential } = (await (
+      await post(
+        "/v1/keychain/credentials",
+        { service: "cron-decline", secret: "dummy", envKey: "CRON_QA_TOKEN" },
+        live,
+      )
+    ).json()) as any;
+    const { ask } = (await (
+      await post("/v1/keychain/asks", { credential: credential.id, purpose: "dummy declined check" }, token)
+    ).json()) as any;
+    assert.equal((await post(`/v1/keychain/asks/${ask.id}/decline`, {}, token)).status, 403);
+    assert.equal((await post(`/v1/keychain/asks/${ask.id}/decline`, { note: "no" }, live)).status, 200);
+    assert.equal((await built.keychain!.getAsk(ask.id))?.status, "declined");
+    assert.equal((await post("/v1/keychain/use", { credential: credential.id }, token)).status, 403);
+    assert.equal(
+      (
+        await post(
+          "/v1/keychain/asks",
+          { credential: credential.id, purpose: "wrong scope" },
+          await capFor("U_ALICE", "personal:U_BOB", { triggered: true }),
+        )
+      ).status,
+      403,
+    );
   });
 
   it("expiry: the scheduler sweep fires exactly one expired-resolution turn into the asking channel", async () => {

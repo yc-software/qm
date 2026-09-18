@@ -984,10 +984,10 @@ test("manifest: in the owner's personal scope their own credentials need no gran
     scopeGrants: [],
     injected: [],
   });
-  assert.match(own, /their own — no grant needed in this personal conversation/);
-  assert.match(own, /access is implied/);
+  assert.match(own, /their own — no grant needed on their live turn/);
+  assert.match(own, /Background and scheduled turns require an explicit grant/);
   assert.match(own, /"credential":"<credential id>"/);
-  assert.match(own, /works only here, in their personal conversation/);
+  assert.match(own, /works only on their live turn in their personal conversation/);
   assert.ok(!own.includes("no grant for this conversation"));
   assert.match(
     own,

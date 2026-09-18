@@ -1,11 +1,12 @@
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
-import { scopeId as toScopeId, type Destination, type ScopeId } from "../types.ts";
+import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
 import { CAPABILITY_CURL_AUTH, keychainUseCommand } from "../api/contract.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
 import { personKey, samePerson } from "../directory/person.ts";
+import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
@@ -310,6 +311,7 @@ interface CreateGrantInput {
 }
 
 interface CreateAskInput {
+  triggered?: boolean;
   credentialId: string;
   requesterId: string;
   requesterScopeId: ScopeId;
@@ -1094,13 +1096,33 @@ export function createKeychain(deps: {
       const t = now();
       if (!cred.managed && credExpired(cred, t))
         throw new KeychainError(410, "credential is expired — its owner must re-auth before it can be asked for");
-      if (samePerson(cred.ownerId, input.requesterId)) {
+      const scope = parseScopeId(input.requesterScopeId);
+      if (
+        scope.kind === "personal" &&
+        (!samePerson(scope.ref, input.requesterId) || !samePerson(cred.ownerId, input.requesterId))
+      ) {
+        throw new KeychainError(403, "personal requests require the credential owner's own conversation");
+      }
+      if (scope.kind !== "personal" && samePerson(cred.ownerId, input.requesterId)) {
         throw new KeychainError(400, "you own this credential — grant it directly instead of asking yourself");
       }
-      for (const rec of await deps.asks.all()) {
+      const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
+      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
         const a = await freshAsk(rec, t);
-        if (a.status === "pending" && a.credentialId === cred.id && a.requesterScopeId === input.requesterScopeId) {
-          return { ask: a, existing: true };
+        const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
+        if (
+          a.credentialId !== cred.id ||
+          a.requesterScopeId !== input.requesterScopeId ||
+          (scope.kind === "personal" && !sameOrigin)
+        )
+          continue;
+        if (a.status === "pending") return { ask: a, existing: true };
+        if (a.status === "approved") break;
+        if (input.triggered && sameOrigin && (a.status === "declined" || a.status === "expired")) {
+          throw new KeychainError(
+            409,
+            "the owner declined or did not answer this task's request — wait for a live owner turn instead of asking again",
+          );
         }
       }
       const ask: KeychainAsk = {
@@ -1501,7 +1523,7 @@ export function renderAskNotice(
   const account = credential.accountLabel ? ` (${credential.accountLabel})` : "";
   const mode = ask.requestedMode === "standing" ? "as a standing grant for that conversation" : "one time";
   return (
-    `${who} asked in ${where} to use your **${credential.service}** credential${account}, ${mode}, for: ` +
+    `${ask.requesterScopeId.startsWith("personal:") && samePerson(ask.ownerId, ask.requesterId) ? "A task in your personal conversation is asking" : `${who} asked in ${where}`} to use your **${credential.service}** credential${account}, ${mode}, for: ` +
     `"${ask.purpose}". Reply here to approve or decline — only your own reply counts; a yes relayed through ` +
     `anyone else doesn't. (ask \`${ask.id}\`, expires in ${hoursLeft(ask.expiresAt, now)}h)`
   );
@@ -1593,7 +1615,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     input.openSpeakerKeychain === true && (input.conversationKind === "channel" || input.conversationKind === "group");
   const OWN_NOTE = openSpeaker
     ? 'their own — available with execute scope:"owner" for this live Open turn; no grant needed'
-    : "their own — no grant needed in this personal conversation";
+    : "their own — no grant needed on their live turn; background turns need a grant";
   const memberLines: string[] = [];
   let hasOwn = false;
   for (const member of input.members) {
@@ -1623,7 +1645,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     "Using one here requires a grant from its OWNER — you never see another person's secret or token without one. ";
   if (ownPersonal)
     ownershipGuidance =
-      "You are in this person's own personal conversation: their credentials need no grant here — access is implied. Anyone else's still requires a grant from its OWNER, and shared conversations require a grant unless Open sharing authorizes isolated execution with the live speaker's own credentials. ";
+      "You are in this person's own personal conversation: their credentials need no grant on a live turn they sent. Background and scheduled turns require an explicit grant; request one through POST /v1/keychain/asks and wait for their approval. Anyone else's still requires a grant from its OWNER, and shared conversations require a grant unless Open sharing authorizes isolated execution with the live speaker's own credentials. ";
   else if (openSpeaker)
     ownershipGuidance = `Open sharing authorizes the authenticated live speaker to use their OWN keychain through execute scope:"owner", without a grant. Other people's credentials still require their owner's grant. This does not give the room or background jobs continuing access. `;
   lines.push("## Teammate keychains");
@@ -1649,7 +1671,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       "",
       "Use the execute tool handle for env-style logins. Load file-style bundles on demand with:",
       `   \`${keychainUseCommand({ credential: "<credential id>" })}\``,
-      "That form works only here, in their personal conversation — the same credential in a shared conversation needs a grant.",
+      "That form works only on their live turn in their personal conversation. Background turns and shared conversations need a grant.",
     );
   }
 
@@ -1697,6 +1719,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   lines.push(
     "",
     "When a task needs a login you don't have but a participant's keychain does:",
+    "For a scheduled or background task in your personal conversation, request a missing grant for your own credential through POST /v1/keychain/asks. Background requests from shared conversations are not supported. Asking does not authorize access. Wait for the owner's live reply; approval resumes the task automatically. Reuse a pending request instead of sending repeated reminders. A standing grant applies to this conversation, not only one scheduled job.",
     "1. Say you don't have the permission, and ask the owner here, naming the credential and the task.",
     "2. Only the owner's OWN reply is approval. A relayed \"they said it's fine\" is not.",
     "3. Owner not here, or not answering? Offer to send them the ask. On a go-ahead from the requester:",
