@@ -22,8 +22,14 @@ const metadata = {
   output_cost_per_token: 0.000002,
 };
 
-for (const protocol of ["openai", "anthropic"])
+for (const protocol of ["openai", "anthropic", "unknown"] as const)
   test(`live ${protocol} gateway discovery, picker and tool continuation`, async (t) => {
+    const expectedPath = { openai: "/v1/responses", anthropic: "/v1/messages", unknown: "/v1/chat/completions" }[
+      protocol
+    ];
+    const expectedApi = { openai: "openai-responses", anthropic: "anthropic-messages", unknown: "openai-completions" }[
+      protocol
+    ];
     let useTool = false;
     let clockOffset = 0;
     const requests: Array<{ path: string; body: Record<string, unknown>; key: unknown }> = [];
@@ -55,10 +61,10 @@ for (const protocol of ["openai", "anthropic"])
           }),
         );
       }
-      assert.equal(req.url, protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions");
+      assert.equal(req.url, expectedPath);
       assert.equal(body.model, "acme/future");
       assert.equal(body.prompt_cache_retention, undefined);
-      assert.equal(body.store, undefined);
+      assert.equal(body.store, protocol === "openai" ? false : undefined);
       res.writeHead(200, { "content-type": "text/event-stream" });
       if (protocol === "anthropic") {
         if (body.thinking) assert.equal(body.thinking.type, "adaptive");
@@ -115,6 +121,43 @@ for (const protocol of ["openai", "anthropic"])
           usage: { output_tokens: 20 },
         });
         send("message_stop", {});
+        return res.end();
+      }
+      if (protocol === "openai") {
+        const toolResult = body.input.some((item: { type: string }) => item.type === "function_call_output");
+        const send = (type: string, data: object) =>
+          res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+        send("response.created", { response: { id: "resp_test", status: "in_progress" } });
+        let item;
+        if (useTool && !toolResult) {
+          clockOffset += 300001;
+          item = {
+            type: "function_call",
+            id: "fc_discovery",
+            call_id: "call_discovery",
+            name: "execute",
+            arguments: JSON.stringify({ command: "echo discovery-tool-ok" }),
+            status: "completed",
+          };
+        } else {
+          item = {
+            type: "message",
+            id: "msg_test",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Discovered model replied", annotations: [] }],
+            status: "completed",
+          };
+        }
+        send("response.output_item.added", { output_index: 0, item });
+        send("response.output_item.done", { output_index: 0, item });
+        send("response.completed", {
+          response: {
+            id: "resp_test",
+            status: "completed",
+            output: [item],
+            usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
+          },
+        });
         return res.end();
       }
       if (useTool && !body.messages.some((m: { role: string }) => m.role === "tool")) {
@@ -198,10 +241,7 @@ for (const protocol of ["openai", "anthropic"])
       scopeId("org", "default-org"),
     );
     assert.deepEqual(runtime.modelsByHarness.pi, ["gateway/acme/future"]);
-    assert.equal(
-      runtime.modelCatalog["gateway/acme/future"]?.api,
-      protocol === "anthropic" ? "anthropic-messages" : "openai-completions",
-    );
+    assert.equal(runtime.modelCatalog["gateway/acme/future"]?.api, expectedApi);
     assert.doesNotMatch(JSON.stringify(runtime), /company-key|127\.0\.0\.1/);
     const catalog = createGatewayCatalog(config, fetch, () => Date.now() + clockOffset);
     await catalog.refresh();
@@ -210,7 +250,7 @@ for (const protocol of ["openai", "anthropic"])
       modelGateway: catalog.transport,
     });
     assert.equal(reply, "Discovered model replied");
-    assert.ok(requests.some((r) => r.path === (protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions")));
+    assert.ok(requests.some((r) => r.path === expectedPath));
     assert.ok(requests.every((r) => r.key === "company-key"));
     useTool = true;
     const beforeRefresh = requests.filter((r) => r.path === "/v1/models").length;
@@ -230,12 +270,14 @@ for (const protocol of ["openai", "anthropic"])
     assert.ok(
       requests.some(
         (r) =>
-          Array.isArray(r.body.messages) &&
-          r.body.messages.some(
-            (m: { role: string; content: unknown }) =>
-              m.role === "tool" ||
-              (Array.isArray(m.content) && m.content.some((c: { type: string }) => c.type === "tool_result")),
-          ),
+          (Array.isArray(r.body.input) &&
+            r.body.input.some((item: { type: string }) => item.type === "function_call_output")) ||
+          (Array.isArray(r.body.messages) &&
+            r.body.messages.some(
+              (m: { role: string; content: unknown }) =>
+                m.role === "tool" ||
+                (Array.isArray(m.content) && m.content.some((c: { type: string }) => c.type === "tool_result")),
+            )),
       ),
     );
   });

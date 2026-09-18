@@ -149,6 +149,11 @@ test("tracked files use only QM branding", () => {
   const legacyContent = paths.flatMap((path) => {
     const content = readTrackedContent(path);
     if (!content || isCompressedMedia(content)) return [];
+    const encodedDocumentFixture =
+      path.startsWith("test/fixtures/documents/") &&
+      (content.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) ||
+        content.subarray(0, 5).toString("ascii") === "%PDF-");
+    if (encodedDocumentFixture) return [];
     return findLegacyNames(content.toString("latin1"), {
       binary: isBinary(content),
       compressed: isCompressedMedia(content),

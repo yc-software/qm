@@ -112,7 +112,7 @@ test("non-image data blobs count at full length — a redacted_thinking blob can
   assert.throws(() => guardOutputBudget(p, FABLE), /prompt is too long/i, "refused, not raised");
 });
 
-test("a PDF document source is not mistaken for an image", () => {
+test("native PDF bytes use a media estimate instead of their encoded text length", () => {
   const doc = {
     type: "document",
     source: { type: "base64", media_type: "application/pdf", data: "P".repeat(790_000) },
@@ -121,7 +121,7 @@ test("a PDF document source is not mistaken for an image", () => {
     max_tokens: 1,
     messages: [{ role: "user", content: [doc, { type: "text", text: "summarize" }] }],
   });
-  assert.throws(() => guardOutputBudget(p, FABLE), /prompt is too long/i, "counted at full length -> refused");
+  assert.equal(guardOutputBudget(p, FABLE).kind, "raised");
 });
 
 test("a data URL pasted as TEXT counts at full length — only url-keyed data URLs are images", () => {

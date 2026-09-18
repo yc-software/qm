@@ -74,14 +74,34 @@ for (const extension of ["docx", "pdf"]) {
     const built = freshApp();
     const bytes = await readFile(new URL(`./fixtures/documents/hostile.${extension}`, import.meta.url));
     const blob = await built.blobTransfer.put(bytes);
-    const request = { surface: "test" as const, actor: { externalId: "U1" }, conversation: { kind: "dm" as const, threadRef: `dm:U1:hostile-${extension}` } };
-    const result = await built.app.turn({ ...request, text: "summarize", attachments: [{ name: `hostile.${extension}`, mimetype: extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document", sizeBytes: blob.sizeBytes, blobId: blob.blobId }] });
+    const request = {
+      surface: "test" as const,
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm" as const, threadRef: `dm:U1:hostile-${extension}` },
+    };
+    const result = await built.app.turn({
+      ...request,
+      text: "summarize",
+      attachments: [
+        {
+          name: `hostile.${extension}`,
+          mimetype:
+            extension === "pdf"
+              ? "application/pdf"
+              : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          sizeBytes: blob.sizeBytes,
+          blobId: blob.blobId,
+        },
+      ],
+    });
     assert.equal(result.status, "ok");
     const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
     assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
     assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /withheld by the external-data security screen/);
     const followup = await built.app.turn({ ...request, text: "try reading it again" });
-    const followupCalls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((record) => record.model === "mock");
+    const followupCalls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter(
+      (record) => record.model === "mock",
+    );
     assert.doesNotMatch(JSON.stringify(followupCalls.at(-1)?.promptEnvelope), /"documents":/);
   });
 }
