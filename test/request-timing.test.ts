@@ -95,6 +95,13 @@ test("core request timings carry registered route templates, never raw paths, an
     assert.equal(runs[0]!.contexts?.trace?.status, "ok");
     assert.equal(runs[0]!.measurements?.queue_wait?.unit, "millisecond");
     assert.ok(runs[0]!.measurements!.queue_wait!.value >= 0);
+    const stopped = await built.runs.enqueue({ sessionId: "private-thread-2", request: run.request });
+    const stoppedClaim = await built.runs.claim("worker", 10_000);
+    assert.equal(stoppedClaim?.id, stopped.run.id);
+    await built.runs.complete(stopped.run.id, stoppedClaim!.leaseToken!, { status: "silent", stopped: true });
+    await settle(5);
+    const cancelled = captured.filter((event) => event.contexts?.trace?.op === "queue.task").at(-1)!;
+    assert.equal(cancelled.contexts.trace.status, "cancelled");
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

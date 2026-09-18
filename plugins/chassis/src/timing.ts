@@ -125,7 +125,7 @@ function scopeTags(tags: Record<string, unknown>): Record<string, string> {
 function bucketed(data: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(data)
-      .filter(([key, value]) => key in BUCKETS && typeof value === "string")
+      .filter(([key, value]) => Object.hasOwn(BUCKETS, key) && typeof value === "string")
       .map(([key, value]) => [key, BUCKETS[key]!(value as string) ? (value as string) : "other"]),
   );
 }

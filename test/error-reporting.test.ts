@@ -266,6 +266,21 @@ test("transaction allowlist keeps timing shape only and rejects unsafe names", (
     "node",
   );
   assert.deepEqual(bucketed?.tags, { surface: "other", origin: "other", http_status: "other", page: "other" });
+  const inherited = sanitizeTransactionEvent(
+    {
+      ...traced("queue.task", "ok"),
+      contexts: {
+        trace: {
+          ...base.contexts.trace,
+          op: "queue.task",
+          status: "ok",
+          data: { toString: "private prompt", constructor: "private-user", hasOwnProperty: "private" },
+        },
+      },
+    },
+    "node",
+  );
+  assert.deepEqual(inherited?.tags, {});
 });
 
 test("trace statuses map HTTP outcomes", () => {

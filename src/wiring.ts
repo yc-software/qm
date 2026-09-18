@@ -1465,8 +1465,8 @@ export function buildApp(
     const startedAt = run.startedAt ?? run.finishedAt ?? Date.now();
     const finishTiming = startTiming("queue.task", "run", startedAt);
     let status: TimingStatus = "internal_error";
-    if (run.status === "done") status = "ok";
-    else if (run.result?.stopped) status = "cancelled";
+    if (run.result?.stopped) status = "cancelled";
+    else if (run.status === "done") status = "ok";
     finishTiming?.({
       status,
       endMs: run.finishedAt ?? Date.now(),
