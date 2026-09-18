@@ -9,9 +9,12 @@ A Loop is a cron with a memory and a gate: a trigger, a playbook, a ledger of wo
 that survives across fires, ship-ready outputs held for a person, and a governor watching
 its health. Reach for one when the ask is "keep doing this kind of work", not "do this".
 
-Work turns run without surface tools or addressed delivery, and final external actions
-are performed in the fenced ship stage. Work-stage tool restriction beyond that remains
-a known limitation pending a turn-runner tool policy.
+Intake, work, and judge turns use the loop's existing owner/scope authorization,
+credentials, command policy, and security posture. They run without surface tools or
+addressed delivery. Intake reads candidates; work prepares outputs; the judge inspects
+the work and executes the declared checks. Final external actions belong in the
+approved ship stage. The review gate controls loop output shipping; it is not a
+read-only sandbox for arbitrary shell commands or API calls in earlier stages.
 
 A cron is enough when each fire is independent and nothing needs reviewing. Prefer the
 cron; a loop earns its complexity only when work items persist, must not be worked twice,
@@ -44,8 +47,10 @@ Free text, and it's the most load-bearing sentence in the loop. A good one has:
 > The Sentry issue has a linked PR whose tests pass and CI is green, the fix touches only
 > the implicated module, or park with a diagnosis after 5 turns.
 
-Add `successChecks` for anything a command can settle (`npm test`, `npm run lint`). Checks
-run before the judge and are authoritative — a failed check never reaches the model.
+Add `successChecks` for anything a command can settle (`npm test`, `npm run lint`). The
+judge runs each check and reports its command and result. A missing or failed reported
+check prevents completion even when the judge claims success. Check results are
+model-reported, not an independent deterministic execution attestation.
 
 ## Stage 2 — Shadow run (never skip)
 

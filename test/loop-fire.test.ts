@@ -121,18 +121,21 @@ test("a playbook that points at its own loop reaches the agent with the real id"
   assert.match(intake!.text!, new RegExp(`/v1/loops/${loop.id}/items`));
 });
 
-test("intake and judge are read-only while work is isolated from surface actions", async () => {
+test("loop stages retain execution authorization without surface actions", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops);
   await s.fire.fire(loop.id, "f1");
   const judge = s.turns.find((t) => stage(t) === "judge");
   const work = s.turns.find((t) => stage(t) === "work");
   const intake = s.turns.find((t) => stage(t) === "intake");
-  assert.equal(intake?.readOnly, true);
-  assert.equal(judge?.readOnly, true);
-  assert.notEqual(work?.readOnly, true);
-  assert.notEqual(work?.surfaceTools, true);
-  assert.notEqual(work?.addressed, true);
+  for (const turn of [intake, work, judge]) {
+    assert.ok(turn);
+    assert.notEqual(turn.readOnly, true);
+    assert.notEqual(turn.surfaceTools, true);
+    assert.notEqual(turn.addressed, true);
+  }
+  assert.match(intake!.text!, /Do not modify source records, create outputs, or execute ship actions/);
+  assert.match(judge!.text!, /Do not repair the work, modify source records, or execute ship actions/);
   assert.deepEqual(judge?.conversation, work?.conversation);
 });
 
