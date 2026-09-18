@@ -105,9 +105,8 @@ export function createTurnMethods(
         ) {
           return { status: "refused", reason: "you're not a member of that context" };
         }
-        const activeMemberIds = project.memberIds.filter((memberId) =>
-          deps.identity.isInternal(deps.identity.classify(memberId)),
-        );
+        const roster = (await deps.projects?.members(conversationRef)) ?? [];
+        const activeMemberIds = roster.filter((memberId) => deps.identity.isInternal(deps.identity.classify(memberId)));
         if (!activeMemberIds.includes(actor.id))
           return { status: "refused", reason: "you're not a member of that context" };
         projectAudience = await Promise.all(
