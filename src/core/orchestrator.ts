@@ -2718,7 +2718,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ): Promise<boolean> => {
           let documentsUnscreened = false;
           if (securityPolicy.inboundScreening === "external") {
-            for (const document of [...documentInputs.documents]) {
+            for (const document of documentInputs.documents.slice()) {
               documentsUnscreened ||= !isTextDocument(document);
               if (!(deps.securityScreener || deps.harness.models.screenSecurity)) {
                 documentsUnscreened = true;
