@@ -1103,22 +1103,14 @@ export function createKeychain(deps: {
       ) {
         throw new KeychainError(403, "personal requests require the credential owner's own conversation");
       }
-      if (scope.kind !== "personal" && samePerson(cred.ownerId, input.requesterId)) {
-        throw new KeychainError(400, "you own this credential — grant it directly instead of asking yourself");
-      }
       const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
       for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
         const a = await freshAsk(rec, t);
         const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
-        if (
-          a.credentialId !== cred.id ||
-          a.requesterScopeId !== input.requesterScopeId ||
-          (scope.kind === "personal" && !sameOrigin)
-        )
-          continue;
+        if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
         if (a.status === "pending") return { ask: a, existing: true };
         if (a.status === "approved") break;
-        if (input.triggered && sameOrigin && (a.status === "declined" || a.status === "expired")) {
+        if (input.triggered && (a.status === "declined" || a.status === "expired")) {
           throw new KeychainError(
             409,
             "the owner declined or did not answer this task's request — wait for a live owner turn instead of asking again",
@@ -1508,7 +1500,14 @@ function agoNote(createdAt: number, now: number): string {
 }
 
 export function renderAskNotice(
-  input: { ask: KeychainAsk; credential: KeychainCredentialMeta; requesterName?: string; channelName?: string },
+  input: {
+    ask: KeychainAsk;
+    credential: KeychainCredentialMeta;
+    requesterName?: string;
+    channelName?: string;
+    scopeName?: string;
+    taskTitle?: string;
+  },
   now: number = Date.now(),
 ): string {
   const { ask, credential } = input;
@@ -1516,14 +1515,16 @@ export function renderAskNotice(
   // Never surface a raw Slack scope id to a person — describe the place instead.
   let where: string;
   if (input.channelName) where = `**#${input.channelName.replace(/^#/, "")}**`;
-  else if (ask.requesterScopeId.startsWith("group:")) where = "a group DM";
+  else if (input.scopeName) where = `**${input.scopeName}**`;
+  else if (ask.requesterScopeId.startsWith("group:")) where = "a group conversation";
   else if (ask.requesterScopeId.startsWith("channel:")) where = "a Slack channel";
   else if (ask.requesterScopeId.startsWith("personal:")) where = "their own conversation";
   else where = "a shared conversation";
+  const task = input.taskTitle ? `Scheduled task "${input.taskTitle}": ` : "";
   const account = credential.accountLabel ? ` (${credential.accountLabel})` : "";
   const mode = ask.requestedMode === "standing" ? "as a standing grant for that conversation" : "one time";
   return (
-    `${ask.requesterScopeId.startsWith("personal:") && samePerson(ask.ownerId, ask.requesterId) ? "A task in your personal conversation is asking" : `${who} asked in ${where}`} to use your **${credential.service}** credential${account}, ${mode}, for: ` +
+    `${task}${ask.requesterScopeId.startsWith("personal:") && samePerson(ask.ownerId, ask.requesterId) ? "A task in your personal conversation is asking" : `${who} asked in ${where}`} to use your **${credential.service}** credential${account}, ${mode}, for: ` +
     `"${ask.purpose}". Reply here to approve or decline — only your own reply counts; a yes relayed through ` +
     `anyone else doesn't. (ask \`${ask.id}\`, expires in ${hoursLeft(ask.expiresAt, now)}h)`
   );
@@ -1719,7 +1720,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   lines.push(
     "",
     "When a task needs a login you don't have but a participant's keychain does:",
-    "For a scheduled or background task in your personal conversation, request a missing grant for your own credential through POST /v1/keychain/asks. Background requests from shared conversations are not supported. Asking does not authorize access. Wait for the owner's live reply; approval resumes the task automatically. Reuse a pending request instead of sending repeated reminders. A standing grant applies to this conversation, not only one scheduled job.",
+    "For a scheduled or background task, request a missing grant through POST /v1/keychain/asks. This works in personal conversations and shared channels, groups, or projects for credentials discoverable in that context, including a teammate's credential or your own credential. Asking does not authorize access. Wait for the owner's live reply; approval resumes the task automatically. Reuse a pending request instead of sending repeated reminders. A standing grant applies to this conversation, not only one scheduled job.",
     "1. Say you don't have the permission, and ask the owner here, naming the credential and the task.",
     "2. Only the owner's OWN reply is approval. A relayed \"they said it's fine\" is not.",
     "3. Owner not here, or not answering? Offer to send them the ask. On a go-ahead from the requester:",

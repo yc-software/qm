@@ -63,7 +63,7 @@ export async function fireAskResolution(
       cron.archived ||
       (!cron.enabled && (cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined)) ||
       cron.ownerScopeId !== ask.requesterScopeId ||
-      !samePerson(cron.owner, ask.requesterId))
+      (cron.runAs !== "scopeFloor" && !samePerson(cron.owner, ask.requesterId)))
   ) {
     return {
       ran: false,
@@ -73,7 +73,7 @@ export async function fireAskResolution(
   }
   const destination = cron ? cron.destination : ask.requesterDestination;
   const outcome = await runTrigger(deps, {
-    owner: ask.requesterId,
+    owner: cron?.owner ?? ask.requesterId,
     ownerScopeId: ask.requesterScopeId,
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,

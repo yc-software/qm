@@ -14,6 +14,7 @@ import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { swallow, swallowAs } from "../../util/errors.ts";
+import { cronIdOf } from "../../sessions/session-store.ts";
 import { keychainUseCommand } from "../contract.ts";
 
 const CONSENT_ON_TRIGGERED_TURN =
@@ -309,47 +310,26 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         });
       }
       const scope = parseScopeId(capability.scopeId);
-      if (capability.triggered && scope.kind !== "personal") {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "background credential requests require the owner's personal conversation",
-        });
-      }
-      if (scope.kind !== "channel" && scope.kind !== "personal") {
-        return sendJson(res, 403, {
-          error: "forbidden",
-          message: "asks require a channel or your own personal conversation",
-        });
+      if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
+        return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
       }
       const cred = await kc.getCredential(b.credential);
       if (!cred) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
-      let channelName: string | undefined;
-      if (scope.kind === "personal") {
-        if (!samePerson(scope.ref, actorId) || !samePerson(cred.ownerId, actorId)) {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message: "personal requests can only ask for your own credential in your own conversation",
-          });
-        }
-      } else {
-        const ch = await app.resolveChannel(scope.ref);
-        if (ch.kind !== "one") {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message: "this channel isn't in the directory yet — try again in a minute",
-          });
-        }
-        const ownerIsMember = ch.channel.isPrivate
-          ? await app.channelMember(ch.channel.channelId, cred.ownerId)
-          : (await app.directoryMember(cred.ownerId))?.type === "internal";
-        if (!ownerIsMember) {
-          return sendJson(res, 403, {
-            error: "forbidden",
-            message: "the credential's owner isn't a verified member of this conversation",
-          });
-        }
-        channelName = ch.channel.name;
+      const requester = await app.directoryMember(actorId);
+      if (
+        !(await app.belongsToScope(actorId, capability.scopeId)) ||
+        !(await app.belongsToScope(cred.ownerId, capability.scopeId)) ||
+        (scope.kind !== "personal" &&
+          (requester?.type !== "internal" || (await app.directoryMember(cred.ownerId))?.type !== "internal"))
+      ) {
+        return sendJson(res, 403, {
+          error: "forbidden",
+          message: "the requester and credential owner must have current access to this conversation",
+        });
       }
+      const context = (await app.listContexts(cred.ownerId)).find((c) => c.scopeId === capability.scopeId);
+      const cronId = cronIdOf(capability.threadRef);
+      const cron = cronId ? await app.getCron(cronId) : null;
       const dest = resolveCapabilityDestination(capability, undefined);
       const { ask, existing } = await kc.createAsk({
         ...(capability.triggered ? { triggered: true } : {}),
@@ -362,12 +342,13 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
         ...(b.requestedMode !== undefined ? { requestedMode: b.requestedMode as GrantMode } : {}),
         ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
       });
-      const requester = await app.directoryMember(actorId);
       const notice = renderAskNotice({
         ask,
         credential: cred,
         ...(requester?.displayName ? { requesterName: requester.displayName } : {}),
-        ...(channelName ? { channelName } : {}),
+        ...(scope.kind === "channel" && context?.name ? { channelName: context.name } : {}),
+        ...(scope.kind === "group" && context?.name ? { scopeName: context.name } : {}),
+        ...(cron?.ownerScopeId === capability.scopeId ? { taskTitle: cron.title ?? cron.id } : {}),
       });
       await deps.deliveries?.enqueue({
         destination: principalDestination(cred.ownerId, actorId),
