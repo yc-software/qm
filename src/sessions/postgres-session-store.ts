@@ -1245,20 +1245,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
-        `WITH viewer AS MATERIALIZED (
-           SELECT session_id, valid_from_seq, valid_from, valid_to_seq, valid_to, title, archived
-             FROM participants WHERE principal_id = $1
-         ), candidates AS MATERIALIZED (
-           SELECT session_id, seq, type, author, text, created_at
-             FROM session_entry_search
-            WHERE session_id = ANY(ARRAY(SELECT session_id FROM viewer))
-              AND search_tsv @@ to_tsquery('simple', $2)
-         )
-         SELECT h.*, s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
-           FROM candidates h
-           JOIN viewer p ON p.session_id = h.session_id
+        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at,
+                s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
+           FROM session_entry_search h
+           JOIN participants p ON p.session_id = h.session_id AND p.principal_id = $1
            JOIN sessions s ON s.id = h.session_id
-          WHERE ${withinParticipantWindow("h", "p")}
+          WHERE h.search_tsv @@ to_tsquery('simple', $2)
+            AND ${withinParticipantWindow("h", "p")}
           ORDER BY h.created_at DESC, h.session_id, h.seq DESC
           LIMIT $3`,
         [principalId, ts, Math.max(1, Math.min(limit, 200))],

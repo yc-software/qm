@@ -1914,6 +1914,43 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   assert.deepEqual(await s.searchEntries("USRCH", "memo missing"), [], "every term must match");
 });
 
+test("pg search: participation windows filter global matches before the result limit", { skip }, async () => {
+  let at = Date.now();
+  const s = createPostgresSessionStore(URL!, { now: () => at });
+  const scope = scopeId("personal", "SEARCH-WINDOW");
+  const session = await s.getOrCreateByThread("search-window-limit", "dm", scope);
+  const lease = (await s.acquireLease(session.id)).lease!;
+  const append = async (text: string) => {
+    at += 1;
+    return s.append(lease, { type: "user", payload: { text }, scopeLabel: scope });
+  };
+  await append("limitwindow before joining");
+  await s.addParticipant(session.id, "SEARCH-WINDOW");
+  const visible = await append("limitwindow visible");
+  await s.removeParticipant(session.id, "SEARCH-WINDOW");
+  await append("limitwindow after leaving");
+  await s.releaseLease(lease);
+
+  const hidden = await s.getOrCreateByThread("search-hidden-limit", "dm", scope);
+  const hiddenLease = (await s.acquireLease(hidden.id)).lease!;
+  at += 1;
+  await s.append(hiddenLease, {
+    type: "user",
+    payload: { text: "limitwindow inaccessible session" },
+    scopeLabel: scope,
+  });
+  await s.releaseLease(hiddenLease);
+
+  for (const limit of [1, 200]) {
+    const hits = await s.searchEntries("SEARCH-WINDOW", "limitwindow", limit);
+    assert.deepEqual(
+      hits.map((hit) => [hit.sessionId, hit.seq]),
+      [[session.id, visible.seq]],
+    );
+  }
+  assert.deepEqual(await s.searchEntries("SEARCH-OUTSIDER", "limitwindow", 1), []);
+});
+
 test("pg search: message writes populate the index and tool results stay unfindable", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "UIDX");
