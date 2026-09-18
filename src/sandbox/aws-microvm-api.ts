@@ -1,8 +1,8 @@
 import { SignatureV4 } from "@smithy/signature-v4";
 import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
-import { sleep } from "../util/async.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { fetchWithRetry, sleep } from "../util/async.ts";
+import { errMessage, swallow, withRequestId } from "../util/errors.ts";
 
 type CredentialProvider = () => Promise<{
   accessKeyId: string;
@@ -111,11 +111,15 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
       body: payload,
       query: {},
     });
-    const res = await doFetch(`https://${host}${path}`, {
-      method,
-      headers: signed.headers as Record<string, string>,
-      ...(payload ? { body: payload } : {}),
-    });
+    const res = await fetchWithRetry(
+      () =>
+        doFetch(`https://${host}${path}`, {
+          method,
+          headers: signed.headers as Record<string, string>,
+          ...(payload ? { body: payload } : {}),
+        }),
+      method === "POST" ? "refused" : "idempotent",
+    );
     const text = await res.text();
     let json: unknown = undefined;
     if (text.trim()) {
@@ -128,7 +132,11 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
     if (res.status < 200 || res.status >= 300) {
       const msg = (json as { message?: string } | undefined)?.message ?? text ?? `HTTP ${res.status}`;
       const awsCode = res.headers.get("x-amzn-errortype") ?? undefined;
-      throw new AwsApiError(`lambda-microvms ${method} ${path} -> ${res.status}: ${msg}`, res.status, awsCode);
+      throw new AwsApiError(
+        withRequestId(`lambda-microvms ${method} ${path} -> ${res.status}: ${msg}`, res.headers),
+        res.status,
+        awsCode,
+      );
     }
     return { status: res.status, json: (json ?? {}) as T };
   }

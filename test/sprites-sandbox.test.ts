@@ -518,3 +518,27 @@ test("every sprites fetch rides one HTTP/1.1 dispatcher, so a bad request fails 
   assert.ok(optionsKey, "undici Agent must expose its options");
   assert.equal(dispatcher[optionsKey]?.allowH2, false);
 });
+
+test("control-plane reads retry 429 with Retry-After while exec is never retried", async () => {
+  const h = await sandbox.provision(layers);
+  fake.failNext(429, { headers: { "retry-after": "0" }, match: (c) => c.path.endsWith("/check") });
+  assert.deepEqual(await sandbox.computerStatus!(scope), {
+    machine: "healthy",
+    listed: "warm",
+    provisioned: true,
+    guestResponsive: true,
+  });
+  assert.equal(fake.calls.filter((c) => c.path.endsWith("/check")).length, 2);
+
+  const before = fake.calls.filter((c) => c.path.endsWith("/exec")).length;
+  fake.failNext(502, { headers: { "fly-request-id": "fly-9" }, match: (c) => c.path.endsWith("/exec") });
+  await assert.rejects(sandbox.run(h, "echo hi"), /sprites exec .*: http 502 .*\[request id fly-9\]/);
+  assert.equal(fake.calls.filter((c) => c.path.endsWith("/exec")).length, before + 1);
+
+  for (let i = 1; i <= 4; i++)
+    fake.failNext(503, {
+      headers: { "retry-after": "0", "x-request-id": `req-${i}` },
+      match: (c) => c.method === "DELETE",
+    });
+  await assert.rejects(sandbox.destroyScope!(scope), /sprites delete .*: http 503 .*\[request id req-4\]/);
+});

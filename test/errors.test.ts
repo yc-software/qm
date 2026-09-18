@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { asError, errMessage } from "../src/util/errors.ts";
+import { asError, errMessage, httpFailure, withRequestId } from "../src/util/errors.ts";
 import { errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
 import { runInNewContext } from "node:vm";
 
@@ -78,4 +78,16 @@ test("asError preserves cross-realm messages without invoking custom stringifier
     asError({ toString: () => assert.fail("object stringification must not run") }).message,
     "Unknown error",
   );
+});
+
+test("httpFailure names the status, a clipped body, and the provider request id", async () => {
+  const res = new Response("x".repeat(300), { status: 502, headers: { "x-request-id": "req-7" } });
+  const text = await httpFailure(res);
+  assert.match(text, /^http 502 x{200} \[request id req-7\]$/);
+  assert.equal(await httpFailure(new Response("plain", { status: 429 })), "http 429 plain");
+  assert.equal(
+    withRequestId("lambda -> 429: throttled", new Headers({ "x-amzn-requestid": "aws-1" })),
+    "lambda -> 429: throttled [request id aws-1]",
+  );
+  assert.equal(withRequestId("fine", new Headers()), "fine");
 });

@@ -20,6 +20,11 @@ interface FakeInstance {
   home: string;
 }
 
+export interface InjectedFailure {
+  headers?: Record<string, string>;
+  match?: (call: { method: string; path: string }) => boolean;
+}
+
 export interface FakeInstanceView {
   status: string;
   template?: string;
@@ -35,6 +40,7 @@ export interface FakeAgent37 {
   sleep(name: string, opts?: { freezing?: number }): void;
   stop(name: string): void;
   fail(name: string): void;
+  failNext(status: number, opts?: InjectedFailure): void;
   execScripts(): string[];
   cleanup(): void;
 }
@@ -48,6 +54,7 @@ export function installFakeAgent37(): FakeAgent37 {
   const execScripts: string[] = [];
   const calls: Agent37Call[] = [];
   let nextId = 1;
+  const injected: Array<InjectedFailure & { status: number }> = [];
 
   const live = (): FakeInstance[] => [...instances.values()].filter((i) => i.status !== "deleted").reverse();
   const byName = (name: string): FakeInstance | undefined => live().find((i) => i.name === name);
@@ -131,6 +138,11 @@ export function installFakeAgent37(): FakeAgent37 {
     const url = new URL(typeof input === "string" ? input : input.toString());
     const method = init?.method ?? "GET";
     calls.push({ method, path: url.pathname });
+    const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
+    if (at >= 0) {
+      const [next] = injected.splice(at, 1);
+      return new Response(`injected ${next!.status}`, { status: next!.status, headers: next!.headers ?? {} });
+    }
     if (url.pathname === "/v1/instances" && method === "GET") {
       return Response.json({ data: live().map(info) });
     }
@@ -221,6 +233,9 @@ export function installFakeAgent37(): FakeAgent37 {
     fail: (name) => {
       const m = byName(name);
       if (m) m.status = "failed";
+    },
+    failNext: (status, opts = {}) => {
+      injected.push({ status, ...opts });
     },
     execScripts: () => [...execScripts],
     cleanup: () => rmSync(root, { recursive: true, force: true }),

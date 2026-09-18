@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ScopeId } from "../types.ts";
 import type { SecurityScreenVerdict } from "./security-posture.ts";
 import { swallow } from "../util/errors.ts";
+import { retryAfterMs } from "../util/async.ts";
 
 export type SecurityScreenHook = "user_input" | "tool_response";
 
@@ -193,14 +194,6 @@ function classification(body: string, provider: string): SecurityScreenClassific
   };
 }
 
-function retryDelayMs(response: Response, fallback: number): number {
-  const retryAfterHeader = response.headers.get("retry-after");
-  const retryAfter =
-    retryAfterHeader === null || retryAfterHeader.trim() === "" ? Number.NaN : Number(retryAfterHeader);
-  if (Number.isFinite(retryAfter) && retryAfter >= 0) return Math.min(retryAfter * 1_000, 30_000);
-  return fallback;
-}
-
 export function createSecurityScreenProxy(opts: {
   provider: string;
   endpoint: string;
@@ -255,7 +248,7 @@ export function createSecurityScreenProxy(opts: {
                 signal: chunkSignal,
               });
               if (response.status === 429 && attempt < SECURITY_SCREEN_RETRY_MS.length) {
-                const waitMs = retryDelayMs(response, SECURITY_SCREEN_RETRY_MS[attempt]!);
+                const waitMs = retryAfterMs(response.headers) ?? SECURITY_SCREEN_RETRY_MS[attempt]!;
                 await cancelResponseBody(response);
                 await delay(waitMs, undefined, { signal: chunkSignal });
                 continue;

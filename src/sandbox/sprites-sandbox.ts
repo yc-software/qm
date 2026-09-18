@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { Agent, fetch as undiciFetch } from "undici";
 import { SpritesClient } from "@fly/sprites";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { sleep } from "../util/async.ts";
-import { swallow, swallowAs, errMessage } from "../util/errors.ts";
+import { fetchWithRetry, sleep } from "../util/async.ts";
+import { httpFailure, swallow, swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import {
@@ -104,7 +104,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       ...(body ? { body: Buffer.from(body) } : {}),
       signal: AbortSignal.timeout(timeoutSec * 1000 + EXIT_GRACE_MS),
     } as RequestInit);
-    if (!res.ok) throw new Error(`sprites exec ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) throw new Error(`sprites exec ${name}: ${await httpFailure(res)}`);
     const raw = Buffer.from(await res.arrayBuffer());
     let rc = 0;
     const out: Buffer[] = [];
@@ -214,15 +214,21 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     if (egressPolicyByName.get(name) === want) return;
     const url = `${baseUrl}/v1/sprites/${encodeURIComponent(name)}/policy/network`;
     const headers = { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/json" };
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ rules }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!res.ok)
-      throw new Error(`sprites egress policy ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
-    const check = await fetchImpl(url, { headers, signal: AbortSignal.timeout(30_000) });
+    const res = await fetchWithRetry(
+      () =>
+        fetchImpl(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ rules }),
+          signal: AbortSignal.timeout(30_000),
+        }),
+      "idempotent",
+    );
+    if (!res.ok) throw new Error(`sprites egress policy ${name}: ${await httpFailure(res)}`);
+    const check = await fetchWithRetry(
+      () => fetchImpl(url, { headers, signal: AbortSignal.timeout(30_000) }),
+      "idempotent",
+    );
     const got = (await check.json().catch(() => null)) as {
       rules?: Array<{ domain?: string; action?: string }>;
     } | null;
@@ -398,13 +404,16 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     async destroyScope(scopeId: string): Promise<void> {
       return base.provisionQueue(scopeId, async () => {
         const name = sandboxScopeName(prefix, scopeId);
-        const res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}`, {
-          method: "DELETE",
-          headers: { authorization: `Bearer ${opts.token ?? ""}` },
-          signal: AbortSignal.timeout(RESTART_TIMEOUT_MS),
-        });
-        if (!res.ok && res.status !== 404)
-          throw new Error(`sprites delete ${name}: http ${res.status} ${(await res.text()).slice(0, 200)}`);
+        const res = await fetchWithRetry(
+          () =>
+            fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}`, {
+              method: "DELETE",
+              headers: { authorization: `Bearer ${opts.token ?? ""}` },
+              signal: AbortSignal.timeout(RESTART_TIMEOUT_MS),
+            }),
+          "idempotent",
+        );
+        if (!res.ok && res.status !== 404) throw new Error(`sprites delete ${name}: ${await httpFailure(res)}`);
         ensured.delete(name);
         pressureEpisodes.delete(name);
         egressPolicyByName.delete(name);
@@ -414,11 +423,15 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     async computerStatus(scopeId: string) {
       const name = sandboxScopeName(prefix, scopeId);
       const spriteJson = async (path: string): Promise<{ status?: string } | null> => {
-        const res = await fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}${path}`, {
-          headers: { authorization: `Bearer ${opts.token ?? ""}` },
-          signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
-        });
-        if (!res.ok) throw new Error(`http ${res.status}`);
+        const res = await fetchWithRetry(
+          () =>
+            fetchImpl(`${baseUrl}/v1/sprites/${encodeURIComponent(name)}${path}`, {
+              headers: { authorization: `Bearer ${opts.token ?? ""}` },
+              signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+            }),
+          "idempotent",
+        );
+        if (!res.ok) throw new Error(await httpFailure(res));
         return (await res.json().catch(() => null)) as { status?: string } | null;
       };
       const [machineOut, listedOut] = await Promise.allSettled([spriteJson("/check"), spriteJson("")]);
@@ -458,14 +471,14 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           });
         const plain = await restart(false);
         if (plain.ok) return;
-        const plainDetail = `http ${plain.status} ${(await plain.text()).slice(0, 200)}`;
+        const plainDetail = await httpFailure(plain);
         if (plain.status !== 409 && plain.status !== 502) throw new Error(`sprites restart ${name}: ${plainDetail}`);
         let forcedDetail = "";
         for (let attempt = 0; attempt < FORCED_RESTART_ATTEMPTS; attempt++) {
           if (attempt > 0) await sleep(FORCED_RESTART_RETRY_MS);
           const forced = await restart(true);
           if (forced.ok) return;
-          forcedDetail = `http ${forced.status} ${(await forced.text()).slice(0, 200)}`;
+          forcedDetail = await httpFailure(forced);
           if (forced.status !== 409 && forced.status !== 502) break;
         }
         throw new Error(`sprites restart ${name}: ${plainDetail}; forced retry: ${forcedDetail}`);

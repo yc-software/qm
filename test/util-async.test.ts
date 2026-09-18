@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sleep, createKeyedQueue } from "../src/util/async.ts";
+import { sleep, createKeyedQueue, fetchWithRetry, jitteredBackoffMs, retryAfterMs } from "../src/util/async.ts";
 
 test("sleep resolves after roughly the given delay", async () => {
   const t0 = Date.now();
@@ -134,4 +134,120 @@ test("withAbort skips an already cancelled operation and preserves the reason", 
   );
   assert.equal(called, false);
   assert.equal(await withAbort(async () => 42), 42);
+});
+
+test("retryAfterMs reads seconds or an HTTP date and caps the wait", () => {
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "2" })), 2_000);
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "0" })), 0);
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "900" })), 30_000);
+  const now = Date.parse("2026-09-18T12:00:00Z");
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "Fri, 18 Sep 2026 12:00:05 GMT" }), now), 5_000);
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "Fri, 18 Sep 2026 11:00:00 GMT" }), now), 0);
+  assert.equal(retryAfterMs(new Headers({ "retry-after": "soon" })), undefined);
+  assert.equal(retryAfterMs(new Headers()), undefined);
+});
+
+test("jitteredBackoffMs grows exponentially, jitters within half its ceiling, and stays bounded", () => {
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    const ceiling = Math.min(8_000, 500 * 2 ** (attempt - 1));
+    for (let i = 0; i < 20; i++) {
+      const d = jitteredBackoffMs(attempt);
+      assert.ok(d >= ceiling / 2 && d <= ceiling, `attempt ${attempt}: ${d} within [${ceiling / 2}, ${ceiling}]`);
+    }
+  }
+  assert.ok(jitteredBackoffMs(3, { baseDelayMs: 10, maxDelayMs: 25 }) <= 25);
+});
+
+const fast = { baseDelayMs: 1, maxDelayMs: 2 };
+const reply = (status: number, headers: Record<string, string> = {}) =>
+  new Response(`status ${status}`, { status, headers });
+
+test("fetchWithRetry retries 429 and 5xx on idempotent requests, honoring Retry-After", async () => {
+  const statuses = [429, 503, 502, 200];
+  let calls = 0;
+  const t0 = Date.now();
+  const res = await fetchWithRetry(
+    async () => reply(statuses[calls++]!, calls === 1 ? { "retry-after": "0" } : {}),
+    "idempotent",
+    fast,
+  );
+  assert.equal(res.status, 200);
+  assert.equal(calls, 4);
+  assert.ok(Date.now() - t0 < 1_000);
+});
+
+test("fetchWithRetry returns the last transient response once attempts are exhausted", async () => {
+  let calls = 0;
+  const res = await fetchWithRetry(
+    async () => {
+      calls++;
+      return reply(429, { "retry-after": "0", "x-request-id": `req-${calls}` });
+    },
+    "idempotent",
+    { ...fast, attempts: 3 },
+  );
+  assert.equal(res.status, 429);
+  assert.equal(res.headers.get("x-request-id"), "req-3");
+  assert.equal(calls, 3);
+});
+
+test("fetchWithRetry never retries client errors or successes", async () => {
+  for (const status of [200, 400, 404, 409, 422]) {
+    let calls = 0;
+    const res = await fetchWithRetry(
+      async () => {
+        calls++;
+        return reply(status);
+      },
+      "idempotent",
+      fast,
+    );
+    assert.equal(res.status, status);
+    assert.equal(calls, 1, `status ${status} is returned to the caller untouched`);
+  }
+});
+
+test("fetchWithRetry retries connection failures only for idempotent requests, never aborts", async () => {
+  let calls = 0;
+  const flaky = async () => {
+    calls++;
+    if (calls === 1) throw new TypeError("fetch failed");
+    return reply(200);
+  };
+  assert.equal((await fetchWithRetry(flaky, "idempotent", fast)).status, 200);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  await assert.rejects(fetchWithRetry(flaky, "refused", fast), /fetch failed/);
+  assert.equal(calls, 1);
+
+  calls = 0;
+  const aborted = async () => {
+    calls++;
+    throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  };
+  await assert.rejects(fetchWithRetry(aborted, "idempotent", fast), { name: "TimeoutError" });
+  assert.equal(calls, 1);
+});
+
+test("fetchWithRetry treats a refused request as retryable only when the server did not process it", async () => {
+  for (const [status, expectedCalls] of [
+    [429, 2],
+    [503, 2],
+    [500, 1],
+    [502, 1],
+    [504, 1],
+  ] as const) {
+    let calls = 0;
+    const res = await fetchWithRetry(
+      async () => {
+        calls++;
+        return reply(calls === 1 ? status : 201, { "retry-after": "0" });
+      },
+      "refused",
+      fast,
+    );
+    assert.equal(calls, expectedCalls, `status ${status}`);
+    assert.equal(res.status, expectedCalls === 2 ? 201 : status);
+  }
 });
