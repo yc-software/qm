@@ -59,7 +59,7 @@ export interface PersistedEgressPolicy {
   scopeId: ScopeId;
   policy: EgressPolicy;
 }
-export type ModelAccount = "company" | "personal" | "anthropic" | "openai";
+type ModelAccount = "company" | "personal" | "anthropic" | "openai";
 
 export interface PersistedModelAccount extends PersistedScopedFlag {
   provider?: "anthropic" | "openai";
