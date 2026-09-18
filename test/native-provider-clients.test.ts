@@ -6,6 +6,16 @@ import { createSdkE2bClient } from "../src/sandbox/e2b-client.ts";
 const modalCalls: unknown[][] = [];
 const modalSandbox = {
   sandboxId: "sb-native",
+  async exec(cmd: string[], options: { timeoutMs: number }) {
+    modalCalls.push(["exec", cmd, options]);
+    if (options.timeoutMs % 1000 !== 0)
+      throw new Error(`timeoutMs must be a multiple of 1000ms, got ${options.timeoutMs}`);
+    return {
+      stdout: { readText: async () => "ok" },
+      stderr: { readText: async () => "" },
+      wait: async () => 0,
+    };
+  },
   async snapshotDirectory(path: string, options: unknown) {
     modalCalls.push(["snapshot", path, options]);
     return { imageId: "im-native" };
@@ -64,6 +74,26 @@ test("Modal native directory snapshot uses explicit finite retention and restore
   await session.restoreHome!(snapshot.imageId);
   assert.deepEqual(modalCalls[1], ["mount", "/root", { imageId: "im-native" }]);
   assert.equal(client.lifetimeMs, 24 * 3600_000);
+});
+
+test("Modal exec timeouts are rounded up to whole seconds", async () => {
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    appName: "test",
+    image: "ubuntu",
+  });
+  const session = await client.create({ name: "test" });
+  modalCalls.length = 0;
+  // Arbitrary remaining-deadline values (e.g. snapshot clocks) are not whole seconds;
+  // the SDK rejects timeouts that are not multiples of 1000ms.
+  const r = await session.runCommand("echo hi", { timeoutMs: 144_216 });
+  assert.equal(r.exitCode, 0);
+  const exec = modalCalls.find((c) => c[0] === "exec")!;
+  const { timeoutMs } = exec[2] as { timeoutMs: number };
+  assert.equal(timeoutMs % 1000, 0);
+  assert.ok(timeoutMs >= 144_216 + 30_000);
+  assert.ok(timeoutMs < 144_216 + 31_000);
 });
 
 test("Modal rejects invalid checkpoint retention", () => {
