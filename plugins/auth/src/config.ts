@@ -135,8 +135,7 @@ export function validEmail(value: string): boolean {
 }
 
 export function emailConfigured(cfg: AuthConfig): boolean {
-  const credentials =
-    cfg.transport === "resend" ? [cfg.resendApiKey] : [cfg.smtp.host, cfg.smtp.username, cfg.smtp.password];
+  const credentials = cfg.transport === "resend" ? [cfg.resendApiKey] : [cfg.smtp.host];
   return [cfg.emailFrom, ...credentials].every((value) => Boolean(value.trim()));
 }
 
@@ -204,10 +203,13 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
     } else {
       if (isMissingOrPlaceholder(cfg.smtp.host))
         problems.push("SMTP_HOST is required when AUTH_EMAIL_TRANSPORT is smtp");
-      if (isMissingOrPlaceholder(cfg.smtp.username))
-        problems.push("SMTP_USERNAME is required when AUTH_EMAIL_TRANSPORT is smtp");
-      if (isMissingOrPlaceholder(cfg.smtp.password))
-        problems.push("SMTP_PASSWORD is required when AUTH_EMAIL_TRANSPORT is smtp");
+      if (
+        (cfg.smtp.username || cfg.smtp.password) &&
+        (isMissingOrPlaceholder(cfg.smtp.username) || isMissingOrPlaceholder(cfg.smtp.password))
+      )
+        problems.push(
+          "SMTP_USERNAME and SMTP_PASSWORD must be set together, or both left unset for a relay that authorizes by source IP",
+        );
       if (!Number.isInteger(cfg.smtp.port) || cfg.smtp.port < 1 || cfg.smtp.port > 65535)
         problems.push("SMTP_PORT must be a TCP port number");
       if (isProd && cfg.smtp.tls === "none")

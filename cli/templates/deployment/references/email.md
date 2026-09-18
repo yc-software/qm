@@ -52,7 +52,10 @@ the domain is verified — check the Domains page.
 ## SMTP
 
 Any relay works: Postmark, Amazon SES, SendGrid, Fastmail, Google Workspace, or
-the operator's own mail server. Collect the host, username, and password.
+the operator's own mail server. Collect the host, username, and password. A
+relay that authorizes by source IP (a corporate smarthost, Google Workspace's
+relay with an IP allowlist) takes no credentials: leave both `SMTP_USERNAME` and
+`SMTP_PASSWORD` unset. Setting only one of them is refused.
 
 `qm setup` collects `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`. Two
 optional settings live in `env.auth`:

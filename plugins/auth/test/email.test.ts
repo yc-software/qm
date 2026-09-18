@@ -20,11 +20,13 @@ test("no mailer is created with missing or incomplete email configuration", () =
       SMTP_USERNAME: "u",
       SMTP_PASSWORD: "p",
     };
-    const credentials = transport === "resend" ? ["RESEND_API_KEY"] : ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"];
+    const credentials = transport === "resend" ? ["RESEND_API_KEY"] : ["SMTP_HOST"];
     for (const name of ["AUTH_EMAIL_FROM", ...credentials]) {
       assert.equal(mailerFor(readConfig(testEnv({ ...complete, [name]: undefined }))), null, `${transport}: ${name}`);
     }
   }
+  const ipRelay = { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_HOST: "smtp.example.com" };
+  assert.ok(mailerFor(readConfig(testEnv(ipRelay))), "an IP-authenticated relay needs no credentials");
 });
 
 test("the sign-in email carries the link once in both alternatives and never a bare secret", () => {

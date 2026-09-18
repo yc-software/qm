@@ -89,8 +89,11 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
     "production, and a relay that does not offer STARTTLS is refused rather",
     "than sent your credentials in cleartext.",
   ],
-  SMTP_USERNAME: ["The SMTP username for that relay (for SES, the SMTP credential, not an AWS access key)."],
-  SMTP_PASSWORD: ["The SMTP password for that relay."],
+  SMTP_USERNAME: [
+    "The SMTP username for that relay (for SES, the SMTP credential, not an AWS access key).",
+    "Skip it and SMTP_PASSWORD for a relay that authorizes by source IP; set both or neither.",
+  ],
+  SMTP_PASSWORD: ["The SMTP password for that relay; skip it with SMTP_USERNAME for an IP-authorized relay."],
   OIDC_CLIENT_ID: [
     'Only for an external identity provider (drop "auth" from services to use one).',
     "Create a Web OAuth/OIDC client in your chosen provider and register",
