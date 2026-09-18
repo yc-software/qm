@@ -3899,9 +3899,13 @@ qm-markdown .tok-in {
 .loadout-add.open,
 .loadout-setting:not([role="menuitemcheckbox"]):not(.loadout-setting-static):hover,
 .loadout-setting.open,
-.loadout-effort:hover,
+.loadout-effort:not([aria-disabled="true"]):hover,
 .loadout-back:hover {
   background: var(--secondary);
+}
+.loadout-effort[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .loadout-setting[role="menuitemcheckbox"]:disabled {
   opacity: 1;

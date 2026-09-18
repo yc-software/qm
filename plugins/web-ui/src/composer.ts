@@ -51,6 +51,7 @@ import {
   defaultModelValue,
   effortLabel,
   getModelOptions,
+  getHarnessOptions,
   harnessSupportsEffort,
   harnessSupportsFastMode,
   harnessSupportsSteer,
@@ -1313,24 +1314,31 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
       }
       ${
         loadoutSection === "harness"
-          ? compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id).map(
-              (option) =>
-                html`<button
-                  class="loadout-effort"
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked=${option.harnessId === selected.harnessId ? "true" : "false"}
-                  @click=${() => {
-                    closeLoadoutSection();
-                    selectHarness(option.harnessId, agent);
-                  }}
+          ? getHarnessOptions(scopeKey()).map((harness) => {
+              const compatible = compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id).some(
+                (option) => option.harnessId === harness.value,
+              );
+              const reason = compatible ? "" : `${harness.label} cannot run ${selected.label}.`;
+              return html`<button
+                class="loadout-effort"
+                type="button"
+                role="menuitemradio"
+                aria-checked=${harness.value === selected.harnessId ? "true" : "false"}
+                aria-disabled=${compatible ? "false" : "true"}
+                aria-description=${reason || nothing}
+                ${tip(reason)}
+                @click=${() => {
+                  if (!compatible) return;
+                  closeLoadoutSection();
+                  selectHarness(harness.value, agent);
+                }}
+              >
+                <span class="loadout-harness-option"
+                  >${modelMark(harness.value, 15) ?? nothing}<span>${harness.label}</span></span
                 >
-                  <span class="loadout-harness-option"
-                    >${modelMark(option.harnessId, 15) ?? nothing}<span>${option.harnessLabel}</span></span
-                  >
-                  ${option.harnessId === selected.harnessId ? icon(Check, 15) : nothing}
-                </button>`,
-            )
+                ${harness.value === selected.harnessId ? icon(Check, 15) : nothing}
+              </button>`;
+            })
           : nothing
       }
       ${
@@ -1369,7 +1377,7 @@ export function createComposerSurface(ctx: ConvCtx): ComposerSurface {
   }
 
   function loadoutHarnessControl(selected: ModelOption): TemplateResult {
-    const options = compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id);
+    const options = getHarnessOptions(scopeKey());
     const value = html`<span class="loadout-harness-option"
       >${modelMark(selected.harnessId, 15) ?? nothing}<span>${selected.harnessLabel}</span></span
     >`;

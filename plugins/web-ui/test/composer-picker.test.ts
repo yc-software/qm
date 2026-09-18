@@ -254,8 +254,19 @@ test("the model picker remembers compatible harnesses without duplicating or cha
     const choices = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')];
     assert.deepEqual(
       choices.map((choice) => choice.textContent?.trim()),
-      ["Pi", "Claude Code", "OpenCode"],
+      ["Pi", "Claude Code", "OpenCode", "Codex"],
     );
+    assert.equal(choices[3]!.getAttribute("aria-disabled"), "true");
+    assert.equal(choices[3]!.getAttribute("aria-description"), "Codex cannot run Alpha.");
+    choices[3]!.dispatchEvent(new MouseEvent("mouseenter"));
+    assert.equal(document.querySelector(".qm-tooltip.visible")?.textContent, "Codex cannot run Alpha.");
+    const beforeDisabledClick = saved();
+    const beforeDisabledUpdates = updates.length;
+    choices[3]!.click();
+    assert.equal(composer!.currentModelOption()?.value, "claude:alpha");
+    assert.deepEqual(saved(), beforeDisabledClick);
+    assert.equal(updates.length, beforeDisabledUpdates);
+    assert.ok(host.querySelector(".loadout-submenu"));
     assert.equal(choices[1]!.getAttribute("aria-checked"), "true");
     assert.equal(document.activeElement, choices[1]);
     choices[0]!.click();
@@ -281,9 +292,19 @@ test("the model picker remembers compatible harnesses without duplicating or cha
 
     pick("Beta").click();
     assert.equal(composer!.currentModelOption()?.value, "codex:beta");
-    assert.equal(host.querySelector('[data-loadout-section="harness"]'), null);
-    assert.match(host.querySelector(".loadout-setting-static")?.textContent ?? "", /Run with\s*Codex/);
-    assert.equal(host.querySelector(".loadout-setting-static button"), null);
+    button('[data-loadout-section="harness"]').click();
+    await tick();
+    const betaChoices = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')];
+    assert.deepEqual(
+      betaChoices.map((choice) => choice.getAttribute("aria-disabled")),
+      ["true", "true", "true", "false"],
+    );
+    const claude = betaChoices[1]!;
+    claude.focus();
+    assert.equal(document.querySelector(".qm-tooltip.visible")?.textContent, "Claude Code cannot run Beta.");
+    claude.click();
+    assert.equal(composer!.currentModelOption()?.value, "codex:beta");
+    button(".loadout-back").click();
     pick("Alpha").click();
     assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
     assert.equal(composer!.state.effortLevel, "high");
