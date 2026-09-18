@@ -187,3 +187,13 @@ test("pi-ai characterization: a stale usage anchor clamps max_tokens to 1 even f
   const clamped = clampMaxTokensToContext({ contextWindow: 200_000 } as never, context as never, 64_000);
   assert.equal(clamped, 1, "upstream floors the cap at 1 instead of failing or compacting");
 });
+
+for (const capKey of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) {
+  test(`output guard handles small and exhausted budgets via ${capKey}`, () => {
+    const p = { [capKey]: 1, messages: [{ role: "user", content: "hello" }] };
+    assert.equal(guardOutputBudget(p, FABLE).kind, "raised");
+    assert.equal(p[capKey], FABLE.maxTokens);
+    const full = { [capKey]: 1, messages: [{ role: "user", content: "x".repeat(790_000) }] };
+    assert.throws(() => guardOutputBudget(full, FABLE), /prompt is too long/i);
+  });
+}

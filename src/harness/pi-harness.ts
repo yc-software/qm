@@ -17,6 +17,7 @@ import {
   type Api,
   type Context,
   type Model,
+  type ModelThinkingLevel,
   type ModelsApiStreamOptions,
   type ModelsSimpleStreamOptions,
   type ProviderHeaders,
@@ -24,7 +25,6 @@ import {
 import { baseModelProviders, CONFIG_DEFAULTS, type Config } from "../config.ts";
 
 type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-const LEGACY_THINKING_LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh"]);
 const TURN_EFFORT_LEVELS = new Set<string>([
   "off",
   "minimal",
@@ -1356,12 +1356,6 @@ export function wantsFastMode(fastMode: boolean | undefined, modelId: string | u
   return fastMode === true && modelSupportsFastMode(modelId);
 }
 
-export const TURN_PROVIDER_EFFORT_ALIASES: Record<string, string | null> = {
-  max: "max",
-  ultracode: "max",
-  auto: null,
-};
-
 export function applyFastSpeed<T>(payload: T, fast: boolean | undefined, api?: string): T {
   if (fast && payload && typeof payload === "object") {
     if (api && api.toLowerCase().startsWith("openai")) {
@@ -1406,9 +1400,10 @@ function estimatePayloadTokens(payload: Record<string, unknown>): number | undef
 export function guardOutputBudget(payload: unknown, model: unknown): OutputBudgetGuardResult {
   const p = payload as Record<string, unknown> | null;
   if (!p || typeof p !== "object") return { kind: "ok" };
-  let capKey: "max_tokens" | "max_output_tokens" | undefined;
+  let capKey: "max_tokens" | "max_output_tokens" | "max_completion_tokens" | undefined;
   if (typeof p.max_tokens === "number") capKey = "max_tokens";
   else if (typeof p.max_output_tokens === "number") capKey = "max_output_tokens";
+  else if (typeof p.max_completion_tokens === "number") capKey = "max_completion_tokens";
   if (capKey === undefined) return { kind: "ok" };
   const cap = p[capKey] as number;
   if (cap >= OUTPUT_BUDGET_FLOOR_TOKENS) return { kind: "ok" };
@@ -1454,30 +1449,15 @@ function withFastModeHeaders(model: Model<Api>): Model<Api> {
   };
 }
 
-function applyEffortAliases(model: unknown): void {
-  const mutable = model as { thinkingLevelMap?: Record<string, string | null> } | undefined;
-  if (!mutable) return;
-  mutable.thinkingLevelMap = {
-    ...mutable.thinkingLevelMap,
-    ...TURN_PROVIDER_EFFORT_ALIASES,
-  };
-}
-
 export function applyTurnEffort(session: AgentSession, level?: string): void {
   if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
   const effectiveLevel =
     level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
   const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
-  applyEffortAliases(session.state.model);
-  try {
-    if (LEGACY_THINKING_LEVELS.has(normalizedLevel)) {
-      session.setThinkingLevel(normalizedLevel as LegacyThinkingLevel);
-    } else {
-      session.state.thinkingLevel = normalizedLevel as typeof session.state.thinkingLevel;
-    }
-  } catch (e) {
-    swallow("pi: set thinking level", e);
-  }
+  const providerLevel = normalizedLevel === "ultracode" ? "max" : normalizedLevel;
+  // Normalize UI aliases before Pi clamps to the model's declared capabilities.
+  // Mutating thinkingLevelMap would enable efforts the provider explicitly excludes.
+  session.setThinkingLevel(providerLevel as ModelThinkingLevel);
 }
 
 export function createPiHarness(opts?: PiHarnessOptions): Harness {

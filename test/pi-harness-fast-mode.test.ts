@@ -7,7 +7,6 @@ import {
   FAST_COST_MULTIPLIER,
   modelSupportsFastMode,
   wantsFastMode,
-  TURN_PROVIDER_EFFORT_ALIASES,
 } from "../src/harness/pi-harness.ts";
 import { defaultInteractiveThinkingLevel } from "../src/model/pi-models.ts";
 
@@ -67,16 +66,6 @@ test("applyFastSpeed never throws on non-object payloads", () => {
   assert.doesNotThrow(() => applyFastSpeed(undefined, true));
   assert.doesNotThrow(() => applyFastSpeed(null, true));
   assert.doesNotThrow(() => applyFastSpeed("raw", true));
-});
-
-test("TURN_PROVIDER_EFFORT_ALIASES maps web-ui aliases to Anthropic effort values", () => {
-  assert.equal(TURN_PROVIDER_EFFORT_ALIASES.max, "max");
-  assert.equal(
-    TURN_PROVIDER_EFFORT_ALIASES.ultracode,
-    "max",
-    "Ultracode is a UI alias, not a provider effort enum (#312)",
-  );
-  assert.equal(TURN_PROVIDER_EFFORT_ALIASES.auto, null, "auto leaves effort to the provider/default path");
 });
 
 test("defaultInteractiveThinkingLevel keeps human turns light by provider", () => {
