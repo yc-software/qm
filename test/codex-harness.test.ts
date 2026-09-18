@@ -217,6 +217,31 @@ process.stdin.resume();
   return path;
 }
 
+function pendingThreadStartCodexBinary(dir: string): string {
+  const path = join(dir, "pending-thread-start-codex");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ id: msg.id, result: {} });
+  if (msg.method === "initialized") return;
+  if (msg.method === "thread/start") fs.writeFileSync(${JSON.stringify(join(dir, "thread-started"))}, "started");
+});
+process.on("SIGTERM", () => {
+  fs.writeFileSync(${JSON.stringify(join(dir, "closed"))}, "closed");
+  process.exit(0);
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
 function pendingTurnStartCodexBinary(dir: string): string {
   const path = join(dir, "pending-turn-start-codex");
   writeFileSync(
@@ -1109,6 +1134,75 @@ test("cancelling an OAuth startup after spawn closes the provider", async (t) =>
   for (let attempt = 0; attempt < 50 && !existsSync(join(dir, "starts")); attempt += 1)
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(existsSync(join(dir, "starts")), true);
+  cancel.abort();
+  assert.deepEqual(await turn, { reply: "", stopped: true });
+  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(readFileSync(join(dir, "closed"), "utf8"), "closed");
+});
+
+test("Codex classifies a thread/start deadline as a non-retryable timeout", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-thread-start-timeout-test-"));
+  const harness = createCodexHarness({
+    binaryPath: pendingThreadStartCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    appServerStartTimeoutMs: 500,
+    turnWallClockMs: 0,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  await assert.rejects(
+    harness.turns.runTurn({
+      session: { id: "thread-start-timeout" } as Session,
+      input: "hi",
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      emit: async (entry) =>
+        ({ ...entry, sessionId: "thread-start-timeout", seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+    }),
+    (error: unknown) =>
+      error instanceof NonRetryableTurnError &&
+      /thread\/start request timed out/.test(error.message) &&
+      error.message !== "Codex app-server request cancelled",
+  );
+});
+
+test("cancelling a pending Codex thread/start is not relabeled as a startup timeout", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-cancel-thread-start-test-"));
+  const harness = createCodexHarness({
+    binaryPath: pendingThreadStartCodexBinary(dir),
+    env: testHarnessEnv(dir),
+    turnWallClockMs: 3_000,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const cancel = new AbortController();
+  const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+  const turn = harness.turns.runTurn({
+    session: { id: "cancel-thread-start" } as Session,
+    input: "hi",
+    systemPrompt: "be concise",
+    history: [],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    cancel: cancel.signal,
+    emit: async (entry) =>
+      ({ ...entry, sessionId: "cancel-thread-start", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+  });
+  for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "thread-started")); attempt += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(existsSync(join(dir, "thread-started")), true);
   cancel.abort();
   assert.deepEqual(await turn, { reply: "", stopped: true });
   for (let attempt = 0; attempt < 100 && !existsSync(join(dir, "closed")); attempt += 1)
