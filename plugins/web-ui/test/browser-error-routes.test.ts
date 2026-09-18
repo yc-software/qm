@@ -44,9 +44,9 @@ test("browser error config requires authentication and excludes impersonation", 
   const body = await response.json();
   assert.deepEqual(body.browserErrors, { dsn: "https://public@sentry.example.com/1", release: "release-1" });
   const csp = (await fetch(`${base}/connectors/oauth/test/callback`)).headers.get("content-security-policy")!;
-  const connectSrc = csp.split(";").map((directive) => directive.trim().split(/\s+/));
+  const directives = csp.split(";").map((directive) => directive.trim().split(/\s+/));
   assert.deepEqual(
-    connectSrc.find(([name]) => name === "connect-src"),
+    directives.find(([name]) => name === "connect-src"),
     ["connect-src", "'self'", "https://sentry.example.com"],
   );
   assert.equal((await (await fetch(`${base}/me`, { headers: headers("admin") })).json()).browserErrors, undefined);
