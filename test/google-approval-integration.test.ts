@@ -42,7 +42,10 @@ const googleHosts = [
   "calendar.googleapis.com",
 ];
 
-async function scenario(t: TestContext, options: { returnedApproval?: boolean; guarded?: boolean } = {}) {
+async function scenario(
+  t: TestContext,
+  options: { returnedApproval?: boolean; guarded?: boolean; manifest?: boolean } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "google-approval-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const sessions = createMemorySessionStore();
@@ -107,6 +110,7 @@ async function scenario(t: TestContext, options: { returnedApproval?: boolean; g
   };
   let execute = false;
   const toolNames: string[][] = [];
+  const systemPrompts: string[] = [];
   const harness = defineHarness(
     {
       id: "pi",
@@ -119,6 +123,7 @@ async function scenario(t: TestContext, options: { returnedApproval?: boolean; g
       async runTurn(turn) {
         await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
         toolNames.push(turn.tools.mcpToolDefs().map((tool) => tool.name));
+        systemPrompts.push(turn.systemPrompt);
         if (execute) await turn.tools.execute("pwd");
         let reply = "Tools inspected";
         try {
@@ -163,6 +168,7 @@ async function scenario(t: TestContext, options: { returnedApproval?: boolean; g
     keychain,
     connectorTokens,
     googleWorkspaceGuarded: options.guarded ?? true,
+    ...(options.manifest ? { signingSecret: "test-signing", apiBaseUrl: "http://core.test" } : {}),
     googleWorkspaceFetch: fetchImpl,
     isCurrentSharedScopeMember: async () => true,
     workspace,
@@ -209,6 +215,8 @@ async function scenario(t: TestContext, options: { returnedApproval?: boolean; g
     approvalGrants,
     config,
     toolNames,
+    systemPrompts,
+    keychain,
     environments,
     changeVersion: () => {
       version = "2";
@@ -431,3 +439,47 @@ test("unguarded mode leaves Google tools unavailable", async (t) => {
   assert.ok(!r.toolNames.at(-1)?.includes("google_workspace_request"));
   assert.ok(!r.toolNames.at(-1)?.includes("google_workspace_trash"));
 });
+
+for (const guarded of [true, false]) {
+  test(`Google connector grant inventory matches guarded=${guarded}`, async (t) => {
+    const r = await scenario(t, { guarded, manifest: true });
+    await r.connect();
+    await r.keychain.setConnectorToken("slack.com", actor.id, { accessToken: "test-slack" });
+    const connectors = (await r.keychain.listConnectorsByOwners([actor.id])).get(actor.id)!;
+    const asks = await Promise.all(
+      ["www.googleapis.com", "slack.com"].map(async (host) => {
+        const credential = connectors.find((item) => item.host === host)!;
+        return (
+          await r.keychain.createAsk({
+            credentialId: credential.credentialId,
+            requesterId: other.id,
+            requesterScopeId: "channel:C1",
+            purpose: `Use ${host}`,
+          })
+        ).ask;
+      }),
+    );
+    r.inspect();
+    await r.orchestrator.handleTurn(
+      r.input({
+        conversation: {
+          kind: "channel",
+          channelRef: "C1",
+          threadRef: "channel:manifest",
+          audience: [actor, other],
+          publishMembers: [actor, other],
+        },
+      }),
+    );
+    const prompt = r.systemPrompts.at(-1)!;
+    assert.match(prompt, /connected app slack\.com/);
+    if (guarded) assert.doesNotMatch(prompt, /connected app (www|gmail|docs|sheets|slides)\.googleapis\.com/);
+    else assert.match(prompt, /connected app www\.googleapis\.com/);
+    assert.equal(prompt.includes(asks[0]!.id), !guarded);
+    assert.ok(prompt.includes(asks[1]!.id));
+    await r.orchestrator.handleTurn(r.input());
+    const ownerPrompt = r.systemPrompts.at(-1)!;
+    assert.equal(ownerPrompt.includes(asks[0]!.id), !guarded);
+    assert.ok(ownerPrompt.includes(asks[1]!.id));
+  });
+}

@@ -1365,6 +1365,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const credentialCutoverServices = credentialServices.filter((service) => cutoverModeOf(service) !== "legacy");
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
+      const googleWorkspaceAvailable =
+        deps.googleWorkspaceGuarded === true &&
+        !automatedTurn &&
+        Boolean(deps.keychain) &&
+        !strictReadOnly &&
+        allInternal &&
+        (conversation.kind === "dm" || openSpeakerKeychain);
       const isolateOwnerKeychain =
         openSpeakerKeychain ||
         (deps.sharedOwnerAuthIsolation === true &&
@@ -2051,6 +2058,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps.keychain.listAsks({ requesterScopeId: scopeId }),
             conversation.kind === "dm" ? deps.keychain.listAsks({ ownerId: actor.id }) : Promise.resolve([]),
           ]);
+          const blockedAskCredentials = new Set<string>();
+          if (deps.googleWorkspaceGuarded) {
+            for (const [owner, connectors] of connectorsByOwner)
+              connectorsByOwner.set(
+                owner,
+                connectors.filter((connector) => !GOOGLE_WORKSPACE_HOSTS.includes(connector.host)),
+              );
+            const keychain = deps.keychain;
+            const askCredentials = await Promise.all(
+              [...new Set([...scopeAsks, ...ownerAsks].map((ask) => ask.credentialId))].map((id) =>
+                keychain.getCredential(id),
+              ),
+            );
+            for (const credential of askCredentials)
+              if (
+                credential?.managed === "connector" &&
+                credential.host &&
+                GOOGLE_WORKSPACE_HOSTS.includes(credential.host)
+              )
+                blockedAskCredentials.add(credential.id);
+          }
           const keychainBlock = renderKeychainManifest({
             scopeId,
             conversationKind: conversation.kind,
@@ -2061,8 +2089,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             connectorsByOwner,
             scopeGrants,
             injected: keychainInjected,
-            scopeAsks,
-            ownerAsks,
+            scopeAsks: scopeAsks.filter((ask) => !blockedAskCredentials.has(ask.credentialId)),
+            ownerAsks: ownerAsks.filter((ask) => !blockedAskCredentials.has(ask.credentialId)),
           });
           if (keychainBlock) systemPrompt += `\n\n${keychainBlock}`;
         }
@@ -2079,6 +2107,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
           systemPrompt += `\n\n${renderConnectedAppsBlock(status, configuredProviders, connectionsUrl)}`;
+        }
+        if (deps.googleWorkspaceGuarded) {
+          systemPrompt +=
+            "\n\n## Google Workspace access\nManaged Google accounts are used only through google_workspace_request and google_workspace_trash. They are not grantable shell credentials; do not request a keychain grant, export a token, or ask the user to reply approved to unlock them. ";
+          systemPrompt += googleWorkspaceAvailable
+            ? "The Google tools are available for this live request. Use the requesting person's selected account directly for the requested read, create, or edit operation without a separate access confirmation. If the selected account is missing, ask them to connect it in Connections. For trash, call google_workspace_trash and let the platform present its one-time approval buttons. Never substitute a text approval. Permanent deletion is unavailable."
+            : "The Google tools are unavailable in this turn. For a personal Google task in a shared conversation, ask the requesting person to continue in a DM with this bot. A text approval or keychain grant cannot enable these tools here. Read-only and automated turns must defer this work to a live authorized conversation. Do not change sharing settings to unlock access.";
         }
         const stableSystemBytes = systemPrompt.length;
         if (swarmBinding)
@@ -2539,12 +2574,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(deps.mcp ? { mcp: deps.mcp } : {}),
-          ...(deps.googleWorkspaceGuarded &&
-          !automatedTurn &&
-          deps.keychain &&
-          !strictReadOnly &&
-          allInternal &&
-          (conversation.kind === "dm" || openSpeakerKeychain)
+          ...(googleWorkspaceAvailable && deps.keychain
             ? {
                 googleWorkspace: createGoogleWorkspaceService({
                   principalId: actor.id,
