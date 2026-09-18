@@ -11,8 +11,8 @@ export interface DocumentInput {
   artifactId?: string;
 }
 
-export const MAX_DOCUMENT_BYTES = 8_000_000;
-export const MAX_DOCUMENT_TEXT_CHARS = 200_000;
+const MAX_DOCUMENT_BYTES = 8_000_000;
+const MAX_DOCUMENT_TEXT_CHARS = 200_000;
 const TEXT_EXTENSIONS = new Set(
   "asm bat c cc conf cpp css cxx def dic eml h hh htm html ics ifb in js json ksh list log markdown md mht mhtml mime mjs nws pl py rst s sql srt text txt vcf vtt xml ts tsx jsx sh bash zsh yml yaml toml rs go java rb php swift kt scala lua r jl perl tex cs graphql ndjson json5 dockerfile".split(
     " ",
@@ -198,7 +198,7 @@ export async function nativeDocumentIsReadable(document: DocumentInput, signal?:
   }
 }
 
-export function boundedDocumentText(text: string): string {
+function boundedDocumentText(text: string): string {
   return text.length > MAX_DOCUMENT_TEXT_CHARS
     ? `${text.slice(0, MAX_DOCUMENT_TEXT_CHARS)}\n[Document text truncated at ${MAX_DOCUMENT_TEXT_CHARS} characters.]`
     : text;
