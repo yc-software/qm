@@ -1,4 +1,10 @@
-import { documentText, historicalDocumentMetas, isTextDocument, loadDocumentInputs } from "./document-inputs.ts";
+import {
+  MAX_DOCUMENT_BYTES,
+  documentText,
+  historicalDocumentMetas,
+  isTextDocument,
+  loadDocumentInputs,
+} from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope } from "../resolution/scope-membership.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
@@ -2706,48 +2712,61 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               undefined,
               turnAbort.signal,
             );
-        let documentsUnscreened = false;
-        if (securityPolicy.inboundScreening === "external") {
-          for (const document of [...documentInputs.documents]) {
-            documentsUnscreened ||= !isTextDocument(document);
-            if (!(deps.securityScreener || deps.harness.models.screenSecurity)) {
-              documentsUnscreened = true;
-              continue;
+        const screenDocuments = async (
+          documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
+          requestText: string,
+        ): Promise<boolean> => {
+          let documentsUnscreened = false;
+          if (securityPolicy.inboundScreening === "external") {
+            for (const document of [...documentInputs.documents]) {
+              documentsUnscreened ||= !isTextDocument(document);
+              if (!(deps.securityScreener || deps.harness.models.screenSecurity)) {
+                documentsUnscreened = true;
+                continue;
+              }
+              let content: string;
+              try {
+                content = await documentText(document, turnAbort.signal);
+              } catch {
+                turnAbort.signal.throwIfAborted();
+                documentsUnscreened = true;
+                continue;
+              }
+              const verdicts: Array<SecurityScreenVerdict | undefined> = [];
+              for (const chunk of securityScreenChunks("tool_result:inbound_document", content)) {
+                turnAbort.signal.throwIfAborted();
+                const verdict = await classifySecurityData(chunk, actor.id, scopeId, undefined, {
+                  hook: "tool_response",
+                  request: requestText,
+                  surface: "inbound_file",
+                  origin: input.origin.kind,
+                });
+                verdicts.push(verdict);
+                if (verdict?.decision === "strict") break;
+              }
+              const verdict =
+                verdicts.find((value) => value?.decision === "strict") ??
+                verdicts.find((value) => value?.unscreened) ??
+                verdicts[0];
+              if (verdict?.decision === "strict") {
+                documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
+                documentInputs.notices.push(
+                  `${document.name}: document withheld by the external-data security screen.`,
+                );
+              } else if (
+                !verdicts.every((value) => value?.decision === "auto" && !value.unscreened) ||
+                content.includes("[Document text truncated")
+              )
+                documentsUnscreened = true;
             }
-            let content: string;
-            try {
-              content = await documentText(document, turnAbort.signal);
-            } catch {
-              turnAbort.signal.throwIfAborted();
-              documentsUnscreened = true;
-              continue;
-            }
-            const verdicts: Array<SecurityScreenVerdict | undefined> = [];
-            for (const chunk of securityScreenChunks("tool_result:inbound_document", content)) {
-              turnAbort.signal.throwIfAborted();
-              const verdict = await classifySecurityData(chunk, actor.id, scopeId, undefined, {
-                hook: "tool_response",
-                request: input.text,
-                surface: "inbound_file",
-                origin: input.origin.kind,
-              });
-              verdicts.push(verdict);
-              if (verdict?.decision === "strict") break;
-            }
-            const verdict =
-              verdicts.find((value) => value?.decision === "strict") ??
-              verdicts.find((value) => value?.unscreened) ??
-              verdicts[0];
-            if (verdict?.decision === "strict") {
-              documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
-              documentInputs.notices.push(`${document.name}: document withheld by the external-data security screen.`);
-            } else if (
-              !verdicts.every((value) => value?.decision === "auto" && !value.unscreened) ||
-              content.includes("[Document text truncated")
-            )
-              documentsUnscreened = true;
           }
-        }
+          return documentsUnscreened;
+        };
+        const documentsUnscreened = await screenDocuments(documentInputs, input.text);
+        let remainingDocumentBytes =
+          MAX_DOCUMENT_BYTES -
+          documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
+        let remainingDocumentCount = 10 - documentInputs.documents.length;
         const tapeRows = await (async () => {
           if (historyHasSecurityTaint || contextWindow.totalEntries > TAPE_IMPORT_MAX_ENTRIES) return undefined;
           try {
@@ -3148,6 +3167,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           )
                       : undefined,
                   );
+              const steeredDocuments = await loadDocumentInputs(
+                deps.files,
+                received.metas,
+                mayReadArtifact,
+                remainingDocumentBytes,
+                turnAbort.signal,
+                remainingDocumentCount,
+              );
+              const steeredUnscreened = await screenDocuments(steeredDocuments, text);
+              remainingDocumentBytes -= steeredDocuments.documents.reduce(
+                (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
+                0,
+              );
+              remainingDocumentCount -= steeredDocuments.documents.length;
+              documentInputs.documents.push(...steeredDocuments.documents);
               const issues = inboundIssueList({
                 ...received,
                 surfaceNotes: strictReadOnly
@@ -3158,9 +3192,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 text: [
                   text,
                   inboundManifest(received.metas, inboxDir),
+                  ...steeredDocuments.notices,
                   issues.length ? fileEventPayload("in", issues).text : "",
                   securityPolicy.inboundScreening === "external" &&
-                  (received.unscreened.length || received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
+                  (steeredUnscreened ||
+                    received.unscreened.length ||
+                    received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
                     ? unscreenedNotice("inbound content")
                     : "",
                 ]
@@ -3168,6 +3205,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   .join("\n\n"),
                 attachments: received.metas,
                 images: received.images,
+                documents: steeredDocuments.documents,
               };
             },
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
@@ -3196,7 +3234,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
-            documents: documentInputs.documents,
+            documents: [...documentInputs.documents],
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,

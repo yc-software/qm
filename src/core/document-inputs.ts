@@ -11,7 +11,7 @@ export interface DocumentInput {
   artifactId?: string;
 }
 
-const MAX_DOCUMENT_BYTES = 8_000_000;
+export const MAX_DOCUMENT_BYTES = 8_000_000;
 const MAX_DOCUMENT_TEXT_CHARS = 200_000;
 const TEXT_EXTENSIONS = new Set(
   "asm bat c cc conf cpp css cxx def dic eml h hh htm html ics ifb in js json ksh list log markdown md mht mhtml mime mjs nws pl py rst s sql srt text txt vcf vtt xml ts tsx jsx sh bash zsh yml yaml toml rs go java rb php swift kt scala lua r jl perl tex cs graphql ndjson json5 dockerfile".split(
@@ -79,6 +79,7 @@ export async function loadDocumentInputs(
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
   maxBytes = MAX_DOCUMENT_BYTES,
   signal?: AbortSignal,
+  maxDocuments = 10,
 ): Promise<{ documents: DocumentInput[]; notices: string[] }> {
   const documents: DocumentInput[] = [];
   const notices: string[] = [];
@@ -91,7 +92,7 @@ export async function loadDocumentInputs(
       seen.add(meta.artifactId);
       const artifact = await files.get(meta.artifactId);
       if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
-      if (artifact.sizeBytes > remaining || documents.length >= 10) {
+      if (artifact.sizeBytes > remaining || documents.length >= maxDocuments) {
         notices.push(
           `${artifact.name}: document omitted from model input because it exceeds the attachment count or byte budget.`,
         );
@@ -214,25 +215,31 @@ export async function documentFallbackText(document: DocumentInput, signal?: Abo
   }
 }
 
+export interface DocumentTextBudget {
+  remaining: number;
+}
+
+export function fitDocumentText(text: string, budget: DocumentTextBudget): string {
+  const length = Math.min(text.length, Math.max(0, budget.remaining));
+  budget.remaining -= length;
+  return length < text.length
+    ? `${text.slice(0, length)}\n[Document text omitted or truncated to fit the model context.]`
+    : text;
+}
+
 export async function documentsFallbackText(
   documents: readonly DocumentInput[],
   signal?: AbortSignal,
+  budget: DocumentTextBudget = { remaining: 100_000 },
 ): Promise<string> {
   const parts: string[] = [];
-  let remaining = 100_000;
   for (const document of documents) {
     signal?.throwIfAborted();
-    if (remaining <= 0) {
+    if (budget.remaining <= 0) {
       parts.push(`Document ${JSON.stringify(document.name)} omitted because the document text budget was exhausted.`);
       continue;
     }
-    const text = await documentFallbackText(document, signal);
-    parts.push(
-      text.length > remaining
-        ? `${text.slice(0, remaining)}\n[Document text truncated to fit the model context.]`
-        : text,
-    );
-    remaining -= text.length;
+    parts.push(fitDocumentText(await documentFallbackText(document, signal), budget));
   }
   return parts.join("\n\n");
 }

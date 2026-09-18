@@ -5,7 +5,7 @@ import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/ski
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -918,6 +918,10 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
   for (const [i, [path]] of inboundWrites.entries()) {
     assert.ok(prepared[i]!.text.includes(path));
     assert.ok(await files.get(prepared[i]!.attachments![0]!.artifactId!));
+    assert.equal(
+      Buffer.from(prepared[i]!.documents![0]!.dataBase64, "base64").toString(),
+      i === 0 ? "first file" : "second file",
+    );
   }
   assert.notEqual(prepared[0]!.attachments![0]!.artifactId, prepared[1]!.attachments![0]!.artifactId);
 });
@@ -940,6 +944,7 @@ test("read-only turns report steered files as unavailable without provisioning a
   const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
+  assert.deepEqual(prepared?.documents, []);
   assert.match(prepared?.text ?? "", /secret.txt/);
 });
 
@@ -981,9 +986,134 @@ test("steered documents use the inbound security screen before writing their con
   const result = await orchestrator.handleTurn(dm("steer-screen", "hello"));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
+  assert.deepEqual(prepared?.documents, []);
   assert.match(prepared?.text ?? "", /unsafe.txt.*withheld/);
   assert.equal(
     writes.some((path) => path.endsWith("unsafe.txt")),
     false,
   );
+});
+
+for (const budget of ["count", "bytes"] as const) {
+  test(`steered documents share the initial turn ${budget} budget`, async () => {
+    const blobTransfer = createMemoryBlobTransferStore();
+    const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
+    const steerBlob = await blobTransfer.put(Buffer.from("steered document"));
+    const sandbox: Sandbox = {
+      ...readSandbox(),
+      removeDir: async () => {},
+      listDir: async () => [],
+      writeFile: async () => {},
+      writeFileBytes: async () => {},
+    };
+    const harness = createMockHarness();
+    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+    harness.turns.runTurn = async (turn) => {
+      assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
+      prepared = await turn.prepareSteer!("read this", {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: `steer-budget-${budget}` },
+        text: "read this",
+        attachments: [{ name: "steered.txt", mimetype: "text/plain", ...steerBlob }],
+      });
+      return { reply: "done" };
+    };
+    const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+    await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    const result = await orchestrator.handleTurn({
+      ...dm(`steer-budget-${budget}`, "hello"),
+      attachments: Array.from({ length: budget === "count" ? 10 : 1 }, (_, i) => ({
+        name: `initial-${i}.txt`,
+        mimetype: "text/plain",
+        ...blob,
+      })),
+    });
+    assert.equal(result.status, "ok", result.reason);
+    assert.deepEqual(prepared?.documents, []);
+    assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
+  });
+}
+
+test("steered native office documents are screened after extraction", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)));
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async () => {},
+  };
+  const harness = createMockHarness();
+  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  let screened = false;
+  harness.turns.runTurn = async (turn) => {
+    prepared = await turn.prepareSteer!("summarize", {
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "steer-office-screen" },
+      text: "summarize",
+      attachments: [
+        {
+          name: "unsafe.docx",
+          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          ...blob,
+        },
+      ],
+    });
+    return { reply: "done" };
+  };
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    shadow: false,
+    classify: async ({ payload }) => {
+      const blocked = payload.includes("DOCX-QUARTZ-731");
+      screened ||= blocked;
+      return { verdict: { decision: blocked ? "strict" : "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
+  const result = await orchestrator.handleTurn(dm("steer-office-screen", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(screened, true);
+  assert.deepEqual(prepared?.documents, []);
+  assert.match(prepared?.text ?? "", /unsafe.docx.*withheld by the external-data security screen/);
+});
+
+test("documents uploaded during a turn survive a runtime handoff without aliasing the active harness", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(Buffer.from("HANDOFF-DOCUMENT-492"));
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async () => {},
+  };
+  const harness = createMockHarness();
+  let segments = 0;
+  harness.turns.runTurn = async (turn) => {
+    if (++segments === 1) {
+      const activeDocuments = turn.documents!;
+      const prepared = await turn.prepareSteer!("read this", {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: "steer-handoff" },
+        text: "read this",
+        attachments: [{ name: "steered.txt", mimetype: "text/plain", ...blob }],
+      });
+      assert.equal(prepared.documents?.length, 1);
+      assert.equal(activeDocuments.length, 0);
+      return { reply: "", runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" } };
+    }
+    assert.equal(turn.documents?.length, 1);
+    assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
+    return { reply: "read after switching" };
+  };
+  const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+  const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
+  assert.equal(result.status, "ok", result.reason);
+  assert.equal(segments, 2);
 });

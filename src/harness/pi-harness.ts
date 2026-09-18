@@ -2145,6 +2145,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                         }
                       }
                       if (!entry.agentSession.isStreaming) return false;
+                      if (prepared?.documents?.length)
+                        entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
                       entry.ref.silentRequested = false;
                       await entry.agentSession.steer(
                         prompt,

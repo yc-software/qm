@@ -1,6 +1,6 @@
 # Conversation document inputs
 
-Inbound attachments are read from the authorized artifact store and included in model input on the first turn and follow-ups, including after compaction. No model tool call is needed to locate or parse supported attachments. Filename extensions and supported MIME types identify documents. Images continue through the existing image input path.
+Inbound attachments are read from the authorized artifact store and included in model input on the first turn, follow-ups and uploads during an active answer, including after compaction and runtime handoff. No model tool call is needed to locate or parse supported attachments. Filename extensions and supported MIME types identify documents. Images continue through the existing image input path.
 
 | Route                                   | Native input                                                                                          | Other documents                       |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -33,9 +33,9 @@ The browser upload flow on the Codex text fallback route recovered all 26 format
 
 A real Claude SDK request using the same document-block builder recovered the native text-PDF and scanned-PDF markers, plus DOCX/XLSX/PPTX text fallback and a native plain-text document, in 8.0 seconds end to end. This is a small-fixture smoke test, not a latency guarantee.
 
-OpenRouter-specific native acceptance and the Slack upload matrix remain release QA requirements. Local schema tests do not substitute for these checks.
+Firefox Slack uploads recovered all 26 supported fallback-format markers across three batches, with zero model tool calls. Legacy DOC/XLS/PPT correctly reported unavailable on the Codex fallback route. Worker execution took 6.1–13.7 seconds per batch, excluding Slack delivery and conversation routing. A Slack follow-up recovered project and revenue details from the retained RTF/ODP attachments without reuploading or tools. The same synthetic fixtures were used in the web and Slack checks.
 
-The development Slack bot also passed a Firefox browser message/reply smoke test. The document upload matrix still needs to run through Slack; the native file chooser prevented completing that check in this session. TypeScript, changed-file lint and lockfile dry-run checks passed.
+Direct OpenRouter native acceptance remains unverified because the configured gateway exposes no OpenRouter provider and no direct credential was available. Request-shape tests cover that route; they do not substitute for provider acceptance.
 
 Authenticated LiteLLM checks verified scanned PDF comprehension on Anthropic Messages and OpenAI/Gemini Chat Completions. OpenAI Responses read 26 native fixtures across office, legacy office and text formats; RTF used text fallback after the provider accepted its file but returned no readable content. Explicit filename labels preserve attachment identity when provider extraction omits filename metadata. Text MIME types are normalized to accepted wire types; these checks caught rejected XML and TypeScript labels that serialization tests had missed. Gateway discovery selects Responses for OpenAI/Azure groups and retains provider-based document capabilities, so unknown vision models do not inherit assumed PDF support.
 
@@ -43,4 +43,4 @@ A live Pi gateway session using discovered OpenAI metadata also passed a read-to
 
 Encrypted PDF fallback was verified to report unavailable content without revealing its verification marker. Native OpenAI requests rejected encrypted and malformed PDFs with HTTP 400 `invalid_file`; they require an unlocked, valid replacement. Supported formats now receive bounded local preflight before native submission; unreadable files become individual unavailability notices. Scanned PDFs with no extractable text remain native visual inputs. Legacy formats without a local parser and provider-specific page/token limits still depend on provider acceptance. A live Pi mixed batch read the scanned marker while reporting malformed/encrypted files unavailable, and repeated that result on a follow-up without tools (2.9 and 3.5 seconds). A twelve-page native PDF check recovered independent markers on the first and last pages in 5.5 seconds.
 
-The rebased branch passed 343 affected regression tests; the final preflight, capture and budgeting fixes passed 156 affected tests. TypeScript and changed-file lint passed, and independent review findings were resolved.
+A live Pi gateway task also accepted a scanned PDF uploaded while its read tool was running, recovered the visual marker in 4.6 seconds, and kept document bytes out of its tape. Regression tests cover active-turn uploads across all four harnesses, shared text/count/byte budgets, screening and runtime handoff.

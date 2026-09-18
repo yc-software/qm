@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -433,4 +434,73 @@ test("OpenCode advertises aliases only for tools available on the turn", async (
     if (sandboxResources) assert.doesNotMatch(systemPrompt, /workspace_execute/);
     else assert.match(systemPrompt, /workspace_execute is execute/);
   }
+});
+
+test("OpenCode includes steered PDF and extracted documents without copying echoed contents into tape", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-steer-doc-"));
+  const capturePath = join(dir, "steered.json");
+  const binary = fakeSidecar(
+    dir,
+    "steer-docs",
+    `
+    if (req.method === "POST" && url.pathname.endsWith("/prompt_async")) {
+      process.qaSteered = JSON.parse(await readBody(req));
+      (await import("node:fs")).writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.qaSteered));
+      return json(res, {});
+    }
+    if (url.pathname === "/session/status") return json(res, { ses_main: { type: "idle" } });
+    if (req.method === "POST" && message) {
+      process.qaInitial = JSON.parse(await readBody(req));
+      while (!process.qaSteered) await new Promise(resolve => setTimeout(resolve, 10));
+      return json(res, ${okAssistant});
+    }
+    if (req.method === "GET" && message) return json(res, [
+      { info: { id: "initial", role: "user" }, parts: process.qaInitial.parts },
+      { info: { id: "steered", role: "user" }, parts: process.qaSteered.parts },
+      ${okAssistant},
+    ]);
+  `,
+  );
+  const signals = createMemoryRunSignalStore();
+  const harness = createOpenCodeHarness({ binaryPath: binary, signals, turnWallClockMs: 10_000 });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const pdf = readFileSync(new URL("./fixtures/documents/sample.pdf", import.meta.url)).toString("base64");
+  const docx = readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)).toString("base64");
+  const tape: unknown[] = [];
+  const turn = turnInput([], []);
+  turn.runId = "opencode-steer-docs";
+  turn.tape = async (row) => {
+    tape.push(row);
+  };
+  turn.documents = [
+    { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
+  ];
+  turn.prepareSteer = async (text) => ({
+    text,
+    documents: [
+      { name: "steered.pdf", mimeType: "application/pdf", dataBase64: pdf },
+      {
+        name: "steered.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        dataBase64: docx,
+      },
+      {
+        name: "overflow.txt",
+        mimeType: "text/plain",
+        dataBase64: Buffer.from("Z".repeat(30_000) + "OUTSIDE-BUDGET-492").toString("base64"),
+      },
+    ],
+  });
+  await signals.send(turn.runId, { kind: "steer", text: "read the documents", ts: "doc.1" });
+  await harness.turns.runTurn(turn);
+  const sent = readFileSync(capturePath, "utf8");
+  assert.ok(sent.includes(pdf));
+  assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
+  assert.match(sent, /truncated to fit/);
+  assert.ok(sent.includes("DOCX-QUARTZ-731"));
+  assert.ok(!JSON.stringify(tape).includes(pdf));
+  assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
 });

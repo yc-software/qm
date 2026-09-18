@@ -79,13 +79,16 @@ function gatedSse(events: Array<Record<string, unknown>>, gate: Promise<void>): 
   return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-for (const variant of ["text", "images", "finished during preparation"]) {
+for (const variant of ["text", "images", "documents", "finished during preparation"]) {
   const withImages = variant !== "text";
   const finishDuringPreparation = variant === "finished during preparation";
   test(`tape rows land in consumption order, including steered ${variant}`, async () => {
     const signals = createMemoryRunSignalStore();
     const harness = createPiHarness({ apiKey: "sk-test", signals });
     const sink: Sink = { entries: [], tape: [] };
+    const documentBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString(
+      "base64",
+    );
     let releaseFirstStep = () => {};
     const steerQueued = new Promise<void>((resolve) => {
       releaseFirstStep = () => setTimeout(resolve, 50);
@@ -112,6 +115,9 @@ for (const variant of ["text", "images", "finished during preparation"]) {
           return {
             text: `${text}\nFile available in inbox/photo.png`,
             images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
+            ...(variant === "documents"
+              ? { documents: [{ name: "steered.pdf", mimeType: "application/pdf", dataBase64: documentBase64 }] }
+              : {}),
           };
         };
       const emit = turn.emit;
@@ -152,6 +158,11 @@ for (const variant of ["text", "images", "finished during preparation"]) {
             artifactRef: "steered-photo",
           },
         );
+      }
+      if (variant === "documents") {
+        assert.ok(!JSON.stringify(requestMessages[0]).includes(documentBase64));
+        assert.ok(JSON.stringify(requestMessages[1]).includes(documentBase64));
+        assert.ok(!JSON.stringify(sink.tape).includes(documentBase64));
       }
       assert.equal(calls, 2);
       assert.equal(tapeRowsAtDispatch[0], 1, "the trigger user row is committed before the first dispatch");

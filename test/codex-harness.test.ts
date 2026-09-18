@@ -1866,3 +1866,69 @@ for (const final of [true, false]) {
     });
   }
 }
+
+test("Codex steers extracted documents into the active turn without copying contents into tape", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-codex-steer-doc-test-"));
+  const binary = stopReportsFailedCodexBinary(dir);
+  const capture = join(dir, "steered.json");
+  const source = readFileSync(binary, "utf8").replace(
+    '  if (msg.method === "turn/interrupt") {',
+    `
+  if (msg.method === "turn/steer") {
+    writeFileSync(${JSON.stringify(capture)}, JSON.stringify(msg.params));
+    send({ id: msg.id, result: {} });
+    send({ method: "item/completed", params: { threadId: "thread-sf", item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "document read" } } });
+    return send({ method: "turn/completed", params: { threadId: "thread-sf", turn: { id: "turn-sf", status: "completed", items: [] } } });
+  }
+  if (msg.method === "turn/interrupt") {`,
+  );
+  writeFileSync(binary, source);
+  const signals = createMemoryRunSignalStore();
+  const harness = createCodexHarness({ binaryPath: binary, env: process.env, turnWallClockMs: 10_000, signals });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const tape: unknown[] = [];
+  const scope = "personal:tester" as ScopeId;
+  const running = harness.turns.runTurn({
+    session: { id: "steer-document-session" } as Session,
+    input: "wait for a document",
+    runId: "steer-document-run",
+    systemPrompt: "QA",
+    history: [],
+    documents: [
+      { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
+    ],
+    tools: {} as HarnessTurnInput["tools"],
+    scopeLabel: scope,
+    orgScopeId: scope,
+    emit: async (entry) =>
+      ({ ...entry, sessionId: "steer-document-session", seq: 1, createdAt: Date.now() }) as SessionEntry,
+    recordModelCall: () => {},
+    tape: async (row) => {
+      tape.push(row);
+    },
+    prepareSteer: async (text) => ({
+      text,
+      documents: [
+        {
+          name: "private.txt",
+          mimeType: "text/plain",
+          dataBase64: Buffer.from("STEER-PRIVATE-492" + "Z".repeat(30_000) + "OUTSIDE-BUDGET-492").toString("base64"),
+        },
+      ],
+    }),
+  });
+  const deadline = Date.now() + 5_000;
+  while (!existsSync(join(dir, "started"))) {
+    if (Date.now() > deadline) throw new Error("mock Codex did not start");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await signals.send("steer-document-run", { kind: "steer", text: "read the document", ts: "doc.1" });
+  await running;
+  assert.match(readFileSync(capture, "utf8"), /STEER-PRIVATE-492/);
+  assert.doesNotMatch(JSON.stringify(tape), /STEER-PRIVATE-492/);
+  assert.doesNotMatch(readFileSync(capture, "utf8"), /OUTSIDE-BUDGET-492/);
+  assert.match(readFileSync(capture, "utf8"), /truncated to fit/);
+});

@@ -86,7 +86,7 @@ export interface HarnessTurnInput {
   prepareSteer?(
     text: string,
     request?: TurnRequest,
-  ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[] }>;
+  ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[]; documents?: DocumentInput[] }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
   runtimeControl?: RuntimeControl;

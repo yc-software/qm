@@ -2,6 +2,8 @@ import { resolveGatewayModel } from "../model/gateway-models.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
   documentExtension,
+  fitDocumentText,
+  type DocumentTextBudget,
   documentFallbackText,
   documentText,
   isTextDocument,
@@ -44,18 +46,12 @@ export function nativeDocumentFormat(
 export async function documentBlocks(
   documents: readonly DocumentInput[],
   model: DocumentModel,
-  maxTextChars = 100_000,
+  maxTextChars: number | DocumentTextBudget = 100_000,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>[]> {
   const blocks: Record<string, unknown>[] = [];
-  let remaining = maxTextChars;
-  const fitText = (text: string): string => {
-    const length = Math.min(text.length, Math.max(0, remaining));
-    remaining -= length;
-    return length < text.length
-      ? `${text.slice(0, length)}\n[Document text omitted or truncated to fit the model context.]`
-      : text;
-  };
+  const budget = typeof maxTextChars === "number" ? { remaining: maxTextChars } : maxTextChars;
+  const fitText = (text: string): string => fitDocumentText(text, budget);
   for (const document of documents) {
     const candidate = nativeDocumentFormat(model, document);
     const format = candidate && (await nativeDocumentIsReadable(document, signal)) ? candidate : undefined;

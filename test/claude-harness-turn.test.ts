@@ -569,3 +569,54 @@ test("Claude sends documents without persisting their contents in the tape", asy
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes(secret));
 });
+
+test("Claude includes steered native and fallback documents without capturing their echoed contents", async () => {
+  const signals = createMemoryRunSignalStore();
+  const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
+  const docx = (await readFile(new URL("./fixtures/documents/sample.docx", import.meta.url))).toString("base64");
+  const tape: unknown[] = [];
+  let sent = "";
+  currentScript = async function* (prompts) {
+    const iterator = prompts[Symbol.asyncIterator]();
+    const initial = (await iterator.next()).value;
+    yield initial!;
+    await signals.send("steer-documents", { kind: "steer", text: "read the documents", ts: "files.2" });
+    const steered = (await iterator.next()).value!;
+    sent = JSON.stringify(steered);
+    yield steered;
+    yield resultMessage("read both");
+    yield resultMessage("done");
+  };
+  const { turn } = harnessTurn({
+    runId: "steer-documents",
+    tape: async (row) => {
+      tape.push(row);
+    },
+  });
+  turn.documents = [
+    { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
+  ];
+  turn.prepareSteer = async (text) => ({
+    text,
+    documents: [
+      { name: "steered.pdf", mimeType: "application/pdf", dataBase64: pdf },
+      {
+        name: "steered.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        dataBase64: docx,
+      },
+      {
+        name: "overflow.txt",
+        mimeType: "text/plain",
+        dataBase64: Buffer.from("Z".repeat(30_000) + "OUTSIDE-BUDGET-492").toString("base64"),
+      },
+    ],
+  });
+  await createClaudeHarness({ signals }).turns.runTurn(turn);
+  assert.ok(sent.includes(pdf));
+  assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
+  assert.match(sent, /truncated to fit/);
+  assert.ok(sent.includes("DOCX-QUARTZ-731"));
+  assert.ok(!JSON.stringify(tape).includes(pdf));
+  assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+});

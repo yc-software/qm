@@ -291,6 +291,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
 
   const runPrompt = async (turn: HarnessTurnInput, toolsEnabled = true): Promise<HarnessTurnResult> => {
     if (turn.cancel?.aborted) return { reply: "", stopped: true };
+    const documentTextBudget = { remaining: 100_000 };
     const preparedDocuments = await documentBlocks(
       turn.documents ?? [],
       {
@@ -298,7 +299,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         provider: "anthropic",
         input: ["image"],
       },
-      undefined,
+      documentTextBudget,
       turn.cancel,
     );
     const jail = mkdtempSync(join(tmpdir(), "qm-claude-"));
@@ -379,7 +380,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     let recordedSteps = 0;
     let lastTotalCostUsd = 0;
     let settled = false;
-    const steerPrompts: string[] = [];
+    const steerPrompts: SDKUserMessage[] = [];
     let streamedText = "";
     let initialUserEchoSkipped = false;
     const appendTape = async (payload: unknown, trigger = false) => {
@@ -496,9 +497,20 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                   },
                   scopeLabel: turn.scopeLabel,
                 });
-                steerPrompts.push(prompt);
+                const baseMessage = userMessage(prompt, prepared?.images);
+                steerPrompts.push(baseMessage);
+                const message = userMessage(prompt, prepared?.images);
+                if (Array.isArray(message.message.content))
+                  message.message.content.push(
+                    ...((await documentBlocks(
+                      prepared?.documents ?? [],
+                      { api: "anthropic-messages", provider: "anthropic", input: ["text", "image"] },
+                      documentTextBudget,
+                      turn.cancel,
+                    )) as unknown as typeof message.message.content),
+                  );
                 pendingPrompts++;
-                queue.push(userMessage(prompt, prepared?.images));
+                queue.push(message);
               },
             },
             { onError: (error) => swallow("claude signal poll", error) },
@@ -594,8 +606,22 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               });
           }
           if (message.type === "user" && !initialUserEchoSkipped) initialUserEchoSkipped = true;
-          else if (message.type === "assistant" || message.type === "user")
-            await appendTape(stripClaudeImageBytes(message));
+          else if (message.type === "assistant" || message.type === "user") {
+            let tapeMessage: SDKMessage = message;
+            if (message.type === "user" && Array.isArray(message.message.content)) {
+              const text = message.message.content.find((block) => block.type === "text")?.text;
+              const index = steerPrompts.findIndex(
+                (prompt) =>
+                  Array.isArray(prompt.message.content) &&
+                  prompt.message.content.some((block) => block.type === "text" && block.text === text),
+              );
+              if (index >= 0) {
+                const [base] = steerPrompts.splice(index, 1);
+                tapeMessage = { ...message, message: { ...message.message, content: base!.message.content } };
+              }
+            }
+            await appendTape(stripClaudeImageBytes(tapeMessage));
+          }
           if (message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;
             if (!taskStates.has(message.task_id)) {
