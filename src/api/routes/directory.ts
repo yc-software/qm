@@ -76,8 +76,15 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   let channelCount: number | undefined;
   if (Array.isArray(b.channels)) {
     const channels = b.channels.filter(
-      (c): c is { channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean } =>
-        isObj(c) && typeof c.channelId === "string" && typeof c.name === "string",
+      (
+        c,
+      ): c is {
+        channelId: string;
+        name: string;
+        isPrivate?: boolean;
+        isExternal?: boolean;
+        rosterAllInternal?: boolean;
+      } => isObj(c) && typeof c.channelId === "string" && typeof c.name === "string",
     );
     const channelMembers = Array.isArray(b.channelMembers)
       ? b.channelMembers.filter(

@@ -1,3 +1,4 @@
+import { authorizesAmbientScope, isAmbientActor } from "../resolution/ambient-access.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -17,7 +18,7 @@ import type { RunSignal } from "../runs/run-signal-store.ts";
 import { processRun } from "../runs/worker.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { CREDENTIAL_BROKER_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import {
   createCanReadScope,
   createCanManageScope,
@@ -434,9 +435,16 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   const membershipControlsScope = createMembershipControlsScope(scopeMembershipDeps);
 
   async function authorizesCapabilityScope(
-    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
+    claims: Pick<
+      CapabilityClaims,
+      "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members" | "aud"
+    >,
   ): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
+    if (isAmbientActor(claims.actorId)) {
+      const authorized = await authorizesAmbientScope(deps, claims);
+      if (authorized || claims.aud === CREDENTIAL_BROKER_AUD) return authorized;
+    }
     if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
     const privateChannel =
       kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;

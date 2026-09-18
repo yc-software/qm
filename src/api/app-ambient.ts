@@ -1,3 +1,4 @@
+import { scopeId } from "../types.ts";
 import type { ActorAssertion, TurnRequest } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
@@ -224,6 +225,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     if (!members?.length) return undefined;
     return members.map((member) => ({
       externalId: member.principalId,
+      ...(member.type === "internal" ? {} : { isExternalGuest: true }),
       ...(member.displayName ? { displayName: member.displayName } : {}),
     }));
   }
@@ -233,6 +235,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
+    if (
+      (await deps.config?.getSharingPostureDurable(
+        scopeId(batch.kind === "group" ? "group" : "channel", batch.container),
+      )) === "open"
+    ) {
+      audience = (await conversationAudience(batch)) ?? [];
+    }
     if (solicited) {
       const askerId = solicited.member.principalId;
       const resolved = await conversationAudience(batch);

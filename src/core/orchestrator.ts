@@ -1,3 +1,4 @@
+import { authorizesAmbientScope, isAmbientActor } from "../resolution/ambient-access.ts";
 import {
   MAX_DOCUMENT_BYTES,
   documentText,
@@ -1377,6 +1378,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       ) {
         ownerAuthAvailable = true;
       }
+      const ambientActor = isAmbientActor(actor.id);
+      const credentialsAllowed =
+        !ambientActor || (await authorizesAmbientScope(deps, { scopeId, members: conversation.publishMembers }));
       const connectorEnv: Record<string, string> = {};
       const ownerAuthEnv: Record<string, string> = {};
       const ownerEnvCredentialIds: string[] = [];
@@ -1385,7 +1389,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const credsStart = Date.now();
       const commandScopedCredentials =
         !strictReadOnly && (await deps.featureFlags?.enabled("command_scoped_credentials", scopeId)) === true;
-      if (!strictReadOnly && deps.keychain) {
+      if (!strictReadOnly && credentialsAllowed && deps.keychain) {
         const own =
           scopeId === personalScope(actor.id) ||
           (input.origin.kind === "automation" && input.origin.useOwnerKeychain && !isolateOwnerKeychain)
@@ -1442,7 +1446,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       let serviceCredRecords: PublicServiceCredential[] = [];
       let grantedCredSlugs = new Set<string>();
-      if (!strictReadOnly && deps.serviceCreds) {
+      if (!strictReadOnly && credentialsAllowed && deps.serviceCreds) {
         serviceCredRecords = await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId);
         if (serviceCredRecords.length > 0) {
           grantedCredSlugs = new Set(
@@ -1530,7 +1534,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(destination ? { destination } : {}),
           ...(delivery.candidates.length > 0 ? { destinations: delivery.candidates } : {}),
           ...(delivery.defaultKey ? { defaultDestinationKey: delivery.defaultKey } : {}),
-          ...(conversation.kind !== "dm"
+          ...(conversation.kind !== "dm" && !ambientActor
             ? { keychainMembers: conversation.audience.filter((p) => p.type === "internal") }
             : {}),
           ...(conversation.kind === "dm" ||
@@ -1629,7 +1633,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           egressSecret,
         );
       }
-      if (!strictReadOnly && actor.type === "internal") {
+      if (!strictReadOnly && credentialsAllowed && actor.type === "internal") {
         for (const tool of brokeredTools) {
           const mode = cutoverModeOf(tool.service);
           if (mode !== "legacy") continue;
@@ -2021,6 +2025,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps.keychain.listAsks({ requesterScopeId: scopeId }),
             conversation.kind === "dm" ? deps.keychain.listAsks({ ownerId: actor.id }) : Promise.resolve([]),
           ]);
+          if (ambientActor) {
+            const granted = new Set(scopeGrants.map(({ credential }) => credential.id));
+            for (const [owner, entries] of entriesByOwner)
+              entriesByOwner.set(
+                owner,
+                entries.filter((entry) => granted.has(entry.id)),
+              );
+            for (const [owner, entries] of connectorsByOwner)
+              connectorsByOwner.set(
+                owner,
+                entries.filter((entry) => granted.has(entry.credentialId)),
+              );
+          }
           const keychainBlock = renderKeychainManifest({
             scopeId,
             conversationKind: conversation.kind,
@@ -2335,7 +2352,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           createdBy: actor.id,
           ...(() => {
             const available =
-              strictReadOnly || actor.type !== "internal"
+              strictReadOnly || !credentialsAllowed || actor.type !== "internal"
                 ? []
                 : brokeredTools.filter(
                     (tool) => cutoverModeOf(tool.service) !== "legacy" && deps.layerBrokerFor?.(tool),

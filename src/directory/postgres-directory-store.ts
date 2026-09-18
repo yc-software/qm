@@ -137,6 +137,7 @@ function channelRow(r: Record<string, unknown>): DirectoryChannel {
     name: r.name as string,
     isPrivate: r.is_private as boolean,
     ...(r.is_external ? { isExternal: true } : {}),
+    ...(typeof r.roster_all_internal === "boolean" ? { rosterAllInternal: r.roster_all_internal } : {}),
   };
 }
 
@@ -182,6 +183,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
     { id: "directory/store/0002", statements: SYNC_STAMP_SCHEMA },
     { id: "directory/store/0003", statements: EXTERNAL_ROSTER_SCHEMA },
+    {
+      id: "directory/store/0004",
+      statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS roster_all_internal BOOLEAN"],
+    },
   ]);
 
   async function pick<T>(
@@ -304,7 +309,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           ? undefined
           : dedupMemberships(channelMembers).filter((member) => rosterIds!.has(member.channelId));
       const revokedRows = dedupMemberships(revocations).filter((member) => listedIds.has(member.channelId));
-      const channelsPart = list.map((c) => `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}|${c.isExternal ? 1 : 0}`);
+      const channelsPart = list.map(
+        (c) =>
+          `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}|${c.isExternal ? 1 : 0}|${c.rosterAllInternal ?? "unknown"}`,
+      );
       const membersPart =
         membershipRows === undefined
           ? []
@@ -327,13 +335,14 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         );
         if (list.length) {
           await client.query(
-            `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[])
+            `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, roster_all_internal)
+             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[], $8::boolean[])
              ON CONFLICT (org_id, channel_id) DO UPDATE SET
                name = EXCLUDED.name,
                name_lc = EXCLUDED.name_lc,
                is_private = EXCLUDED.is_private,
                is_external = EXCLUDED.is_external,
+               roster_all_internal = EXCLUDED.roster_all_internal,
                roster_known = directory_channels.roster_known OR EXCLUDED.roster_known`,
             [
               orgId,
@@ -343,6 +352,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
               list.map((c) => !!c.isPrivate),
               list.map((c) => !!c.isExternal),
               list.map((c) => rosterIds?.has(c.channelId) ?? false),
+              list.map((c) => c.rosterAllInternal ?? null),
             ],
           );
         }
@@ -569,7 +579,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const rows =
         kind === "channel"
           ? await q(
-              `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
+              `SELECT channel.roster_known, channel.is_external, channel.roster_all_internal, roster.principal_id AS roster_principal_id,
                       member.principal_id, member.display_name, member.type, member.slack_id
                FROM directory_channels channel
                LEFT JOIN directory_channel_members roster
@@ -581,7 +591,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
               [orgId, id],
             )
           : await q(
-              `SELECT group_row.roster_known, FALSE AS is_external, roster.principal_id AS roster_principal_id,
+              `SELECT group_row.roster_known, FALSE AS is_external, TRUE AS roster_all_internal, roster.principal_id AS roster_principal_id,
                       member.principal_id, member.display_name, member.type, member.slack_id
                FROM directory_groups group_row
                LEFT JOIN directory_group_members roster
@@ -592,14 +602,20 @@ export function createPostgresDirectoryStore(connectionString: string): Director
                ORDER BY roster.principal_id`,
               [orgId, id],
             );
-      if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
+      if (
+        !rows.length ||
+        rows[0]?.roster_known !== true ||
+        rows[0]?.is_external === true ||
+        rows[0]?.roster_all_internal !== true
+      )
+        return undefined;
       if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
       return rows.map(memberRow);
     },
 
     async listChannelsFor(principalId) {
       const rows = await q(
-        `SELECT channel_id, name, is_private, is_external FROM directory_channels c
+        `SELECT channel_id, name, is_private, is_external, roster_all_internal FROM directory_channels c
          WHERE org_id = $1 AND (is_private = FALSE OR (is_external = FALSE AND EXISTS (
            SELECT 1 FROM directory_channel_members m
            WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = $2)))
@@ -616,7 +632,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
     async listChannels() {
       const rows = await q(
-        "SELECT channel_id, name, is_private, is_external FROM directory_channels WHERE org_id = $1",
+        "SELECT channel_id, name, is_private, is_external, roster_all_internal FROM directory_channels WHERE org_id = $1",
         [orgId],
       );
       return rows.map(channelRow);

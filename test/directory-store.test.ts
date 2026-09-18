@@ -71,7 +71,7 @@ describe("channel resolution (agent → channel addressing, §10)", () => {
       { channelId: "C-engng", name: "engineering" },
       { channelId: "C-d1", name: "design-frontend" },
       { channelId: "C-d2", name: "design-backend" },
-      { channelId: "C-secret", name: "secret", isPrivate: true },
+      { channelId: "C-secret", name: "secret", rosterAllInternal: true, isPrivate: true },
     ]);
     return d;
   };
@@ -241,7 +241,7 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
     ]);
     await d.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+      [{ channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true }],
       [{ channelId: "C-sec", principalId: "U-carol" }],
     );
     assert.equal(await d.channelMember("C-sec", "U-carol"), true);
@@ -254,11 +254,11 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
       ["U-carol"],
     );
 
-    await d.replaceChannels([{ channelId: "C-sec", name: "secret", isPrivate: true }]);
+    await d.replaceChannels([{ channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true }]);
     assert.equal(await d.channelMember("C-sec", "U-carol"), true);
 
     await d.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+      [{ channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true }],
       [{ channelId: "C-sec", principalId: "U-alice" }],
     );
     assert.equal(await d.channelMember("C-sec", "U-carol"), false);
@@ -271,7 +271,7 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
     await d.replaceChannels(
       [
         { channelId: "C-public", name: "public" },
-        { channelId: "C-sec", name: "secret", isPrivate: true },
+        { channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true },
       ],
       [],
     );
@@ -288,9 +288,9 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
   it("partially replaces only the channel rosters known by the source", async () => {
     const d = createDirectoryStore();
     const channels = [
-      { channelId: "C-one", name: "one", isPrivate: true },
-      { channelId: "C-two", name: "two", isPrivate: true },
-      { channelId: "C-new", name: "new", isPrivate: true },
+      { channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true },
+      { channelId: "C-two", name: "two", rosterAllInternal: true, isPrivate: true },
+      { channelId: "C-new", name: "new", rosterAllInternal: true, isPrivate: true },
     ];
     await d.replaceChannels(channels.slice(0, 2), [
       { channelId: "C-one", principalId: "U-old-one" },
@@ -306,14 +306,14 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
   it("applies removals without clearing a failed channel refresh", async () => {
     const d = createDirectoryStore();
     await d.replaceChannels(
-      [{ channelId: "C-one", name: "one", isPrivate: true }],
+      [{ channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true }],
       [
         { channelId: "C-one", principalId: "U-leaving" },
         { channelId: "C-one", principalId: "U-keep" },
       ],
     );
     await d.replaceChannels(
-      [{ channelId: "C-one", name: "one", isPrivate: true }],
+      [{ channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true }],
       [],
       undefined,
       [],
@@ -326,7 +326,7 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
   it("uses one Slack Connect roster without making a private room an ordinary send target", async () => {
     const d = createDirectoryStore();
     await d.replaceChannels(
-      [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
+      [{ channelId: "C-connect", name: "connect", rosterAllInternal: true, isPrivate: true, isExternal: true }],
       [{ channelId: "C-connect", principalId: "U-member" }],
     );
     assert.equal(await d.channelMembership("C-connect", "U-member"), true);
@@ -337,9 +337,9 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
   it("partially replaces only the channel rosters known by the source", async () => {
     const d = createDirectoryStore();
     const channels = [
-      { channelId: "C-one", name: "one", isPrivate: true },
-      { channelId: "C-two", name: "two", isPrivate: true },
-      { channelId: "C-new", name: "new", isPrivate: true },
+      { channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true },
+      { channelId: "C-two", name: "two", rosterAllInternal: true, isPrivate: true },
+      { channelId: "C-new", name: "new", rosterAllInternal: true, isPrivate: true },
     ];
     await d.replaceChannels(channels.slice(0, 2), [
       { channelId: "C-one", principalId: "U-old-one" },
@@ -355,14 +355,14 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
   it("applies removals without clearing a failed channel refresh", async () => {
     const d = createDirectoryStore();
     await d.replaceChannels(
-      [{ channelId: "C-one", name: "one", isPrivate: true }],
+      [{ channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true }],
       [
         { channelId: "C-one", principalId: "U-leaving" },
         { channelId: "C-one", principalId: "U-keep" },
       ],
     );
     await d.replaceChannels(
-      [{ channelId: "C-one", name: "one", isPrivate: true }],
+      [{ channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true }],
       [],
       undefined,
       [],
@@ -375,11 +375,36 @@ describe("private-channel membership (authorizes private-channel sends, §10)", 
   it("uses one Slack Connect roster without making a private room an ordinary send target", async () => {
     const d = createDirectoryStore();
     await d.replaceChannels(
-      [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
+      [{ channelId: "C-connect", name: "connect", rosterAllInternal: true, isPrivate: true, isExternal: true }],
       [{ channelId: "C-connect", principalId: "U-member" }],
     );
     assert.equal(await d.channelMembership("C-connect", "U-member"), true);
     assert.equal(await d.channelMember("C-connect", "U-member"), false);
     assert.deepEqual(await d.listChannelsFor("U-member"), []);
   });
+});
+
+it("credential roster trust changes without revoking internal membership", async () => {
+  const store = createDirectoryStore();
+  await store.replace([{ principalId: "U1", displayName: "Alice", type: "internal" }]);
+  for (const rosterAllInternal of [true, false, undefined, true]) {
+    await store.replaceChannels(
+      [
+        {
+          channelId: "C-flags",
+          name: "flags",
+          isPrivate: true,
+          ...(rosterAllInternal === undefined ? {} : { rosterAllInternal }),
+        },
+      ],
+      [{ channelId: "C-flags", principalId: "U1" }],
+    );
+    assert.equal(await store.channelMember("C-flags", "U1"), true);
+    assert.equal(await store.channelMembership("C-flags", "U1"), true);
+    assert.equal((await store.listChannels())[0]?.rosterAllInternal, rosterAllInternal);
+    assert.deepEqual(
+      (await store.conversationMembers("channel", "C-flags"))?.map((member) => member.principalId),
+      rosterAllInternal === true ? ["U1"] : undefined,
+    );
+  }
 });

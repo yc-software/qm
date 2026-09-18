@@ -215,16 +215,7 @@ async function gate(
         return null;
       }
     }
-    if (
-      !(await app.authorizesCapabilityScope({
-        actorId: capability.actorId,
-        scopeId: capability.scopeId,
-        ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
-        ...(capability.botActor ? { botActor: true } : {}),
-        ...(capability.liveActor ? { liveActor: true } : {}),
-        ...(capability.members ? { members: capability.members } : {}),
-      }))
-    ) {
+    if (!(await app.authorizesCapabilityScope(capability))) {
       sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
       return null;
     }

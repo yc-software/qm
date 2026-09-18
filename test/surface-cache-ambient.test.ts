@@ -770,7 +770,7 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
     await built.directory.replaceChannels(
-      [{ channelId: container, name: "solicited-chan", isPrivate: false }],
+      [{ channelId: container, name: "solicited-chan", isPrivate: false, rosterAllInternal: true }],
       [{ channelId: container, principalId: "alice@acme.com" }],
     );
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
@@ -803,7 +803,7 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
       { principalId: "bob@acme.com", displayName: "Bob", type: "internal", slackId: "U2" },
     ]);
     await built.directory.replaceChannels(
-      [{ channelId: container, name: "solicited-roster", isPrivate: false }],
+      [{ channelId: container, name: "solicited-roster", isPrivate: false, rosterAllInternal: true }],
       [
         { channelId: container, principalId: "alice@acme.com" },
         { channelId: container, principalId: "bob@acme.com" },
@@ -925,7 +925,9 @@ test("a solicited verdict for a message that isn't the newest speaker's degrades
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
       { principalId: "mallory@acme.com", displayName: "Mallory", type: "internal", slackId: "U2" },
     ]);
-    await built.directory.replaceChannels([{ channelId: container, name: "disarmed-chan", isPrivate: false }]);
+    await built.directory.replaceChannels([
+      { channelId: container, name: "disarmed-chan", isPrivate: false, rosterAllInternal: true },
+    ]);
     await built.app.setChannelPolicy(container, "!engage-asked !post disarmed reply", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
@@ -959,7 +961,7 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
     await built.directory.replaceChannels(
-      [{ channelId: container, name: "private-chan", isPrivate: true }],
+      [{ channelId: container, name: "private-chan", isPrivate: true, rosterAllInternal: true }],
       [{ channelId: container, principalId: "alice@acme.com" }],
     );
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");

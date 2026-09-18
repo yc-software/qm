@@ -143,16 +143,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
       message: "git credential broker requires a credential-broker capability token",
     });
   }
-  if (
-    !(await ctx.app.authorizesCapabilityScope({
-      actorId: claims.actorId,
-      scopeId: claims.scopeId,
-      ...(claims.scopeVersion ? { scopeVersion: claims.scopeVersion } : {}),
-      ...(claims.botActor ? { botActor: true } : {}),
-      ...(claims.liveActor ? { liveActor: true } : {}),
-      ...(claims.members ? { members: claims.members } : {}),
-    }))
-  ) {
+  if (!(await ctx.app.authorizesCapabilityScope(claims))) {
     return sendJson(ctx.res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
   }
   if (!Array.isArray(claims.credentials) || !claims.credentials.includes(slug)) {

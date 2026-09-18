@@ -40,6 +40,7 @@ interface ChannelRow {
   name: string;
   isPrivate?: boolean;
   isExternal?: boolean;
+  rosterAllInternal?: boolean;
 }
 interface ChannelMembershipRow {
   channelId: string;
@@ -295,7 +296,7 @@ export function createDirectory(deps: {
     channelRevocations: ChannelMembershipRow[];
   }> {
     const refs = [...publicChannels, ...privateChannels];
-    const channels = refs.map((channel) => ({
+    const channels: ChannelRow[] = refs.map((channel) => ({
       channelId: channel.id,
       name: channel.name,
       ...(channel.info.is_private ? { isPrivate: true } : {}),
@@ -314,6 +315,8 @@ export function createDirectory(deps: {
     });
     for (const channel of refs) {
       const roster = rosters.get(channel.id);
+      const row = channels.find((row) => row.channelId === channel.id)!;
+      row.rosterAllInternal = !!roster?.complete && !roster.actors.some((actor) => actor.isExternalGuest);
       const internalIds = roster && internalChannelMembers(roster.actors, roster.complete);
       if (!internalIds) continue;
       const revoked = invalidations.get(channel.id);
@@ -408,6 +411,10 @@ export function createDirectory(deps: {
         name: channel.name,
         ...(channel.info.is_private ? { isPrivate: true } : {}),
         ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
+        rosterAllInternal: (
+          computed.channels.find((row) => row.channelId === channel.id) ??
+          privateChannelsCache?.channels.find((row) => row.channelId === channel.id)
+        )?.rosterAllInternal,
       }));
       if (privateChannelsCache) {
         const refreshed = new Set(computed.channelRosterIds);

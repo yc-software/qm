@@ -1696,3 +1696,33 @@ test("a denyMessage account stays silent on ambient channel chatter from unliste
     await f.stop();
   }
 });
+
+test("directory distinguishes a mixed guest roster from an all-internal channel without losing membership", async () => {
+  const f = await fixture({ externalParticipants: true });
+  try {
+    const row = () => f.core.directories.at(-1).channels.find((channel: any) => channel.channelId === "C1");
+    assert.equal(row().rosterAllInternal, true);
+    f.client.usersById.set("U-GUEST", { ...internalUser("U-GUEST", "Guest"), is_restricted: true });
+    f.client.membersByChannel.set("C1", ["U1", "U-GUEST", "UBOT"]);
+    let pushes = f.core.directories.length;
+    await f.app.emitEvent("member_joined_channel", { user: "U-GUEST", channel: "C1", event_ts: "200.1" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.equal(row().rosterAllInternal, false);
+    assert.notEqual(row().isExternal, true);
+    assert.ok(
+      f.core.directories.at(-1).channelMembers.some((m: any) => m.channelId === "C1" && m.principalId === "U1"),
+    );
+    f.client.membersByChannel.set("C1", ["U1", "UBOT"]);
+    pushes = f.core.directories.length;
+    await f.app.emitEvent("member_left_channel", { user: "U-GUEST", channel: "C1", event_ts: "200.2" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.equal(row().rosterAllInternal, true);
+    f.client.membershipFailures.add("C1");
+    pushes = f.core.directories.length;
+    await f.app.emitEvent("channel_rename", { channel: { id: "C1" }, event_ts: "200.3" });
+    await waitFor(() => f.core.directories.length > pushes);
+    assert.equal(row().rosterAllInternal, false);
+  } finally {
+    await f.stop();
+  }
+});

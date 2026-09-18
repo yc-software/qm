@@ -74,7 +74,13 @@ interface StoredApprovalView {
 
 interface DirectoryPush {
   members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string }>;
-  channels?: Array<{ channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean }>;
+  channels?: Array<{
+    channelId: string;
+    name: string;
+    isPrivate?: boolean;
+    isExternal?: boolean;
+    rosterAllInternal?: boolean;
+  }>;
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   channelRosterIds?: string[];
   channelRevocations?: Array<{ channelId: string; principalId: string }>;

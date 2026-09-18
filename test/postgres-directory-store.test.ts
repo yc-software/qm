@@ -29,7 +29,7 @@ const seed = async (store: ReturnType<typeof createPostgresDirectoryStore>) => {
     { channelId: "C-engng", name: "engineering" },
     { channelId: "C-d1", name: "design-frontend" },
     { channelId: "C-d2", name: "design-backend" },
-    { channelId: "C-secret", name: "secret", isPrivate: true },
+    { channelId: "C-secret", name: "secret", rosterAllInternal: true, isPrivate: true },
   ]);
 };
 
@@ -174,7 +174,7 @@ test(
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
     ]);
     await store.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+      [{ channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true }],
       [{ channelId: "C-sec", principalId: "U-carol" }],
     );
     assert.equal(await store.channelMember("C-sec", "U-carol"), true);
@@ -187,18 +187,18 @@ test(
       ["U-carol"],
     );
 
-    await store.replaceChannels([{ channelId: "C-sec", name: "secret", isPrivate: true }]);
+    await store.replaceChannels([{ channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true }]);
     assert.equal(await store.channelMember("C-sec", "U-carol"), true);
 
     await store.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+      [{ channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true }],
       [{ channelId: "C-sec", principalId: "U-alice" }],
     );
     assert.equal(await store.channelMember("C-sec", "U-carol"), false);
     assert.equal(await store.channelMember("C-sec", "U-alice"), true);
 
     await store.replaceChannels(
-      [{ channelId: "C-sec", name: "secret", isPrivate: true }],
+      [{ channelId: "C-sec", name: "secret", rosterAllInternal: true, isPrivate: true }],
       [{ channelId: "C-sec", principalId: "U-alice" }],
     );
     assert.equal(await store.channelMember("C-sec", "U-alice"), true);
@@ -209,9 +209,12 @@ test("pg directory: private nonmembership is definitive only after a membership-
   const store = createPostgresDirectoryStore(URL!);
   const direct = (await freshPg(URL!)).query;
   await direct("UPDATE directory_sync SET channel_members_synced = FALSE", []);
-  await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }]);
+  await store.replaceChannels([{ channelId: "C-privdef", name: "secret", rosterAllInternal: true, isPrivate: true }]);
   assert.equal(await store.channelMembership("C-privdef", "U-alice"), undefined);
-  await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }], []);
+  await store.replaceChannels(
+    [{ channelId: "C-privdef", name: "secret", rosterAllInternal: true, isPrivate: true }],
+    [],
+  );
   assert.equal(await store.channelMembership("C-privdef", "U-alice"), false);
 });
 
@@ -277,8 +280,8 @@ test(
     await store.replaceChannels(
       [
         { channelId: "C-pub", name: "general" },
-        { channelId: "C-mine", name: "mine", isPrivate: true },
-        { channelId: "C-theirs", name: "theirs", isPrivate: true },
+        { channelId: "C-mine", name: "mine", rosterAllInternal: true, isPrivate: true },
+        { channelId: "C-theirs", name: "theirs", rosterAllInternal: true, isPrivate: true },
       ],
       [
         { channelId: "C-mine", principalId: "U1" },
@@ -386,9 +389,9 @@ test("pg directory: a swap stamped older than the stored snapshot is refused", {
 test("pg directory: a partial roster swap preserves channels whose roster is unknown", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   const channels = [
-    { channelId: "C-one", name: "one", isPrivate: true },
-    { channelId: "C-two", name: "two", isPrivate: true },
-    { channelId: "C-new", name: "new", isPrivate: true },
+    { channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true },
+    { channelId: "C-two", name: "two", rosterAllInternal: true, isPrivate: true },
+    { channelId: "C-new", name: "new", rosterAllInternal: true, isPrivate: true },
   ];
   await store.replaceChannels(channels.slice(0, 2), [
     { channelId: "C-one", principalId: "U-old-one" },
@@ -404,14 +407,14 @@ test("pg directory: a partial roster swap preserves channels whose roster is unk
 test("pg directory: removals apply without clearing a failed channel refresh", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replaceChannels(
-    [{ channelId: "C-one", name: "one", isPrivate: true }],
+    [{ channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true }],
     [
       { channelId: "C-one", principalId: "U-leaving" },
       { channelId: "C-one", principalId: "U-keep" },
     ],
   );
   await store.replaceChannels(
-    [{ channelId: "C-one", name: "one", isPrivate: true }],
+    [{ channelId: "C-one", name: "one", rosterAllInternal: true, isPrivate: true }],
     [],
     undefined,
     [],
@@ -425,7 +428,7 @@ test("pg directory: a private Slack Connect roster is not an ordinary send targe
   const store = createPostgresDirectoryStore(URL!);
   await store.replace([{ principalId: "U-member", displayName: "Member", type: "internal" }]);
   await store.replaceChannels(
-    [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
+    [{ channelId: "C-connect", name: "connect", rosterAllInternal: true, isPrivate: true, isExternal: true }],
     [{ channelId: "C-connect", principalId: "U-member" }],
   );
   assert.equal(await store.channelMembership("C-connect", "U-member"), true);
@@ -470,3 +473,28 @@ test(
     assert.equal(await store.groupMember("G-idem", "U-alice"), true);
   },
 );
+
+test("pg directory: credential roster trust transitions persist without revoking membership", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replace([{ principalId: "U1", displayName: "Alice", type: "internal" }]);
+  for (const rosterAllInternal of [true, false, undefined, true]) {
+    await store.replaceChannels(
+      [
+        {
+          channelId: "C-flags",
+          name: "flags",
+          isPrivate: true,
+          ...(rosterAllInternal === undefined ? {} : { rosterAllInternal }),
+        },
+      ],
+      [{ channelId: "C-flags", principalId: "U1" }],
+    );
+    assert.equal(await store.channelMember("C-flags", "U1"), true);
+    assert.equal(await store.channelMembership("C-flags", "U1"), true);
+    assert.equal((await store.listChannels())[0]?.rosterAllInternal, rosterAllInternal);
+    assert.deepEqual(
+      (await store.conversationMembers("channel", "C-flags"))?.map((member) => member.principalId),
+      rosterAllInternal === true ? ["U1"] : undefined,
+    );
+  }
+});

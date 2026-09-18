@@ -13,6 +13,7 @@ export interface DirectoryChannel {
   name: string;
   isPrivate?: boolean;
   isExternal?: boolean;
+  rosterAllInternal?: boolean;
 }
 
 export interface ChannelMembership {
@@ -244,7 +245,8 @@ export function createDirectoryStore(): DirectoryStore {
       let ids: string[];
       if (kind === "channel") {
         const channel = channels.find((candidate) => candidate.channelId === id);
-        if (!channel || channel.isExternal || !knownChannelRosters?.has(id)) return undefined;
+        if (!channel || channel.isExternal || channel.rosterAllInternal !== true || !knownChannelRosters?.has(id))
+          return undefined;
         ids = [...(channelMembers?.get(id) ?? [])];
       } else {
         if (!knownGroupRosters?.has(id)) return undefined;
