@@ -882,6 +882,7 @@ export function buildApp(
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox(workspace, {
+      advisoryLock,
       client: createSdkModalClient({
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,

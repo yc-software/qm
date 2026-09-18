@@ -63,7 +63,7 @@ export interface SandboxResources {
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string): Promise<void>;
   retire(actorId: string, id: string): Promise<void>;
-  use<T>(id: string, action: () => Promise<T>): Promise<T>;
+  use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null | undefined>;
   get(id: string): Promise<SandboxResource>;
@@ -180,12 +180,18 @@ export function createSandboxResources(opts: {
     if (!record) throw new Error(`sandbox not found: ${id}`);
     return record;
   };
-  const use = <T>(id: string, action: () => Promise<T>): Promise<T> =>
-    opts.lock.withLock(`sandbox-resource:${id}`, async () => {
-      const record = await get(id);
-      if (record.state === "retired") throw new Error("sandbox has been retired");
+  const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
+    const record = await get(id);
+    const lock =
+      exclusive || record.backend !== "modal" || !opts.lock.withSharedLock
+        ? opts.lock.withLock
+        : opts.lock.withSharedLock;
+    return lock(`sandbox-resource:${id}`, async () => {
+      const current = await get(id);
+      if (current.state === "retired") throw new Error("sandbox has been retired");
       return action();
     });
+  };
   const recordLegacy = async (scopeId: string, backend: SandboxBackendName, handle: SandboxHandle): Promise<string> => {
     const id = legacyId(scopeId, backend);
     await opts.records.putIfAbsent(id, {
@@ -269,7 +275,7 @@ export function createSandboxResources(opts: {
       await authorize(actorId, record.ownerScopeId);
       const backend = opts.backends[record.backend];
       if (!backend?.restartComputer) throw new Error(`sandbox restart unavailable: ${record.backend}`);
-      await use(id, () => backend.restartComputer!(record.backingScopeId));
+      await use(id, () => backend.restartComputer!(record.backingScopeId), true);
     },
     async resolve(scopeId) {
       await initialize();

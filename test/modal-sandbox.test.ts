@@ -1,3 +1,4 @@
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -675,6 +676,7 @@ test("a late checkpoint from another core cannot replace a newer committed check
   const two = await second.provision(layers);
   const older = first.teardown(one);
   await entered;
+  await store.merge(scope, { lastSnapshotAttemptMs: 1 });
   await second.teardown(two);
   const newest = (await store.get(scope))?.nativeSnapshotId;
   release();
@@ -856,4 +858,180 @@ test("repeated destroy teardown never targets an unrelated default scope", async
   await backend.teardown(handle, { destroy: true });
   assert.deepEqual(await store.get("default"), defaultRecord);
   assert.equal(await store.get(scope), null);
+});
+
+test("warm commands and process controls do not wait for a checkpoint", { timeout: 10000 }, async () => {
+  const counting = instrumentedSnapshotStore();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const s = make({
+    snapshots: {
+      ...counting.store,
+      createUpload: async (id: string) => {
+        const upload = await counting.store.createUpload!(id);
+        entered.resolve();
+        await release.promise;
+        return upload;
+      },
+    },
+  });
+  const handle = await s.provision(layers);
+  await s.writeFile(handle, "keep.txt", "before snapshot");
+  const saving = s.teardown(handle);
+  try {
+    await entered.promise;
+    assert.equal((await s.run(handle, "echo responsive")).stdout.trim(), "responsive");
+    assert.equal(await s.readFile(handle, "keep.txt"), "before snapshot");
+    assert.ok(supportsProcessSessions(s));
+    assert.deepEqual(await s.listProcesses(handle), []);
+  } finally {
+    release.resolve();
+    await saving;
+  }
+});
+
+test("ordinary calls never rotate an aged warm sandbox", async () => {
+  const store = createMemoryMap<StoredModalSandbox>();
+  const s = make({ store, rotateAfterMs: 1 });
+  const handle = await s.provision(layers);
+  await store.merge(scope, { createdAtMs: 0 });
+  const id = (await store.get(scope))!.sandboxId;
+  await s.run(handle, "echo same machine");
+  await s.writeFile(handle, "keep.txt", "same machine");
+  assert.equal((await store.get(scope))!.sandboxId, id);
+  assert.equal(fake.createdCount(scopeName()), 1);
+  await s.provision(layers);
+  assert.notEqual((await store.get(scope))!.sandboxId, id);
+});
+
+test("checkpoint writers from separate cores share the durable lifecycle lock", { timeout: 10000 }, async () => {
+  const store = createMemoryMap<StoredModalSandbox>();
+  const advisoryLock = createMemoryAdvisoryLock();
+  const counting = instrumentedSnapshotStore();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let writers = 0;
+  let maximum = 0;
+  const snapshots = {
+    ...counting.store,
+    createUpload: async (id: string) => {
+      writers++;
+      maximum = Math.max(maximum, writers);
+      const upload = await counting.store.createUpload!(id);
+      if (counting.puts() === 0) {
+        entered.resolve();
+        await release.promise;
+      }
+      return {
+        ...upload,
+        complete: async () => {
+          await upload.complete();
+          writers--;
+        },
+      };
+    },
+  };
+  const first = make({ store, snapshots, advisoryLock });
+  const second = make({ store, snapshots, advisoryLock });
+  const a = await first.provision(layers);
+  const b = await second.provision(layers);
+  const saving = first.teardown(a);
+  await entered.promise;
+  const exporting = second.persistHomeSnapshot!(scope);
+  try {
+    assert.equal((await second.run(b, "echo second core")).stdout.trim(), "second core");
+  } finally {
+    release.resolve();
+    await Promise.all([saving, exporting]);
+  }
+  assert.equal(maximum, 1);
+  assert.equal(counting.puts(), 2);
+});
+
+test("failed native checkpoints wait for the interval across cleanup and maintenance", async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  let attempts = 0;
+  let fail = false;
+  const wrap = (session: Awaited<ReturnType<ModalClient["create"]>>) => ({
+    ...session,
+    async snapshotHome() {
+      attempts++;
+      if (fail) throw new Error("Timeout expired");
+      return session.snapshotHome!();
+    },
+  });
+  const client: ModalClient = {
+    ...fake.client,
+    create: async (options) => wrap(await fake.client.create(options)),
+    fromId: async (id) => wrap(await fake.client.fromId(id)),
+  };
+  const s = make({ store, client });
+  const h = await s.provision(layers);
+  await s.teardown(h);
+  const saved = (await store.get(scope))!.nativeSnapshotId;
+  fail = true;
+  await store.merge(scope, { lastSnapshotMs: 1, lastSnapshotAttemptMs: 1 });
+  await s.teardown(h);
+  assert.equal(attempts, 2);
+  await s.teardown(h);
+  await s.reapDeepIdle!(6 * 3600_000);
+  assert.equal(attempts, 2);
+  const restarted = make({ store, client });
+  await restarted.reapDeepIdle!(6 * 3600_000);
+  assert.equal(attempts, 2);
+  assert.equal((await store.get(scope))!.nativeSnapshotId, saved);
+  assert.equal((await store.get(scope))!.recoveryError, "Timeout expired");
+  await store.merge(scope, { lastSnapshotAttemptMs: 1 });
+  await s.teardown(h);
+  assert.equal(attempts, 3);
+});
+
+test("deep idle termination excludes writes from another core until recovery", { timeout: 10000 }, async () => {
+  fake.cleanup();
+  fake = installFakeModal({ native: true });
+  const store = createMemoryMap<StoredModalSandbox>();
+  const advisoryLock = createMemoryAdvisoryLock();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let block = false;
+  const wrap = (session: Awaited<ReturnType<ModalClient["create"]>>) => ({
+    ...session,
+    async snapshotHome() {
+      const snapshot = await session.snapshotHome!();
+      if (block) {
+        entered.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    },
+  });
+  const client: ModalClient = {
+    ...fake.client,
+    create: async (options) => wrap(await fake.client.create(options)),
+    fromId: async (id) => wrap(await fake.client.fromId(id)),
+  };
+  const first = make({ store, client, advisoryLock });
+  const second = make({ store, client, advisoryLock });
+  const one = await first.provision(layers);
+  const two = await second.provision(layers);
+  await first.teardown(one);
+  await store.merge(scope, { lastActivityMs: Date.now() - 7 * 3600_000 });
+  block = true;
+  const reaping = first.reapDeepIdle!(6 * 3600_000);
+  await entered.promise;
+  let completed = false;
+  const writing = second.writeFile(two, "after-checkpoint.txt", "must survive").then(() => {
+    completed = true;
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(completed, false);
+  } finally {
+    release.resolve();
+    await Promise.all([reaping, writing]);
+  }
+  assert.equal(await second.readFile(two, "after-checkpoint.txt"), "must survive");
+  assert.equal(fake.createdCount(scopeName()), 2);
 });
