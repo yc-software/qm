@@ -455,7 +455,7 @@ export function createTurnHandler(deps: {
     let overheard: OverheardMessage[] | undefined;
     let detectContext: string | undefined;
     let detectOpener: string | undefined;
-    if (!inc.synthetic) {
+    if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
       const serialize = () =>
         serializer.serializeSlackConversation(client, inc, {
           audience,
