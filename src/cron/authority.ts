@@ -4,7 +4,10 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { App } from "../api/app.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 
-type TriggerAuthority = Pick<TriggerSpec, "owner" | "ownerScopeId" | "runAs" | "ownerResourcesRequireOpen" | "unattendedGrants" | "members">;
+type TriggerAuthority = Pick<
+  TriggerSpec,
+  "owner" | "ownerScopeId" | "runAs" | "ownerResourcesRequireOpen" | "unattendedGrants" | "members"
+>;
 
 export function cronTriggerAuthority(cron: TriggerAuthority): TriggerAuthority {
   return {

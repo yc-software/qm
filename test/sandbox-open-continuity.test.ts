@@ -68,6 +68,26 @@ function fixture(source = "group:project", target = "personal:alice", authority 
       restored.push(bytes);
     },
   };
+  const roomSkill = {
+    skill: {
+      id: "room-tool",
+      scopeId: source,
+      manifest: {
+        name: "room-tool",
+        description: "room helper",
+        requiredCapabilities: [],
+        body: "synthetic-room-skill: run scripts/run.js",
+        files: [{ path: "scripts/run.js", content: "synthetic-room-skill-file" }],
+      },
+      signature: "",
+      status: "published",
+      createdBy: "bob",
+      version: 1,
+      grantedCapabilities: [],
+      approvals: [],
+    },
+    shadowed: [],
+  };
   const resources = {
     get: async () => resource,
     access: async () => {
@@ -139,7 +159,8 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     ownerAuthAvailable: false,
     turnSessionDir: "turn/session",
     turnFilesDir: "turn/session/fire",
-    visibleSkills: [],
+    visibleSkills: [roomSkill],
+    visibleSkillsForTurn: async () => [roomSkill],
     emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
@@ -150,7 +171,7 @@ function fixture(source = "group:project", target = "personal:alice", authority 
     provisionResource: turn.provisionResource,
     canUseSandboxScope: turn.canUseSandboxScope,
     provision: turn.provision,
-    ensureSkillTree: turn.ensureSkillTree,
+    useSkill: turn.useSkill,
     layers: [{ scopeId: source, mode: "rw", mountPath: "" }],
     commandPolicy: () => sourcePolicy,
     authorizeCommand: (command: string, key = command, exact?: boolean, modes?: typeof targetModes) => {
@@ -232,7 +253,9 @@ test("Open shared requests execute on the owner's personal machine without movin
   assert.equal(f.runs.at(-1)?.env?.OWN_SECRET, "synthetic-own-secret");
   assert.ok(f.restored.some((bytes) => Buffer.from(bytes).includes("synthetic-own-file")));
   assert.equal(JSON.stringify(f.provisions).includes("team:private"), false);
-  await f.tools.execute("node skills/private-tool/run.js", { sandboxId: "personal-box" });
+  const skill = await f.tools.skill("room-tool", { sandboxId: "personal-box" });
+  assert.match(skill.content ?? "", /synthetic-room-skill/);
+  assert.equal(skill.dir, undefined);
   await f.turn.reclaimBox();
   assert.deepEqual(f.writes, []);
 });

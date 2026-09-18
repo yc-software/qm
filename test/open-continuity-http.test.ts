@@ -2,14 +2,13 @@ import "./support/auto-fake-sprites.ts";
 import { test, mock, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
+import { randomUUID } from "node:crypto";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { testConfig } from "./support/test-config.ts";
 
-// Only the model and provider transport are synthetic. HTTP routing, capability
-// verification, control service, scheduler, turn authorization and tools are real.
 mock.module("../src/harness/mock-harness.ts", {
   namedExports: {
     createMockHarness: () => {
@@ -18,11 +17,14 @@ mock.module("../src/harness/mock-harness.ts", {
       h.turns.runTurn = async (turn: HarnessTurnInput) => {
         const match = /!proof (\{[^\n]+\})/.exec(turn.input);
         if (!match) return run(turn);
-        const command = JSON.parse(match[1]!) as { id: string; command: string };
+        const command = JSON.parse(match[1]!) as { id?: string; ownerAuth?: boolean; command: string };
         await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
         let reply: string;
         try {
-          const out = await turn.tools.execute(command.command, { sandboxId: command.id });
+          const out = await turn.tools.execute(command.command, {
+            ...(command.id ? { sandboxId: command.id } : {}),
+            ...(command.ownerAuth ? { ownerAuth: true } : {}),
+          });
           reply = out.stdout.trim() || out.stderr.trim();
         } catch (e) {
           reply = `DENIED: ${String(e)}`;
@@ -58,6 +60,8 @@ async function fixture(t: TestContext) {
     );
   await roster(["alice", "bob"]);
   await b.config.setSharingPosture("org:default-org", "open");
+  const sharedSandbox = await b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof");
+  await b.sandboxResources.setDefault("alice", "channel:public-room", sharedSandbox.id);
   const server = createServer(b.app, {
     signingSecret: SECRET,
     scheduler: b.scheduler,
@@ -105,9 +109,15 @@ async function fixture(t: TestContext) {
     }
     assert.fail("HTTP scheduler fire did not finish within 10s");
   };
-  const turn = async (text: string, actor = "alice", room = true) => {
+  const turn = async (
+    text: string,
+    actor = "alice",
+    room = true,
+    audience: { externalId: string; isExternalGuest?: boolean }[] = members.map((m) => ({ externalId: m.id })),
+  ) => {
     const body = JSON.stringify({
       surface: "test",
+      idempotencyKey: randomUUID(),
       actor: { externalId: actor },
       origin: { kind: "human" },
       conversation: room
@@ -115,7 +125,8 @@ async function fixture(t: TestContext) {
             kind: "channel",
             channelRef: "public-room",
             threadRef: `proof:${actor}`,
-            audience: members.map((m) => ({ externalId: m.id })),
+            audience,
+            publishMembers: audience,
           }
         : { kind: "dm", threadRef: `proof-dm:${actor}` },
       text,
@@ -125,7 +136,8 @@ async function fixture(t: TestContext) {
       headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
       body,
     });
-    return (await response.json()) as { status: string; reply?: string };
+    const result = (await response.json()) as { status: string; reply?: string; reason?: string };
+    return { ...result, http: response.status };
   };
   return { ...b, cap, request, turn, roster, awaitFire };
 }
@@ -134,10 +146,9 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
   const b = await fixture(t);
   const resource = await b.sandboxResources.create("alice", "personal:alice", "sprites", "personal-proof");
   const command = (cmd: string) => `!proof ${JSON.stringify({ id: resource.id, command: cmd })}`;
-  assert.equal(
-    (await b.turn(command("printf continuity-sentinel > proof.txt; cat proof.txt"), "alice", false)).reply,
-    "continuity-sentinel",
-  );
+  const first = await b.turn(command("printf continuity-sentinel > proof.txt; cat proof.txt"), "alice", false);
+  assert.equal(first.http, 200, JSON.stringify(first));
+  assert.equal(first.reply, "continuity-sentinel");
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
   assert.match((await b.turn(command("cat proof.txt"), "bob")).reply ?? "", /DENIED/);
   assert.match((await b.turn(command("cat proof.txt"), "stranger")).reply ?? "", /DENIED/);
@@ -146,7 +157,12 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
   assert.equal((await b.turn(command("cat proof.txt"), "alice", false)).reply, "continuity-sentinel");
   await b.config.clearSharingPosture("personal:alice");
   await b.roster(["bob"]);
-  assert.match((await b.turn(command("cat proof.txt"))).reply ?? "", /DENIED/);
+  assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
+  const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
+  const refused = await b.turn(command("cat proof.txt"), "alice", true, guests);
+  assert.equal(refused.http, 403);
+  assert.equal(refused.status, "refused");
+  assert.equal(refused.reply, undefined);
 });
 
 test("HTTP Open continuity: public channel permits explicit shared cron", async (t) => {
@@ -219,7 +235,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   const created = await b.request("POST", "/v1/crons", owner, {
     title: "Owner keychain proof",
     schedule: { everyMs: 3600000 },
-    task: '!owner printf "%s" "$CONTINUITY_PROOF_TOKEN"',
+    task: `!proof ${JSON.stringify({ ownerAuth: true, command: 'printf "%s" "$CONTINUITY_PROOF_TOKEN"' })}`,
   });
   assert.equal(created.status, 200, JSON.stringify(created.body));
   assert.equal(created.body.cron.runAs, "scopeShared");
@@ -259,7 +275,7 @@ for (const isPrivate of [false, true]) {
       const response = await b.request("POST", "/v1/crons", await b.cap("alice"), {
         title: "Opt-out proof",
         schedule: { everyMs: 3600000 },
-        task: '!owner printf "%s" "$CONTINUITY_VETO_TOKEN"',
+        task: `!proof ${JSON.stringify({ ownerAuth: true, command: 'printf "%s" "$CONTINUITY_VETO_TOKEN"' })}`,
       });
       assert.equal(response.status, 200, JSON.stringify(response.body));
       const id = response.body.cron.id;
@@ -309,7 +325,7 @@ test("HTTP legacy explicit private shared cron remains owner-authorized under is
     runAs: "scopeShared",
     members,
     schedule: { everyMs: 3600000 },
-    action: '!owner printf "%s" "$CONTINUITY_LEGACY_TOKEN"',
+    action: `!proof ${JSON.stringify({ ownerAuth: true, command: 'printf "%s" "$CONTINUITY_LEGACY_TOKEN"' })}`,
     destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
   });
   assert.equal(cron.ownerResourcesRequireOpen, undefined);

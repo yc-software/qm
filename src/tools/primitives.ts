@@ -942,9 +942,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (opts?.sandboxId) {
         if (!deps.sandboxResources || !deps.provisionResource)
           throw new Error("named sandboxes are not available here");
-        const record = await deps.sandboxResources.get(opts.sandboxId);
-        if (!record) throw new Error(`unknown sandbox ${opts.sandboxId}`);
-        if (record.ownerScopeId !== writableScopeId) throw new Error("load skills from the sandbox's owning scope");
+        await accessSandbox(opts.sandboxId);
       }
       return withAbort(() => deps.useSkill!(name, opts?.path ?? "SKILL.md", opts?.sandboxId), opts?.signal);
     },
