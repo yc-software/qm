@@ -759,7 +759,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (_m, p) => p.startsWith("/v1/admin/"),
     when: (v) => v.isAdmin && livePersonCapability(v.claims),
     guidance:
-      "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads work only from a DM with the admin; bulk config imports also require a DM; other mutations work anywhere; admin grant changes are portal-only and refuse agent tokens.",
+      "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the live admin (organization, personal, and conversation restrictions all apply); bulk config imports require a DM or the portal; other mutations work anywhere; admin grant changes and impersonation are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       {
@@ -771,7 +771,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/admin/scopes/:scopeId",
         summary:
-          "a scope's resolved config: command policy, SOUL, egress, flags, connectors, service credentials (non-org scopes: DM only)",
+          "a scope's resolved config: command policy, SOUL, egress, flags, connectors, service credentials (non-org scopes: DM or effective Open sharing)",
       },
       {
         method: "PUT",
@@ -782,41 +782,48 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET|PUT",
         path: "/v1/admin/memory?scope=",
-        summary: "read or rewrite any scope's memory notebook (e.g. fix poisoned memory; non-org reads: DM only)",
+        summary:
+          "read or rewrite any scope's memory notebook (e.g. fix poisoned memory; non-org reads: DM or effective Open sharing)",
       },
       {
         method: "GET",
         path: "/v1/admin/sessions?scope=",
         summary:
-          "conversation metadata; /v1/admin/sessions/:id for a transcript and /:id/llm for captured prompts (DM only)",
+          "conversation metadata; /v1/admin/sessions/:id for a transcript and /:id/llm for captured prompts (DM or effective Open sharing)",
       },
-      { method: "GET", path: "/v1/admin/runs?scope=", summary: "queued / in-flight / recent runs (DM only)" },
+      {
+        method: "GET",
+        path: "/v1/admin/runs?scope=",
+        summary: "queued / in-flight / recent runs (DM or effective Open sharing)",
+      },
       {
         method: "GET",
         path: "/v1/admin/files?scope=",
-        summary: "document store listing; files/read?id= and files/download?id= for content (DM only)",
+        summary:
+          "document store listing; files/read?id= and files/download?id= for content (DM or effective Open sharing)",
       },
       {
         method: "GET",
         path: "/v1/admin/volumes?scope=",
-        summary: "a scope's computer/backup contents (paths and sizes; DM only)",
+        summary: "a scope's computer/backup contents (paths and sizes; DM or effective Open sharing)",
       },
       {
         method: "GET",
         path: "/v1/admin/crons|deployments|skills?scope=",
-        summary: "artifacts by owning scope (DM only)",
+        summary: "artifacts by owning scope (DM or effective Open sharing)",
       },
       {
         method: "GET",
         path: "/v1/admin/audit|errors|metrics|egress?scope=",
-        summary: "observability: audit log, error telemetry, turn metrics, outbound-destination log (logs: DM only)",
+        summary:
+          "observability: audit log, error telemetry, turn metrics, outbound-destination log (logs: DM or effective Open sharing)",
       },
       { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },
       {
         method: "GET",
         path: "/v1/admin/users",
         summary:
-          "org roster with admin status plus externalUsers (invited outside collaborators with role, expiry, status); /v1/admin/users/:id for one user's activity, conversations, and personal-scope artifacts (DM only)",
+          "org roster with admin status plus externalUsers (invited outside collaborators with role, expiry, status); /v1/admin/users/:id for one user's activity, conversations, and personal-scope artifacts (DM or effective Open sharing)",
       },
       {
         method: "POST",
@@ -838,7 +845,7 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET",
         path: "/v1/admin/keychain",
-        summary: "person-owned keychain metadata, grants, and asks (DM only)",
+        summary: "person-owned keychain metadata, grants, and asks (DM or effective Open sharing)",
       },
     ],
   },

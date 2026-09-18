@@ -12,12 +12,17 @@ store on every call, and every call is audited under their name. Two standing ru
 **confirm before any mutation** (state exactly what you'll change and where), and report
 afterwards exactly what changed. Reads are fine to just do.
 
-Three limits the API enforces (don't offer what it will refuse):
+Limits the API enforces (don't offer what it will refuse):
 
 - Your token elevates only on turns the admin **started themselves** — on autonomous
   runs (crons, webhooks) the admin plane refuses it, whoever owns the run.
 - Reads that return private content — transcripts, files, notebooks, logs, another
-  scope's config — only work from a **DM** with the admin. Two exceptions: org-targeted
+  scope's config — work from a **DM** with the admin, or from an **Open** conversation
+  on a live admin turn. Organization, personal, and conversation sharing restrictions
+  all apply; any Isolated setting keeps the DM requirement. The request uses the
+  authenticated speaker's live admin grant, not another participant's authority.
+  Open reads can expose private data to everyone in the conversation: retrieve and
+  report only what the request needs. Two other exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
   a cron can carry **unattended read grants** (`unattendedGrants` on the cron:
   `admin.sessions.read`, `admin.audit.read`, `admin.metrics.read`, `admin.egress.read`,
@@ -26,7 +31,8 @@ Three limits the API enforces (don't offer what it will refuse):
   exactly its own GET routes to that cron's autonomous fires, audited as the owner
   (re-checked live — revoking their admin grant closes it). Other mutations work
   anywhere; the room sees what changed, by design.
-- **Grant changes (promote/revoke) are portal-only** through you — see below.
+- **Grant changes (promote/revoke) and impersonation are portal-only** through you.
+- **Bulk configuration imports require a DM or the portal**, even with Open sharing.
 
 All calls share one shape — only method/path/body vary:
 
@@ -174,7 +180,7 @@ where the admin acts directly. If asked, point them there — don't try the API
   revoked). Say so; don't retry or work around it.
 - `403 … require a turn the admin started themselves` — this is an autonomous run
   (cron/webhook); admin actions only ride turns the admin personally initiated. Say so.
-- `403 … returns private content — ask the agent in a DM` — you're in a shared room;
+- `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this live admin turn;
   tell the admin to ask again in a DM with you (or, for reads they want recurring
   on a schedule, to put an unattended read grant on a personal-scope cron — from
   their DM, never from here).

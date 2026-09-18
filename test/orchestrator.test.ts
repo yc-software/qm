@@ -1122,6 +1122,11 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     adminTurn({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:t2" } }),
   );
   assert.match(adminPrompt.reply ?? "", /## Acting for an org admin/);
+  assert.match(
+    adminPrompt.reply ?? "",
+    /private-content reads require a DM or an Open conversation on a live admin turn/,
+  );
+  assert.doesNotMatch(adminPrompt.reply ?? "", /private-content reads work only from a DM/);
   assert.match(adminPrompt.reply ?? "", /"scope":"org"/, "the org-notebook option rides in the admin hint");
 
   captured = undefined;

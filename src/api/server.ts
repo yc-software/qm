@@ -21,7 +21,7 @@ import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from 
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseScopeId } from "../types.ts";
+import { parseScopeId, scopeId } from "../types.ts";
 import {
   armBodyDeadline,
   canonicalPayload,
@@ -44,7 +44,13 @@ const safeDecode = (s: string): string => {
   }
 };
 
-function capabilityAdminDenied(method: string, pathname: string, url: URL, claims: CapabilityClaims): string | null {
+async function capabilityAdminDenied(
+  method: string,
+  pathname: string,
+  url: URL,
+  claims: CapabilityClaims,
+  config: ServerDeps["config"],
+): Promise<string | null> {
   if (method === "GET" && pathname === "/v1/admin/whoami") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
   if (!livePersonCapability(claims) && !unattendedAdminReadAllowed(method, pathname, claims)) {
@@ -68,7 +74,11 @@ function capabilityAdminDenied(method: string, pathname: string, url: URL, claim
     if (pathname.startsWith("/v1/admin/scopes/"))
       target = safeDecode(pathname.slice("/v1/admin/scopes/".length).split("/")[0] ?? "");
     else if (pathname === "/v1/admin/memory") target = url.searchParams.get("scope") ?? "";
-    if (parseScopeId(target).kind !== "org") {
+    if (
+      parseScopeId(target).kind !== "org" &&
+      (!livePersonCapability(claims) ||
+        (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
+    ) {
       return "this admin read returns private content — ask the agent in a DM";
     }
   }
@@ -239,7 +249,7 @@ async function gate(
         return null;
       }
       if (pathname.startsWith("/v1/admin/")) {
-        const denied = capabilityAdminDenied(method, pathname, url, capability);
+        const denied = await capabilityAdminDenied(method, pathname, url, capability, deps.config);
         if (denied) {
           sendJson(res, 403, { error: "forbidden", message: denied });
           return null;
