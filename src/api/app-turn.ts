@@ -514,7 +514,7 @@ export function createTurnMethods(
               maxAttempts: deps.maxAttempts,
             });
             if (deduped) return { status: "silent" };
-            return req.async ? { status: "queued", runId: run.id } : drive(run.id);
+            return req.async ? { status: "queued", runId: run.id, conversationAside: true } : drive(run.id);
           }
           if (!isTerminal(targetRun.status) && (cancel || sameAccount)) {
             const steerText = attributedSteerText(

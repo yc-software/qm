@@ -159,6 +159,7 @@ test("a DM routed to a task on another account queues with the sender's account 
       redeliveryKey: "account-update",
     });
     assert.equal(result.status, "queued");
+    assert.equal(result.conversationAside, true);
     assert.notEqual(result.runId, child.id);
     assert.notEqual(result.steered, true);
     const queued = (await built.runs.get(result.runId!))!;
