@@ -225,7 +225,7 @@ for (const base of ["", "/admin", "/control"]) {
     }));
     assert.deepEqual(
       links.map((link) => link.dataset.designView),
-      ["governance", "skills", "files", "history", "metrics", "audit", "egress"],
+      ["governance", "skills", "files", "history", "audit", "egress"],
     );
     const bindStart = html.indexOf('        root.querySelectorAll(".design-page-links a")');
     const bindEnd = html.indexOf("        });", bindStart) + "        });".length;
@@ -243,7 +243,6 @@ for (const base of ["", "/admin", "/control"]) {
         `${base}/skills?scope=${SCOPE_ENC}`,
         `${base}/files?scope=${SCOPE_ENC}`,
         `${base}/history/scopes/${SCOPE_ENC}`,
-        `${base}/metrics?scope=${SCOPE_ENC}`,
         `${base}/audit?scope=${SCOPE_ENC}`,
         `${base}/egress?scope=${SCOPE_ENC}`,
       ],

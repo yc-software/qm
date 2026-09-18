@@ -7804,17 +7804,16 @@
         },
         {
           label: "Logs",
-          views: ["history", "slack", "judgments", "errors", "audit", "egress", "metrics"],
+          views: ["history", "slack", "judgments", "errors", "audit", "egress"],
         },
         {
           label: "Artifacts",
-          views: ["files", "skills", "memory", "deployments", "crons", "retention"],
+          views: ["files", "skills", "memory", "deployments", "crons"],
         },
         { views: ["design-system"] },
       ];
 
       const VIEWS = [...SECTIONS.flatMap((s) => s.views), "onboarding", "user", "ackemoji", "keychain"];
-      const DISABLED_VIEWS = new Set(["retention"]);
       function paritySubsection(card) {
         card.classList.remove("card", "sv-governance", "sv-models", "sv-credentials", "sv-customize");
         card.classList.add("parity-subsection");
@@ -8638,10 +8637,7 @@
             b.type = "button";
             b.appendChild(document.createTextNode(VIEW_TITLE[v] || v[0].toUpperCase() + v.slice(1)));
             if (v === view) b.setAttribute("aria-current", "page");
-            if (DISABLED_VIEWS.has(v)) {
-              b.disabled = true;
-              b.title = "Coming back soon";
-            } else b.onclick = () => setView(v);
+            b.onclick = () => setView(v);
 
             if (v === "judgments" && view === "ackemoji") {
               b.classList.add("active");
@@ -11530,7 +11526,7 @@
               designSpec(
                 "Choose a page pattern",
                 "Live references · preserve the selected organization",
-                '<div class="design-page-links"><a data-design-view="governance">Governance / Models</a><p>Descriptions beside settings, 40px column gap; stack on small screens. Keep Apply right-aligned with status on its left.</p><a data-design-view="skills">Skills</a><p>Open installed-skill and skill-pack sections; compact tables and an inline registration form.</p><a data-design-view="files">Files</a><p>Search in the header, flat upload toolbar, then scopes or files with metadata.</p><a data-design-view="history">Sessions</a><p>Two-way sort toggle, named environments, and a separately titled conversation list.</p><a data-design-view="metrics">Metrics</a><p>Quiet summary metrics followed by ruled report sections.</p><a data-design-view="audit">Audit</a> · <a data-design-view="egress">Egress</a><p>Filters above plain tables; headers stay transparent and regular-weight.</p></div>',
+                '<div class="design-page-links"><a data-design-view="governance">Governance / Models</a><p>Descriptions beside settings, 40px column gap; stack on small screens. Keep Apply right-aligned with status on its left.</p><a data-design-view="skills">Skills</a><p>Open installed-skill and skill-pack sections; compact tables and an inline registration form.</p><a data-design-view="files">Files</a><p>Search in the header, flat upload toolbar, then scopes or files with metadata.</p><a data-design-view="history">Sessions</a><p>Two-way sort toggle, named environments, and a separately titled conversation list.</p><a data-design-view="audit">Audit</a> · <a data-design-view="egress">Egress</a><p>Filters above plain tables; headers stay transparent and regular-weight.</p></div>',
                 true,
               ),
               designSpec(

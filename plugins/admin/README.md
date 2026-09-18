@@ -9,9 +9,9 @@ You reach it through the **portal** (real SSO); the surface trusts the portal-sy
 `admin=<sub>` cookie as identity and asks the **core** whether that principal is an admin
 (`GET /api/whoami` → core `GET /v1/admin/whoami` → `canAdminister`). It holds **no admin id list**
 of its own. Pick a scope, then either **edit governance** (command policy, SOUL, egress),
-**manage users** (the org-wide **Users** tab), or read the **observability** views — Metrics,
-History, Files, Live, Errors, Audit, Skills, Crons, Deployments, Volumes, Retention.
-The **Users** tab (org-wide, org_admin-only, like Retention) lists everyone who has
+**manage users** (the org-wide **Users** tab), or read the **observability** views —
+History, Files, Live, Errors, Audit, Skills, Crons, Deployments, Volumes.
+The **Users** tab (org-wide, org_admin-only) lists everyone who has
 used the agent (from session metadata — no content) with admin status joined, plus the
 authoritative grant list, and lets an org_admin **promote** a principal to org_admin
 or **revoke** — every mutation attributed and audited, the last org_admin protected.
@@ -25,16 +25,11 @@ expired; a day after expiry, **Remove** drops the row. An address that already b
 org member (the org's email domain, the Slack directory, the sign-in allow-list, or anyone who
 has used the agent) cannot be invited.
 (`org_admin` is the only supported role for now; `team_admin` was removed — team-scoped admin
-observability is future work. See `src/admin/admin-service.ts`.) Metrics
-shows TTFT + turn/queue/execution-latency
-percentiles, throughput, and a daily TTFT trend. History (conversation listing with a
+observability is future work. See `src/admin/admin-service.ts`.) History (conversation listing with a
 by-type usage rollup, drilling into transcripts with per-turn model-context breakdowns), Files
 (workspace contents), and Live (ongoing/recent runs) are **top-down content** views: an
 org-scope query spans the whole org; a narrower scope is limited to that scope. Every
 action is authorized in the core and audited.
-**Retention** is org-wide (no scope picker): DAU/WAU/MAU, new-vs-returning, weekly retention cohorts,
-stickiness, and per-user distributions — derived from session/participant metadata only
-(channel attribution is approximate, since entries carry no author principal).
 
 ## Run
 

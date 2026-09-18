@@ -14,7 +14,7 @@ function slice(from: string, to: string): string {
 
 function resolveView(pathname: string, search: string): string {
   const src = [
-    slice("const SECTIONS = [", "const DISABLED_VIEWS"),
+    slice("const SECTIONS = [", "function paritySubsection"),
     slice("const DEFAULT_VIEW = ", ";") + ";",
     slice("function decodePathSegment(seg) {", "let transcriptObserver"),
     "urlToState().view;",
