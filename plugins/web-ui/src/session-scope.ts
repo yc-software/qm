@@ -42,11 +42,6 @@ const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<numb
     }
     return count;
   },
-  files: async (scope) => {
-    const q = new URLSearchParams({ limit: "100", scope });
-    const r = await api<{ owned?: unknown[]; shared?: unknown[] }>(`/api/files?${q.toString()}`);
-    return (r.owned?.length ?? 0) + (r.shared?.length ?? 0);
-  },
   apps: async (scope) => {
     const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
       "/api/deployments",
@@ -54,10 +49,6 @@ const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<numb
     return (r.deployments ?? []).filter(
       (d) => d.status !== "archived" && (d.createdInScope === scope || d.ownerScopeId === scope),
     ).length;
-  },
-  skills: async (scope) => {
-    const r = await api<{ skills?: Array<{ scopeId?: string; status?: string }> }>("/api/skills?includeShadowed=1");
-    return (r.skills ?? []).filter((sk) => sk.scopeId === scope && sk.status !== "archived").length;
   },
 };
 
@@ -133,7 +124,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
     }
   `;
   const tool = (t: SessionTool, glyph: Parameters<typeof icon>[0], hint: string) => {
-    const count = o.toolCount?.(t) ?? null;
+    const count = t === "crons" || t === "apps" ? (o.toolCount?.(t) ?? null) : null;
     return html`
       <button
         class="session-tool ${o.activeTool === t ? "active" : ""}"
@@ -147,7 +138,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
     `;
   };
   const sheetTool = (t: SessionTool, glyph: Parameters<typeof icon>[0], hint: string) => {
-    const count = o.toolCount?.(t) ?? null;
+    const count = t === "crons" || t === "apps" ? (o.toolCount?.(t) ?? null) : null;
     return html`
       <button
         class="menu-option ${o.activeTool === t ? "active" : ""}"
@@ -188,7 +179,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           : html`<div class="session-heading">${heading}</div>`
       }
       <div class="topbar-actions session-tools">
-        ${tool("crons", Clock3, "Crons")} ${tool("files", Files, "Files")} ${tool("apps", Rocket, "Apps")}
+        ${tool("crons", Clock3, "Crons")} ${tool("apps", Rocket, "Apps")} ${tool("files", Files, "Files")}
         ${tool("skills", Box, "Skills")} ${tool("memory", Brain, "Memory")}
         ${tool("keychain", KeyRound, "Your keychain")}
       </div>
@@ -205,8 +196,8 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
         </button>
         <div class="menu-popover" role="menu" hidden>
           <div class="menu-title">This conversation's workspace</div>
-          ${sheetTool("crons", Clock3, "Crons")} ${sheetTool("files", Files, "Files")}
-          ${sheetTool("apps", Rocket, "Apps")} ${sheetTool("skills", Box, "Skills")}
+          ${sheetTool("crons", Clock3, "Crons")} ${sheetTool("apps", Rocket, "Apps")}
+          ${sheetTool("files", Files, "Files")} ${sheetTool("skills", Box, "Skills")}
           ${sheetTool("memory", Brain, "Memory")} ${sheetTool("keychain", KeyRound, "Your keychain")}
         </div>
       </div>

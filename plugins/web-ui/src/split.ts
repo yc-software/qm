@@ -873,8 +873,8 @@ function paneCrumb(panel: IDockviewPanel): string | null {
 
 const PANE_TOOLS: { tool: SessionTool; glyph: Parameters<typeof icon>[0]; label: string }[] = [
   { tool: "crons", glyph: Clock3, label: "Crons" },
-  { tool: "files", glyph: Files, label: "Files" },
   { tool: "apps", glyph: Rocket, label: "Apps" },
+  { tool: "files", glyph: Files, label: "Files" },
   { tool: "skills", glyph: Box, label: "Skills" },
   { tool: "memory", glyph: Brain, label: "Memory" },
   { tool: "keychain", glyph: KeyRound, label: "Your keychain" },
