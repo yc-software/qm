@@ -338,6 +338,17 @@ and tracing are excluded. A final transport gate rejects unsanitized SDK failure
 and non-event envelopes. Requests omit cookies and referrers. The ingestion
 server can still see the network source IP. Delivery is best effort.
 
+### Browser performance timing
+
+Set `SENTRY_BROWSER_TRACES_SAMPLE_RATE` (0 to 1, default 0) alongside `SENTRY_BROWSER_DSN` to sample
+browser timings; `0.1` is a reasonable start. A sampled page reports one `pageload` transaction
+(time to first byte, DOM content loaded, load, first and largest contentful paint, and a `page`
+tag drawn from the fixed list of application views) and one `http.client` transaction per
+same-origin API request, named by a fixed `/api/<resource>` allowlist (`GET /api/sessions/*`)
+with the HTTP status. At most 200 timings are sent per page. URLs, query strings, identifiers,
+and request or response content are never included; timings stop with error reporting on
+sign-out, authentication failure, and impersonation.
+
 ## Personal AI accounts
 
 Open **Settings → AI access**, or use the account label beside the model picker.

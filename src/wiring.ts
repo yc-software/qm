@@ -1,5 +1,6 @@
-import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
+import { resolveTurnOrigin } from "./core/turn-origin.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
@@ -1460,6 +1461,17 @@ export function buildApp(
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
   runs.onTerminal((run) => {
     void productAnalytics.responseFinished(run);
+    const startedAt = run.startedAt ?? run.finishedAt ?? Date.now();
+    startTiming(
+      "queue.task",
+      "run",
+      startedAt,
+    )?.({
+      status: run.status === "done" ? "ok" : "internal_error",
+      endMs: run.finishedAt ?? Date.now(),
+      data: { surface: run.request.surface, origin: resolveTurnOrigin(run.request).kind },
+      measurements: { queue_wait: startedAt - run.createdAt },
+    });
   });
   const ledger = runStore.ledger;
 
