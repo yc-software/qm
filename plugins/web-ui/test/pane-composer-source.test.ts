@@ -56,21 +56,8 @@ test("narrow short panes hide runtime labels, not the accessible picker", () => 
   assert.match(composer, /aria-label=\$\{`Model:/);
 });
 
-test("short panes preserve the account action with a named icon-only button", () => {
-  const account = composer.match(/<button\s+type="button"\s+class="btn composer-account"[^]*?<\/button>/)?.[0] ?? "";
-  assert.match(account, /aria-label=\$\{appState\.me\?\.individualModelAuth \? "My account" : "Company access"\}/);
-  assert.match(account, /@click=\$\{\(\) => switchView\("settings"\)\}/);
-  assert.match(account, /class="composer-account-icon" aria-hidden="true"/);
-  assert.match(css, /^\.composer-account-icon \{\s*display: none;/m);
-  const short = css.slice(css.indexOf("@container split-pane (max-height: 480px)"));
-  assert.match(short, /\.composer-account-label \{\s*display: none;/);
-  assert.match(short, /\.composer-account-icon \{\s*display: inline-flex;/);
-  assert.doesNotMatch(short, /\.composer-account \{[^}]*display: none;/);
-});
-
-test("the smallest short panes leave text space even with stop and account controls", () => {
+test("the smallest short panes leave text space even with stop controls", () => {
   const minimum = css.slice(css.indexOf("@container split-pane (max-height: 480px) and (max-width: 300px)"));
-  assert.match(minimum, /\.composer-toolbar \.stop-btn,/);
-  assert.match(minimum, /\.composer-toolbar \.composer-account \{\s*width: 28px;\s*height: 28px;\s*min-height: 28px;/);
+  assert.match(minimum, /\.composer-toolbar \.stop-btn \{\s*width: 28px;\s*height: 28px;\s*min-height: 28px;/);
   assert.match(minimum, /\.composer-attach \{\s*transform: none;/);
 });

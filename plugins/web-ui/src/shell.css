@@ -12001,15 +12001,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   overflow-wrap: anywhere;
 }
 
-.dark .custom-chat {
-  --background: #181818;
-  --foreground: #eeeeee;
-  --muted-foreground: #a1a1a1;
-  --secondary: #232323;
-  --border: #303030;
-  background: var(--background);
-}
-
 :is(markdown-block, qm-markdown).markdown-content table {
   font-size: 13px;
   line-height: 1.65;
@@ -12075,10 +12066,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   flex-wrap: wrap;
 }
 
-.composer-account-icon {
-  display: none;
-}
-
 @container split-pane (max-height: 480px) {
   .composer-wrap {
     display: grid;
@@ -12112,20 +12099,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
     flex-wrap: nowrap;
     gap: 4px;
   }
-  .composer-wrap .composer-account {
-    width: 34px;
-    height: 34px;
-    min-height: 34px;
-    padding: 0;
-    flex: none;
-    justify-content: center;
-  }
-  .composer-wrap .composer-account-label {
-    display: none;
-  }
-  .composer-wrap .composer-account-icon {
-    display: inline-flex;
-  }
   .composer-wrap .composer-toolbar .menu-button.loadout-button {
     max-width: 180px;
   }
@@ -12147,8 +12120,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   .composer-wrap .composer-toolbar .icon-btn,
   .composer-wrap .composer-toolbar .menu-button.loadout-button,
   .composer-wrap .composer-toolbar .send-btn,
-  .composer-wrap .composer-toolbar .stop-btn,
-  .composer-wrap .composer-toolbar .composer-account {
+  .composer-wrap .composer-toolbar .stop-btn {
     width: 28px;
     height: 28px;
     min-height: 28px;
