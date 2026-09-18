@@ -1,0 +1,26 @@
+Two related thoughts from running a small self-hosted deployment, one tiny
+and concrete, one bigger that I'd mostly like your read on.
+
+I want my personal scope running on my Claude subscription token
+(CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`) while org work bills an
+API key. Per-scope harness/model selection plus custom providers already gets
+me surprisingly close.
+
+(a) The concrete one: when both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN
+are set, the claude harness passes both into the Claude Code child
+(claude-harness.ts, the CLAUDE_ENV_PASSTHROUGH list), and which credential
+actually gets used is decided by Claude Code's internal precedence. The
+operator has no say, and the answer silently decides whether a turn bills a
+subscription or an API account. An explicit knob (CLAUDE_AUTH=token|api-key or
+similar) that filters the passthrough would make mixed-credential deployments
+deterministic. Happy to have this be the whole ask if (b) doesn't land.
+
+(b) The bigger thought: model credentials are the one credential class that
+bypasses the keychain entirely and lives in process env. Everything else a
+person authenticates with is owner-scoped, encrypted, grantable, auditable,
+but the thing that bills money is global. What I'd love: let a person connect
+their own Claude subscription token as a keychain credential, and have
+personal-scope turns on the claude harness use *their* token, with shared/org
+scopes and the utility-harness calls (screener, titles, judge) always on the
+deployment credential. That gives per-person cost attribution.
+
