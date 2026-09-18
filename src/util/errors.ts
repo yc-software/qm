@@ -1,3 +1,6 @@
+import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { WorkAdmissionClosed } from "./admitted-work.ts";
+
 const CAUSE_DEPTH = 5;
 
 function errorText(value: unknown): string {
@@ -41,6 +44,43 @@ export function swallow(context: string, e: unknown): void {
 export function swallowAs<T>(context: string, fallback: T): (e: unknown) => T {
   return (e) => {
     swallow(context, e);
+    return fallback;
+  };
+}
+
+const reportedErrors = new WeakSet<object>();
+
+export function markErrorReported(e: unknown): void {
+  if (typeof e === "object" && e !== null) reportedErrors.add(e);
+}
+
+export function errorAlreadyReported(e: unknown): boolean {
+  return typeof e === "object" && e !== null && reportedErrors.has(e);
+}
+
+function isExpectedInterruption(e: unknown): boolean {
+  return (e instanceof Error && e.name === "AbortError") || e instanceof WorkAdmissionClosed;
+}
+
+export function failureCode(context: string): string {
+  return context
+    .toLowerCase()
+    .replace(/\s*:\s*/g, ":")
+    .replace(/[^a-z0-9_.:-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+}
+
+export function reportFailure(context: string, e: unknown, detail?: string): void {
+  console.error(`[failed] ${context}${detail ? ` (${detail})` : ""}: ${errMessage(e)}`);
+  if (isExpectedInterruption(e) || errorAlreadyReported(e)) return;
+  markErrorReported(e);
+  reportBackendError(asError(e), failureCode(context));
+}
+
+export function reportFailureAs<T>(context: string, fallback: T, detail?: string): (e: unknown) => T {
+  return (e) => {
+    reportFailure(context, e, detail);
     return fallback;
   };
 }

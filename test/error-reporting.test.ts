@@ -173,3 +173,30 @@ test("operator error records retain local details and send one classified event 
   assert.equal(events[0]!.tags.error_code, "turn:failed");
   assert.doesNotMatch(JSON.stringify(events), /private-/);
 });
+
+test("reportFailure sends one classified event per distinct failure and skips cancellations and recorded errors", async () => {
+  const { events, code } = await runReporting(`
+    const { reportFailure } = await import('./src/util/errors.ts');
+    const { createErrorLog, withErrorReporting } = await import('./src/admin/error-log.ts');
+    const errors = withErrorReporting(createErrorLog());
+    const recorded = new Error('private-turn-failure');
+    errors.record({category:'turn', code:'error', message:recorded.message, scopeLabel:'private-scope'}, recorded);
+    reportFailure('scheduler: fire', recorded);
+    reportFailure('scheduler: fire', new DOMException('private-cancel', 'AbortError'));
+    const infra = new Error('private-db-down');
+    reportFailure('scheduler: tick', infra);
+    reportFailure('worker: background run crashed', infra);
+    reportFailure('audit: persist event', 'private-string-throw');
+    const reportedFirst = new Error('private-tool-failure');
+    reportFailure('tools: persist artifact', reportedFirst);
+    errors.record({category:'turn', code:'error', message:reportedFirst.message, scopeLabel:'private-scope'}, reportedFirst);
+    await flushErrorReporting();
+  `);
+  assert.equal(code, 0);
+  assert.deepEqual(
+    events.map((event) => event.tags.error_code),
+    ["turn:error", "scheduler:tick", "audit:persist_event", "tools:persist_artifact"],
+  );
+  assert.doesNotMatch(JSON.stringify(events), /private-/);
+  assert.equal(events[1]!.exception.values[0].value, "scheduler:tick");
+});

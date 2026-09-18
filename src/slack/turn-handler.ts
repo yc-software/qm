@@ -2,7 +2,7 @@ import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { performance } from "node:perf_hooks";
 import { slackFailureText } from "./turn-flow.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
 import {
   type ActorAssertion,
   type ChannelMeta,
@@ -840,7 +840,7 @@ export function createTurnHandler(deps: {
       () => handleIncoming(stamped, client),
       (err) => {
         stamped.ackGate?.failed(errMessage(err));
-        console.error("[slack-plugin] handler error:", errMessage(err));
+        reportFailure("slack: incoming handler", err);
       },
     );
     if (!ran) gate?.failed("already in flight on this instance");
@@ -962,7 +962,7 @@ export function createTurnHandler(deps: {
           );
           await handleIncoming(inc, client);
         },
-        (err) => console.error("[slack-plugin] handler error:", errMessage(err)),
+        reportFailureAs("slack: reaction handler", undefined),
       );
     } finally {
       reactionsInFlight.delete(flightKey);

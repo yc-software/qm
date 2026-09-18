@@ -12,7 +12,7 @@ import {
   type AmbientDecision,
 } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
-import { errMessage } from "../util/errors.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import { buildWakeEnvelope } from "../core/wake-envelope.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import { unscreenedNotice } from "../security/security-posture.ts";
@@ -36,9 +36,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
 
   const ambientSelf = new Map<string, { name?: string; mentionId?: string }>();
   const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
-    void deps.ambientJudgments
-      ?.record(j)
-      .catch((e) => console.error("[ambient] record judgment failed:", errMessage(e)));
+    void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
   };
   async function judgeAmbientContainer(
     surface: string,
@@ -292,7 +290,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
     if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
-    await app.turn(req).catch((e) => console.error("[ambient] spawn worker failed:", errMessage(e)));
+    await app.turn(req).catch(reportFailureAs("ambient: spawn worker", undefined));
   }
 
   async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {

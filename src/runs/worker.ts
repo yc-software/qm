@@ -1,6 +1,6 @@
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import { errorAlreadyRecorded, type ErrorLog } from "../admin/error-log.ts";
+import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
@@ -8,7 +8,7 @@ import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import { errorParks, type Run, type RunStore } from "./run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, errorAlreadyReported, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
@@ -89,7 +89,7 @@ export async function processRun(deps: ProcessDeps, run: Run, opts?: { backgroun
   } catch (err) {
     stopBeat();
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
-    if (!errorAlreadyRecorded(err))
+    if (!errorAlreadyReported(err))
       deps.errors?.record(
         {
           category: "turn",
