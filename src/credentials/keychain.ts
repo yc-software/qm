@@ -1190,11 +1190,17 @@ export function createKeychain(deps: {
 
     async unnotifiedResolvedAsks(nowAt) {
       const out: KeychainAsk[] = [];
-      for (const rec of await deps.asks.all()) {
+      const taskDecisions = new Set<string>();
+      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
         const a = await freshAsk(rec, nowAt);
+        const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
+        const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
+        const retainDecision =
+          origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
+        taskDecisions.add(task);
         if (a.status === "pending") continue;
         if (a.notifiedAt === undefined) out.push(a);
-        else if (a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
+        else if (!retainDecision && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
       }
       return out;
     },

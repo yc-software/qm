@@ -141,6 +141,44 @@ test("personal cron asks deduplicate recurring fires without combining jobs or r
   );
 });
 
+for (const outcome of ["declined", "expired"] as const) {
+  test(`task ${outcome} decisions survive pruning and a later approval supersedes them`, async () => {
+    let now = 1_000_000;
+    const k = kcAt(() => now++);
+    const credential = await k.save(GH);
+    const input = {
+      credentialId: credential.id,
+      requesterId: "U_ALICE",
+      requesterScopeId: "personal:U_ALICE" as const,
+      requesterThreadRef: "cron:retained:fire:first",
+      purpose: "scheduled check",
+      triggered: true,
+    };
+    const { ask } = await k.createAsk(input);
+    if (outcome === "declined") await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
+    else now += ASK_TTL_MS + 1;
+    const sweep = createAskExpirySweep({ keychain: k, fire: async () => undefined });
+    await sweep(now);
+    now += ASK_PRUNE_AFTER_MS + 1;
+    await sweep(now);
+    assert.equal((await k.getAsk(ask.id))?.status, outcome);
+    await assert.rejects(
+      k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:later" }),
+      (e: KeychainError) => e.status === 409,
+    );
+    const revived = await k.createAsk({ ...input, triggered: false });
+    await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "retry it" });
+    await sweep(now);
+    now += ASK_PRUNE_AFTER_MS + 1;
+    await sweep(now);
+    assert.equal(await k.getAsk(ask.id), null);
+    assert.equal((await k.getAsk(revived.ask.id))?.status, "approved");
+    const next = await k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:next" });
+    assert.equal(next.existing, false);
+    assert.equal(next.ask.status, "pending");
+  });
+}
+
 test("approveAsk: same createGrant owner gate, audience from the record, single resolution", async () => {
   const k = kcAt(Date.now);
   const cred = await k.save(GH);

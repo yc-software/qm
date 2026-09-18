@@ -91,7 +91,10 @@ export async function fireAskResolution(
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),
   });
-  if (outcome.deferred)
+  if (
+    outcome.deferred ||
+    (!outcome.ran && !outcome.authzFailed && !(await deps.idempotency.committed(`ask:${ask.id}:${ask.status}`)))
+  )
     throw new Error("credential approval resume is waiting for the original conversation to become idle");
   if (outcome.ran && outcome.status === "ok") return outcome;
   if (cronId && (!outcome.ran || outcome.status === "refused")) return outcome;

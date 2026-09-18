@@ -4,8 +4,10 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
-import type { KeychainAsk } from "../src/credentials/keychain.ts";
+import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
+import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
+import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
@@ -99,4 +101,44 @@ test("failed cron credential resolution notifies only the owner even when its re
   assert.match(pending[0]!.text, /couldn't resume the task automatically/);
   assert.match(pending[0]!.text, /retry-ask/);
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
+});
+
+test("a concurrent sweep cannot mark an in-flight busy resume notified before it becomes retryable", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<TurnResult>();
+  let runs = 0;
+  const f = await fixture(async () => {
+    runs++;
+    if (runs > 1) return { status: "ok", reply: "dummy scheduled result" };
+    entered.resolve();
+    return release.promise;
+  });
+  await f.crons.setRecipientConsent(f.cron.id, { recipientId: "U_BOB", status: "accepted" });
+  const asks = createMemoryMap<KeychainAsk>();
+  await asks.put(f.ask.id, f.ask);
+  const keychain = createKeychain({
+    creds: createMemoryMap(),
+    grants: createMemoryMap(),
+    asks,
+    key: deriveConnectorKey("concurrent-cron-resume-test"),
+  });
+  const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
+  const initial = assert.rejects(fireAskResolution(f.deps, f.ask), /waiting for the original conversation/);
+  await entered.promise;
+
+  await sweep(Date.now());
+  assert.equal((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
+  release.resolve({ status: "refused", refusalKind: "session_busy", reason: "conversation is busy" });
+  await initial;
+  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), false);
+
+  await sweep(Date.now());
+  await sweep(Date.now());
+
+  assert.equal(runs, 2);
+  assert.notEqual((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
+  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
+  const pending = await f.deliveries.pending("principal");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.destination.target, "U_BOB");
 });
