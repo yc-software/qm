@@ -1526,6 +1526,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     sessionId: string,
     systemPrompt: string,
     history: SessionEntry[],
+    turnTools: HarnessTurnInput["tools"],
     priorTurns?: ConversationTurn[],
     readOnly?: boolean,
     surfaceTools?: boolean,
@@ -1576,7 +1577,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       turnProviderKeys ? undefined : modelGateway,
       systemCacheSplit ? "long" : undefined,
     );
-    const ref: ToolContextRef = { current: null };
+    const ref: ToolContextRef = { current: turnTools };
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       composedPrompt,
@@ -1761,6 +1762,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           turn.session.id,
           turn.systemPrompt,
           turn.history,
+          turn.tools,
           turn.priorTurns,
           turn.readOnly,
           turn.surfaceTools,

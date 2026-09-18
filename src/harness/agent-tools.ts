@@ -61,6 +61,9 @@ export interface ToolContextRef {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    grantModes?: { session: boolean; always: boolean };
+    summary?: string;
+    summaryDetail?: string;
   }>;
   pausedOnApproval?: boolean;
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
@@ -621,6 +624,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       matched: e.matched,
       ...(purpose ? { purpose } : {}),
       ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+      ...(e.grantModes ? { grantModes: e.grantModes } : {}),
+      ...(e.summary ? { summary: e.summary } : {}),
+      ...(e.summaryDetail ? { summaryDetail: e.summaryDetail } : {}),
     });
     ref.pausedOnApproval = true;
     return recordResult(
@@ -1911,6 +1917,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             matched: e.matched,
             ...(params.purpose ? { purpose: params.purpose } : {}),
             ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+            ...(e.grantModes ? { grantModes: e.grantModes } : {}),
+            ...(e.summary ? { summary: e.summary } : {}),
+            ...(e.summaryDetail ? { summaryDetail: e.summaryDetail } : {}),
           });
           ref.pausedOnApproval = true;
           return recordResult(
@@ -3463,6 +3472,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             kind: error.kind,
             matched: error.matched,
             ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
+            ...(error.grantModes ? { grantModes: error.grantModes } : {}),
+            ...(error.summary ? { summary: error.summary } : {}),
+            ...(error.summaryDetail ? { summaryDetail: error.summaryDetail } : {}),
           });
           ref.pausedOnApproval = true;
           return recordResult(
@@ -3754,7 +3766,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const mcpDefs = opts?.mcpTools?.() ?? [];
+  const mcpDefs = [
+    ...new Map(
+      [...(opts?.mcpTools?.() ?? []), ...(ref.current?.mcpToolDefs?.() ?? [])].map((tool) => [tool.name, tool]),
+    ).values(),
+  ];
   const mcpTools = mcpDefs
     .filter((d) => !opts?.readOnly || d.readOnly)
     .map((d) =>
@@ -3779,6 +3795,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               `mcp server ${d.serverId}`,
             );
           } catch (error) {
+            if (error instanceof NeedsApproval) return blockOnApproval(callId, error, undefined, d.name);
             return recordResult(
               callId,
               { tool: d.name, mcpServer: d.serverId, failed: true },

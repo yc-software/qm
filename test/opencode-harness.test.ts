@@ -1,4 +1,6 @@
 import test from "node:test";
+import { googleWorkspaceToolDefs } from "../src/connectors/google-workspace.ts";
+import { NeedsApproval } from "../src/tools/primitives.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -507,4 +509,61 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.ok(sent.includes("DOCX-QUARTZ-731"));
   assert.ok(!JSON.stringify(tape).includes(pdf));
   assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+});
+
+test("OpenCode registers Google schemas before the first eligible turn while enforcing each turn's availability", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-google-tools-"));
+  const captured = join(dir, "tools.json");
+  const handlers = `
+    if (req.method === "POST" && message) {
+      const prompt = JSON.parse(await readBody(req));
+      const headers = { authorization: "Bearer " + process.env.OPENCODE_BRIDGE_SECRET, "content-type": "application/json" };
+      const definitions = await fetch(process.env.OPENCODE_BRIDGE_URL + "/definitions", { headers }).then((r) => r.json());
+      const response = await fetch(process.env.OPENCODE_BRIDGE_URL + "/session/" + message[1] + "/tool", {
+        method: "POST", headers, body: JSON.stringify({ tool: "google_workspace_trash", callID: "trash-call", args: { fileId: "file-1" } }),
+      });
+      const tool = await response.json();
+      require("node:fs").writeFileSync(${JSON.stringify(captured)}, JSON.stringify({ definitions, enabled: prompt.tools, status: response.status, tool }));
+      return json(res, ${okAssistant});
+    }
+    if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+  `;
+  const harness = createOpenCodeHarness({ binaryPath: fakeSidecar(dir, "google-tools", handlers) });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  let calls = 0;
+  for (const mode of ["unavailable", "available", "readonly", "revoked"]) {
+    const turn = turnInput([], []);
+    turn.readOnly = mode === "readonly";
+    turn.tools = {
+      mcpToolDefs: () => (mode === "available" || mode === "readonly" ? googleWorkspaceToolDefs : []),
+      callMcpTool: async (name: string) => {
+        calls++;
+        assert.equal(name, "google_workspace_trash");
+        throw new NeedsApproval("Trash file-1", "Requires one-time approval", "approval", undefined, "snapshot-1", {
+          session: false,
+          always: false,
+        });
+      },
+    } as unknown as HarnessTurnInput["tools"];
+    const result = await harness.turns.runTurn(turn);
+    const capture = JSON.parse(readFileSync(captured, "utf8")) as {
+      definitions: Array<{ name: string }>;
+      enabled: Record<string, boolean>;
+      status: number;
+      tool: { terminate?: boolean };
+    };
+    assert.ok(capture.definitions.some((tool) => tool.name === "google_workspace_trash"));
+    assert.ok(capture.definitions.some((tool) => tool.name === "google_workspace_request"));
+    assert.equal(capture.enabled.google_workspace_trash, mode === "available");
+    assert.equal(capture.status, mode === "available" ? 200 : 404);
+    if (mode === "available") {
+      assert.equal(capture.tool.terminate, true);
+      assert.equal(result.pendingApprovals?.[0]?.approvalKey, "snapshot-1");
+      assert.deepEqual(result.pendingApprovals?.[0]?.grantModes, { session: false, always: false });
+    }
+  }
+  assert.equal(calls, 1);
 });

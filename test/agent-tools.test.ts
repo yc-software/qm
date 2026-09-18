@@ -2785,7 +2785,7 @@ test("unified sandbox rejects missing, mistyped and unrelated action fields befo
   const tc = new Proxy(fakeToolContext(), {
     get(target, key, receiver) {
       const value = Reflect.get(target, key, receiver);
-      if (typeof value !== "function") return value;
+      if (typeof value !== "function" || key === "mcpToolDefs") return value;
       return () => {
         dispatched++;
         throw new Error("must not dispatch");
@@ -3349,4 +3349,64 @@ test("quarantined mail remains pending for release and mailbox failures preserve
     { path: "a.txt" },
   );
   assert.ok(JSON.stringify(third).includes("data"));
+});
+
+test("dynamic tools preserve one-time approval requirements and pause the turn", async () => {
+  const descriptor = {
+    name: "workspace_trash",
+    serverId: "workspace",
+    remoteName: "trash",
+    description: "Move one file to trash",
+    inputSchema: { type: "object", properties: { fileId: { type: "string" } } },
+    readOnly: false,
+  };
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    mcpToolDefs: () => [descriptor],
+    async callMcpTool() {
+      const error = new NeedsApproval(
+        "Move test file to trash",
+        "Confirm this exact file",
+        "approval",
+        undefined,
+        "workspace-trash:test",
+      );
+      Object.assign(error, { grantModes: { session: false, always: false } });
+      throw error;
+    },
+  };
+  const ref: ToolContextRef = { current: tc, pendingApprovals: [] };
+  const tool = createAgentTools(ref, { mcpTools: () => [descriptor] }).find((entry) => entry.name === descriptor.name)!;
+  const result = (await call(tool, { fileId: "file1" })) as { terminate?: boolean };
+  assert.equal(result.terminate, true);
+  assert.equal(ref.pausedOnApproval, true);
+  assert.deepEqual(ref.pendingApprovals, [
+    {
+      command: "Move test file to trash",
+      reason: "Confirm this exact file",
+      kind: "approval",
+      matched: undefined,
+      approvalKey: "workspace-trash:test",
+      grantModes: { session: false, always: false },
+    },
+  ]);
+});
+
+test("per-turn dynamic tools are available alongside configured tools without duplicates", () => {
+  const descriptor = {
+    name: "workspace_request",
+    serverId: "workspace",
+    remoteName: "request",
+    description: "Read and update workspace files",
+    inputSchema: { type: "object", properties: {} },
+    readOnly: false,
+  };
+  const tc: ToolContext = { ...fakeToolContext(), mcpToolDefs: () => [descriptor] };
+  assert.equal(createAgentTools({ current: tc }).filter((entry) => entry.name === descriptor.name).length, 1);
+  assert.equal(
+    createAgentTools({ current: tc }, { mcpTools: () => [descriptor] }).filter(
+      (entry) => entry.name === descriptor.name,
+    ).length,
+    1,
+  );
 });

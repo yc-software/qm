@@ -157,6 +157,9 @@ export function createMockHarness(): Harness {
           kind?: "approval";
           matched?: string;
           approvalKey?: string;
+          grantModes?: { session: boolean; always: boolean };
+          summary?: string;
+          summaryDetail?: string;
         }> = [];
         let pausedOnApproval = false;
         const gateTool = (tool: string): boolean => {
@@ -499,6 +502,9 @@ export function createMockHarness(): Harness {
               kind: e.kind,
               matched: e.matched,
               ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+              ...(e.grantModes ? { grantModes: e.grantModes } : {}),
+              ...(e.summary ? { summary: e.summary } : {}),
+              ...(e.summaryDetail ? { summaryDetail: e.summaryDetail } : {}),
             });
             reply = `[blocked] ${e.approvalReason}`;
           }
@@ -520,6 +526,9 @@ export function createMockHarness(): Harness {
                 kind: e.kind,
                 matched: e.matched,
                 ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
+                ...(e.grantModes ? { grantModes: e.grantModes } : {}),
+                ...(e.summary ? { summary: e.summary } : {}),
+                ...(e.summaryDetail ? { summaryDetail: e.summaryDetail } : {}),
               });
             }
           }

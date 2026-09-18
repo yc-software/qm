@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
+import { googleWorkspaceToolDefs } from "../connectors/google-workspace.ts";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { customProviderApi, isCustomModelId } from "../model/custom-providers.ts";
 import type { CustomProviderProtocol, CustomProviderSpec } from "../model/custom-providers.ts";
@@ -440,9 +441,13 @@ async function terminateProcess(proc: ChildProcess): Promise<void> {
 export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harness {
   const active = new Map<string, ActiveTurn>();
   const definitionRef: ToolContextRef = { current: null };
+  const definitionOptions = {
+    ...harnessToolOptions(opts),
+    mcpTools: () => [...(opts.mcpTools?.() ?? []), ...googleWorkspaceToolDefs],
+  };
   const definitionTools = [
-    ...bridgedTools(definitionRef, harnessToolOptions(opts)),
-    ...bridgedTools(definitionRef, { ...harnessToolOptions(opts), surfaceTools: false }),
+    ...bridgedTools(definitionRef, definitionOptions),
+    ...bridgedTools(definitionRef, { ...definitionOptions, surfaceTools: false }),
   ];
   const definitions = [
     ...new Map(

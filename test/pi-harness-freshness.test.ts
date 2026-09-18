@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { googleWorkspaceToolDefs } from "../src/connectors/google-workspace.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import { createPiHarness, stableCwd } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
@@ -161,4 +162,33 @@ test("prior-turn bootstrap is taped as a retry-idempotent import before the firs
   assert.equal((bootstrap[0]!.payload as { event?: string }).event, "legacy_import");
   assert.match(JSON.stringify(bootstrap[0]), /release result/);
   assert.match(JSON.stringify(bootstrap[0]), /tell me more/);
+});
+
+test("Pi discovers current-turn Google tools before constructing its session and drops them on the next turn", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const requests: Array<{ tools?: Array<{ name: string }> }> = [];
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return Response.json(
+      { error: { type: "invalid_request_error", message: "offline tool discovery test" } },
+      { status: 400 },
+    );
+  }) as typeof fetch;
+  const harness = createPiHarness({ defaultModelId: "claude-haiku-4-5", apiKey: "offline-key" });
+  const first = recordingTurn("BASE", [], "dynamic-tools");
+  first.tools = { mcpToolDefs: () => googleWorkspaceToolDefs } as HarnessTurnInput["tools"];
+  await runIgnoringPromptError(harness, first);
+  assert.ok(requests[0]?.tools?.some((tool) => tool.name === "google_workspace_request"));
+  assert.ok(requests[0]?.tools?.some((tool) => tool.name === "google_workspace_trash"));
+  const second = recordingTurn("BASE", [], "dynamic-tools");
+  second.tools = { mcpToolDefs: () => [] } as unknown as HarnessTurnInput["tools"];
+  await runIgnoringPromptError(harness, second);
+  assert.equal(requests.length, 2);
+  assert.equal(
+    requests[1]?.tools?.some((tool) => tool.name.startsWith("google_workspace_")),
+    false,
+  );
 });

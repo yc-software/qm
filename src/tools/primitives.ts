@@ -5,6 +5,7 @@ import { contextMemory, type TurnContext } from "../resolution/turn-context.ts";
 import { randomUUID } from "node:crypto";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";
+import { googleWorkspaceToolDefs, type createGoogleWorkspaceService } from "../connectors/google-workspace.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
@@ -127,7 +128,17 @@ export class NeedsApproval extends Error {
   kind: "approval";
   matched?: string;
   approvalKey?: string;
-  constructor(command: string, reason: string, kind: "approval" = "approval", matched?: string, approvalKey?: string) {
+  grantModes?: { session: boolean; always: boolean };
+  summary?: string;
+  summaryDetail?: string;
+  constructor(
+    command: string,
+    reason: string,
+    kind: "approval" = "approval",
+    matched?: string,
+    approvalKey?: string,
+    grantModes?: { session: boolean; always: boolean },
+  ) {
     super(`command requires approval: ${command}`);
     this.name = "NeedsApproval";
     this.command = command;
@@ -135,6 +146,7 @@ export class NeedsApproval extends Error {
     this.kind = kind;
     this.matched = matched;
     this.approvalKey = approvalKey;
+    this.grantModes = grantModes;
   }
 }
 
@@ -471,6 +483,7 @@ export interface ToolContextDeps {
   memoryScopeId?: ScopeId;
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
+  googleWorkspace?: ReturnType<typeof createGoogleWorkspaceService>;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -1131,10 +1144,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     mcpToolDefs(): McpToolDescriptor[] {
-      return deps.mcp?.toolDefs() ?? [];
+      return [...(deps.googleWorkspace ? googleWorkspaceToolDefs : []), ...(deps.mcp?.toolDefs() ?? [])];
     },
 
     async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
+      if (googleWorkspaceToolDefs.some((tool) => tool.name === name)) {
+        if (!deps.googleWorkspace)
+          throw new Error("Google Workspace is not available to this actor in this conversation");
+        return deps.googleWorkspace.call(name, args);
+      }
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
       return deps.mcp.call(name, args, deps.createdBy);
     },

@@ -499,6 +499,7 @@ export function createKeychain(deps: {
   asks: DurableMap<KeychainAsk>;
   key: SecretKey;
   refreshConnector?: OAuthRefresh;
+  blockedConnectorMaterializationHosts?: readonly string[];
   oauthSkewMs?: number;
   oauthRefreshMarginMs?: number;
   now?: () => number;
@@ -506,6 +507,18 @@ export function createKeychain(deps: {
   const now = deps.now ?? Date.now;
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
+
+  const blockedConnectorHosts = new Set(deps.blockedConnectorMaterializationHosts?.map((host) => host.toLowerCase()));
+
+  function connectorMaterializationBlocked(rec: KeychainCredential): boolean {
+    return rec.managed === "connector" && blockedConnectorHosts.has((rec.host ?? rec.service).toLowerCase());
+  }
+
+  function assertMaterializable(rec: KeychainCredential): void {
+    if (connectorMaterializationBlocked(rec)) {
+      throw new KeychainError(403, "connector credentials are restricted to their trusted service");
+    }
+  }
 
   async function getOwned(ownerId: string, id: string): Promise<KeychainCredential | null> {
     const rec = await deps.creds.get(id);
@@ -900,6 +913,7 @@ export function createKeychain(deps: {
     cred: KeychainCredential,
     extra?: { grantId: string; purpose: string },
   ): Promise<MaterializedCred> {
+    assertMaterializable(cred);
     const value = cred.host ? await connectorTokenForRecord(cred) : null;
     if (!value || !cred.host) {
       throw new KeychainError(
@@ -1029,6 +1043,7 @@ export function createKeychain(deps: {
     async readOwnSecret(ownerId, id) {
       const rec = await getOwned(ownerId, id);
       if (!rec || rec.kind !== "env") return null;
+      assertMaterializable(rec);
       return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
     },
 
@@ -1326,6 +1341,7 @@ export function createKeychain(deps: {
     async connectorDerivedAuth(host, principalId, accountType) {
       const rec = await connectorRecord(host, principalId, accountType);
       if (!rec) return null;
+      assertMaterializable(rec);
       const accessToken = await connectorTokenForRecord(rec);
       if (accessToken === null) return null;
       // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
@@ -1411,7 +1427,7 @@ export function createKeychain(deps: {
       for (const grant of await activeGrantsFor(scopeId)) {
         if (grant.mode !== "standing") continue;
         const cred = await deps.creds.get(grant.credentialId);
-        if (!cred || cred.kind !== "env") continue;
+        if (!cred || cred.kind !== "env" || connectorMaterializationBlocked(cred)) continue;
         if (cred.managed === "connector") {
           const value = cred.host ? await connectorTokenForRecord(cred) : null;
           if (value && cred.host) {

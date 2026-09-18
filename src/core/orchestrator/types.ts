@@ -176,6 +176,8 @@ export interface OrchestratorDeps {
   runtime?: RuntimeService;
   livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
+  googleWorkspaceGuarded?: boolean;
+  googleWorkspaceFetch?: typeof fetch;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;

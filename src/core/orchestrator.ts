@@ -1,3 +1,4 @@
+import { createGoogleWorkspaceService, GOOGLE_WORKSPACE_HOSTS } from "../connectors/google-workspace.ts";
 import {
   MAX_DOCUMENT_BYTES,
   documentText,
@@ -1300,6 +1301,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       const commandUses = new Map<string, number>();
+      const oneTimeActionUses = new Map<string, number>();
       for (const grant of await approvalGrants.all()) {
         if (!samePerson(grant.actorId, actor.id)) continue;
         if (grant.scope === "session" && grant.sessionId !== session.id) continue;
@@ -1427,6 +1429,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       if (!strictReadOnly && deps.connectorTokens && (conversation.kind === "dm" || openSpeakerKeychain)) {
         for (const host of CONNECTOR_HOSTS) {
+          if (deps.googleWorkspaceGuarded && GOOGLE_WORKSPACE_HOSTS.includes(host)) continue;
           const token =
             (await deps.connectorTokens.connectorAccessToken(host, actor.id, "personal")) ??
             (await deps.connectorTokens.connectorAccessToken(host, actor.id)) ??
@@ -1829,7 +1832,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
             await mirrorRunActivity(decisionEntry);
-            await pending.delete(input.approval.requestId);
+            const consumed = await pending.take(input.approval.requestId);
+            if (
+              !consumed ||
+              consumed.sessionId !== p.sessionId ||
+              consumed.createdAt !== p.createdAt ||
+              consumed.command !== p.command ||
+              consumed.approvalKey !== p.approvalKey
+            ) {
+              return {
+                status: "refused",
+                sessionId: session.id,
+                reason: "that approval request was already resolved or changed — ask again if you still want it to run",
+              };
+            }
             deps.auditLog.record({
               at: Date.now(),
               principalId: actor.id,
@@ -1846,11 +1862,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             };
           } else {
             const scope = input.approval.scope ?? "once";
-            const recordDisallowsScope =
-              scope !== "once" &&
-              p.grantModes?.[scope] === false &&
-              p.approvalKey?.startsWith("security-screen-release:") === true;
+            const recordDisallowsScope = scope !== "once" && p.grantModes?.[scope] === false;
             if (scope !== "once" && (!resolution.approvalGrantModes[scope] || recordDisallowsScope)) {
+              let reason = "this operation can only be approved once — approve once or deny";
+              if (!resolution.approvalGrantModes[scope])
+                reason = `the "${scope}" approval option is disabled by an admin here — approve once or deny`;
+              else if (p.approvalKey?.startsWith("security-screen-release:"))
+                reason = "quarantined content can only be released once — approve once or deny";
               deps.auditLog.record({
                 at: Date.now(),
                 principalId: actor.id,
@@ -1863,9 +1881,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               return {
                 status: "pending_approval",
                 sessionId: session.id,
-                reason: recordDisallowsScope
-                  ? `quarantined content can only be released once — approve once or deny`
-                  : `the "${scope}" approval option is disabled by an admin here — approve once or deny`,
+                reason,
                 pendingApprovals: [
                   {
                     requestId: input.approval.requestId,
@@ -1891,13 +1907,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
             await mirrorRunActivity(decisionEntry);
-            await pending.delete(input.approval.requestId);
+            const consumed = await pending.take(input.approval.requestId);
+            if (
+              !consumed ||
+              consumed.sessionId !== p.sessionId ||
+              consumed.createdAt !== p.createdAt ||
+              consumed.command !== p.command ||
+              consumed.approvalKey !== p.approvalKey
+            ) {
+              return {
+                status: "refused",
+                sessionId: session.id,
+                reason: "that approval request was already resolved or changed — ask again if you still want it to run",
+              };
+            }
             if (p.kind === "input") {
               await deps.sessions
                 .clearSecurityTaint(session.id)
                 .catch(swallowAs("clearSecurityTaint on input approval", false));
             }
             const useKey = p.approvalKey ?? p.command;
+            if (scope === "once") oneTimeActionUses.set(useKey, (oneTimeActionUses.get(useKey) ?? 0) + 1);
             commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" ? 1 : Infinity));
             if (scope === "session" || scope === "always") {
               const grant: CommandApprovalGrant = {
@@ -2509,6 +2539,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(deps.mcp ? { mcp: deps.mcp } : {}),
+          ...(deps.googleWorkspaceGuarded &&
+          !automatedTurn &&
+          deps.keychain &&
+          !strictReadOnly &&
+          allInternal &&
+          (conversation.kind === "dm" || openSpeakerKeychain)
+            ? {
+                googleWorkspace: createGoogleWorkspaceService({
+                  principalId: actor.id,
+                  tokens: deps.keychain,
+                  ...(deps.googleWorkspaceFetch ? { fetchImpl: deps.googleWorkspaceFetch } : {}),
+                  authorize: (_command, key) => {
+                    const remaining = oneTimeActionUses.get(key) ?? 0;
+                    if (remaining <= 0) return false;
+                    oneTimeActionUses.set(key, remaining - 1);
+                    return true;
+                  },
+                  audit: (event) =>
+                    deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event }),
+                }),
+              }
+            : {}),
           ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
@@ -3826,7 +3878,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           for (const pa of turnApprovals) {
             const blocks = approvalBlocksInput(pa.kind, outcome);
             const command = pa.command;
-            const requestId = commandApprovalId(session.id, command);
+            const requestId = commandApprovalId(
+              session.id,
+              command,
+              pa.grantModes?.session === false && pa.grantModes?.always === false ? pa.approvalKey : undefined,
+            );
             const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({
               requestId,
@@ -3917,12 +3973,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
         }
         if (err instanceof NeedsApproval) {
-          const requestId = commandApprovalId(session.id, err.command);
+          const requestId = commandApprovalId(
+            session.id,
+            err.command,
+            err.grantModes?.session === false && err.grantModes?.always === false ? err.approvalKey : undefined,
+          );
           const grantModesField =
             resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
               ? {}
               : { grantModes: resolution.approvalGrantModes };
-          const summary = await approvalSummary(scopeId, err.command, err.approvalReason);
+          const summary = err.summary ?? (await approvalSummary(scopeId, err.command, err.approvalReason));
           try {
             await withManagedRosterVersion(async () => {
               await pending.put(requestId, {
@@ -3930,10 +3990,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 command: err.command,
                 createdAt: Date.now(),
                 reason: err.approvalReason,
-                ...grantModesField,
+                ...(err.grantModes ? { grantModes: err.grantModes } : grantModesField),
                 ...(err.matched ? { matched: err.matched } : {}),
                 ...(summary ? { summary } : {}),
                 ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
+                ...(err.summaryDetail ? { summaryDetail: err.summaryDetail } : {}),
                 request: replayableRequest(input),
                 blocksInput: true,
                 kind: err.kind,
@@ -3954,10 +4015,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             requestId,
             command: err.command,
             reason: err.approvalReason,
-            ...grantModesField,
+            ...(err.grantModes ? { grantModes: err.grantModes } : grantModesField),
             ...(err.matched ? { matched: err.matched } : {}),
             ...(summary ? { summary } : {}),
             ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
+            ...(err.summaryDetail ? { summaryDetail: err.summaryDetail } : {}),
             ...(err.kind ? { kind: err.kind } : {}),
             blocksInput: true,
           };

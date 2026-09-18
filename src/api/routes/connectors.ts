@@ -14,7 +14,7 @@ import {
   type OAuthState,
 } from "../../connectors/oauth.ts";
 import { bestOAuthTokenStatus, CONNECTOR_STATUS_ACCOUNT_TYPES } from "../../credentials/connector-status.ts";
-import type { DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
+import type { OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
@@ -513,14 +513,14 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
   if (pageToken && pageToken.length > 2048) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
     let accountType: AccountType | undefined;
-    let auth: DerivedOAuthAuth | null | undefined;
+    let accessToken: string | null | undefined;
     let authError: unknown;
     for (const candidate of requestedAccountType
       ? [requestedAccountType as AccountType]
       : (["default", "personal", "company"] satisfies AccountType[])) {
       try {
-        auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
-        if (auth) {
+        accessToken = await ctx.deps.keychain?.connectorAccessToken("gmail.googleapis.com", principal, candidate);
+        if (accessToken) {
           accountType = candidate;
           break;
         }
@@ -528,16 +528,16 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
         authError ??= error;
       }
     }
-    if (!auth && authError) throw authError;
-    if (!auth || !accountType)
+    if (!accessToken && authError) throw authError;
+    if (!accessToken || !accountType)
       return sendJson(ctx.res, 409, {
         error: "not_connected",
         message: "Connect this Google account in Settings to see sent mail.",
       });
     return sendJson(ctx.res, 200, {
       ...(ctx.params.messageId
-        ? await getSentEmail(auth.accessToken, ctx.params.messageId)
-        : await listSentEmails(auth.accessToken, pageToken)),
+        ? await getSentEmail(accessToken, ctx.params.messageId)
+        : await listSentEmails(accessToken, pageToken)),
       accountType,
     });
   } catch (error) {

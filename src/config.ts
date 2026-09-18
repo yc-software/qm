@@ -129,6 +129,7 @@ export interface Config {
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
+  googleWorkspaceGuarded: boolean;
   slackEventsPort?: number;
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
@@ -1411,6 +1412,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { portalIdentitySecret: env.PORTAL_IDENTITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
+    googleWorkspaceGuarded: boolEnvStrict("GOOGLE_WORKSPACE_GUARDED", env.GOOGLE_WORKSPACE_GUARDED) ?? false,
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),

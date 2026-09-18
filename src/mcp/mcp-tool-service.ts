@@ -49,11 +49,13 @@ export function createMcpToolService(opts: {
   servers: McpServerStore;
   audit?: AuditLog;
   userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken">;
+  blockedUserTokenHosts?: readonly string[];
   fetchImpl?: McpFetch;
   now?: () => number;
   refreshIntervalMs?: number;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
+  const blockedUserTokenHosts = new Set(opts.blockedUserTokenHosts?.map((host) => host.toLowerCase()));
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
   let closed = false;
@@ -87,6 +89,9 @@ export function createMcpToolService(opts: {
     if (server.credentialScope !== "per-user") throw new Error("invalid MCP credential scope");
     if (!principalId || !server.credentialHost || !opts.userTokens) {
       throw new Error(`MCP server ${server.id} requires a connected user account`);
+    }
+    if (blockedUserTokenHosts.has(server.credentialHost.toLowerCase())) {
+      throw new Error("connector credentials are restricted to their trusted service");
     }
     const token = await opts.userTokens.connectorAccessToken(
       server.credentialHost,

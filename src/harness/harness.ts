@@ -154,6 +154,9 @@ export interface HarnessTurnResult {
     matched?: string;
     purpose?: string;
     approvalKey?: string;
+    grantModes?: { session: boolean; always: boolean };
+    summary?: string;
+    summaryDetail?: string;
   }>;
   pausedOnApproval?: boolean;
   modelCalls?: number;

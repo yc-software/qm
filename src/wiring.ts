@@ -247,6 +247,7 @@ import {
   type DeviceFlowCutoverStore,
 } from "./credentials/device-flow-cutover.ts";
 import { createFeatureFlagStore, type FeatureFlagRecord, type FeatureFlagStore } from "./feature-flags.ts";
+import { GOOGLE_WORKSPACE_HOSTS } from "./connectors/google-workspace.ts";
 import { makeRefresh, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
@@ -1077,11 +1078,13 @@ export function buildApp(
     ...deriveConnectorKey(keychainKeyMaterial ?? randomBytes(32), "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
+  const googleWorkspaceGuarded = config.googleWorkspaceGuarded;
   const credentialStore: Keychain = createKeychain({
     creds: artifactMap<KeychainCredential>("keychain_credentials"),
     grants: artifactMap<KeychainGrant>("keychain_grants"),
     asks: artifactMap<KeychainAsk>("keychain_asks"),
     key: credentialKey,
+    ...(googleWorkspaceGuarded ? { blockedConnectorMaterializationHosts: GOOGLE_WORKSPACE_HOSTS } : {}),
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
       // AI subscription logins ride the same connector-refresh machinery:
@@ -1119,6 +1122,7 @@ export function buildApp(
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
+    ...(googleWorkspaceGuarded ? { blockedUserTokenHosts: GOOGLE_WORKSPACE_HOSTS } : {}),
     audit: auditLog,
     ...(keychain ? { userTokens: keychain } : {}),
   });
@@ -1694,6 +1698,7 @@ export function buildApp(
     },
   });
   const orchestratorDeps: OrchestratorDeps = {
+    googleWorkspaceGuarded,
     sessionSyscalls,
     refreshModels,
     identity,
