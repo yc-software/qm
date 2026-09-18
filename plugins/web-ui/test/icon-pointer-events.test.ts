@@ -27,6 +27,7 @@ for (const [label, glyph] of [
 ] as const) {
   test(`${label} keeps pointer targeting on the button across icon redraws`, () => {
     const host = document.createElement("div");
+    host.className = "dv-tab dv-active-tab";
     document.body.append(host);
     const view = () =>
       html`<span class="split-tab-actions"
