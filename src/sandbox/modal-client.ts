@@ -168,7 +168,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     },
     async snapshotHome() {
       const expiresAtMs = Date.now() + snapshotRetentionMs;
-      const image = await sbx.snapshotDirectory("/root", { ttlMs: snapshotRetentionMs });
+      const image = await sbx.snapshotDirectory("/root", { ttlMs: snapshotRetentionMs, timeoutMs: 600_000 });
       return { imageId: image.imageId, expiresAtMs };
     },
     async restoreHome(imageId): Promise<void> {
