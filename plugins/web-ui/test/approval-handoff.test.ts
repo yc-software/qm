@@ -186,6 +186,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       assert.deepEqual(requests.find((r) => r.path === "/api/runs/r1/signal")?.body, {
         kind: "steer",
         text: "use the smaller change",
+        queuedRunId: "q1",
         threadRef: row.threadRef,
         scopeId: row.scopeId,
       });

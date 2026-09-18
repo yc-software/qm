@@ -536,6 +536,7 @@ test("steering forwards prepared images and file paths while retaining the origi
     { type: "image", source: { type: "base64", media_type: "image/png", data: "YWJj" } },
   ]);
   const entry = entries.find((e) => (e.payload as { steered?: boolean }).steered);
-  assert.equal((entry?.payload as { text: string }).text, "check this");
-  assert.equal((entry?.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
+  assert.ok(entry);
+  assert.equal((entry.payload as { text: string }).text, "check this");
+  assert.equal((entry.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
 });

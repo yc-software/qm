@@ -421,7 +421,7 @@ test("post replies remain visible in new and continuing conversations", async (t
     });
     for (const edited of [false, true]) {
       await t.test(
-        `delayed ended-run steer ${edited ? "preserves a newer draft" : "resends after completion"}`,
+        `ended-run steer keeps the durable queue and ${edited ? "preserves a newer draft" : "leaves the composer empty"}`,
         async (sub) => {
           sub.after(() => {
             intercept = undefined;
@@ -431,16 +431,21 @@ test("post replies remain visible in new and continuing conversations", async (t
           let oldRunLive = true;
           let signalled = false;
           let resends = 0;
+          let withdrawals = 0;
+          const queued = [{ runId: "queued", text: "Follow-up question" }];
           intercept = (path) => {
             if (path.includes("/api/runs/active"))
               return Promise.resolve(
                 Response.json({
                   runId: oldRunLive ? "r1" : null,
                   run: oldRunLive ? { status: "running" } : null,
-                  queued: [],
+                  queued,
                 }),
               );
-            if (path === "/api/runs/queued/withdraw") return Promise.resolve(Response.json({ withdrawn: true }));
+            if (path === "/api/runs/queued/withdraw") {
+              withdrawals++;
+              return Promise.resolve(Response.json({ withdrawn: true }));
+            }
             if (path === "/api/runs/r1/signal") {
               signalled = true;
               return Promise.resolve(Response.json({ reason: "terminal", replayed: false }, { status: 409 }));
@@ -459,17 +464,20 @@ test("post replies remain visible in new and continuing conversations", async (t
           conv!.composer.setQueuedRuns(row.threadRef, [{ runId: "queued", text: "Follow-up question" }]);
           conv!.drawActiveChat(agent);
           host.querySelector<HTMLButtonElement>(".queued-steer")!.click();
-          await until(() => signalled && conv!.composer.state.draft === "Follow-up question");
+          await until(() => signalled);
+          await settle();
+          assert.equal(conv!.composer.state.draft, "");
+          assert.deepEqual(conv!.composer.queuedRunsFor(row.threadRef), queued);
           if (edited) conv!.composer.state.draft = "New draft";
-          await new Promise((resolve) => setTimeout(resolve, 5_200));
           assert.equal(resends, 0);
           oldRunLive = false;
           run.emit("done", { status: "done", result: { status: "ok", reply: "Original answer" } });
           await turn;
-          if (!edited) await until(() => resends === 1);
           await settle();
-          assert.equal(resends, edited ? 0 : 1);
-          if (edited) assert.equal(conv!.composer.state.draft, "New draft");
+          assert.equal(resends, 0);
+          assert.equal(withdrawals, 0);
+          assert.deepEqual(conv!.composer.queuedRunsFor(row.threadRef), queued);
+          assert.equal(conv!.composer.state.draft, edited ? "New draft" : "");
           intercept = undefined;
         },
       );
