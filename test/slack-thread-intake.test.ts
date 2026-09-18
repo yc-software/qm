@@ -70,3 +70,27 @@ test("explicit threads steer only their own active conversation", async () => {
     await b.runtime.stop();
   }
 });
+
+test("changing model accounts queues in the same Slack thread without steering the old account", async () => {
+  const b = await fixture();
+  try {
+    const prior = (await b.runs.claimById(b.root.id, "test", 60000))!;
+    await b.runs.complete(prior.id, prior.leaseToken!, { status: "ok", reply: "Done" });
+    const old = (
+      await b.runs.enqueue({
+        sessionId: b.root.sessionId,
+        request: { ...b.root.request, modelAccount: "openai" },
+      })
+    ).run;
+    const update = await b.app.turn(message("10.1"));
+    assert.notEqual(update.runId, old.id);
+    assert.notEqual(update.steered, true);
+    const queued = (await b.runs.get(update.runId!))!;
+    assert.equal(queued.sessionId, b.root.sessionId);
+    assert.equal(queued.request.deliveryTarget, "D1:10.1");
+    assert.equal(queued.request.modelAccount, "company");
+    assert.deepEqual(await b.signals.takePending(old.id), []);
+  } finally {
+    await b.runtime.stop();
+  }
+});
