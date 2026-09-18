@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
-import type { GenerateContentParameters } from "@google/genai";
-import type { ResponseCreateParams } from "openai/resources/responses/responses";
-import type { ChatCompletionCreateParams } from "openai/resources/chat/completions";
 import { promptEnvelopeWithoutHistory } from "../src/harness/harness.ts";
 import { sanitizeLlmPayload } from "../src/harness/pi-harness.ts";
 import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
@@ -23,64 +20,59 @@ const cases: Array<{
   },
   {
     name: "Chat Completions and Mistral messages",
-    payload: (history, instruction, tool) =>
-      ({
-        model: "test-model",
-        temperature: 0.5,
-        tools: [{ type: "function", function: { name: tool } }],
-        messages: [
-          { role: "system", content: instruction },
-          ...history.map((content) => ({ role: "user" as const, content })),
-          { role: "developer", content: "developer instruction" },
-          { role: "assistant", content: "answer" },
-          { role: "tool", tool_call_id: "call_1", content: "result" },
-        ],
-      }) satisfies ChatCompletionCreateParams,
+    payload: (history, instruction, tool) => ({
+      model: "test-model",
+      temperature: 0.5,
+      tools: [{ type: "function", function: { name: tool } }],
+      messages: [
+        { role: "system", content: instruction },
+        ...history.map((content) => ({ role: "user" as const, content })),
+        { role: "developer", content: "developer instruction" },
+        { role: "assistant", content: "answer" },
+        { role: "tool", tool_call_id: "call_1", content: "result" },
+      ],
+    }),
   },
   {
     name: "OpenAI and Azure Responses input",
-    payload: (history, instruction, tool) =>
-      ({
-        model: "test-model",
-        tools: [{ type: "function", name: tool, parameters: {}, strict: false }],
-        input: [
-          { role: "system", content: instruction },
-          ...history.map((text) => ({ role: "user" as const, content: [{ type: "input_text" as const, text }] })),
-          { type: "message", role: "developer", content: [{ type: "input_text", text: "developer instruction" }] },
-          { type: "function_call", call_id: "call_1", name: tool, arguments: "{}" },
-          { type: "function_call_output", call_id: "call_1", output: "result" },
-          { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "reasoning" },
-        ],
-      }) satisfies ResponseCreateParams,
+    payload: (history, instruction, tool) => ({
+      model: "test-model",
+      tools: [{ type: "function", name: tool, parameters: {}, strict: false }],
+      input: [
+        { role: "system", content: instruction },
+        ...history.map((text) => ({ role: "user" as const, content: [{ type: "input_text" as const, text }] })),
+        { type: "message", role: "developer", content: [{ type: "input_text", text: "developer instruction" }] },
+        { type: "function_call", call_id: "call_1", name: tool, arguments: "{}" },
+        { type: "function_call_output", call_id: "call_1", output: "result" },
+        { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "reasoning" },
+      ],
+    }),
   },
   {
     name: "Codex Responses instructions",
-    payload: (history, instruction, tool) =>
-      ({
-        model: "test-model",
-        instructions: instruction,
-        tools: [{ type: "function", name: tool, parameters: {}, strict: false }],
-        input: history.map((content) => ({ role: "user", content })),
-      }) satisfies ResponseCreateParams,
+    payload: (history, instruction, tool) => ({
+      model: "test-model",
+      instructions: instruction,
+      tools: [{ type: "function", name: tool, parameters: {}, strict: false }],
+      input: history.map((content) => ({ role: "user", content })),
+    }),
   },
   {
     name: "Responses string input",
-    payload: (history, instruction, tool) =>
-      ({
-        model: "test-model",
-        instructions: instruction,
-        tools: [{ type: "function", name: tool, parameters: {}, strict: false }],
-        input: history.join("\n"),
-      }) satisfies ResponseCreateParams,
+    payload: (history, instruction, tool) => ({
+      model: "test-model",
+      instructions: instruction,
+      tools: [{ type: "function", name: tool, parameters: {}, strict: false }],
+      input: history.join("\n"),
+    }),
   },
   {
     name: "Gemini and Vertex contents",
-    payload: (history, instruction, tool) =>
-      ({
-        model: "test-model",
-        config: { systemInstruction: instruction, tools: [{ functionDeclarations: [{ name: tool }] }] },
-        contents: history.map((text) => ({ role: "user", parts: [{ text }] })),
-      }) satisfies GenerateContentParameters,
+    payload: (history, instruction, tool) => ({
+      model: "test-model",
+      config: { systemInstruction: instruction, tools: [{ functionDeclarations: [{ name: tool }] }] },
+      contents: history.map((text) => ({ role: "user", parts: [{ text }] })),
+    }),
   },
   {
     name: "Pi messages context",
