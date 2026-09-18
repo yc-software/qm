@@ -25,7 +25,7 @@ import { sleep } from "../util/async.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import {
   defineHarness,
-  envelopeWithoutMessages,
+  promptEnvelopeWithoutHistory,
   type Harness,
   type HarnessTurnInput,
   type HarnessTurnResult,
@@ -1003,7 +1003,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             turnSeq: state.userSeq,
             step: capture.step,
             model: capture.model,
-            promptEnvelope: envelopeWithoutMessages(capture.request),
+            promptEnvelope: promptEnvelopeWithoutHistory(capture.request),
             truncated: false,
             transport: info?.providerID && info.modelID ? { modelId: `${info.providerID}/${info.modelID}` } : null,
             ttftMs: null,

@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
+import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import { promptEnvelopeBody, type NewEntry, type NewTapeRecord } from "../src/sessions/session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
@@ -328,10 +328,10 @@ test("native document bytes reach the provider on every step without entering th
   }
 });
 
-test("Pi request captures exclude document fallback text on Responses routes", async () => {
+test("Pi Responses captures exclude history and document text without changing requests or tape", async () => {
   const harness = createPiHarness({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" });
   const sink: Sink = { entries: [], tape: [] };
-  const captures: unknown[] = [];
+  const captures: HarnessLlmRequestRecord[] = [];
   const realFetch = globalThis.fetch;
   const requests: unknown[] = [];
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
@@ -366,6 +366,17 @@ test("Pi request captures exclude document fallback text on Responses routes", a
         },
       }),
     );
+    assert.ok(requests.length > 1);
+    assert.match(JSON.stringify(requests[0]), /do the thing/);
+    assert.match(JSON.stringify(requests.at(-1)), /do the thing/);
+    assert.match(JSON.stringify(requests.at(-1)), /The turn ended with an empty message/);
+    assert.match(JSON.stringify(sink.tape), /do the thing/);
+    const firstEnvelope = promptEnvelopeBody(captures[0]!.promptEnvelope)!;
+    assert.match(firstEnvelope.body, /BASE/);
+    for (const capture of captures) {
+      assert.equal(promptEnvelopeBody(capture.promptEnvelope)!.hash, firstEnvelope.hash);
+      assert.doesNotMatch(JSON.stringify(capture.promptEnvelope), /do the thing|The turn ended with an empty message/);
+    }
     assert.ok(JSON.stringify(requests).includes("RTF-QUARTZ-731"));
     assert.ok(captures.length > 0);
     assert.ok(!JSON.stringify(captures).includes("RTF-QUARTZ-731"));

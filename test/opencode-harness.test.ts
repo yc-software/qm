@@ -253,6 +253,10 @@ test("OpenCode records requests without usage attribution when captures and assi
   const result = await harness.turns.runTurn(turnInput([], llmRows));
   assert.equal(result.reply, "hello from fake");
   assert.deepEqual(
+    llmRows.map((row) => row.promptEnvelope),
+    [{ system: "s" }, { system: "s" }],
+  );
+  assert.deepEqual(
     llmRows.map((row) => ({ step: row.step, usage: row.usage, durationMs: row.durationMs })),
     [
       { step: 0, usage: null, durationMs: null },

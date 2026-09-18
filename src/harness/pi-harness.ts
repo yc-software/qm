@@ -68,7 +68,7 @@ import { customModelsJson, customProvidersVersion } from "../model/custom-provid
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import {
   defineHarness,
-  envelopeWithoutMessages,
+  promptEnvelopeWithoutHistory,
   type Harness,
   type HarnessCompactInput,
   type HarnessDetectInput,
@@ -853,7 +853,7 @@ export function sanitizeLlmPayload(
   const withTransport = (r: { envelope: unknown; truncated: boolean }) => (transport ? { ...r, transport } : r);
   let redacted: unknown;
   try {
-    redacted = redactImageBytes(envelopeWithoutMessages(payload));
+    redacted = redactImageBytes(promptEnvelopeWithoutHistory(payload));
   } catch {
     return withTransport({ envelope: { note: "payload not capturable" }, truncated: true });
   }
