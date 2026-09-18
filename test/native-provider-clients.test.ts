@@ -48,7 +48,7 @@ mock.module("e2b", {
   },
 });
 
-test("Modal native directory snapshot uses explicit finite retention and restores the exact image", async () => {
+test("Modal native directory snapshot has a ten-minute timeout, finite retention, and restores the exact image", async () => {
   const client = createSdkModalClient({
     tokenId: "id",
     tokenSecret: "secret",
@@ -59,7 +59,7 @@ test("Modal native directory snapshot uses explicit finite retention and restore
   const session = await client.create({ name: "test" });
   const before = Date.now();
   const snapshot = await session.snapshotHome!();
-  assert.deepEqual(modalCalls[0], ["snapshot", "/root", { ttlMs: 60_000 }]);
+  assert.deepEqual(modalCalls[0], ["snapshot", "/root", { ttlMs: 60_000, timeoutMs: 600_000 }]);
   assert.ok(snapshot.expiresAtMs >= before + 60_000);
   await session.restoreHome!(snapshot.imageId);
   assert.deepEqual(modalCalls[1], ["mount", "/root", { imageId: "im-native" }]);
