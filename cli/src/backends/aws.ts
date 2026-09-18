@@ -1834,7 +1834,9 @@ function serviceSnapshotFromStates(
     const state = states.get(workload)!;
     if (!state.taskDefinition) throw new CliError(`${workload}: ECS service has no task definition`);
     tasks[workload] = state.taskDefinition;
-    counts[workload] = state.desiredCount ?? 0;
+    if (typeof state.desiredCount !== "number" || !Number.isSafeInteger(state.desiredCount) || state.desiredCount < 0)
+      throw new CliError(`${workload}: ECS service has no valid desired count`);
+    counts[workload] = state.desiredCount;
   }
   return { tasks, counts };
 }

@@ -6211,3 +6211,75 @@ for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] 
     }
   });
 }
+
+for (const mode of ["stopped", "running", "corrupt", "missing", "null"] as const) {
+  test(`AWS unchanged-layer preflight handles ${mode} core without weakening integrity`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-cold-layer-"));
+    const single = oneServiceConfig();
+    single.env = { ...single.env, core: { ...single.env.core, BACKGROUND_WORK_ENABLED: "0" } };
+    const candidatePath = join(dir, "candidate.json");
+    const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
+    writeFileSync(
+      candidatePath,
+      JSON.stringify({
+        contract: 1,
+        accountId: "123456789012",
+        region: "us-west-2",
+        label: "cold-candidate",
+        images: { core: image },
+        imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      }),
+    );
+    const task = "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1";
+    const fake = statefulAws(
+      dir,
+      single,
+      manifestItems([{ id: "current", tasks: { core: task }, counts: { core: 1 } }], "current"),
+    );
+    const state = JSON.parse(readFileSync(fake.state, "utf8"));
+    state.services["acme-core"].desiredCount = mode === "running" ? 1 : 0;
+    if (mode === "corrupt") state.objects[EMPTY_LAYER.key] = "corrupt";
+    if (mode === "missing") delete state.services["acme-core"].desiredCount;
+    if (mode === "null") state.services["acme-core"].desiredCount = null;
+    writeFileSync(fake.state, JSON.stringify(state));
+    const priorFetch = globalThis.fetch;
+    const priorSecret = process.env.CORE_SIGNING_SECRET;
+    process.env.CORE_SIGNING_SECRET = "test-signing-secret";
+    const methods: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes("/v1/deployment-layer")) {
+        methods.push(init?.method ?? "GET");
+        if (init?.method !== "PUT") return new Response("core unavailable", { status: 503 });
+        assert.match(readFileSync(fake.log, "utf8"), /ecs update-service/);
+        assert.equal(init.body, EMPTY_LAYER_BODY);
+      }
+      return priorFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const deploy = () => awsUp(single, dir, { yes: true, candidate: candidatePath, sandboxDir: dir });
+      if (mode === "stopped") {
+        await deploy();
+        assert.deepEqual(methods, ["PUT"]);
+        const after = JSON.parse(readFileSync(fake.state, "utf8"));
+        const current = after.dynamo["deployment/current"].manifestId.S;
+        const manifest = JSON.parse(after.dynamo[`deployment/manifest/${current}`].manifest.S);
+        const container = after.definitions[manifest.tasks.core].containerDefinitions[0];
+        assert.equal(container.image, image);
+        assert.equal(
+          container.environment.find((entry: { name: string }) => entry.name === "BACKGROUND_WORK_ENABLED").value,
+          "0",
+        );
+      } else {
+        await assert.rejects(deploy);
+        assert.deepEqual(methods, mode === "running" ? ["GET"] : []);
+        assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:run-task|register-task-definition|update-service)/);
+      }
+    } finally {
+      globalThis.fetch = priorFetch;
+      if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
+      else process.env.CORE_SIGNING_SECRET = priorSecret;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
