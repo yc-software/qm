@@ -1,4 +1,5 @@
 import type * as Sentry from "@sentry/node";
+import { swallow } from "./errors.ts";
 
 export type TransactionEvent = Sentry.Event & { type: "transaction" };
 
@@ -25,9 +26,59 @@ const SPAN_STATUS_OK = 1;
 const SPAN_STATUS_ERROR = 2;
 
 const NAME = /^[A-Z]{3,7} (\/(v[0-9]{1,3}|[a-z][a-z-]{0,31}|:[a-zA-Z]{1,32}|\*)){1,10}$|^(run|pageload)$/;
+const OPS = new Set(["http.server", "http.client", "queue.task", "pageload"]);
+const STATUSES = new Set<string>([
+  "ok",
+  "cancelled",
+  "unauthenticated",
+  "permission_denied",
+  "not_found",
+  "resource_exhausted",
+  "invalid_argument",
+  "internal_error",
+]);
 const TAG_KEYS = new Set(["service", "deployment"]);
-const DATA_KEYS = new Set(["surface", "origin", "http_status", "page"]);
 const TAG_VALUE = /^[a-zA-Z0-9_.:-]{1,64}$/;
+const HTTP_STATUS = /^([1-5][0-9]{2}|network)$/;
+const setHas = (values: string[]) => {
+  const set = new Set(values);
+  return (value: string) => set.has(value);
+};
+const BUCKETS: Record<string, (value: string) => boolean> = {
+  surface: setHas([
+    "core",
+    "cron",
+    "external",
+    "inbound_file",
+    "keychain-ask",
+    "loop",
+    "monitor",
+    "secret-drop",
+    "shared_skill",
+    "slack",
+    "steer",
+    "swarm",
+    "web",
+    "webhook",
+  ]),
+  origin: setHas(["direct", "human", "ambient", "automation"]),
+  page: setHas([
+    "calendar",
+    "chats",
+    "contexts",
+    "crons",
+    "deploys",
+    "files",
+    "inbox",
+    "keychain",
+    "loops",
+    "memory",
+    "settings",
+    "skills",
+    "webhooks",
+  ]),
+  http_status: (value) => HTTP_STATUS.test(value),
+};
 const MEASUREMENTS = new Set(["queue_wait", "ttfb", "dom_content_loaded", "load", "fcp", "lcp"]);
 const HEX = /^[a-f0-9]+$/;
 
@@ -47,23 +98,36 @@ export function traceStatus(httpStatus: number): TimingStatus {
 }
 
 export function finishTiming(sdk: TimingSdk, span: Sentry.Span, result: TimingResult): void {
-  if (result.name) span.updateName(result.name);
-  span.setStatus(
-    result.status === "ok" ? { code: SPAN_STATUS_OK } : { code: SPAN_STATUS_ERROR, message: result.status },
-  );
-  for (const [key, value] of Object.entries(result.data ?? {})) if (value !== undefined) span.setAttribute(key, value);
-  for (const [key, value] of Object.entries(result.measurements ?? {}))
-    if (value !== undefined && Number.isFinite(value) && value >= 0)
-      sdk.setMeasurement(key, Math.round(value), "millisecond", span);
-  span.end(result.endMs ?? Date.now());
+  try {
+    if (result.name) span.updateName(result.name);
+    span.setStatus(
+      result.status === "ok" ? { code: SPAN_STATUS_OK } : { code: SPAN_STATUS_ERROR, message: result.status },
+    );
+    for (const [key, value] of Object.entries(result.data ?? {}))
+      if (value !== undefined) span.setAttribute(key, value);
+    for (const [key, value] of Object.entries(result.measurements ?? {}))
+      if (value !== undefined && Number.isFinite(value) && value >= 0)
+        sdk.setMeasurement(key, Math.round(value), "millisecond", span);
+    span.end(result.endMs ?? Date.now());
+  } catch (error) {
+    swallow("timing", error);
+  }
 }
 
-function allowlisted(entries: Record<string, unknown>, keys: Set<string>): Record<string, string> {
+function scopeTags(tags: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(entries).filter(
-      ([key, value]) => keys.has(key) && typeof value === "string" && TAG_VALUE.test(value),
+    Object.entries(tags).filter(
+      ([key, value]) => TAG_KEYS.has(key) && typeof value === "string" && TAG_VALUE.test(value),
     ),
   ) as Record<string, string>;
+}
+
+function bucketed(data: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(data)
+      .filter(([key, value]) => key in BUCKETS && typeof value === "string")
+      .map(([key, value]) => [key, BUCKETS[key]!(value as string) ? (value as string) : "other"]),
+  );
 }
 
 export function sanitizeTransactionEvent(
@@ -83,7 +147,9 @@ export function sanitizeTransactionEvent(
     end < start ||
     !trace ||
     !HEX.test(trace.trace_id ?? "") ||
-    !HEX.test(trace.span_id ?? "")
+    !HEX.test(trace.span_id ?? "") ||
+    !OPS.has(trace.op ?? "") ||
+    !STATUSES.has(trace.status ?? "")
   )
     return null;
   return {
@@ -96,7 +162,7 @@ export function sanitizeTransactionEvent(
     platform,
     environment: event.environment,
     release: event.release,
-    tags: { ...allowlisted(event.tags ?? {}, TAG_KEYS), ...allowlisted(trace.data ?? {}, DATA_KEYS) },
+    tags: { ...scopeTags(event.tags ?? {}), ...bucketed(trace.data ?? {}) },
     contexts: {
       trace: { trace_id: trace.trace_id, span_id: trace.span_id, op: trace.op, status: trace.status, origin: "manual" },
     },

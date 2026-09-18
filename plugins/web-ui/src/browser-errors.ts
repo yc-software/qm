@@ -1,6 +1,7 @@
 import type * as Browser from "@sentry/browser";
 import type { init, ErrorEvent, StackFrame } from "@sentry/browser";
 import type { Me } from "./shell-state";
+import { parseDeepLink, UI_BASE } from "./deep-link.ts";
 import {
   finishTiming,
   sanitizeTransactionEvent,
@@ -36,7 +37,6 @@ const API_RESOURCES = new Set([
   "inbox",
   "keychain",
   "loops",
-  "me",
   "memory",
   "playgrounds",
   "projects",
@@ -54,24 +54,6 @@ const API_RESOURCES = new Set([
   "ui-state",
   "user-model-auth",
   "webhooks",
-]);
-const PAGES = new Set([
-  "root",
-  "s",
-  "c",
-  "projects",
-  "admin",
-  "apps",
-  "deploys",
-  "crons",
-  "skills",
-  "files",
-  "inbox",
-  "loops",
-  "keychain",
-  "connectors",
-  "contexts",
-  "chats",
 ]);
 let client: ReturnType<typeof init>;
 let sdk: typeof Browser | undefined;
@@ -135,11 +117,17 @@ export function sanitizeBrowserError(event: ErrorEvent, origin: string, release?
 function timing(op: string, name: string, startMs: number, result: TimingResult): void {
   if (!client || !sdk || timingBudget <= 0) return;
   timingBudget--;
-  finishTiming(
-    sdk,
-    sdk.startInactiveSpan({ op, name, startTime: startMs, attributes: { "sentry.source": "route" } }),
-    result,
-  );
+  try {
+    sdk.getCurrentScope().setPropagationContext({ traceId: hex(16), sampleRand: Math.random() });
+    const span = sdk.startInactiveSpan({ op, name, startTime: startMs, attributes: { "sentry.source": "route" } });
+    finishTiming(sdk, span, result);
+  } catch {
+    return;
+  }
+}
+
+function hex(bytes: number): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export function apiRouteName(pathname: string): string {
@@ -170,11 +158,11 @@ function reportPageLoad(): void {
     const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
     if (!navigation?.loadEventEnd) return;
     const paint = (name: string) => performance.getEntriesByName(name)[0]?.startTime;
-    const page = String(window.location.pathname).split("/")[1] || "root";
+    const { view } = parseDeepLink(UI_BASE, window.location.pathname, "");
     timing("pageload", "pageload", performance.timeOrigin, {
       status: "ok",
       endMs: performance.timeOrigin + navigation.loadEventEnd,
-      data: { page: PAGES.has(page) ? page : "other" },
+      data: { page: view ?? "other" },
       measurements: {
         ttfb: navigation.responseStart,
         dom_content_loaded: navigation.domContentLoadedEventEnd,
@@ -200,7 +188,7 @@ function startTiming(rate: number): void {
     largestContentfulPaint = undefined;
   }
   try {
-    const report = () => setTimeout(reportPageLoad, 0);
+    const report = () => setTimeout(reportPageLoad, 500);
     if (document.readyState === "complete") report();
     else window.addEventListener("load", report, { once: true });
   } catch {

@@ -1,6 +1,7 @@
 import type * as Sentry from "@sentry/node";
 import { basename } from "node:path";
 import { finishTiming, parseSampleRate, sanitizeTransactionEvent, type TimingResult } from "./timing.ts";
+import { swallow } from "./errors.ts";
 
 const FLUSH_MS = 2_000;
 const ERROR_TYPES = new Set([
@@ -105,8 +106,13 @@ export type FinishTiming = (result: TimingResult) => void;
 
 export function startTiming(op: string, name: string, startMs = Date.now()): FinishTiming | undefined {
   if (!client || !tracing) return undefined;
-  const span = client.startInactiveSpan({ op, name, startTime: startMs, attributes: { "sentry.source": "route" } });
-  return (result) => finishTiming(client!, span, result);
+  try {
+    const span = client.startInactiveSpan({ op, name, startTime: startMs, attributes: { "sentry.source": "route" } });
+    return (result) => finishTiming(client!, span, result);
+  } catch (error) {
+    swallow("timing", error);
+    return undefined;
+  }
 }
 
 export async function flushErrorReporting(): Promise<void> {

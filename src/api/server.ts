@@ -491,13 +491,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   };
   const requestNames = new WeakMap<IncomingMessage, string>();
   const server = createHttpServer((req, res) => {
-    const finishTiming = startTiming("http.server", `${req.method ?? "GET"} /*`);
+    const finishTiming = req.url === "/healthz" ? undefined : startTiming("http.server", `${req.method ?? "GET"} /*`);
     if (finishTiming)
       res.once("close", () =>
         finishTiming({
           name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
           status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
-          data: { http_status: String(res.statusCode) },
+          data: { http_status: res.writableFinished ? String(res.statusCode) : undefined },
         }),
       );
     req.on("error", () => res.destroy());

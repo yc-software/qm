@@ -45,19 +45,19 @@ test("core request timings carry registered route templates, never raw paths, an
     await fetch(`${base}/v1/sessions/private-session-id?token=private-token`);
     await fetch(`${base}/v1/no-such-route/private-segment-9f3a/deep`, { method: "POST" });
     await fetch(`${base}/v1/blobs/private-blob-id`);
-    const settle = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      await flushErrorReporting();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    const settle = async (expected: number) => {
+      for (let i = 0; i < 40 && captured.length < expected; i++) {
+        await flushErrorReporting();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
     };
-    await settle();
+    await settle(3);
     const requests = captured.filter((event) => event.contexts?.trace?.op === "http.server");
-    assert.equal(requests.length, 4);
+    assert.equal(requests.length, 3);
     assert.doesNotMatch(JSON.stringify(requests), /private/);
     assert.deepEqual(
       requests.map((event) => [event.transaction, event.contexts?.trace?.status, event.tags?.http_status]),
       [
-        ["GET /healthz", "ok", "200"],
         ["GET /v1/sessions/:id", "invalid_argument", "400"],
         ["POST /*", "not_found", "404"],
         ["GET /v1/blobs/:id", "internal_error", "501"],
@@ -86,7 +86,7 @@ test("core request timings carry registered route templates, never raw paths, an
     const claimed = await built.runs.claim("worker", 10_000);
     assert.equal(claimed?.id, run.id);
     await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok" });
-    await settle();
+    await settle(4);
     const runs = captured.filter((event) => event.contexts?.trace?.op === "queue.task");
     assert.equal(runs.length, 1);
     assert.doesNotMatch(JSON.stringify(runs), /private/);

@@ -223,7 +223,7 @@ test("transaction allowlist keeps timing shape only and rejects unsafe names", (
   assert.doesNotMatch(JSON.stringify(clean), /private/);
   assert.equal(clean?.transaction, "GET /v1/sessions/:id");
   assert.deepEqual(clean?.transaction_info, { source: "route" });
-  assert.deepEqual(clean?.tags, { service: "core", http_status: "200", surface: "web" });
+  assert.deepEqual(clean?.tags, { service: "core", http_status: "200", surface: "web", page: "other" });
   assert.deepEqual(clean?.measurements, { queue_wait: { value: 5, unit: "millisecond" } });
   assert.deepEqual(clean?.spans, []);
   assert.deepEqual(clean?.contexts?.trace, {
@@ -237,12 +237,35 @@ test("transaction allowlist keeps timing shape only and rejects unsafe names", (
     type: "transaction" as const,
     start_timestamp: 1,
     timestamp: 2,
-    contexts: { trace: { trace_id: "a".repeat(32), span_id: "c".repeat(16) } },
+    contexts: { trace: { trace_id: "a".repeat(32), span_id: "c".repeat(16), op: "queue.task", status: "ok" } },
   };
   for (const transaction of ["GET /v1/sessions/1234?token=private", "private text", "GET https://x/", undefined])
     assert.equal(sanitizeTransactionEvent({ ...base, transaction }, "node"), null);
   assert.equal(sanitizeTransactionEvent({ ...base, transaction: "run", timestamp: 0 }, "node"), null);
   assert.equal(sanitizeTransactionEvent({ ...base, transaction: "run", contexts: {} }, "node"), null);
+  const traced = (op: string, status: string) => ({
+    ...base,
+    transaction: "run",
+    contexts: { trace: { ...base.contexts.trace, op, status } },
+  });
+  assert.equal(sanitizeTransactionEvent(traced("private.op", "ok"), "node"), null);
+  assert.equal(sanitizeTransactionEvent(traced("queue.task", "private status"), "node"), null);
+  assert.equal(sanitizeTransactionEvent(traced("queue.task", "ok"), "node")?.contexts?.trace?.op, "queue.task");
+  const bucketed = sanitizeTransactionEvent(
+    {
+      ...traced("queue.task", "ok"),
+      contexts: {
+        trace: {
+          ...base.contexts.trace,
+          op: "queue.task",
+          status: "ok",
+          data: { surface: "private-surface", origin: "private-origin", http_status: "private", page: "private" },
+        },
+      },
+    },
+    "node",
+  );
+  assert.deepEqual(bucketed?.tags, { surface: "other", origin: "other", http_status: "other", page: "other" });
 });
 
 test("trace statuses map HTTP outcomes", () => {
@@ -261,7 +284,7 @@ test("trace statuses map HTTP outcomes", () => {
 test("real SDK sends sanitized sampled transactions only when a sample rate is configured", async () => {
   const body = `
     startTiming('queue.task', 'run', Date.now() - 500)?.({ status: 'ok', endMs: Date.now(),
-      data: { surface: 'web', origin: 'human', private: 'private-tag' },
+      data: { surface: 'web', origin: 'human', private: 'private-tag', page: 'private-page' },
       measurements: { queue_wait: 20, private: 5 } });
     const finish = startTiming('http.server', 'GET /*');
     finish?.({ name: 'GET /v1/sessions/:id', status: 'not_found', data: { http_status: '404' } });
@@ -283,7 +306,13 @@ test("real SDK sends sanitized sampled transactions only when a sample rate is c
   const [run, request] = on.transactions;
   assert.equal(run!.transaction, "run");
   assert.ok(Math.abs(run!.timestamp - run!.start_timestamp - 0.5) < 0.05);
-  assert.deepEqual(run!.tags, { service: "test", deployment: "test-deployment", surface: "web", origin: "human" });
+  assert.deepEqual(run!.tags, {
+    service: "test",
+    deployment: "test-deployment",
+    surface: "web",
+    origin: "human",
+    page: "other",
+  });
   assert.deepEqual(run!.measurements, { queue_wait: { value: 20, unit: "millisecond" } });
   assert.equal(run!.contexts.trace.op, "queue.task");
   assert.equal(run!.release, "test-release");

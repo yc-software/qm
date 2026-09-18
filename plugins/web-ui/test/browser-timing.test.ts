@@ -54,7 +54,7 @@ async function withBrowser(run: (sent: Record<string, any>[][]) => Promise<void>
   const define = (name: string, value: unknown) =>
     Object.defineProperty(globalThis, name, { configurable: true, value });
   define("window", {
-    location: { origin, pathname: "/s/private-session-id" },
+    location: { origin, pathname: "/s/private-session-id", search: "" },
     addEventListener() {},
   });
   define("document", { readyState: "complete", addEventListener() {} });
@@ -98,7 +98,7 @@ test("real browser SDK sends sanitized page load and request timings when sample
   await withBrowser(async (sent) => {
     await initializeBrowserErrors(me(1));
     const sdk = await import("@sentry/browser");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 600));
     reportRequestTiming(
       `${origin}/api/sessions/0f3a9c1e-1d2b-4c5d-8e9f-abcdef012345/entries?after=private`,
       "GET",
@@ -113,7 +113,7 @@ test("real browser SDK sends sanitized page load and request timings when sample
       transaction: "GET /api/private/1234",
       start_timestamp: 1,
       timestamp: 2,
-      contexts: { trace: { trace_id: "a".repeat(32), span_id: "b".repeat(16) } },
+      contexts: { trace: { trace_id: "a".repeat(32), span_id: "b".repeat(16), op: "http.client", status: "ok" } },
     });
     sdk.captureEvent({
       type: "transaction",
@@ -124,7 +124,15 @@ test("real browser SDK sends sanitized page load and request timings when sample
       request: { url: "private" },
       spans: [{ span_id: "1", trace_id: "2", description: "private", start_timestamp: 1, timestamp: 2, data: {} }],
       tags: { private: "private" },
-      contexts: { trace: { trace_id: "a".repeat(32), span_id: "b".repeat(16), data: { private: 1 } } },
+      contexts: {
+        trace: {
+          trace_id: "a".repeat(32),
+          span_id: "b".repeat(16),
+          op: "http.client",
+          status: "ok",
+          data: { private: 1 },
+        },
+      },
     });
     await sdk.flush(1000);
     const payload = JSON.stringify(sent);
@@ -142,7 +150,7 @@ test("real browser SDK sends sanitized page load and request timings when sample
       ],
     );
     const pageload = items[0]![2]!;
-    assert.deepEqual(pageload.tags, { page: "s" });
+    assert.deepEqual(pageload.tags, { page: "chats" });
     assert.equal(pageload.contexts.trace.data, undefined);
     assert.deepEqual(pageload.measurements, {
       ttfb: { value: 120, unit: "millisecond" },
@@ -160,6 +168,8 @@ test("real browser SDK sends sanitized page load and request timings when sample
     assert.equal(items[3]![2]!.contexts.trace.status, "internal_error");
     assert.deepEqual(items[4]![2]!.spans, []);
     assert.deepEqual(items[4]![2]!.tags, {});
+    const traceIds = new Set(items.slice(0, 4).map(([, , event]) => event!.contexts.trace.trace_id));
+    assert.equal(traceIds.size, 4);
     for (const [, , event] of items) {
       assert.equal(event!.user, undefined);
       assert.equal(event!.request, undefined);

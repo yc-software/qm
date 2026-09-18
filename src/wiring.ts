@@ -1,4 +1,5 @@
 import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
+import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { resolveTurnOrigin } from "./core/turn-origin.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
@@ -1462,12 +1463,12 @@ export function buildApp(
   runs.onTerminal((run) => {
     void productAnalytics.responseFinished(run);
     const startedAt = run.startedAt ?? run.finishedAt ?? Date.now();
-    startTiming(
-      "queue.task",
-      "run",
-      startedAt,
-    )?.({
-      status: run.status === "done" ? "ok" : "internal_error",
+    const finishTiming = startTiming("queue.task", "run", startedAt);
+    let status: TimingStatus = "internal_error";
+    if (run.status === "done") status = "ok";
+    else if (run.result?.stopped) status = "cancelled";
+    finishTiming?.({
+      status,
       endMs: run.finishedAt ?? Date.now(),
       data: { surface: run.request.surface, origin: resolveTurnOrigin(run.request).kind },
       measurements: { queue_wait: startedAt - run.createdAt },
