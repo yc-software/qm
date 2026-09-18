@@ -30,10 +30,9 @@ a write, ask. Do not infer permission from a login merely being present on the c
   establish native Git transport access or configure the CLI's active login.
 
 For an existing checkout, inspect the remote and applicable credential-helper, SSH,
-proxy, and HTTP-header configuration without printing secret values. A reused checkout
+proxy, and HTTP-header configuration. A reused checkout
 may still select a previous account. Commit author metadata is separate from transport
 identity. Resolve an unknown identity before a write; do not probe access by pushing.
-Never copy tokens into remotes or expose them while checking authentication.
 
 ## Logging in
 

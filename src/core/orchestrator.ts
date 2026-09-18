@@ -1933,7 +1933,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           systemPrompt +=
             "\n\n## Org credentials on your computer\n" +
             "These credentials are authorized for this conversation and supplied to commands on its scoped computer, not scratch computers. " +
-            "Use the matching access skill. Never print secret values or save them in source or workspace files.\n" +
+            "Use the matching access skill.\n" +
             envCredLines.join("\n");
         }
         if (actorIsOrgAdmin) {
