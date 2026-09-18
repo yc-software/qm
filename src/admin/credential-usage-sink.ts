@@ -20,7 +20,7 @@ interface CredentialUsageQuery {
 
 export const CREDENTIAL_USAGE_WINDOW = 5000;
 
-export interface CredentialUsageSummary {
+interface CredentialUsageSummary {
   slug: string;
   usageCount: number;
   usageTruncated: boolean;
