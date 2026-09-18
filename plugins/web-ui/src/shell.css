@@ -251,6 +251,7 @@ body.resizing-sidebar {
 .icon {
   display: block;
   flex-shrink: 0;
+  pointer-events: none;
 }
 
 .nav {
