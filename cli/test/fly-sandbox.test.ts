@@ -593,7 +593,7 @@ else console.log("ok");`,
     }
     assert.match(
       calls,
-      /ssh console -a acme-core --machine machine-core .* --quiet/,
+      /machine exec -a acme-core machine-core .* --timeout 120/,
       "live readiness proves S3 from the running core",
     );
   } finally {
@@ -640,7 +640,7 @@ else console.log("ok");`,
     );
     assert.doesNotMatch(
       readFileSync(fake.log, "utf8"),
-      /ssh console/,
+      /machine exec/,
       "an unowned core never receives the storage probe",
     );
   } finally {
@@ -836,7 +836,7 @@ test("fly live readiness fails when core cannot round-trip durable object storag
 if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "started", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(env)} } }] }));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
-else if (a.startsWith("ssh console")) { console.error("AccessDenied"); process.exit(1); }
+else if (a.startsWith("machine exec")) { console.error("AccessDenied"); process.exit(1); }
 else console.log("ok");`,
   );
   try {
