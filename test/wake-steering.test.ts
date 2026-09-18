@@ -526,6 +526,27 @@ test("reverse race: an addressed mention steers into the live ambient run, not a
   assert.equal(signals[0]!.text, "@bot are you on it?");
 });
 
+for (const personalSide of ["ambient", "mention"] as const) {
+  test(`reverse race: ${personalSide} personal access cannot share the other run's company account`, async () => {
+    const built = freshApp();
+    const channel = `C-account-${personalSide}`;
+    const askTs = "1600.2";
+    const ambientRef = `slack:${channel}:ambient:${askTs}`;
+    await built.config.setPersonalModelAuth(personalSide === "ambient" ? "jordan@acme.test" : "U1", true, "openai");
+    await built.sessions.getOrCreateByThread(ambientRef, "channel", `channel:${channel}`);
+    const ambient = await built.app.turn(spawnedWorker(channel, askTs));
+    const second = await built.app.turn({ ...mention("@bot continue", channel, askTs), triggerTs: askTs });
+    assert.equal(second.status, "queued");
+    assert.notEqual(second.runId, ambient.runId);
+    assert.notEqual(second.steered, true);
+    assert.deepEqual(await built.signals.takePending(ambient.runId!), []);
+    assert.equal(
+      (await built.runs.get(second.runId!))?.request.modelAccount,
+      personalSide === "mention" ? "openai" : "company",
+    );
+  });
+}
+
 test("spine ON: the FIRST message (no live run) engages normally — no steer", async () => {
   const built = freshApp();
   const channel = "C4";

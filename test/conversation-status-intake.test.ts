@@ -125,6 +125,55 @@ test("independent tasks remain addressable after the root ends, including termin
   }
 });
 
+test("a DM routed to a task on another account queues with the sender's account and preserves the task destination", async () => {
+  const built = buildApp(testConfig());
+  try {
+    const turn: TurnRequest = {
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "dm:D-account" },
+      text: "Website",
+      async: true,
+      liveActor: true,
+      redeliveryKey: "account-root",
+    };
+    const first = await built.app.turn(turn);
+    const root = (await built.runs.get(first.runId!))!;
+    const childRef = "dm:D-account:task:email";
+    const child = (
+      await built.runs.enqueue({
+        sessionId: childRef,
+        request: {
+          ...root.request,
+          modelAccount: "openai",
+          deliveryTarget: "D-account:10.1",
+          conversation: { ...root.request.conversation, threadRef: childRef },
+        },
+      })
+    ).run;
+    selectTask = child.id;
+    const result = await built.app.turn({
+      ...turn,
+      text: "Shorten the email",
+      deliveryTarget: "D-account:20.1",
+      redeliveryKey: "account-update",
+    });
+    assert.equal(result.status, "queued");
+    assert.notEqual(result.runId, child.id);
+    assert.notEqual(result.steered, true);
+    const queued = (await built.runs.get(result.runId!))!;
+    assert.equal(queued.sessionId, childRef);
+    assert.equal(queued.request.conversation.threadRef, childRef);
+    assert.equal(queued.request.modelAccount, "company");
+    assert.equal(queued.request.deliveryTarget, "D-account:10.1");
+    assert.deepEqual(await built.signals.takePending(child.id), []);
+    assert.deepEqual(await built.signals.takePending(root.id), []);
+  } finally {
+    selectTask = undefined;
+    await built.runtime.stop();
+  }
+});
+
 for (const excluded of [
   { name: "channel", conversation: { kind: "channel", channelRef: "C1" } },
   { name: "group DM", conversation: { kind: "group", channelRef: "G1", isMpim: true } },
