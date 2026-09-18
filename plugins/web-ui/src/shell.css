@@ -2005,14 +2005,14 @@ qm-markdown .tok-in {
 .message-stack .user-row:not(:has(~ .user-row)):not(.pin-expanded) .user-bubble > .pin-content {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 6;
   overflow: hidden;
 }
 .message-stack
   .user-row:not(:has(~ .user-row)):not(.pin-expanded)
   .user-bubble
   > .pin-content:has(code-block, pre, table, img, svg, math, .katex-display, video, iframe) {
-  max-height: 2lh;
+  max-height: 6lh;
 }
 .message-stack .user-row.pin-expanded .user-bubble > .pin-content {
   max-height: var(--pin-expanded-max);

@@ -25,7 +25,7 @@ function fixture() {
           const limit = row.style.getPropertyValue("--pin-expanded-max");
           return Math.min(fullHeight, limit ? parseFloat(limit) : fullHeight);
         }
-        return Math.min(fullHeight, 46.5);
+        return Math.min(fullHeight, 139.5);
       },
     },
   });
@@ -89,7 +89,7 @@ function fixture() {
 test("long prompts clamp to the pane and expand or collapse through their button", () => {
   const f = fixture();
   try {
-    assert.equal(f.content.clientHeight, 46.5);
+    assert.equal(f.content.clientHeight, 139.5);
     assert.equal(f.toggle.hidden, false);
     f.toggle.click();
     assert.equal(f.row.classList.contains("pin-expanded"), true);
@@ -107,9 +107,9 @@ test("pane resizes keep the compact preview height", () => {
   const f = fixture();
   try {
     f.resize(100);
-    assert.equal(f.content.clientHeight, 46.5);
+    assert.equal(f.content.clientHeight, 139.5);
     f.resize(2000);
-    assert.equal(f.content.clientHeight, 46.5);
+    assert.equal(f.content.clientHeight, 139.5);
   } finally {
     f.close();
   }
@@ -218,7 +218,7 @@ test("expanding a scrolled prompt stays sticky with a bounded scrollable body", 
     f.toggle.click();
     assert.equal(f.content.scrollTop, 0);
     assert.equal(f.row.classList.contains("stuck"), true);
-    assert.equal(f.content.clientHeight, 46.5);
+    assert.equal(f.content.clientHeight, 139.5);
     assert.equal(f.scroller.scrollTop, 500);
   } finally {
     f.close();
@@ -278,6 +278,23 @@ test("repeated prompt measurement preserves the disclosure text node", () => {
     assert.notEqual(expandedLabel, label);
     f.resize(400);
     assert.equal(f.toggle.firstChild, expandedLabel);
+  } finally {
+    f.close();
+  }
+});
+
+test("ordinary multi-line prompts stay fully visible without a disclosure", () => {
+  const f = fixture();
+  try {
+    for (const height of [70, 100, 139]) {
+      f.grow(height);
+      assert.equal(f.content.clientHeight, height);
+      assert.equal(f.toggle.hidden, true);
+    }
+    f.grow(250);
+    assert.equal(f.toggle.hidden, false);
+    f.toggle.click();
+    assert.equal(f.content.clientHeight, 250);
   } finally {
     f.close();
   }

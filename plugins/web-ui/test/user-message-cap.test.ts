@@ -11,7 +11,7 @@ test("only the collapsed pinned prompt is capped and overflow clips instead of n
     css.match(
       /\.message-stack\s+\.user-row:not\(:has\(~ \.user-row\)\):not\(\.pin-expanded\)\s+\.user-bubble\s+>\s+\.pin-content \{[^}]*\}/,
     )?.[0] ?? "";
-  assert.match(bubble, /max-height: 2lh;/);
+  assert.match(bubble, /-webkit-line-clamp: 6;/);
   assert.match(bubble, /overflow: hidden;/);
   assert.doesNotMatch(css, /\.user-bubble > (?:markdown-block|\.slack-wire-text)\s*\{/);
   const base = css.match(/\n\.user-bubble \{[^}]*\}/)?.[0] ?? "";
