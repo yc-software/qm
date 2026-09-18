@@ -359,9 +359,9 @@ export function createTurnHandler(deps: {
       const intercepted = await maybeInterceptStop({
         text,
         threadRef,
-        getInFlightRun: (ref) =>
-          inFlightRunByThread.get(ref) ??
-          core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined)),
+        getInFlightRun: async (ref) =>
+          (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
+          inFlightRunByThread.get(ref),
         signalAbort: (runId) => core.signalRunAbort(runId),
       }).catch(swallowAs("slack: abort signal", true));
       if (intercepted) return;
