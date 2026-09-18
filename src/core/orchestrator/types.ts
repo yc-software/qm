@@ -85,6 +85,7 @@ export interface OrchestratorInput extends Omit<
   | "unprompted"
   | "liveActor"
 > {
+  modelAccount?: import("../../resolution/config-store.ts").ModelAccount;
   surface?: string;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;

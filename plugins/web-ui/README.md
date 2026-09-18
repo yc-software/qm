@@ -304,3 +304,17 @@ content, URLs, query strings, titles and referrers. Delivery is best effort.
 Set the same variables on core to capture `app_published` after a successful new
 application or version deployment. Core events use the application's creator and
 company, matching browser identity. No key means no analytics requests.
+
+## Personal AI accounts
+
+Open **Settings → AI access**, or use the account label beside the model picker.
+Choose Company, Claude, or ChatGPT / Codex. Sign in with your subscription
+or use the secondary API-key option; connecting automatically selects that account. **Company access** switches back without disconnecting
+personal credentials. The choice is durable per person and applies to their human
+chat turns on the web and in Slack; background tasks retain company access.
+
+A submitted turn keeps its account choice, so switching affects new turns. Personal
+access failures do not retry on company credentials. Messages using a different
+account queue separately instead of steering an existing run; an explicit steer
+across accounts is refused. Organizations that already require individual accounts
+continue to require them.

@@ -85,6 +85,7 @@ const USER_SCOPED: Rule[] = [
   pat("GET", "/v1/deployments", { in: "query", name: "principalId" }),
   pat("POST", "/v1/deployments", { in: "body", name: "createdBy" }),
   pat("GET", "/v1/user-model-auth/status", { in: "query", name: "principalId" }),
+  pat("POST", "/v1/user-model-auth/account", { in: "body", name: "principalId" }),
   pat("POST", "/v1/user-model-auth/api-key", { in: "body", name: "principalId" }),
   pat("POST", "/v1/user-model-auth/disconnect", { in: "body", name: "principalId" }),
   pat("POST", "/v1/user-model-auth/chatgpt/start", { in: "body", name: "principalId" }),

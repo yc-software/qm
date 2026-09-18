@@ -11023,6 +11023,7 @@ h3.ambient-field-label {
 
 .mc-panel {
   width: 520px;
+  max-width: 100%;
   gap: 6px;
 }
 .mc-panel .signin-body {
@@ -11037,11 +11038,15 @@ h3.ambient-field-label {
   align-items: center;
   justify-content: center;
   overflow: auto;
+  padding: 24px;
 }
 .mc-overlay .signin {
   height: auto;
   min-height: 0;
-  padding: 32px 24px;
+  padding: 0;
+  width: min(420px, 100%);
+  max-height: 100%;
+  overflow: auto;
 }
 .mc-overlay .signin-panel {
   background: var(--background);
@@ -11070,8 +11075,21 @@ h3.ambient-field-label {
   background: var(--background);
   border-color: var(--muted-foreground);
 }
+.mc-account-hint,
+.mc-notice {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.mc-provider-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .mc-provider-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
@@ -11096,7 +11114,7 @@ h3.ambient-field-label {
 }
 .mc-provider-text {
   flex: 1;
-  min-width: 0;
+  min-width: 100px;
   display: flex;
   flex-direction: column;
   line-height: 1.35;
@@ -11179,34 +11197,17 @@ h3.ambient-field-label {
   position: relative;
 }
 .mc-steps {
-  margin: 2px 0 14px;
-  padding: 2px 0 2px 4px;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  counter-reset: mcstep;
   list-style: none;
 }
 .mc-steps > li {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  counter-increment: mcstep;
-}
-.mc-steps > li::before {
-  content: counter(mcstep);
-  flex: none;
-  width: 20px;
-  height: 20px;
-  margin-top: 3px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .mc-steps > li > * {
   min-width: 0;
@@ -11277,10 +11278,10 @@ h3.ambient-field-label {
 }
 .mc-close {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 28px;
-  height: 28px;
+  top: 8px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11964,4 +11965,58 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .stopped-work[open] > .stopped-head > .activity-chevron {
   transform: rotate(90deg);
+}
+
+.settings-ai-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.mc-simple-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+}
+.mc-simple-flow > .settings-theme-link {
+  align-self: flex-start;
+}
+
+.mc-overlay .mc-panel h1 {
+  font-family: var(--app-font);
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  margin: 0 28px 8px 0;
+}
+.mc-overlay .mc-panel .signin-body {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 24px;
+}
+.mc-simple-flow .mc-steps {
+  gap: 16px;
+}
+.mc-simple-flow .mc-steps .btn {
+  width: 100%;
+  min-height: 36px;
+  justify-content: center;
+}
+.mc-simple-flow .mc-field > span {
+  font-weight: 400;
+  margin-bottom: 2px;
+}
+.mc-simple-flow > .settings-theme-link {
+  font-size: 12px;
+  text-decoration: none;
+  color: var(--muted-foreground);
+}
+.mc-simple-flow > .settings-theme-link:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+.settings-ai-controls .settings-choice {
+  flex-wrap: wrap;
 }

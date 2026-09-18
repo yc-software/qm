@@ -2946,18 +2946,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let claudeOauthToken: string | undefined;
           let codexTurnAuth: CodexTurnAuth | undefined;
           const userCredStore = deps.userModelCredentials;
-          if (userCredStore && humanTurn && (await deps.config?.getIndividualModelAuthDurable())) {
+          const account = input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company";
+          if (userCredStore && humanTurn && account !== "company") {
             const [anthCred, oaiCred] = await Promise.all([
-              userCredStore.get(actor.id, "anthropic"),
-              userCredStore.get(actor.id, "openai"),
+              account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
+              account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
             ]);
             const orgRuntime = await deps.config?.getRuntimeSelectionDurable(resolution.orgScopeId);
             const preferredHarness = runtime.harnessId ?? input.harness ?? orgRuntime?.harnessId ?? deps.defaultHarness;
             const routing = resolveIndividualAuthRouting(
               anthCred ?? null,
               oaiCred ?? null,
-              runtime.modelId ?? input.model,
-              preferredHarness,
+              account === "personal" ? (runtime.modelId ?? input.model) : runtime.modelId,
+              account === "personal" ? preferredHarness : runtime.harnessId,
             );
             if (routing?.kind === "apikey") {
               userHarnessOverride = "pi";
@@ -2997,7 +2998,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
             if (!userHarnessOverride) {
               throw new NonRetryableTurnError(
-                "This organization has each person chat on their own AI account, and yours isn't connected yet. Open the web app and connect Claude or ChatGPT from the AI account panel, then try again.",
+                "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
               );
             }
           }

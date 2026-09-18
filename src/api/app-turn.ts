@@ -164,7 +164,20 @@ export function createTurnMethods(
         return (await deps.projects.withVersion(conversationRef, projectVersion, fn)) ?? null;
       }
 
-      const individualAuth = !!deps.userModelCredentials && (await deps.config.getIndividualModelAuthDurable());
+      const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
+      const sameApprovedMessage =
+        approvedRequest?.text === req.text &&
+        approvedRequest.actor.externalId === req.actor.externalId &&
+        approvedRequest.conversation.threadRef === req.conversation.threadRef;
+      let privateRequest = req.privateSessionMessage ? req : undefined;
+      if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
+      const origin = resolveTurnOrigin(privateRequest ?? req);
+
+      const modelAccount =
+        deps.userModelCredentials && origin.kind === "human"
+          ? await deps.config.getModelAccountDurable(actor.id)
+          : "company";
+      const individualAuth = modelAccount !== "company";
       if (req.surface === "web") {
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
@@ -269,15 +282,6 @@ export function createTurnMethods(
         ...(publishMembers ? { publishMembers } : {}),
       };
 
-      const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
-      const sameApprovedMessage =
-        approvedRequest?.text === req.text &&
-        approvedRequest.actor.externalId === req.actor.externalId &&
-        approvedRequest.conversation.threadRef === req.conversation.threadRef;
-      let privateRequest = req.privateSessionMessage ? req : undefined;
-      if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
-      const origin = resolveTurnOrigin(privateRequest ?? req);
-
       const input = {
         surface: req.surface,
         ...(sameApprovedMessage && approvedRequest?.sessionSenderId
@@ -288,6 +292,7 @@ export function createTurnMethods(
         actor,
         conversation,
         origin,
+        modelAccount: origin.kind === "human" ? modelAccount : ("company" as const),
         text: req.text,
         ...(req.gatewayContext ? { gatewayContext: req.gatewayContext } : {}),
         ...(req.proactiveOpener ? { proactiveOpener: true } : {}),
@@ -490,78 +495,101 @@ export function createTurnMethods(
             }
           }
           const targetRun = live;
-          const steerText = attributedSteerText(
-            actor,
-            origin.kind === "ambient" ? null : targetRun.request.actor.id,
-            req.text,
-          );
-          let injectedText = steerText;
-          if (origin.kind === "ambient") {
-            const session = await deps.sessions.getByThread(conversation.threadRef);
-            const decision = await deps.orchestrator.screenSecuritySteer({
-              payload: steerText,
-              actor,
-              conversation,
-              ...(session ? { sessionId: session.id } : {}),
+          const sameAccount =
+            targetRun.request.modelAccount !== undefined &&
+            targetRun.request.modelAccount === input.modelAccount &&
+            (input.modelAccount === "company" || targetRun.request.actor.id === actor.id);
+          const cancel = origin.kind === "human" && (targetedCancel || isHalt(req.text));
+          if (conversationRouting && !cancel && !sameAccount) {
+            const { run, deduped } = await deps.runs.enqueue({
+              sessionId: targetRun.sessionId,
+              request: {
+                ...input,
+                deliveryTarget: req.gatewayContext?.details?.thread_ts
+                  ? input.deliveryTarget
+                  : (targetRun.request.deliveryTarget ?? input.deliveryTarget),
+                conversation: { ...input.conversation, threadRef: targetRun.request.conversation.threadRef },
+              },
+              dedupKey: redeliveryKey,
+              maxAttempts: deps.maxAttempts,
             });
-            if (decision === "block")
-              return req.async ? { status: "queued", runId: targetRun.id, steered: true } : drive(targetRun.id);
-            if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
+            if (deduped) return { status: "silent" };
+            return req.async ? { status: "queued", runId: run.id } : drive(run.id);
           }
-          const fileNames = (req.attachments ?? []).map((a) =>
-            a.sourceId
-              ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
-              : a.name,
-          );
-          const wake: Wake = {
-            situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
-            ts: String(req.clientSentAt ?? Date.now()),
-            text: injectedText,
-            halt: origin.kind === "human" && (targetedCancel || isHalt(req.text)),
-            ...(fileNames.length ? { fileNames } : {}),
-          };
-          const route = routeWake(wake, true, resolveTurnOrigin(targetRun.request).kind === "ambient");
-          if (route.kind === "steer" || route.kind === "drop") {
-            const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
-            let redelivered = false;
-            const routedRunId = await withCurrentProjectRoster(async () => {
-              if (route.kind === "steer")
-                redelivered = !(await deps.signals!.send(targetRun.id, {
-                  kind: route.signal,
-                  ...(route.text ? { text: route.text } : {}),
-                  ...(steerTs ? { ts: steerTs } : {}),
-                  ...(route.signal === "steer"
-                    ? {
-                        request: {
-                          ...req,
-                          ...(conversationRouting
-                            ? {
-                                deliveryTarget: targetRun.request.deliveryTarget ?? req.deliveryTarget,
-                              }
-                            : {}),
-                          conversation: { ...req.conversation, threadRef: targetRun.request.conversation.threadRef },
-                        },
-                      }
-                    : {}),
-                  ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
-                }));
-              return targetRun.id;
-            });
-            if (!routedRunId)
-              return { status: "refused", reason: "project membership changed; retry from the current project" };
-            if (redelivered)
-              return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
-            if (route.kind === "steer") {
-              const after = await deps.runs.get(targetRun.id);
-              if (!after || isTerminal(after.status)) {
-                const own = (await replayOrphanedRunSignals(targetRun.id)).find(
-                  (d) => d.signal.text === route.text && d.signal.ts === steerTs,
-                );
-                if (own?.replayRunId)
-                  return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
-              }
+          if (!isTerminal(targetRun.status) && (cancel || sameAccount)) {
+            const steerText = attributedSteerText(
+              actor,
+              origin.kind === "ambient" ? null : targetRun.request.actor.id,
+              req.text,
+            );
+            let injectedText = steerText;
+            if (origin.kind === "ambient") {
+              const session = await deps.sessions.getByThread(conversation.threadRef);
+              const decision = await deps.orchestrator.screenSecuritySteer({
+                payload: steerText,
+                actor,
+                conversation,
+                ...(session ? { sessionId: session.id } : {}),
+              });
+              if (decision === "block")
+                return req.async ? { status: "queued", runId: targetRun.id, steered: true } : drive(targetRun.id);
+              if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
             }
-            return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
+            const fileNames = (req.attachments ?? []).map((a) =>
+              a.sourceId
+                ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
+                : a.name,
+            );
+            const wake: Wake = {
+              situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
+              ts: String(req.clientSentAt ?? Date.now()),
+              text: injectedText,
+              halt: origin.kind === "human" && (targetedCancel || isHalt(req.text)),
+              ...(fileNames.length ? { fileNames } : {}),
+            };
+            const route = routeWake(wake, true, resolveTurnOrigin(targetRun.request).kind === "ambient");
+            if (route.kind === "steer" || route.kind === "drop") {
+              const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
+              let redelivered = false;
+              const routedRunId = await withCurrentProjectRoster(async () => {
+                if (route.kind === "steer")
+                  redelivered = !(await deps.signals!.send(targetRun.id, {
+                    kind: route.signal,
+                    ...(route.text ? { text: route.text } : {}),
+                    ...(steerTs ? { ts: steerTs } : {}),
+                    ...(route.signal === "steer"
+                      ? {
+                          request: {
+                            ...req,
+                            ...(conversationRouting
+                              ? {
+                                  deliveryTarget: targetRun.request.deliveryTarget ?? req.deliveryTarget,
+                                }
+                              : {}),
+                            conversation: { ...req.conversation, threadRef: targetRun.request.conversation.threadRef },
+                          },
+                        }
+                      : {}),
+                    ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
+                  }));
+                return targetRun.id;
+              });
+              if (!routedRunId)
+                return { status: "refused", reason: "project membership changed; retry from the current project" };
+              if (redelivered)
+                return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
+              if (route.kind === "steer") {
+                const after = await deps.runs.get(targetRun.id);
+                if (!after || isTerminal(after.status)) {
+                  const own = (await replayOrphanedRunSignals(targetRun.id)).find(
+                    (d) => d.signal.text === route.text && d.signal.ts === steerTs,
+                  );
+                  if (own?.replayRunId)
+                    return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+                }
+              }
+              return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
+            }
           }
         }
       }
@@ -584,7 +612,12 @@ export function createTurnMethods(
         const ambientSession = await deps.sessions.getByThread(ambientRef);
         if (ambientSession) {
           const liveAmbient = await deps.runs.activeForThread(ambientRef);
-          if (liveAmbient && !isTerminal(liveAmbient.status)) {
+          if (
+            liveAmbient &&
+            !isTerminal(liveAmbient.status) &&
+            input.modelAccount === "company" &&
+            liveAmbient.request.modelAccount === "company"
+          ) {
             const routedRunId = await withCurrentProjectRoster(async () => {
               if (deps.signals)
                 await deps.signals.send(liveAmbient.id, {
@@ -836,6 +869,17 @@ export function createTurnMethods(
       }
       if (signal.request && signal.request.conversation.threadRef !== run.request.conversation.threadRef) {
         return { accepted: false, reason: "conversation_mismatch" };
+      }
+      if (signal.kind === "steer") {
+        const principal = viewer ?? signal.request?.actor.externalId ?? run.request.actor.id;
+        const account = principal ? await deps.config.getModelAccountDurable(principal) : undefined;
+        if (
+          !account ||
+          run.request.modelAccount !== account ||
+          (account !== "company" && run.request.actor.id !== principal)
+        ) {
+          return { accepted: false, reason: "account_changed: send a new message to use your selected AI account" };
+        }
       }
       let outbound = signal;
       if (signal.kind === "steer") {

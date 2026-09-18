@@ -1118,6 +1118,19 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "POST",
+    path: "/api/user-model-auth/account",
+    handle: async (c) => {
+      const p = JSON.parse((await readBody(c.req)) || "{}") as { account?: unknown; provider?: unknown };
+      return relayCore(
+        c.res,
+        "POST",
+        "/v1/user-model-auth/account",
+        JSON.stringify({ principalId: c.user, account: p.account, provider: p.provider }),
+      );
+    },
+  },
+  {
+    method: "POST",
     path: "/api/user-model-auth/api-key",
     handle: async (c) => {
       const p = JSON.parse((await readBody(c.req)) || "{}") as { provider?: unknown; apiKey?: unknown };
@@ -1234,6 +1247,7 @@ const apiRoutes: readonly WebRoute[] = [
       }
       const parsed = JSON.parse(authStatus.text) as {
         individualModelAuth?: boolean;
+        account?: string;
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
@@ -1247,7 +1261,10 @@ const apiRoutes: readonly WebRoute[] = [
         mode: AUTH_MODE,
         slackWorkspaceUrl: workspaceUrl,
         individualModelAuth: parsed.individualModelAuth === true,
-        modelAuthConnected: (parsed.connections?.length ?? 0) > 0,
+        modelAuthConnected:
+          parsed.connections?.some(
+            (c) => !parsed.account || parsed.account === "personal" || parsed.account === c.provider,
+          ) ?? false,
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         ...(welcomeCohort ? { welcomeCohort } : {}),

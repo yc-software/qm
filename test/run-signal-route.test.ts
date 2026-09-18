@@ -40,7 +40,13 @@ after(async () => {
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function request(text: string, threadRef = "t-signal"): OrchestratorInput {
-  return { actor, conversation: { kind: "dm", threadRef, audience: [actor] }, origin: { kind: "direct" }, text };
+  return {
+    modelAccount: "company",
+    actor,
+    conversation: { kind: "dm", threadRef, audience: [actor] },
+    origin: { kind: "direct" },
+    text,
+  };
 }
 
 async function coreSignal(runId: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
@@ -158,6 +164,7 @@ test("signalRun attributes a bare steer from a shared-scope viewer who is not th
   const { run } = await built.runs.enqueue({
     sessionId: threadRef,
     request: {
+      modelAccount: "company",
       actor: owner,
       conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner] },
       origin: { kind: "direct" },
@@ -544,6 +551,7 @@ test("run control follows current shared membership while public history require
     const { run } = await built.runs.enqueue({
       sessionId: threadRef,
       request: {
+        modelAccount: "company",
         actor: owner,
         conversation: { kind: shared.kind, channelRef: shared.ref, threadRef, audience: [owner] },
         origin: { kind: "direct" },

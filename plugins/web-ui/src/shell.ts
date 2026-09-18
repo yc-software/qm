@@ -1,6 +1,6 @@
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureConnectionReturn } from "./connection-return";
-import { openModelConnectManager, renderModelConnectGate } from "./model-connect";
+import { renderModelConnectGate } from "./model-connect";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   Box,
@@ -564,7 +564,6 @@ export function renderSidebarFooter(): void {
         ${
           userMenuOpen
             ? html`<div class="session-menu-popover user-menu-popover" role="menu">
-                ${appState.me?.individualModelAuth ? html`<button class="session-menu-option" type="button" role="menuitem" @click=${openModelConnectManager}>Manage AI account</button>` : nothing}
                 <button class="session-menu-option" type="button" role="menuitem" @click=${signOutFromMenu}>
                   ${icon(LogOut, 15)}<span>Sign out</span>
                 </button>
