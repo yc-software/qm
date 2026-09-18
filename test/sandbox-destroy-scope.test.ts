@@ -16,6 +16,7 @@ import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 
 import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
+import { installFakeSprites } from "./support/fake-sprites.ts";
 import { installFakeAgent37 } from "./support/fake-agent37.ts";
 
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
@@ -41,21 +42,21 @@ test("Local scope deletion removes deterministic resources without provisioning,
 });
 
 test("Sprites scope deletion sends only DELETE, retries provider errors, and accepts missing bodies", async () => {
-  const calls: string[] = [];
-  let status = 503;
-  const sandbox = createSpritesSandbox(workspace(), {
-    token: "test",
-    fetchImpl: async (input, init) => {
-      calls.push(`${init?.method} ${new URL(String(input)).pathname}`);
-      return new Response(null, { status });
-    },
-  });
-  await assert.rejects(sandbox.destroyScope!("scope"), /503/);
-  status = 204;
-  await sandbox.destroyScope!("scope");
-  status = 404;
-  await sandbox.destroyScope!("scope");
-  assert.deepEqual(calls, Array(3).fill(`DELETE /v1/sprites/${sandboxScopeName("qm", "scope")}`));
+  const fake = installFakeSprites();
+  try {
+    const sandbox = createSpritesSandbox(workspace(), { token: "test", baseUrl: fake.baseUrl });
+    fake.refuseDelete(503);
+    await assert.rejects(sandbox.destroyScope!("scope"), /503/);
+    fake.refuseDelete();
+    await sandbox.destroyScope!("scope");
+    await sandbox.destroyScope!("scope");
+    assert.deepEqual(
+      fake.calls.map((c) => `${c.method} ${c.path}`),
+      Array(3).fill(`DELETE /v1/sprites/${sandboxScopeName("qm", "scope")}`),
+    );
+  } finally {
+    fake.cleanup();
+  }
 });
 
 for (const [name, create, resource] of [

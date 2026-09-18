@@ -38,8 +38,7 @@ function sprites() {
   const dir = mkdtempSync(join(tmpdir(), "dfp-ws-"));
   return createSpritesSandbox(createLocalWorkspaceStore(dir), {
     token: "test-token",
-    client: ff.client,
-    fetchImpl: ff.fetchImpl,
+    baseUrl: ff.baseUrl,
   });
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
@@ -374,8 +373,7 @@ test("ACMECLI quarantine removes the canonical root even with no record or a sta
   const dir = mkdtempSync(join(tmpdir(), "dfp-ws-"));
   const sb = createSpritesSandbox(createLocalWorkspaceStore(dir), {
     token: "test-token",
-    client: ff.client,
-    fetchImpl: ff.fetchImpl,
+    baseUrl: ff.baseUrl,
     credentialPaths: [{ path: ".acmecli", kind: "directory" }],
   });
   const k = kc();

@@ -25,6 +25,7 @@ export interface ExecProcessSessions {
 }
 
 const PROC_BASE = "${HOME:-/root}/.agent-proc";
+export const processSessionDir = (processId: string): string => `${PROC_BASE}/${processId}`;
 const REBOOT_RC = 137;
 const BOOT_ID_SH = `cat /proc/sys/kernel/random/boot_id 2>/dev/null || sysctl -n kern.boottime 2>/dev/null || true`;
 const REAP_SH = [
@@ -83,7 +84,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         .map(([k, v]) => `export ${k}=${shq(v)}`)
         .join("; ");
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `mkdir -p "$P"`,
         `printf '%s' '${b64(command)}' | base64 -d > "$P/cmd"`,
         ...(envExports ? [`printf '%s' '${b64(envExports)}' | base64 -d > "$P/env"`] : []),
@@ -110,7 +111,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
       const waitMs = Math.max(0, opts?.waitMs ?? 0);
       const iters = Math.ceil(waitMs / 100);
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `[ -d "$P" ] || { echo "MISSING=1"; exit 0; }`,
         REAP_SH,
         `_reap "$P"`,
@@ -147,7 +148,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
     async writeStdin(handle, processId, data): Promise<void> {
       assertId(processId);
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `[ -p "$P/in" ] || { echo "MISSING=1"; exit 1; }`,
         `printf '%s' '${b64(data)}' | base64 -d > "$P/in"`,
       ].join("\n");
@@ -164,7 +165,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
           ? `[ -f "$P/code" ] || echo 137 > "$P/code"`
           : `if ! kill -0 -"$pid" 2>/dev/null && ! kill -0 "$pid" 2>/dev/null; then [ -f "$P/code" ] || echo 143 > "$P/code"; fi`;
       const script = [
-        `P="${PROC_BASE}/${processId}"`,
+        `P="${processSessionDir(processId)}"`,
         `pid=$(cat "$P/pid" 2>/dev/null) || exit 0`,
         `kill -${sig} -"$pid" 2>/dev/null || kill -${sig} "$pid" 2>/dev/null || true`,
         sentinelLine,
