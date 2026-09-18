@@ -201,7 +201,8 @@ test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample
   rejects("Here's what I found in the logs", "reply_opener");
   rejects("**Fix** the thing", "markdown");
   rejects("# Fix the thing", "markdown");
-  rejects("NONE", "none");
+  for (const sentinel of ["NONE", "none", " NONE\n"]) assert.equal(sanitizeTitle(sentinel), undefined);
+  rejects("NONE\nexplanation", "none");
   rejects("   ", "empty");
   rejects('Title: "..."', "empty");
   rejects("", "empty");

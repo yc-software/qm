@@ -394,9 +394,10 @@ const APPROVAL_SUMMARY_PROMPT = [
 
 const MAX_TITLE_CHARS = 60;
 
-export function sanitizeTitle(out = ""): string {
+export function sanitizeTitle(out = ""): string | undefined {
   let t = (out.trim().split("\n")[0] ?? "").trim();
   if (!t) throw new TitleRejected("empty", out);
+  if (/^none$/i.test(out.trim())) return undefined;
   if (/^none$/i.test(t)) throw new TitleRejected("none", out);
   t = t.replace(/^(?:title|chat title)\s*[:-]\s*/i, "");
   t = t.replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, "").trim();
