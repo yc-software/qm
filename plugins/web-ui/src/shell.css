@@ -1198,6 +1198,9 @@ a.chat-row-open {
   grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
 .custom-chat-shell.in-pane.empty-chat {
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+.split-canvas:not(.single-pane) .custom-chat-shell.in-pane.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 .drop-overlay {
@@ -8252,35 +8255,38 @@ h3.ambient-field-label {
 }
 
 .split-pane-chat {
-  --chat-pad: 13px;
-  --composer-inset: 10px;
-  --meta-lane: 19px;
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
-  font-size: 12px;
   overflow: hidden;
 }
 
-.split-pane-chat .assistant-body,
-.split-pane-chat .message-bubble,
-.split-pane-chat .message-stack {
+.split-canvas:not(.single-pane) .split-pane-chat {
+  --chat-pad: 13px;
+  --composer-inset: 10px;
+  --meta-lane: 19px;
   font-size: 12px;
 }
 
-.split-pane-chat .chat-cta {
+.split-canvas:not(.single-pane) .split-pane-chat .assistant-body,
+.split-canvas:not(.single-pane) .split-pane-chat .message-bubble,
+.split-canvas:not(.single-pane) .split-pane-chat .message-stack {
+  font-size: 12px;
+}
+
+.split-canvas:not(.single-pane) .split-pane-chat .chat-cta {
   font-size: 21px;
 }
 
-.dockview-theme-qm .dv-tabs-and-actions-container .icon-btn {
+.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container .icon-btn {
   width: 27px;
   height: 27px;
   min-width: 27px;
   border-radius: 0;
 }
 
-.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
+.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   height: 27px;
   border-radius: 0;
 }
@@ -8542,7 +8548,7 @@ h3.ambient-field-label {
   display: none;
 }
 
-.split-pane-chat .custom-chat-shell .composer-wrap {
+.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
   --composer-font-size: 12px;
   --composer-pad-block: 10px;
   --composer-pad-inline: 10px;
