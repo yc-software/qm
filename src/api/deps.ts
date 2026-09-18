@@ -1,3 +1,4 @@
+import type { DeployStore } from "../deploy/deploy-store.ts";
 import type { BackgroundOwnershipStore } from "../runs/background-ownership.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
@@ -179,6 +180,7 @@ export interface ServerDeps {
   webhookReceiver?: WebhookReceiver;
   identity?: IdentityService;
   keychain?: Keychain;
+  deployStore?: DeployStore;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;

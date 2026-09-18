@@ -196,14 +196,32 @@ async function gate(
       sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
       return null;
     }
+    const auditDeploymentDenial = (reason: string) => {
+      if (!capability?.deployment) return;
+      deps.auditLog?.record({
+        at: Date.now(),
+        principalId: capability.actorId,
+        action: "credential.broker.denied",
+        resource: capability.deployment,
+        scopeLabel: capability.scopeId,
+        status: "denied",
+        detail: `${reason} deployment:${capability.deployment}`,
+      });
+    };
     if (deps.identity) {
       await deps.identity.refresh();
       if (deps.identity.classify(capability.actorId).type !== "internal") {
+        auditDeploymentDenial("principal_inactive");
         sendJson(res, 401, { error: "unauthorized", message: "principal is no longer active" });
         return null;
       }
     }
     if (capability.deployment !== undefined) {
+      if (pathname !== "/v1/credentials/broker" || method !== "POST" || capability.aud !== "credential-broker") {
+        auditDeploymentDenial("deployment_route_not_allowed");
+        sendJson(res, 403, { error: "forbidden", message: "published app tokens only support the credential broker" });
+        return null;
+      }
       const deployment = await app.getDeployment(capability.deployment);
       if (
         !deployment ||
@@ -211,6 +229,7 @@ async function gate(
         deployment.status !== "running" ||
         deployment.createdBy !== capability.actorId
       ) {
+        auditDeploymentDenial("deployment_unavailable");
         sendJson(res, 401, { error: "unauthorized", message: "the published app behind this token is not running" });
         return null;
       }
@@ -225,6 +244,7 @@ async function gate(
         ...(capability.members ? { members: capability.members } : {}),
       }))
     ) {
+      auditDeploymentDenial("scope_revoked");
       sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
       return null;
     }

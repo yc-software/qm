@@ -95,7 +95,7 @@ function recordDenied(ctx: BaseCtx, claims: CapabilityClaims | null, slug: strin
     resource: slug || "(none)",
     scopeLabel: claims.scopeId,
     status: "denied",
-    detail: code,
+    detail: claims.deployment ? `${code} deployment:${claims.deployment}` : code,
   });
 }
 
@@ -136,6 +136,17 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
     if (ctx.deps.identity.classify(claims.actorId).type !== "internal") {
       return sendJson(ctx.res, 401, { error: "unauthorized", message: "principal is no longer active" });
     }
+  }
+  if (claims.deployment) {
+    return sendDenied(
+      ctx,
+      claims,
+      403,
+      "deployment_route_not_allowed",
+      "published app tokens only support the text HTTP credential broker",
+      slug,
+      "",
+    );
   }
   if (claims.aud !== CREDENTIAL_BROKER_AUD) {
     return sendJson(ctx.res, 403, {

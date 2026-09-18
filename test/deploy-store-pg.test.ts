@@ -164,3 +164,76 @@ test("pre-existing duplicate names degrade gracefully: no index, deterministic g
   const created = await store.create(createInput("fresh-name"));
   assert.equal((await store.getByName("fresh-name"))!.id, created.id);
 });
+
+test(
+  "credential bindings persist across store instances and revocation survives unrelated writes",
+  { skip },
+  async () => {
+    const first = makeStore().store;
+    const d = await first.create(createInput());
+    const binding = {
+      credentialId: "fixture-credential",
+      ownerId: "U1",
+      host: "api.example.com",
+      allowedMethods: ["GET"],
+      allowedPathPrefixes: ["/v1/usage"],
+      headers: [{ name: "Authorization", field: "API_TOKEN", scheme: "Bearer" }],
+    };
+    await first.setCredentialBindings(d.id, [binding], (await first.get(d.id))!);
+    const second = makeStore().store;
+    assert.deepEqual((await second.get(d.id))?.credentialBindings, [binding]);
+    await Promise.all([
+      first.setCredentialBindings(d.id, [], (await first.get(d.id))!),
+      second.setDisplayName(d.id, "Renamed fixture"),
+      second.setStatus(d.id, "running"),
+      second.setAlwaysOn(d.id, true),
+    ]);
+    assert.deepEqual((await first.get(d.id))?.credentialBindings, []);
+    assert.equal((await first.get(d.id))?.displayName, "Renamed fixture");
+    await first.setCredentialBindings(d.id, [binding], (await first.get(d.id))!);
+    await second.setOwnerScope(d.id, scopeId("personal", "U2"));
+    await second.setOwnerScope(d.id, scopeId("personal", "U1"));
+    assert.deepEqual((await first.get(d.id))?.credentialBindings, []);
+  },
+);
+
+test(
+  "credential bindings survive store recreation and atomic lifecycle updates fence stale approvals",
+  { skip },
+  async () => {
+    const { store } = makeStore();
+    const d = await store.create(createInput());
+    const binding = {
+      credentialId: "fake-id",
+      ownerId: "U1",
+      host: "api.example.com",
+      allowedMethods: ["GET"],
+      allowedPathPrefixes: ["/data"],
+      headers: [{ name: "Authorization", field: "TOKEN" }],
+    };
+    assert.equal(await store.setCredentialBindings(d.id, [binding], d), true);
+    const { store: other } = makeStore();
+    const approved = (await other.get(d.id))!;
+    assert.deepEqual(approved.credentialBindings, [binding]);
+    assert.equal(await other.setCredentialBindings(d.id, [], approved), true);
+    assert.equal(await store.setCredentialBindings(d.id, [binding], approved), false);
+    await store.addVersion(d.id, { entrypoint: "v2", snapshotDir: "/v2" });
+    await store.setCurrentVersion(d.id, 1);
+    await store.setVersionImage(d.id, 1, "fake-image");
+    await store.setName(d.id, `binding-${d.id}`);
+    await store.setDisplayName(d.id, "Bound app");
+    await store.setAppliedVersion(d.id, 1);
+    await store.setEndpoint(d.id, { host: "127.0.0.1", port: 1234 });
+    await store.setStatus(d.id, "running");
+    assert.deepEqual((await other.get(d.id))!.credentialBindings, []);
+    const beforeArchive = (await other.get(d.id))!;
+    await store.setStatus(d.id, "archived");
+    await store.setStatus(d.id, "running");
+    assert.equal(await other.setCredentialBindings(d.id, [binding], beforeArchive), false);
+    const beforeTransfer = (await other.get(d.id))!;
+    await store.setOwnerScope(d.id, scopeId("personal", "U2"));
+    await store.setOwnerScope(d.id, d.ownerScopeId);
+    assert.equal(await other.setCredentialBindings(d.id, [binding], beforeTransfer), false);
+    assert.deepEqual((await makeStore().store.get(d.id))!.credentialBindings, []);
+  },
+);

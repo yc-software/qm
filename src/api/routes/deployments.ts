@@ -1,3 +1,9 @@
+import {
+  parseCredentialBindings,
+  validateCredentialBinding,
+  ownsPersonalDeployment,
+} from "../../deploy/credential-bindings.ts";
+import { KeychainError } from "../../credentials/keychain.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -14,7 +20,7 @@ import { deploymentView, type App, type DeployInput, type RedeployInput } from "
 import { errMessage } from "../../util/errors.ts";
 import { canonicalPayload, escapeHtml, sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope, verifiedConversationSpeaker } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
@@ -1519,7 +1525,63 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { match: (_m, p) => p.startsWith("/d/"), auth: "source", handle: proxyDeployment },
 ];
 
+async function deploymentCredentials(ctx: ApiCtx): Promise<void> {
+  const { res, app, deps, capability, params, method, body } = ctx;
+  if (
+    !capability ||
+    capability.deployment ||
+    capability.triggered ||
+    capability.liveActor !== true ||
+    capability.scopeId !== `personal:${capability.actorId}`
+  ) {
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "credential bindings require the live owner in their personal conversation",
+    });
+  }
+  const speaker = await verifiedConversationSpeaker(ctx, capability.actorId);
+  if ("error" in speaker) return sendJson(res, 403, { error: "forbidden", message: speaker.error });
+  const deployment = await app.getDeployment(params.id!);
+  if (!deployment || deployment.id !== params.id!) return sendJson(res, 404, { error: "not_found" });
+  if (!ownsPersonalDeployment(deployment, capability.actorId) || deployment.status === "archived") {
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "only the publisher owning this personal app home can bind credentials",
+    });
+  }
+  if (method === "GET") return sendJson(res, 200, { credentialBindings: deployment.credentialBindings ?? [] });
+  if (!deps.keychain || !deps.deployStore) return sendJson(res, 503, { error: "unavailable" });
+  try {
+    if (!isObj(body) || Object.keys(body).some((key) => key !== "credentialBindings")) {
+      throw new KeychainError(400, "expected { credentialBindings: [...] }");
+    }
+    const bindings = parseCredentialBindings(body.credentialBindings);
+    for (const binding of bindings) {
+      validateCredentialBinding(binding, await deps.keychain.getCredential(binding.credentialId), capability.actorId);
+    }
+    if (!(await deps.deployStore.setCredentialBindings(deployment.id, bindings, deployment))) {
+      return sendJson(res, 409, {
+        error: "deployment_changed",
+        message: "the app or its bindings changed; obtain fresh approval",
+      });
+    }
+    audit(deps, {
+      principalId: capability.actorId,
+      action: "deployment.credentials.replace",
+      resource: deployment.id,
+      scopeLabel: capability.scopeId,
+      detail: bindings.map((b) => b.credentialId).join(","),
+    });
+    return sendJson(res, 200, { credentialBindings: bindings });
+  } catch (error) {
+    if (!(error instanceof KeychainError)) throw error;
+    return sendJson(res, error.status, { error: "invalid_bindings", message: error.message });
+  }
+}
+
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/deployments/:id/credentials", auth: "either", handle: deploymentCredentials },
+  { method: "POST", path: "/v1/deployments/:id/credentials", auth: "either", handle: deploymentCredentials },
   { method: "POST", path: "/v1/deployments", auth: "source", handle: createDeployment },
   { method: "GET", path: "/v1/deployments", auth: "either", handle: listDeployments },
   { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },

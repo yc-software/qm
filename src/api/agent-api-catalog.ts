@@ -431,6 +431,23 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) => (m === "GET" || m === "POST") && /^\/v1\/deployments\/[^/]+\/credentials$/.test(p),
+    guidance:
+      "Personal credentials for a published app require explicit approval by the publisher in their own live personal conversation. The publisher must still own the personal app home and every credential. GET lists bindings; POST replaces the entire list with {credentialBindings:[{credentialId,ownerId,host,allowedMethods,allowedPathPrefixes,headers:[{name,field?,scheme?}]}]}; an empty list revokes immediately. Use keychain credential IDs, never names. Only unmanaged env credentials are supported. Field names come from credential metadata; paired credentials can use x-token-id and x-token-secret. Secrets stay in core; the app calls /v1/credentials/broker using $AGENT_CREDENTIAL_TOKEN with credential set to the approved ID. App users can see returned data, and app managers control its code. Explain these consequences before recording approval. Text HTTP only; paired headers do not enable arbitrary SDK, gRPC or binary protocols.",
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/deployments/:id/credentials",
+        summary: "list this personal app's approved credential bindings (verified live owner only)",
+      },
+      {
+        method: "POST",
+        path: "/v1/deployments/:id/credentials",
+        summary: "replace this app's credentialBindings after explicit owner approval; [] revokes without redeploy",
+      },
+    ],
+  },
+  {
     match: (m, p) =>
       (m === "GET" && p === "/v1/deployments") ||
       (m === "GET" && /^\/v1\/deployments\/[^/]+$/.test(p)) ||
@@ -752,7 +769,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/credentials/broker",
         summary:
-          "call a vended org credential's host BY PROXY — secret stays server-side (use $AGENT_CREDENTIAL_TOKEN)",
+          "call a vended org credential slug or an explicitly bound app credential ID by proxy; secrets stay in core (use $AGENT_CREDENTIAL_TOKEN)",
       },
     ],
   },

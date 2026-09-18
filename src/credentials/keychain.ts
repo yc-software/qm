@@ -184,6 +184,7 @@ export interface PublicServiceCredential {
 }
 
 export interface DecryptedServiceCredential {
+  authHeaders?: Record<string, string>;
   slug: string;
   name: string;
   secret: string;
@@ -387,7 +388,11 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
   /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
-  readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
+  readOwnSecret(
+    ownerId: string,
+    credentialId: string,
+    validate?: (credential: KeychainCredentialMeta) => void,
+  ): Promise<string | null>;
   remove(ownerId: string, id: string): Promise<boolean>;
 
   createGrant(input: CreateGrantInput): Promise<KeychainGrant>;
@@ -1026,9 +1031,10 @@ export function createKeychain(deps: {
       return rec ? toMeta(rec) : null;
     },
 
-    async readOwnSecret(ownerId, id) {
+    async readOwnSecret(ownerId, id, validate) {
       const rec = await getOwned(ownerId, id);
       if (!rec || rec.kind !== "env") return null;
+      validate?.(toMeta(rec));
       return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
     },
 

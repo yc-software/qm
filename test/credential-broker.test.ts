@@ -448,7 +448,7 @@ test("a deployment token is refused when the credential is switched off for publ
   assert.deepEqual(
     audits.map((e) => [e.action, e.detail]),
     [
-      ["credential.broker.denied", "not_available_to_deployments"],
+      ["credential.broker.denied", "not_available_to_deployments deployment:dpl-1"],
       ["credential.broker.use", "deployment:dpl-1"],
     ],
   );
@@ -456,4 +456,55 @@ test("a deployment token is refused when the credential is switched off for publ
     base({ reader: reader({ slug: "x-firehose", deployments: false, allowedPathPrefixes: ["/2/tweets/search/"] }) }),
   );
   assert.equal(agent.status, 200, "an agent turn's token is not affected by the published-apps switch");
+});
+
+test("personal app requests cannot fall through to the ordinary broker transport", async () => {
+  const ordinary = captureFetch();
+  const result = await brokerCredentialCall(
+    base({
+      claims: { ...claims([]), deployment: "fixture-app" },
+      body: { credential: "fixture-personal", url: "https://127.0.0.1/" },
+      deploymentReader: async () => ({
+        slug: "fixture-personal",
+        name: "fixture-personal",
+        secret: "",
+        delivery: "broker",
+        host: "127.0.0.1",
+        enabled: true,
+        deployments: true,
+        authHeaders: { authorization: "Bearer fake-personal-value" },
+      }),
+      fetchImpl: ordinary.fetch,
+    }),
+  );
+  assert.equal(result.status, 502);
+  assert.equal(ordinary.calls.length, 0);
+});
+
+test("personal multi-header requests select the dedicated transport after binding checks", async () => {
+  const ordinary = captureFetch();
+  const personal = captureFetch();
+  const result = await brokerCredentialCall(
+    base({
+      claims: { ...claims([]), deployment: "fixture-app" },
+      body: { credential: "fixture-personal", url: "https://provider.example/usage" },
+      deploymentReader: async () => ({
+        slug: "fixture-personal",
+        name: "fixture-personal",
+        secret: "",
+        delivery: "broker",
+        host: "provider.example",
+        enabled: true,
+        deployments: true,
+        allowedMethods: ["GET"],
+        allowedPathPrefixes: ["/usage"],
+        authHeaders: { "x-token-id": "fake-id", "x-token-secret": "fake-secret" },
+      }),
+      fetchImpl: ordinary.fetch,
+      personalFetchImpl: personal.fetch,
+    }),
+  );
+  assert.equal(result.status, 200);
+  assert.equal(ordinary.calls.length, 0);
+  assert.deepEqual(personal.calls[0]?.headers, { "x-token-id": "fake-id", "x-token-secret": "fake-secret" });
 });
