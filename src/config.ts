@@ -576,6 +576,7 @@ interface Agent37SandboxEnv {
   cpus?: number;
   memoryGb?: number;
   diskGb?: number;
+  idleTimeoutSec?: number;
   egressProxyUrl?: string;
   defaultTimeoutSec?: number;
 }
@@ -594,6 +595,9 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
       : {}),
     ...(numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) !== undefined
       ? { diskGb: numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) }
+      : {}),
+    ...(numEnvStrict("AGENT37_IDLE_TIMEOUT_SEC", env.AGENT37_IDLE_TIMEOUT_SEC) !== undefined
+      ? { idleTimeoutSec: numEnvStrict("AGENT37_IDLE_TIMEOUT_SEC", env.AGENT37_IDLE_TIMEOUT_SEC) }
       : {}),
     ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
