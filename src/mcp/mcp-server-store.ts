@@ -14,6 +14,8 @@ export interface McpServer {
   name: string;
   url: string;
   auth: McpServerAuthMode;
+  /** Existing broker-only service credential supplying the bearer token or client secret. */
+  serviceCredential?: string;
   credentialScope?: "shared" | "per-user";
   credentialHost?: string;
   credentialAccountType?: "default" | "personal" | "company";

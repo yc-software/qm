@@ -2508,7 +2508,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memory: deps.memory,
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(deps.mcp ? { mcp: deps.mcp } : {}),
+          ...(deps.mcp
+            ? {
+                mcp: deps.mcp,
+                mcpContext: {
+                  audience: conversation.audience,
+                  scopeId,
+                  orgScopeId: resolution.orgScopeId,
+                  allInternal: allInternal && !strictReadOnly,
+                },
+                mcpToolDefs: strictReadOnly
+                  ? []
+                  : await deps.mcp.authorizedToolDefs({
+                      audience: conversation.audience,
+                      scopeId,
+                      orgScopeId: resolution.orgScopeId,
+                      allInternal,
+                    }),
+              }
+            : {}),
           ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {

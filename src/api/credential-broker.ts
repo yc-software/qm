@@ -86,6 +86,49 @@ export function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [st
   return [injHeader, `${injScheme}${rec.secret}`];
 }
 
+/** Shared outbound policy for core consumers of broker-only credentials. */
+export function brokerCredentialTargetError(
+  rec: DecryptedServiceCredential,
+  rawUrl: string,
+  method: string,
+  actorId?: string,
+): { status: number; code: string; message: string } | null {
+  const deny = (status: number, code: string, message: string) => ({ status, code, message });
+  if (credentialInjectionError(rec.injection)) {
+    return deny(503, "invalid_injection", "credential injection configuration is invalid");
+  }
+  if (rec.injection?.actor && (typeof actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(actorId))) {
+    return deny(403, "invalid_actor", "actor identity cannot be attested");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return deny(400, "bad_url", "url is not a valid absolute URL");
+  }
+  if (parsed.protocol !== "https:") return deny(403, "scheme_not_allowed", "only https targets are allowed");
+  if (
+    rec.injection?.actor
+      ? parsed.hostname.toLowerCase() !== rec.host.toLowerCase()
+      : !brokerHostMatches(parsed.hostname, rec.host)
+  ) {
+    return deny(403, "host_not_allowed", "url host is not the credential's pinned host");
+  }
+  if (rec.injection?.actor && parsed.port) {
+    return deny(403, "port_not_allowed", "actor-attested credentials require standard HTTPS");
+  }
+  const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>
+    m.toUpperCase(),
+  );
+  if (!methods.includes(method))
+    return deny(403, "method_not_allowed", `method ${method} is not allowed for this credential`);
+  if (!brokerPathAllowed(parsed.pathname, rec.allowedPathPrefixes)) {
+    return deny(403, "path_not_allowed", "url path is not in the credential's allowlist");
+  }
+
+  return null;
+}
+
 export async function brokerCredentialCall(opts: {
   claims: CapabilityClaims;
   body: BrokerRequest;
@@ -143,34 +186,9 @@ export async function brokerCredentialCall(opts: {
   ) {
     return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
   }
-  if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId))) {
-    return deny(403, "invalid_actor", "actor identity cannot be attested", rec.host);
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    return deny(400, "bad_url", "url is not a valid absolute URL", rec.host);
-  }
-  if (parsed.protocol !== "https:") return deny(403, "scheme_not_allowed", "only https targets are allowed", rec.host);
-  if (
-    rec.injection?.actor
-      ? parsed.hostname.toLowerCase() !== rec.host.toLowerCase()
-      : !brokerHostMatches(parsed.hostname, rec.host)
-  ) {
-    return deny(403, "host_not_allowed", "url host is not the credential's pinned host", rec.host);
-  }
-  if (rec.injection?.actor && parsed.port) {
-    return deny(403, "port_not_allowed", "actor-attested credentials require standard HTTPS", rec.host);
-  }
-  const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>
-    m.toUpperCase(),
-  );
-  if (!methods.includes(method))
-    return deny(403, "method_not_allowed", `method ${method} is not allowed for this credential`, rec.host);
-  if (!brokerPathAllowed(parsed.pathname, rec.allowedPathPrefixes)) {
-    return deny(403, "path_not_allowed", "url path is not in the credential's allowlist", rec.host);
-  }
+  const targetError = brokerCredentialTargetError(rec, rawUrl, method, claims.actorId);
+  if (targetError) return deny(targetError.status, targetError.code, targetError.message, rec.host);
+  const parsed = new URL(rawUrl);
 
   const headers: Record<string, string> = {};
   if (body.headers && typeof body.headers === "object") {

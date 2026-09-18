@@ -55,3 +55,45 @@ HTTP redirects are rejected for every MCP authentication mode. Updating an endpo
 or credential host is an administrative trust decision. Tool call auditing records
 the initiating actor as before; authentication does not expand the audience allowed
 to receive the result.
+
+## Reuse service credential authorization
+
+For audience-restricted shared MCP servers, set `serviceCredential` to an existing
+**broker-delivery** service credential slug instead of storing an inline secret:
+
+```json
+{
+  "name": "Shared tools",
+  "url": "https://tools.example.com/mcp",
+  "auth": "client-credentials",
+  "clientId": "shared-tools-client",
+  "serviceCredential": "shared-tools",
+  "readOnly": true,
+  "enabled": true
+}
+```
+
+The existing service credential secret supplies the bearer token or OAuth client
+secret. Grant and revoke access through the ordinary service credential grants.
+There is no separate MCP audience policy. Tool exposure and calls require the
+same internal-only audience gate and full-audience ACL as service credential
+delivery. Calls recheck access after the response too, including error responses.
+Secrets remain in core; env-delivery credentials cannot be referenced here.
+
+Existing broker HTTPS, host, method and path restrictions apply to each request.
+Allow `POST` to `/mcp` and, for client credentials, `/token`. Credential deletion,
+disabling, rotation and policy changes take effect on subsequent calls, without
+waiting for the catalog refresh. Actor-attested credentials are not supported
+because background catalog discovery has no authenticated caller. Client
+credentials also require default injection rather than custom header injection.
+Omitted injection and explicit `Authorization` / `Bearer` defaults are equivalent:
+header names are case-insensitive, and `Bearer` normalizes to `Bearer ` using the
+broker's existing scheme normalization. Custom headers/schemes remain unsupported.
+
+Registration probes and catalog refresh still run as core. Only non-sensitive
+catalog metadata belongs in tool descriptions and schemas. An admin can inspect
+the full catalog; harnesses receive only their turn's authorized tools.
+
+**Compatibility:** registrations without `serviceCredential` retain the legacy
+shared/per-user behavior described above. This option does not retrofit audience
+isolation onto those registrations, or onto the separate memory-provider system.

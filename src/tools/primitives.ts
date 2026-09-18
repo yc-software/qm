@@ -57,7 +57,7 @@ import { swallow, errMessage } from "../util/errors.ts";
 import { fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryService } from "../memory/memory-service.ts";
-import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import type { McpCallContext, McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
@@ -471,6 +471,8 @@ export interface ToolContextDeps {
   memoryScopeId?: ScopeId;
   memoryAccess?: { write?: ScopeId; read: ScopeId[] };
   mcp?: McpToolService;
+  mcpContext?: McpCallContext;
+  mcpToolDefs?: McpToolDescriptor[];
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -1131,12 +1133,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     mcpToolDefs(): McpToolDescriptor[] {
-      return deps.mcp?.toolDefs() ?? [];
+      return deps.mcpToolDefs ?? [];
     },
 
     async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy);
+      return deps.mcp.call(name, args, deps.createdBy, deps.mcpContext);
     },
 
     async backgroundStart(
