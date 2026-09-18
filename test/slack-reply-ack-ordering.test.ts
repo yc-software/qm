@@ -34,20 +34,6 @@ function fakeCore(pending: Map<string, { text: string }>, events: string[]) {
   } as any;
 }
 
-test("a status response is delivered without replacing the running task's stop target", async () => {
-  const core = fakeCore(new Map(), []);
-  core.submitTurn = async () => ({ status: "queued", runId: "status-run", conversationAside: true });
-  const flow = createTurnFlow(core);
-  flow.inFlightRunByThread.set("dm:D1", "work-run");
-  await flow.callCore({ text: "Any progress?" } as any, {
-    onQueued: (id, conversationAside) => {
-      assert.equal(conversationAside, true);
-      if (!conversationAside) flow.inFlightRunByThread.set("dm:D1", id);
-    },
-  });
-  assert.equal(flow.inFlightRunByThread.get("dm:D1"), "work-run");
-});
-
 test("deferDeliveryAck: recovery delivery stays pending until the caller settles it", async () => {
   const events: string[] = [];
   const pending = new Map<string, { text: string }>();

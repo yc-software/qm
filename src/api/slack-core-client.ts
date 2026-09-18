@@ -105,7 +105,6 @@ export interface SlackCoreClient {
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
   waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
-  runDeliveryTarget?(runId: string): Promise<string | undefined>;
   activeRunForThread(threadRef: string): Promise<string | undefined>;
   signalRunAbort(runId: string): Promise<void>;
   ackRunDelivery(runId: string): Promise<void>;
@@ -405,9 +404,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       }
     },
 
-    async runDeliveryTarget(runId) {
-      return (await deps.runs.get(runId))?.request.deliveryTarget;
-    },
     async activeRunForThread(threadRef) {
       return (await deps.app.activeRunForThread(threadRef))?.runId;
     },

@@ -48,13 +48,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const store: RunStore = {
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
-    async enqueue({
-      sessionId,
-      request,
-      dedupKey,
-      maxAttempts = 3,
-      idleDelivery,
-    }: EnqueueInput): Promise<EnqueueResult> {
+    async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
       if (dedupKey) {
         const existingId = byKey.get(dedupKey);
         if (existingId) {
@@ -62,15 +56,6 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
           if (existing) return { run: existing, deduped: true };
         }
       }
-      if (
-        idleDelivery &&
-        ![...runs.values()].some(
-          (run) =>
-            !isTerminal(run.status) &&
-            (run.sessionId === idleDelivery.threadRef || run.sessionId.startsWith(`${idleDelivery.threadRef}:`)),
-        )
-      )
-        request = { ...request, deliveryTarget: idleDelivery.target };
       const run: Run = {
         id: randomUUID(),
         sessionId,

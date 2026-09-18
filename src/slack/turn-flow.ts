@@ -22,7 +22,7 @@ export type CoreTurnBody = Omit<TurnRequest, "surface">;
 
 interface TurnHooks {
   deferDeliveryAck?: boolean;
-  onQueued?: (runId: string, conversationAside?: boolean) => void | Promise<void>;
+  onQueued?: (runId: string) => void | Promise<void>;
   onSteered?: (runId: string) => void | Promise<void>;
   onFirstBlock?: (text: string) => void;
   onSurfacePosted?: () => void;
@@ -98,7 +98,7 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
     }
     inFlightRuns.add(queued.runId);
     try {
-      await hooks.onQueued?.(queued.runId, queued.conversationAside);
+      await hooks.onQueued?.(queued.runId);
       return await pollRun(queued.runId, hooks);
     } finally {
       inFlightRuns.delete(queued.runId);

@@ -43,7 +43,6 @@ export interface EnqueueInput {
   request: OrchestratorInput;
   dedupKey?: string;
   maxAttempts?: number;
-  idleDelivery?: { threadRef: string; target: string };
 }
 
 export interface EnqueueResult {

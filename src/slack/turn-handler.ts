@@ -33,7 +33,6 @@ import {
   dmThreadRef,
   downloadSlackFile,
   encodeDeliveryTarget,
-  parseDeliveryTarget,
   groupDmDisplayName,
   hasContent,
   hydrateSlackFiles,
@@ -338,10 +337,6 @@ export function createTurnHandler(deps: {
     }
 
     const taskManaged = !inc.unprompted && !actor.isBot && inc.kind === "dm" && !!core.taskAcknowledgements;
-    if (taskManaged) {
-      threadRef = dmThreadRef(inc.channel);
-      replyThreadTs = inc.threadTs ?? inc.ts;
-    }
     const moveTaskAck = async (runId: string, ts: string, pick = false) => {
       if (!taskManaged) return;
       await core
@@ -360,7 +355,7 @@ export function createTurnHandler(deps: {
     const finishTaskAck = async () => {
       if (taskManaged && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
     };
-    if (!inc.unprompted && !taskManaged) {
+    if (!inc.unprompted) {
       const intercepted = await maybeInterceptStop({
         text,
         threadRef,
@@ -460,7 +455,7 @@ export function createTurnHandler(deps: {
     let overheard: OverheardMessage[] | undefined;
     let detectContext: string | undefined;
     let detectOpener: string | undefined;
-    if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
+    if (!inc.synthetic) {
       const serialize = () =>
         serializer.serializeSlackConversation(client, inc, {
           audience,
@@ -554,16 +549,9 @@ export function createTurnHandler(deps: {
         { ...turn, intakePreambleMs: Math.round(tSubmit - t0), clientSentAt: Date.now() },
         {
           deferDeliveryAck: true,
-          onQueued: async (runId, conversationAside) => {
+          onQueued: async (runId) => {
             queuedRunId = runId;
-            if (taskManaged) {
-              const target = await core.runDeliveryTarget?.(runId);
-              if (target) {
-                const destination = parseDeliveryTarget(target);
-                if (destination.channel === inc.channel) replyThreadTs = destination.threadTs;
-              }
-            }
-            if (!conversationAside) inFlightRunByThread.set(threadRef, runId);
+            inFlightRunByThread.set(threadRef, runId);
             accepted = true;
             inc.ackGate?.persisted();
             await moveTaskAck(runId, inc.ts, true);
