@@ -128,11 +128,17 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
     assert.equal(host.querySelectorAll(".inbox-sent-row").length, 2);
     resetSentMail();
     let detailRequest = "";
-    globalThis.fetch = async (input) => {
+    let directChatAccountType: unknown;
+    globalThis.fetch = async (input, options) => {
       if (String(input).endsWith("/sent-seed.local.json")) return new Response(null, { status: 404 });
-      if (String(input).endsWith("/inbox/sent-chat")) return Response.json({ item: { id: "chat", thread: [] } });
+      if (String(input).endsWith("/inbox/sent-chat")) {
+        directChatAccountType = JSON.parse(String(options?.body)).accountType;
+        return Response.json({ item: { id: "chat", thread: [] } });
+      }
       detailRequest = String(input);
+      assert.equal(new URL(detailRequest, location.origin).searchParams.has("accountType"), false);
       return Response.json({
+        accountType: "company",
         id: "unlisted",
         threadId: "thread-unlisted",
         to: "Alex",
@@ -147,7 +153,8 @@ test("sent view pages Gmail messages and opens the matching Google account", asy
       });
     };
     await openSentEmailById("unlisted", draw);
-    assert.match(detailRequest, /\/api\/inbox\/sent\/unlisted\?accountType=default$/);
+    assert.match(detailRequest, /\/api\/inbox\/sent\/unlisted\?$/);
+    assert.equal(directChatAccountType, "company");
     render(sentEmailPageTpl(draw), host);
     assert.match(host.textContent!, /Direct link/);
     assert.match(host.textContent!, /Loaded without listing/);

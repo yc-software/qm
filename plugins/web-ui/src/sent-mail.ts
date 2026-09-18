@@ -78,7 +78,7 @@ export async function openSentEmail(message: SentEmail, draw: () => void): Promi
           attachments: [],
         }
       : await api<NonNullable<typeof detail>>(
-          `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams({ accountType: message.accountType ?? "default" })}`,
+          `/api/inbox/sent/${encodeURIComponent(message.id)}?${new URLSearchParams(message.accountType ? { accountType: message.accountType } : {})}`,
         );
     if (current === detailGeneration) {
       detail = result;
