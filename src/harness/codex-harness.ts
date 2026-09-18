@@ -953,9 +953,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     }
     let started: { thread: { id: string }; model?: string };
     try {
-      const requestTimeoutMs = deadline ? Math.max(1, deadline - Date.now()) : CODEX_START_TIMEOUT_MS;
+      const requestTimeoutMs = deadline
+        ? Math.max(1, deadline - Date.now())
+        : (opts.appServerStartTimeoutMs ?? CODEX_START_TIMEOUT_MS);
       let requestTimer: NodeJS.Timeout | undefined;
       const requestAbort = new AbortController();
+      let threadStartTimedOut = false;
       started = await awaitSetup(
         Promise.race([
           rt.server.request(
@@ -966,13 +969,23 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
           ),
           new Promise<never>((_, reject) => {
             requestTimer = setTimeout(() => {
+              threadStartTimedOut = true;
               requestAbort.abort();
               reject(new NonRetryableTurnError("Codex thread/start request timed out"));
             }, requestTimeoutMs);
           }),
-        ]).finally(() => {
-          if (requestTimer) clearTimeout(requestTimer);
-        }),
+        ])
+          .finally(() => {
+            if (requestTimer) clearTimeout(requestTimer);
+          })
+          .catch((error: unknown) => {
+            if (threadStartTimedOut) {
+              const timeoutError = new NonRetryableTurnError("Codex thread/start request timed out");
+              timeoutError.cause = error;
+              throw timeoutError;
+            }
+            throw error;
+          }),
       );
     } catch (error) {
       return failSetup(error);
