@@ -16,6 +16,7 @@ process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = secret;
 process.env.PORTAL_IDENTITY_SECRET = secret;
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
+delete process.env.POSTHOG_API_KEY;
 process.env.SENTRY_BROWSER_DSN = "https://public@sentry.example.com/1";
 process.env.SENTRY_RELEASE = "release-1";
 const { handler } = await import("../server/index.ts");
@@ -43,8 +44,11 @@ test("browser error config requires authentication and excludes impersonation", 
   const body = await response.json();
   assert.deepEqual(body.browserErrors, { dsn: "https://public@sentry.example.com/1", release: "release-1" });
   const csp = (await fetch(`${base}/connectors/oauth/test/callback`)).headers.get("content-security-policy")!;
-  assert.ok(csp.includes("https://sentry.example.com"));
-  assert.equal(csp.includes("public@"), false);
+  const connectSrc = csp.split(";").map((directive) => directive.trim().split(/\s+/));
+  assert.deepEqual(
+    connectSrc.find(([name]) => name === "connect-src"),
+    ["connect-src", "'self'", "https://sentry.example.com"],
+  );
   assert.equal((await (await fetch(`${base}/me`, { headers: headers("admin") })).json()).browserErrors, undefined);
   coreStatus = 503;
   assert.equal((await fetch(`${base}/me`, { headers: headers() })).status, 503);
