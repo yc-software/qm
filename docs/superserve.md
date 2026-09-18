@@ -43,24 +43,36 @@ For local development, export the key and template and run
 
 ## Settings
 
-| Variable                       | Default     | Purpose                                                                            |
-| ------------------------------ | ----------- | ---------------------------------------------------------------------------------- |
-| `SUPERSERVE_API_KEY`           | Required    | Team API key, held by core.                                                        |
-| `SUPERSERVE_TEMPLATE`          | Required    | Ready template name.                                                               |
-| `SUPERSERVE_BASE_URL`          | SDK default | API endpoint override.                                                             |
-| `SUPERSERVE_NAME_PREFIX`       | `qm`        | Namespace for scope discovery.                                                     |
-| `SUPERSERVE_HOME_DIR`          | `/root`     | Guest home; workspace is `<home>/workspace`.                                       |
-| `SUPERSERVE_IDLE_PAUSE_SEC`    | `900`       | Active-time limit before pause, not an inactivity timer.                           |
-| `SUPERSERVE_RETENTION_SEC`     | `2592000`   | Delete the sandbox after this many continuous seconds paused (30 days by default). |
-| `SUPERSERVE_EGRESS_ALLOW`      | Unset       | Comma-separated outbound allow rules.                                              |
-| `SUPERSERVE_EGRESS_DENY`       | Unset       | Comma-separated outbound deny rules.                                               |
-| `SUPERSERVE_CONFIG_GENERATION` | Automatic   | Explicit rollout sequence.                                                         |
-| `SANDBOX_TIMEOUT_SEC`          | `600`       | Default command deadline in seconds.                                               |
+| Variable                       | Default     | Purpose                                                                           |
+| ------------------------------ | ----------- | --------------------------------------------------------------------------------- |
+| `SUPERSERVE_API_KEY`           | Required    | Team API key, held by core.                                                       |
+| `SUPERSERVE_TEMPLATE`          | Required    | Ready template name.                                                              |
+| `SUPERSERVE_BASE_URL`          | SDK default | API endpoint override.                                                            |
+| `SUPERSERVE_NAME_PREFIX`       | `qm`        | Namespace for scope discovery.                                                    |
+| `SUPERSERVE_HOME_DIR`          | `/root`     | Guest home; workspace is `<home>/workspace`.                                      |
+| `SUPERSERVE_RETENTION_SEC`     | `2592000`   | Delete the sandbox after this many continuous seconds paused; at most 30 days.    |
+| `SUPERSERVE_EGRESS_ALLOW`      | Unset       | Comma-separated outbound allow rules: IPs, CIDRs, or domain patterns.             |
+| `SUPERSERVE_EGRESS_DENY`       | Unset       | Comma-separated outbound deny rules: IPs and CIDRs only.                          |
+| `SUPERSERVE_CONFIG_GENERATION` | Automatic   | Explicit rollout sequence.                                                        |
+| `SANDBOX_TIMEOUT_SEC`          | `600`       | Default command deadline in seconds.                                              |
+| `BACKGROUND_JOB_TTL_MAX_SEC`   | `3600`      | Also the continuous active-time ceiling of a sandbox before Superserve pauses it. |
 
-Ending a turn leaves its sandbox running until the active-time limit, so other
-turns sharing it can continue. Background work can extend that limit to QM's
-configured maximum background job lifetime. Scratch sandboxes are deleted when
-their last local handle closes, with time limits as a cleanup fallback.
+Superserve's `timeoutSeconds` bounds continuous active time from the last resume,
+not inactivity, and a command still running when it elapses is paused mid-run. QM
+therefore pauses a scope sandbox itself when the last handle sharing it closes,
+resumes it on the next provision, and sets the provider ceiling to
+`BACKGROUND_JOB_TTL_MAX_SEC` (at most seven days) as a backstop for lost cores. A
+teardown that leaves background work running skips the pause. Processes survive
+pause and resume. Scratch sandboxes are deleted when their last local handle
+closes, with the ceiling and a one-day retention as cleanup fallbacks.
+
+Egress rules are enforced by Superserve outside the guest. A sandbox reaches any
+public address until `SUPERSERVE_EGRESS_DENY` names `0.0.0.0/0`, which turns
+`SUPERSERVE_EGRESS_ALLOW` into a strict allowlist. Under that rule QM also allows
+the resolvers Superserve sandboxes use (`1.1.1.1` and `8.8.8.8`) whenever a domain
+pattern is present, and the core's `PUBLIC_API_URL` host so file staging keeps
+working. Private, link-local, and loopback ranges are always blocked. Bare IPs read
+back as `/32`.
 
 Command output is limited to 2 MiB per stream; write larger results to files.
 Guest restart and the optional browser engine are not supported.
@@ -74,7 +86,9 @@ replacement when a paused sandbox cannot accept the update. Export needed files
 before either change.
 
 A sandbox that remains paused for `SUPERSERVE_RETENTION_SEC` is automatically
-deleted, including its disk. Explicit scope destruction also deletes the disk.
+deleted, including its disk. Explicit scope destruction also deletes the disk. A
+sandbox Superserve reports as `failed` (it could not boot or resume) is deleted
+when QM next lists the scope, and the next provision creates a replacement.
 
 Automatic configuration ordering assigns a generation to each build and
 configuration. Older instances cannot overwrite a newer sandbox configuration.

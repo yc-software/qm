@@ -939,7 +939,7 @@ export function buildApp(
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
     if (!ss.template)
       throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
-    const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
+    const activeLimitSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
     const generationKey = createHash("sha256")
       .update(
         JSON.stringify([
@@ -947,9 +947,8 @@ export function buildApp(
           ss.template,
           ss.namePrefix ?? "",
           ss.homeDir ?? "",
-          ss.idlePauseSec ?? null,
           ss.retentionSec ?? null,
-          keepWarmSec,
+          activeLimitSec,
           [...(ss.egressAllow ?? [])].sort(),
           [...(ss.egressDeny ?? [])].sort(),
         ]),
@@ -968,8 +967,7 @@ export function buildApp(
       ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
       template: ss.template,
       ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
-      ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
-      keepWarmSec,
+      activeLimitSec,
       ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
       ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
       ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),

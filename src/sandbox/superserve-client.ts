@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface SuperserveCommandResult {
   stdout: string;
@@ -33,6 +33,8 @@ interface SuperserveRunOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
 }
+
+const FILE_TRANSFER_TIMEOUT_MS = 10 * 60_000;
 
 export interface SuperserveUpdate {
   network?: SuperserveNetwork;
@@ -117,6 +119,7 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
     }));
 
   type SdkSandbox = Awaited<ReturnType<Sdk["Sandbox"]["create"]>>;
+  type SdkInfo = Awaited<ReturnType<Sdk["Sandbox"]["list"]>>[number];
 
   const gone = (id: string, err: unknown): never => {
     throw new SuperserveSandboxGoneError(id, errMessage(err));
@@ -147,7 +150,7 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
     },
     async readFileBytes(absPath): Promise<Uint8Array | null> {
       try {
-        return await sbx.files.read(absPath);
+        return await sbx.files.read(absPath, { timeoutMs: FILE_TRANSFER_TIMEOUT_MS });
       } catch (err) {
         if (hasStatus(err, 404)) {
           let status: string;
@@ -166,7 +169,7 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
     },
     async writeFileBytes(absPath, data): Promise<void> {
       try {
-        await sbx.files.write(absPath, data);
+        await sbx.files.write(absPath, data, { timeoutMs: FILE_TRANSFER_TIMEOUT_MS });
       } catch (err) {
         if (isGoneError(err)) gone(sbx.id, err);
         throw err;
@@ -217,6 +220,17 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
     ...(i.autoDeleteAt ? { autoDeleteAtMs: i.autoDeleteAt.getTime() } : {}),
   });
 
+  const listLive = async (metadata: Record<string, string> | undefined): Promise<SdkInfo[]> => {
+    const { Sandbox } = await loadSdk();
+    const listed = await Sandbox.list({ ...connection, ...(metadata ? { metadata } : {}) });
+    for (const failed of listed.filter((s) => s.status === "failed")) {
+      await Sandbox.killById(failed.id, connection).catch(
+        swallowAs(`superserve-client: delete failed sandbox ${failed.id}`, undefined),
+      );
+    }
+    return listed.filter((s) => !GONE_STATES.has(s.status));
+  };
+
   return {
     async create(createOpts): Promise<SuperserveSession> {
       const { Sandbox } = await loadSdk();
@@ -251,12 +265,10 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
       }
     },
     async info(sandboxId, scopeMetadata): Promise<SuperserveSandboxInfo> {
-      const { Sandbox } = await loadSdk();
       const scoped = scopeMetadata && Object.keys(scopeMetadata).length ? scopeMetadata : undefined;
       try {
-        const listed = await Sandbox.list({ ...connection, ...(scoped ? { metadata: scoped } : {}) });
-        const hit = listed.find((s) => s.id === sandboxId);
-        if (!hit || GONE_STATES.has(hit.status)) throw new SuperserveSandboxGoneError(sandboxId, "not listed");
+        const hit = (await listLive(scoped)).find((s) => s.id === sandboxId);
+        if (!hit) throw new SuperserveSandboxGoneError(sandboxId, "not listed");
         return toInfo(hit);
       } catch (err) {
         if (isGoneError(err)) gone(sandboxId, err);
@@ -264,11 +276,8 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
       }
     },
     async list(metadata): Promise<SuperserveSandboxSummary[]> {
-      const { Sandbox } = await loadSdk();
-      const listed = await Sandbox.list({ ...connection, ...(Object.keys(metadata).length ? { metadata } : {}) });
-      return listed
-        .filter((s) => !GONE_STATES.has(s.status))
-        .map((s) => ({ id: s.id, name: s.name, status: s.status, metadata: s.metadata ?? {} }));
+      const listed = await listLive(Object.keys(metadata).length ? metadata : undefined);
+      return listed.map((s) => ({ id: s.id, name: s.name, status: s.status, metadata: s.metadata ?? {} }));
     },
     async kill(sandboxId): Promise<void> {
       const { Sandbox } = await loadSdk();

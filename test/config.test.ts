@@ -401,6 +401,15 @@ test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () =
   }
 });
 
+test("SUPERSERVE_RETENTION_SEC accepts only whole seconds up to Superserve's thirty-day maximum", () => {
+  for (const value of ["-1", "0.5", "2592001", "NaN"]) {
+    assert.throws(() => loadConfig({ SUPERSERVE_RETENTION_SEC: value }), /SUPERSERVE_RETENTION_SEC/, value);
+  }
+  assert.equal(loadConfig({ SUPERSERVE_RETENTION_SEC: "" }).superserveSandbox.retentionSec, undefined);
+  assert.equal(loadConfig({ SUPERSERVE_RETENTION_SEC: "0" }).superserveSandbox.retentionSec, 0);
+  assert.equal(loadConfig({ SUPERSERVE_RETENTION_SEC: "2592000" }).superserveSandbox.retentionSec, 2592000);
+});
+
 test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(

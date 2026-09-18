@@ -37,6 +37,7 @@ import {
 import type {
   AgentComputerProfile,
   ComputerStatus,
+  EgressEnforcement,
   ExecOptions,
   ExecResult,
   ProvisionOptions,
@@ -49,11 +50,13 @@ const DEFAULT_HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
 const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
-const DEFAULT_IDLE_PAUSE_SEC = 15 * 60;
-const DEFAULT_KEEP_WARM_SEC = 3600;
-const DEFAULT_RETENTION_SEC = 30 * 24 * 3600;
-const SCRATCH_IDLE_PAUSE_SEC = 10 * 60;
+const DEFAULT_ACTIVE_LIMIT_SEC = 3600;
+const MAX_ACTIVE_LIMIT_SEC = 7 * 24 * 3600;
+export const MAX_RETENTION_SEC = 30 * 24 * 3600;
+const DEFAULT_RETENTION_SEC = MAX_RETENTION_SEC;
 const SCRATCH_RETENTION_SEC = 24 * 3600;
+const DENY_ALL = "0.0.0.0/0";
+const DNS_RESOLVERS = ["1.1.1.1/32", "8.8.8.8/32"];
 const PREP_TIMEOUT_SEC = 60;
 const TIMEOUT_EXIT_CODE = 124;
 const TIMEOUT_KILLED_EXIT_CODE = 137;
@@ -110,8 +113,7 @@ export interface SuperserveSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   template?: string;
   homeDir?: string;
-  idlePauseSec?: number;
-  keepWarmSec?: number;
+  activeLimitSec?: number;
   configEpoch?: number | (() => Promise<number>);
   retentionSec?: number;
   egressAllow?: string[];
@@ -134,21 +136,43 @@ const pinnedSandbox = new AsyncLocalStorage<string>();
 const isConflict = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { statusCode?: unknown }).statusCode === 409;
 
+const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+const CIDR_RE = /^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/;
+
+const canonicalEgressRule = (rule: string): string => {
+  const trimmed = rule.trim();
+  return IPV4_RE.test(trimmed) ? `${trimmed}/32` : trimmed;
+};
+
+const isDomainRule = (rule: string): boolean => !IPV4_RE.test(rule) && !CIDR_RE.test(rule);
+
+function egressNetwork(
+  allow: readonly string[] | undefined,
+  deny: readonly string[] | undefined,
+  apiBaseUrl?: string,
+): SuperserveNetwork | undefined {
+  const allowOut = (allow ?? []).map(canonicalEgressRule);
+  const denyOut = (deny ?? []).map(canonicalEgressRule);
+  if (!allowOut.length && !denyOut.length) return undefined;
+  if (denyOut.includes(DENY_ALL)) {
+    if (allowOut.some(isDomainRule)) allowOut.push(...DNS_RESOLVERS);
+    if (apiBaseUrl) allowOut.push(canonicalEgressRule(new URL(apiBaseUrl).hostname));
+  }
+  const unique = (rules: string[]): string[] => [...new Set(rules)];
+  return {
+    ...(allowOut.length ? { allowOut: unique(allowOut) } : {}),
+    ...(denyOut.length ? { denyOut: unique(denyOut) } : {}),
+  };
+}
+
 export function createSuperserveSandbox(workspace: WorkspaceStore, opts: SuperserveSandboxOptions): Sandbox {
   const client = opts.client;
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const configuredHome = opts.homeDir ?? DEFAULT_HOME_DIR;
-  const idlePauseSec = opts.idlePauseSec ?? DEFAULT_IDLE_PAUSE_SEC;
-  const keepWarmSec = Math.max(opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC, idlePauseSec);
-  const retentionSec = opts.retentionSec ?? DEFAULT_RETENTION_SEC;
-  const network: SuperserveNetwork | undefined =
-    opts.egressAllow?.length || opts.egressDeny?.length
-      ? {
-          ...(opts.egressAllow?.length ? { allowOut: opts.egressAllow } : {}),
-          ...(opts.egressDeny?.length ? { denyOut: opts.egressDeny } : {}),
-        }
-      : undefined;
+  const activeLimitSec = Math.min(Math.max(opts.activeLimitSec ?? DEFAULT_ACTIVE_LIMIT_SEC, 1), MAX_ACTIVE_LIMIT_SEC);
+  const retentionSec = Math.min(opts.retentionSec ?? DEFAULT_RETENTION_SEC, MAX_RETENTION_SEC);
+  const network = egressNetwork(opts.egressAllow, opts.egressDeny, opts.apiBaseUrl);
   const store = opts.store ?? createMemoryMap<StoredSuperserveSandbox>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
   const lockKey = (scope: string): string => `superserve-provision:${scope}`;
@@ -157,7 +181,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   const liveByName = new Map<string, Live>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
+  const activeHandles = new Map<string, number>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
@@ -168,14 +192,29 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   const adoptedNetwork: SuperserveNetwork = network ?? { allowOut: [], denyOut: [] };
   const normalizedNetwork = (value: SuperserveNetwork | undefined): string =>
     JSON.stringify([
-      [...(value?.allowOut ?? [])].map((rule) => rule.trim()).sort(),
-      [...(value?.denyOut ?? [])].map((rule) => rule.trim()).sort(),
+      [...new Set((value?.allowOut ?? []).map(canonicalEgressRule))].sort(),
+      [...new Set((value?.denyOut ?? []).map(canonicalEgressRule))].sort(),
     ]);
   const appliedNetwork = normalizedNetwork(adoptedNetwork);
-  const egressTag = createHash("sha256")
-    .update(JSON.stringify([[...(adoptedNetwork.allowOut ?? [])].sort(), [...(adoptedNetwork.denyOut ?? [])].sort()]))
-    .digest("hex")
-    .slice(0, 16);
+  const egressTag = createHash("sha256").update(appliedNetwork).digest("hex").slice(0, 16);
+  const enforcementOf = (): EgressEnforcement => {
+    if (!network) return "none";
+    return network.denyOut?.includes(DENY_ALL) ? "domain" : "ip_port";
+  };
+  const egressEnforcement = enforcementOf();
+
+  const retainHandle = (name: string): void => {
+    activeHandles.set(name, (activeHandles.get(name) ?? 0) + 1);
+  };
+  const releaseHandle = (name: string): boolean => {
+    const remaining = (activeHandles.get(name) ?? 1) - 1;
+    if (remaining > 0) {
+      activeHandles.set(name, remaining);
+      return false;
+    }
+    activeHandles.delete(name);
+    return true;
+  };
 
   const bootEpoch = Date.now();
   const configEpoch = async (): Promise<number> =>
@@ -277,7 +316,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     };
     try {
       await client.update(sandboxId, {
-        timeoutSeconds: Math.max(info.timeoutSeconds ?? 0, idlePauseSec),
+        timeoutSeconds: activeLimitSec,
         autoDeleteSeconds: retentionSec,
         metadata: { ...info.metadata, ...(await scopeMetadata(info.name)) },
         ...(stale ? { network: adoptedNetwork } : {}),
@@ -358,7 +397,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       name,
       metadata: await scopeMetadata(name),
       ...(opts.template ? { template: opts.template } : {}),
-      timeoutSeconds: idlePauseSec,
+      timeoutSeconds: activeLimitSec,
       autoDeleteSeconds: retentionSec,
       ...(network ? { network } : {}),
     });
@@ -371,7 +410,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       name,
       metadata: { ...(await scopeMetadata(name)), [SUPERSERVE_METADATA.kind]: "scratch" },
       ...(opts.template ? { template: opts.template } : {}),
-      timeoutSeconds: SCRATCH_IDLE_PAUSE_SEC,
+      timeoutSeconds: activeLimitSec,
       autoDeleteSeconds: SCRATCH_RETENTION_SEC,
       ...(network ? { network } : {}),
     });
@@ -381,7 +420,6 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
     const name = sandboxScopeName(`${prefix}-scratch`, key);
     scratchKeyByName.set(name, key);
-    const active = activeScratch.get(name) ?? 0;
     const cached = liveByName.get(name);
     if (cached) {
       try {
@@ -402,7 +440,6 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     }
     const coldStart = !liveByName.has(name);
     if (coldStart) await createScratch(name);
-    activeScratch.set(name, active + 1);
     return { name, coldStart };
   }
 
@@ -463,9 +500,9 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     backend: "superserve",
     writablePersistence: "resident_disk",
     processSessions: true,
-    egressEnforcement: "none",
+    egressEnforcement,
     spec: {
-      os: "Ubuntu — Superserve sandbox (disk persists across pause/resume; publish durable work to git or Files)",
+      os: "Ubuntu 24.04 — Superserve Firecracker microVM (paused between turns; disk and processes persist across pause/resume; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
       get tools() {
         return visibleTools([
@@ -573,6 +610,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             scopeByName.set(name, scope);
             coldStart = (await ensureLive(scope, name, provOpts?.onStatus)).coldStart;
           }
+          retainHandle(name);
           const homeDir = configuredHome;
           const workspaceDir = workspaceDirOf(homeDir);
           const providerSandboxId = liveByName.get(name)?.session.id;
@@ -725,12 +763,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       if (handle.scratch) {
         const key = scratchKeyByName.get(handle.id);
         return provisionQueue(key ? `scratch:${key}` : handle.id, async () => {
-          const remaining = (activeScratch.get(handle.id) ?? 1) - 1;
-          if (remaining > 0) {
-            activeScratch.set(handle.id, remaining);
-            return;
-          }
-          activeScratch.delete(handle.id);
+          if (!releaseHandle(handle.id)) return;
           const live = liveByName.get(handle.id);
           if (!live) return;
           try {
@@ -745,26 +778,31 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
       const scope = scopeByName.get(handle.id) ?? "default";
       return provisionQueue(scope, async () => {
-        if (!tdOpts?.destroy && !handleIsCurrent(handle)) return;
-        await teardownScope(handle.id, scope, tdOpts);
+        const last = releaseHandle(handle.id);
+        if (tdOpts?.destroy) return advisoryLock.withLock(lockKey(scope), () => destroyStoredScope(scope));
+        if (last && !tdOpts?.keepWarm && handleIsCurrent(handle)) await pauseScope(handle.id, scope);
       });
     },
   };
 
-  async function teardownScope(name: string, scope: string, tdOpts?: TeardownOptions): Promise<void> {
-    if (tdOpts?.destroy) return advisoryLock.withLock(lockKey(scope), () => destroyStoredScope(scope));
+  async function pauseScope(name: string, scope: string): Promise<void> {
     const live = liveByName.get(name);
     if (!live?.current) return;
     return advisoryLock.withLock(lockKey(scope), async () => {
       try {
         const info = await client.info(live.session.id, scopeFilter(name));
         live.current = Number(info.metadata[SUPERSERVE_METADATA.epoch] ?? 0) <= (await configEpoch());
-        if (!live.current) return;
-        await live.session.update({ timeoutSeconds: tdOpts?.keepWarm ? keepWarmSec : idlePauseSec });
+        if (!live.current || info.status !== "active") return;
+        await live.session.pause();
       } catch (err) {
-        if (!(err instanceof SuperserveSandboxGoneError)) throw err;
-        dropLive(name, live.session.id);
-        await forget(scope, live.session.id);
+        if (err instanceof SuperserveSandboxGoneError) {
+          dropLive(name, live.session.id);
+          await forget(scope, live.session.id);
+          return;
+        }
+        if (isConflict(err)) return;
+        reportError("sandbox_preservation", "pause_failed", errMessage(err), scope);
+        throw err;
       }
     });
   }

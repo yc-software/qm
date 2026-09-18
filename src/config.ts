@@ -1,6 +1,7 @@
 import { isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseScopeId } from "./types.ts";
 import type { SandboxScopeDefaults } from "./sandbox/sandbox-routing.ts";
+import { MAX_RETENTION_SEC } from "./sandbox/superserve-sandbox.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
   parseProviderBaseUrl,
@@ -608,7 +609,6 @@ interface SuperserveSandboxEnv {
   namePrefix?: string;
   template?: string;
   homeDir?: string;
-  idlePauseSec?: number;
   retentionSec?: number;
   egressAllow?: string[];
   egressDeny?: string[];
@@ -633,18 +633,22 @@ function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
       `SUPERSERVE_CONFIG_GENERATION=${JSON.stringify(env.SUPERSERVE_CONFIG_GENERATION)} must be a nonnegative safe integer, or unset it.`,
     );
   }
+  const retentionSec = numEnvStrict("SUPERSERVE_RETENTION_SEC", env.SUPERSERVE_RETENTION_SEC);
+  if (
+    retentionSec !== undefined &&
+    (!Number.isInteger(retentionSec) || retentionSec < 0 || retentionSec > MAX_RETENTION_SEC)
+  ) {
+    throw new Error(
+      `SUPERSERVE_RETENTION_SEC=${JSON.stringify(env.SUPERSERVE_RETENTION_SEC)} must be an integer between 0 and ${MAX_RETENTION_SEC} (Superserve deletes a sandbox at most 30 days after it pauses), or unset it.`,
+    );
+  }
   return {
     ...(env.SUPERSERVE_API_KEY ? { apiKey: env.SUPERSERVE_API_KEY } : {}),
     ...(env.SUPERSERVE_BASE_URL?.trim() ? { baseUrl: env.SUPERSERVE_BASE_URL.trim() } : {}),
     ...(env.SUPERSERVE_NAME_PREFIX ? { namePrefix: env.SUPERSERVE_NAME_PREFIX } : {}),
     ...(env.SUPERSERVE_TEMPLATE?.trim() ? { template: env.SUPERSERVE_TEMPLATE.trim() } : {}),
     ...(env.SUPERSERVE_HOME_DIR ? { homeDir: env.SUPERSERVE_HOME_DIR } : {}),
-    ...(numEnvStrict("SUPERSERVE_IDLE_PAUSE_SEC", env.SUPERSERVE_IDLE_PAUSE_SEC) !== undefined
-      ? { idlePauseSec: numEnvStrict("SUPERSERVE_IDLE_PAUSE_SEC", env.SUPERSERVE_IDLE_PAUSE_SEC) }
-      : {}),
-    ...(numEnvStrict("SUPERSERVE_RETENTION_SEC", env.SUPERSERVE_RETENTION_SEC) !== undefined
-      ? { retentionSec: numEnvStrict("SUPERSERVE_RETENTION_SEC", env.SUPERSERVE_RETENTION_SEC) }
-      : {}),
+    ...(retentionSec !== undefined ? { retentionSec } : {}),
     ...(egressAllow ? { egressAllow } : {}),
     ...(egressDeny ? { egressDeny } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
