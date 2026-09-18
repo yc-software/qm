@@ -416,14 +416,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!principal) return json(res, 401, { error: "signed_out" });
     const rest = pathname.slice("/api/scopes/".length);
     if (method === "GET") {
-      if (rest.endsWith("/export")) {
-        const scopeId = decodeURIComponent(rest.slice(0, -"/export".length));
+      const suffix = ["/export", "/credential-usage"].find((suffix) => rest.endsWith(suffix));
+      if (suffix) {
+        const scopeId = decodeURIComponent(rest.slice(0, -suffix.length));
         return forward(
           req,
           res,
           principal,
           "GET",
-          `/v1/admin/scopes/${encodeURIComponent(scopeId)}/export${url.search}`,
+          `/v1/admin/scopes/${encodeURIComponent(scopeId)}${suffix}${url.search}`,
         );
       }
       const scopeId = decodeURIComponent(rest);

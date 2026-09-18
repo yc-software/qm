@@ -92,3 +92,80 @@ test("pg credential-usage sink: sparse and absent credentials use an ordered ind
     await p.end();
   }
 });
+
+test("pg credential summaries aggregate a bounded window without transferring raw events", { skip }, async (t) => {
+  const { createCredentialUsageSink, CREDENTIAL_USAGE_WINDOW } = await import("../src/admin/credential-usage-sink.ts");
+  const memory = createCredentialUsageSink();
+  const sink = createPostgresCredentialUsageSink(URL!);
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  t.after(() => pool.end());
+  await pool.query(
+    `INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
+    SELECT n, 'summary-window', 'example.com', CASE WHEN n % 3 = 0 THEN 'denied' ELSE 'ok' END,
+      'personal:summary', 'person-' || (n % 20) FROM generate_series(1, $1::int) n`,
+    [CREDENTIAL_USAGE_WINDOW + 10],
+  );
+  const clock = t.mock.method(Date, "now");
+  for (let n = 1; n <= CREDENTIAL_USAGE_WINDOW + 10; n++) {
+    clock.mock.mockImplementation(() => n);
+    memory.record({
+      slug: "summary-window",
+      host: "example.com",
+      status: n % 3 === 0 ? "denied" : "ok",
+      scopeLabel: "personal:summary",
+      principalId: "person-" + (n % 20),
+    });
+  }
+  clock.mock.restore();
+  const slugs = ["summary-window", "summary-absent", "summary-window"];
+  assert.deepEqual(await sink.summary(slugs), await memory.summary(slugs));
+  await pool.query(`INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
+    SELECT 123, 'summary-ties', 'example.com', 'ok', 'personal:summary', 'person-' || n
+    FROM generate_series(1, 20) n`);
+  const tiedClock = t.mock.method(Date, "now", () => 123);
+  for (let n = 1; n <= 20; n++) {
+    memory.record({
+      slug: "summary-ties",
+      host: "example.com",
+      status: "ok",
+      scopeLabel: "personal:summary",
+      principalId: "person-" + n,
+    });
+  }
+  tiedClock.mock.restore();
+  assert.deepEqual(await sink.summary(["summary-ties"]), await memory.summary(["summary-ties"]));
+  assert.deepEqual(await sink.summary([]), []);
+  assert.equal((await sink.summary(["serp"]))[0]!.usageCount, 0);
+});
+
+test("pg credential summaries do not wait for pending telemetry writes", { skip }, async (t) => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  const locker = await pool.connect();
+  const sink = createPostgresCredentialUsageSink(URL!);
+  await sink.summary(["summary-blocked"]);
+  await locker.query("BEGIN");
+  await locker.query("LOCK TABLE credential_usage IN SHARE MODE");
+  t.after(async () => {
+    await locker.query("ROLLBACK");
+    locker.release();
+    await sink.list({ slug: "summary-blocked" });
+    await pool.end();
+  });
+  sink.record({
+    slug: "summary-blocked",
+    host: "example.com",
+    status: "ok",
+    scopeLabel: "personal:summary",
+    principalId: "summary",
+  });
+  const result = await Promise.race([
+    sink.summary(["summary-blocked"]),
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("summary waited for blocked write")), 2000);
+      timer.unref();
+    }),
+  ]);
+  assert.equal(result[0]!.usageCount, 0);
+});

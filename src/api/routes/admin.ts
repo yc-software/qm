@@ -3,6 +3,7 @@ import { type ApiCtx, type Route } from "./route.ts";
 import {
   getAdminResources,
   getScopeConfig,
+  getCredentialUsageSummary,
   listAdminScopes,
   putScopeConfig,
   retention,
@@ -98,6 +99,12 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/whoami", auth: "either", handle: whoami },
   { method: "GET", path: "/v1/admin/scopes", auth: "either", handle: listAdminScopes },
   { method: "GET", path: "/v1/admin/scopes/:scope", auth: "either", handle: getScopeConfig },
+  {
+    method: "GET",
+    path: "/v1/admin/scopes/:scope/credential-usage",
+    auth: "either",
+    handle: getCredentialUsageSummary,
+  },
   { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
   { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
   { method: "GET", path: "/v1/admin/metrics", auth: "either", handle: metrics },

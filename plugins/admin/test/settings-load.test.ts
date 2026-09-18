@@ -125,3 +125,98 @@ test("branding reload clears only the committed draft and preserves other unsave
     assert.equal(reloads, otherDraft ? 0 : 1);
   }
 });
+
+test("credential usage distinguishes loading, failure, and confirmed zero", () => {
+  const context = vm.createContext({ plural: (n: number, word: string) => `${n} ${word}s`, fmtTime: String });
+  vm.runInContext(extract("function serviceCredentialUsageLabel(", "function renderServiceCreds("), context);
+  assert.equal(vm.runInContext("serviceCredentialUsageLabel({})", context), "Loading usage…");
+  assert.equal(vm.runInContext("serviceCredentialUsageLabel({usageUnavailable:true})", context), "Usage unavailable");
+  assert.equal(
+    vm.runInContext("serviceCredentialUsageLabel({usageCount:0})", context),
+    "0 successful uses in retained broker history",
+  );
+});
+
+test("usage completion preserves credentials on failure and ignores stale scope, view, and reload responses", async () => {
+  for (const state of ["current", "failed", "scope", "view", "reload"]) {
+    const pending = Promise.withResolvers<unknown>();
+    let renders = 0;
+    const context = vm.createContext({
+      scope: "org:example",
+      view: "credentials",
+      governanceReq: 1,
+      serviceCredList: [{ slug: "example", name: "Example", grantees: ["org:example"] }],
+      api: () => pending.promise,
+      renderServiceCreds: (list: unknown) => {
+        renders++;
+        context.serviceCredList = list;
+      },
+    });
+    vm.runInContext(
+      extract("async function loadServiceCredentialUsage(", "function serviceCredentialUsageLabel("),
+      context,
+    );
+    const work = vm.runInContext('loadServiceCredentialUsage("org:example", 1)', context);
+    if (state === "scope") context.scope = "org:other";
+    if (state === "view") context.view = "models";
+    if (state === "reload") context.governanceReq = 2;
+    pending.resolve(
+      state === "failed" ? { ok: false } : { ok: true, data: { summaries: [{ slug: "example", usageCount: 7 }] } },
+    );
+    await work;
+    assert.equal(renders, ["current", "failed"].includes(state) ? 1 : 0, state);
+    assert.equal(context.serviceCredList[0].name, "Example");
+    assert.equal(context.serviceCredList[0].usageCount, state === "current" ? 7 : undefined);
+    assert.equal(
+      context.serviceCredList[0].usageUnavailable,
+      ({ failed: true, current: false } as Record<string, boolean>)[state],
+    );
+  }
+});
+
+test("credential request displays loading, then a visible retry on failure", async () => {
+  const pending = Promise.withResolvers<unknown>();
+  const messages: unknown[] = [];
+  const add = { disabled: false };
+  const context = vm.createContext({
+    scope: "org:example",
+    view: "credentials",
+    governanceReq: 0,
+    loadedGovernanceScope: null,
+    serviceCredList: [{ slug: "stale" }],
+    setServiceCredentialState: (...args: unknown[]) => messages.push(args),
+    $: () => add,
+    loadPersonalKeychainSummary() {},
+    setStatus() {},
+    api: () => pending.promise,
+  });
+  const source = extract("async function loadScope() {", "        const refreshModelChoices = [];");
+  vm.runInContext(source + "}", context);
+  const work = vm.runInContext("loadScope()", context);
+  assert.deepEqual(messages, [["Loading credentials…"]]);
+  assert.equal(add.disabled, true);
+  assert.equal(context.serviceCredList.length, 0);
+  pending.resolve({ ok: false, status: 500 });
+  await work;
+  assert.deepEqual(messages.at(-1), ["Could not load credentials.", true]);
+});
+
+test("admin requests convert rejected fetches and interrupted bodies into failure states", async () => {
+  for (const fetch of [
+    async () => {
+      throw new Error("network disconnected");
+    },
+    async () => ({
+      text: async () => {
+        throw new Error("body interrupted");
+      },
+    }),
+  ]) {
+    const context = vm.createContext({ fetch, API_BASE: "" });
+    vm.runInContext(extract("async function api(", "async function openWebUiAs("), context);
+    const result = await vm.runInContext('api("GET", "/api/scopes/org:example")', context);
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.data.message, "Network request failed.");
+  }
+});

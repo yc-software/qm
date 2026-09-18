@@ -7320,7 +7320,9 @@
                       saving.
                     </p>
                   </div>
-                  <div class="body"><div id="sc-list" class="hint">No credentials configured.</div></div>
+                  <div class="body">
+                    <div id="sc-list" class="hint" role="status" aria-live="polite">Loading credentials…</div>
+                  </div>
                   <div
                     class="body hidden"
                     id="sc-editor"
@@ -8075,17 +8077,21 @@
       const API_BASE = "__ADMIN_BASE__";
 
       async function api(method, path, body) {
-        const res = await fetch(API_BASE + path, {
-          method,
-          headers: body ? { "content-type": "application/json" } : {},
-          ...(body ? { body: JSON.stringify(body) } : {}),
-        });
-        const text = await res.text();
-        let data = null;
         try {
-          data = text ? JSON.parse(text) : null;
-        } catch {}
-        return { ok: res.ok, status: res.status, data };
+          const res = await fetch(API_BASE + path, {
+            method,
+            headers: body ? { "content-type": "application/json" } : {},
+            ...(body ? { body: JSON.stringify(body) } : {}),
+          });
+          const text = await res.text();
+          let data = null;
+          try {
+            data = text ? JSON.parse(text) : null;
+          } catch {}
+          return { ok: res.ok, status: res.status, data };
+        } catch {
+          return { ok: false, status: 0, data: { message: "Network request failed." } };
+        }
       }
 
       async function openWebUiAs(target) {
@@ -9589,12 +9595,24 @@
         const requestedView = view;
         const requestId = ++governanceReq;
         const scopeChanged = scope !== loadedGovernanceScope;
+        if (requestedView === "credentials") {
+          serviceCredList = [];
+          setServiceCredentialState("Loading credentials…");
+          $("sc-add").disabled = true;
+          void loadPersonalKeychainSummary(requestId, requestedScope);
+        }
         const r = await api(
           "GET",
           "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(requestedView),
         );
         if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view) return;
         if (!r.ok) {
+          if (requestedView === "credentials") {
+            setServiceCredentialState(
+              r.status === 403 ? "You don't administer this scope." : "Could not load credentials.",
+              true,
+            );
+          }
           setStatus(
             "st-policy",
             r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.",
@@ -10074,7 +10092,10 @@
         if (showFeatureFlags) renderFeatureFlags(r.data.featureFlags || []);
         renderServiceCreds(r.data.serviceCredentials || []);
         if (view === "models") void loadCustomProviders();
-        if (view === "credentials") void loadPersonalKeychainSummary();
+        if (view === "credentials") {
+          $("sc-add").disabled = false;
+          void loadServiceCredentialUsage(requestedScope, requestId);
+        }
         if (scopeChanged) resetScForm();
         loadedGovernanceScope = scope;
         initCustomDropdowns($("view-governance"));
@@ -10127,11 +10148,15 @@
         return true;
       }
       async function refreshServiceCredentialConflict() {
+        const requestedScope = scope;
+        const requestedView = view;
+        const requestId = ++governanceReq;
         const fresh = await api(
           "GET",
           "/api/scopes/" + encodeURIComponent(scope) + "?view=" + encodeURIComponent(view),
         );
-        if (!fresh.ok) return false;
+        if (requestId !== governanceReq || requestedScope !== scope || requestedView !== view || !fresh.ok)
+          return false;
         serviceCredDirectory = fresh.data.directoryMembers || [];
         serviceCredChannels = fresh.data.directoryChannels || [];
         const options = $("sc-people-options");
@@ -10146,6 +10171,7 @@
         const refreshedEditing = credentials.find((credential) => credential.slug === scEditing);
         if (refreshedEditing) scEditVersion = refreshedEditing.updatedAt;
         renderServiceCreds(credentials);
+        void loadServiceCredentialUsage(requestedScope, requestId);
         renderServiceCredentialCapability();
         updateScFormDirty();
         return refreshedEditing ? "present" : "missing";
@@ -10206,6 +10232,42 @@
       let scSnapshot = "";
       let serviceCredList = [];
       let serviceCredentialResolutionError = "";
+      function setServiceCredentialState(message, retry = false) {
+        const root = $("sc-list");
+        root.className = "hint";
+        root.textContent = message;
+        if (retry) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Retry";
+          button.style.marginInlineStart = "8px";
+          button.onclick = () => loadScope();
+          root.appendChild(button);
+        }
+      }
+      async function loadServiceCredentialUsage(requestedScope, requestId) {
+        if (!serviceCredList.length) return;
+        const result = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "/credential-usage");
+        if (requestId !== governanceReq || requestedScope !== scope || view !== "credentials") return;
+        const summaries = new Map((result.data?.summaries || []).map((summary) => [summary.slug, summary]));
+        renderServiceCreds(
+          serviceCredList.map((credential) => ({
+            ...credential,
+            ...(result.ok ? summaries.get(credential.slug) : {}),
+            usageUnavailable: !result.ok || !summaries.has(credential.slug),
+          })),
+        );
+      }
+      function serviceCredentialUsageLabel(credential) {
+        if (credential.usageUnavailable) return "Usage unavailable";
+        if (credential.usageCount == null) return "Loading usage…";
+        const window = credential.usageCount
+          ? " since " + fmtTime(credential.usageSince)
+          : " in retained broker history";
+        return (
+          (credential.usageTruncated ? "at least " : "") + plural(credential.usageCount, "successful use") + window
+        );
+      }
       function renderServiceCreds(list) {
         serviceCredList = list;
         const root = $("sc-list");
@@ -10234,17 +10296,11 @@
           const who = orgWide ? "Organization-wide" : plural((c.grantees || []).length, "principal");
           const meta = document.createElement("div");
           meta.className = "hint";
-          const usageWindow = c.usageCount ? " since " + fmtTime(c.usageSince) : " in retained broker history";
           const target =
             c.delivery === "env"
               ? "sandbox env $" + (c.envKey || "?")
               : c.host + " · " + (c.allowedMethods && c.allowedMethods.length ? c.allowedMethods.join("/") : "GET");
-          meta.textContent =
-            target +
-            " · " +
-            (c.usageTruncated ? "at least " : "") +
-            plural(c.usageCount || 0, "successful use") +
-            usageWindow;
+          meta.textContent = target + " · " + serviceCredentialUsageLabel(c);
           const badges = document.createElement("div");
           badges.className = "credential-badges";
           badges.append(
@@ -10682,11 +10738,14 @@
         const principals = c.grantees.some((g) => g.startsWith("org:"))
           ? "everyone in the organization"
           : c.grantees.map(serviceCredentialPrincipalLabel).join(", ");
-        const recent = c.recentUsagePrincipals.length
-          ? " Recent users in the retained window: " +
-            c.recentUsagePrincipals.map((id) => serviceCredentialPrincipalLabel("personal:" + id)).join(", ") +
-            "."
-          : " No successful use appears in the retained window.";
+        const recent =
+          c.usageCount == null || c.usageUnavailable
+            ? " Recent usage is unavailable."
+            : c.recentUsagePrincipals.length
+              ? " Recent users in the retained window: " +
+                c.recentUsagePrincipals.map((id) => serviceCredentialPrincipalLabel("personal:" + id)).join(", ") +
+                "."
+              : " No successful use appears in the retained window.";
         const confirmed = await reviewGovernanceChange({
           title: "Delete “" + (c.name || c.slug) + "”?",
           subtitle: "This credential currently grants broker access to " + principals + "." + recent,
@@ -11358,8 +11417,11 @@
           rows.appendChild(tr);
         });
       }
-      async function loadPersonalKeychainSummary() {
+      async function loadPersonalKeychainSummary(requestId, requestedScope) {
+        $("keychain-user-count").textContent = "—";
+        $("keychain-standing-count").textContent = "—";
         const res = await api("GET", "/api/keychain?summary=1");
+        if (requestId !== governanceReq || requestedScope !== scope || view !== "credentials") return;
         $("keychain-user-count").textContent = res.ok && res.data?.enabled !== false ? String(res.data.users) : "—";
         $("keychain-standing-count").textContent =
           res.ok && res.data?.enabled !== false ? String(res.data.standing) : "—";

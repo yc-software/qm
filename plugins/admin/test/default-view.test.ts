@@ -487,7 +487,7 @@ test("admin parity views expose the requested card groups and real navigation ac
   assert.match(html, /id="model-custom-provider-rows"/);
   assert.match(html, /provider\.models\.length/);
   assert.match(html, /function renderBuiltInConnectors\(\)/);
-  assert.match(html, /function loadPersonalKeychainSummary\(\)/);
+  assert.match(html, /function loadPersonalKeychainSummary\(requestId, requestedScope\)/);
   assert.doesNotMatch(html, /Enabled harnesses/);
   assert.doesNotMatch(html, /id="card-browsing"/);
   assert.doesNotMatch(html, /\$\("feature-flag-enable"\)\.disabled = true/);
