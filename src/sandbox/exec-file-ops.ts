@@ -159,7 +159,15 @@ export interface ExecExportDeps {
   readAbsBytes(id: string, absPath: string): Promise<Uint8Array | null>;
   defaultHomeDir: string;
   ephemeralCredentialPrefixes: readonly string[];
+  archiveDir?: (handle: SandboxHandle) => string;
 }
+
+const EXPORT_ARCHIVE_DIR = "/tmp";
+
+const relativeUnder = (root: string, path: string): string | null => {
+  const base = root.replace(/\/+$/, "");
+  return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : null;
+};
 
 export interface ExecExport {
   exportFiles(handle: SandboxHandle, opts?: AgentComputerExportOptions): Promise<AgentComputerExportEntry[]>;
@@ -171,6 +179,7 @@ export function createExecExport({
   readAbsBytes,
   defaultHomeDir,
   ephemeralCredentialPrefixes,
+  archiveDir = () => EXPORT_ARCHIVE_DIR,
 }: ExecExportDeps): ExecExport {
   const rootForArea = (handle: SandboxHandle, area: AgentComputerExportArea): string =>
     area === "workspace" ? handle.rootDir : (handle.homeDir ?? defaultHomeDir);
@@ -208,15 +217,20 @@ export function createExecExport({
               "-path '*/.cache'",
               "-path '*/.cache/*'",
             ];
-        const made = await exec(handle.id, `mktemp /tmp/agent-computer-export.XXXXXX`, 60);
-        if (made.code !== 0) throw new Error(`${label} export ${area} mktemp failed: ${made.stderr}`);
-        const tmp = made.stdout.trim();
+        const scratch = archiveDir(handle).replace(/\/+$/, "");
+        const tmp = `${scratch}/agent-computer-export.${randomBytes(6).toString("hex")}`;
+        const made = await exec(handle.id, `mkdir -p ${shq(scratch)} && : > ${shq(tmp)}`, 60);
+        if (made.code !== 0) throw new Error(`${label} export ${area} scratch failed: ${made.stderr}`);
         try {
           const flag = exportOpts.followSymlinks ? "-L " : "";
           const deref = exportOpts.followSymlinks ? "-h " : "";
           const paths = exportOpts.includePaths?.map((p) => shq(p)).join(" ");
           const start = paths ?? ".";
-          const prunes = [...contentCachePrunes, ...homeOnlyPrunes];
+          const scratchRel = relativeUnder(root, scratch);
+          const scratchPrunes = scratchRel
+            ? [`-path ${shq(`./${scratchRel}`)}`, `-path ${shq(`./${scratchRel}/*`)}`]
+            : [];
+          const prunes = [...contentCachePrunes, ...homeOnlyPrunes, ...scratchPrunes];
           const pruneClause = prunes.length ? `\\( ${prunes.join(" -o ")} \\) -prune -o ` : "";
           const script =
             `cd ${shq(root)} 2>/dev/null || exit 0; ` +

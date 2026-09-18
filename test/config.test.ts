@@ -664,9 +664,13 @@ test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's to
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
     PORTER_SANDBOX_TTL_SEC: "120",
+    PORTER_CPUS: "2",
+    PORTER_MEMORY_MB: "4096",
   });
   assert.equal(inCluster.porterSandbox.token, "tok");
   assert.equal(inCluster.porterSandbox.ttlSec, 120);
+  assert.equal(inCluster.porterSandbox.cpus, 2);
+  assert.equal(inCluster.porterSandbox.memoryMb, 4096);
   assert.equal(inCluster.porterDeploy.token, "tok");
 });
 

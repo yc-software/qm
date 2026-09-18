@@ -228,21 +228,26 @@ test("destroy retires the body but keeps the data volume for the next apply", as
 test("a body that vanished between list and terminate does not break destroy or redeploy", async () => {
   const d = deployment("dep-7");
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));
-  const list = fake.client.sandboxes.list;
-  fake.client.sandboxes.list = async (options) =>
-    (await list(options)).map((sb) => ({
-      ...sb,
-      get phase() {
-        return sb.phase;
-      },
-      get tags() {
-        return sb.tags;
-      },
-      async terminate() {
-        await sb.terminate();
-        throw new NotFoundError("sandbox already gone");
-      },
-    }));
+  const listPage = fake.client.sandboxes.listPage;
+  fake.client.sandboxes.listPage = async (options) => {
+    const page = await listPage(options);
+    return {
+      ...page,
+      sandboxes: page.sandboxes.map((sb) => ({
+        ...sb,
+        get phase() {
+          return sb.phase;
+        },
+        get tags() {
+          return sb.tags;
+        },
+        async terminate() {
+          await sb.terminate();
+          throw new NotFoundError("sandbox already gone");
+        },
+      })),
+    };
+  };
   await provider.destroy(d);
   assert.equal(await store.get("dep-7"), null);
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));

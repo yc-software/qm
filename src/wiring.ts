@@ -213,7 +213,7 @@ import { createSdkE2bClient } from "./sandbox/e2b-client.ts";
 import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
+import { createPorterSandbox, type StoredPorterScope } from "./sandbox/porter-sandbox.ts";
 import {
   createSandboxRouter,
   ROUTE_CACHE_TTL_MS,
@@ -1002,10 +1002,12 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
+  const porterBodies = artifactMap<StoredPorterScope>("porter_sandbox_bodies");
   const buildPorter = (): Sandbox =>
     createPorterSandbox(workspace, {
       ...config.porterSandbox,
       advisoryLock,
+      store: porterBodies,
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
@@ -1041,11 +1043,12 @@ export function buildApp(
     rollout: artifactMap<SandboxResourceRollout>("sandbox_resource_rollout"),
     legacyScopes: async () => (await sessions.distinctScopes()).map((scope) => scope.scopeId),
     legacySandboxes: async () => {
-      const [e2b, modal, aws, superserve] = await Promise.all([
+      const [e2b, modal, aws, superserve, porter] = await Promise.all([
         e2bBodies.entries(),
         modalBodies.entries(),
         awsBodies.entries(),
         superserveBodies.entries(),
+        porterBodies.entries(),
       ]);
       return [
         ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
@@ -1055,6 +1058,11 @@ export function buildApp(
           scopeId,
           backend: "superserve" as const,
           machineId: body.sandboxId,
+        })),
+        ...porter.map(([scopeId, body]) => ({
+          scopeId,
+          backend: "porter" as const,
+          ...(body.sandboxId ? { machineId: body.sandboxId } : {}),
         })),
       ];
     },

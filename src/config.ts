@@ -497,6 +497,8 @@ interface PorterSandboxEnv {
   namePrefix?: string;
   homeDir?: string;
   ttlSec?: number;
+  cpus?: number;
+  memoryMb?: number;
   egressProxyUrl?: string;
   defaultTimeoutSec?: number;
 }
@@ -554,6 +556,8 @@ function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
   const token = env.PORTER_DEPLOY_API_TOKEN;
   const baseUrl = porterApiBaseUrl(env);
   const ttlSec = numEnvStrict("PORTER_SANDBOX_TTL_SEC", env.PORTER_SANDBOX_TTL_SEC);
+  const cpus = numEnvStrict("PORTER_CPUS", env.PORTER_CPUS);
+  const memoryMb = numEnvStrict("PORTER_MEMORY_MB", env.PORTER_MEMORY_MB);
   return {
     ...(env.PORTER_SANDBOX_IMAGE ? { image: env.PORTER_SANDBOX_IMAGE } : {}),
     ...(token ? { token } : {}),
@@ -561,6 +565,8 @@ function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
     ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
+    ...(cpus !== undefined ? { cpus } : {}),
+    ...(memoryMb !== undefined ? { memoryMb } : {}),
     ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
