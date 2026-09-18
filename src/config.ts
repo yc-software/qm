@@ -1154,6 +1154,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "[config] SANDBOX_BACKEND=sprites without SPRITES_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SPRITES_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.",
     );
   }
+  if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_EGRESS_PROXY_URL) {
+    console.warn(
+      "[config] modal sandbox backend enabled without MODAL_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set MODAL_EGRESS_PROXY_URL to the public https egress proxy so Modal's outbound allowlist admits only that host.",
+    );
+  }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
   const porterSandboxSelected = env.SANDBOX_BACKEND === "porter";
   if (porterSandboxSelected && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {

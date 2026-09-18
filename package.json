@@ -90,7 +90,7 @@
     "fastify": "^5.12.1",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
-    "modal": "^0.10.0",
+    "modal": "^0.10.1",
     "officeparser": "^8.0.0",
     "opencode-ai": "1.17.18",
     "pg": "^8.13.1",
