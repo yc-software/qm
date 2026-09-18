@@ -14,6 +14,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
+import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -774,5 +775,57 @@ test("final shutdown bounds tracked worker drain without claiming ownership is d
   } finally {
     release.resolve();
     await built.runtime.backgroundDrained();
+  }
+});
+
+test("buildApp captures human run outcomes through the shared terminal hook", async (t) => {
+  const events: string[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    events.push(JSON.parse(String(init.body)).event);
+    return new Response("ok");
+  });
+  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  try {
+    const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
+    for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
+      await built.runs.enqueue({ sessionId: "t1", request });
+      const run = (await built.runs.claim("worker", 10_000))!;
+      await built.runs.complete(run.id, run.leaseToken!, result);
+    }
+    assert.deepEqual(events, ["response_completed", "response_failed"]);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("web admission and replay preserve analytics exclusions", async (t) => {
+  const events: string[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    events.push(JSON.parse(String(init.body)).event);
+    return new Response("ok");
+  });
+  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  try {
+    for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
+      for (const status of ["ok", "failed"] as const) {
+        const admitted = await built.app.turn({
+          surface: "web",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
+          text: "test message",
+          liveActor: true,
+          async: true,
+          [flag]: true,
+        });
+        assert.ok(admitted.runId);
+        const run = (await built.runs.claimById(admitted.runId, "worker", 10_000))!;
+        assert.equal(run.request[flag], true);
+        assert.equal(replayableRequest(run.request)[flag], true);
+        await built.runs.complete(run.id, run.leaseToken!, { status });
+      }
+    }
+    assert.deepEqual(events, []);
+  } finally {
+    await built.runtime.stop();
   }
 });

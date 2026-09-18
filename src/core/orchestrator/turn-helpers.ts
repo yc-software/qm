@@ -249,6 +249,8 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     },
     text: input.text,
     ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
+    ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
+    ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
     ...turnOriginRequestFields(input.origin),
     ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
     ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),

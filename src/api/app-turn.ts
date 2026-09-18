@@ -295,6 +295,9 @@ export function createTurnMethods(
         text: req.text,
         ...(req.gatewayContext ? { gatewayContext: req.gatewayContext } : {}),
         ...(req.proactiveOpener ? { proactiveOpener: true } : {}),
+        ...(req.analyticsSuppressed || (sameApprovedMessage && approvedRequest?.analyticsSuppressed)
+          ? { analyticsSuppressed: true }
+          : {}),
         ...(req.conversationHeader ? { conversationHeader: req.conversationHeader } : {}),
         ...(req.priorTurns?.length ? { priorTurns: req.priorTurns } : {}),
         ...(req.overheard?.length ? { overheard: req.overheard } : {}),

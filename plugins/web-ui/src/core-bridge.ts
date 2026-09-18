@@ -1,4 +1,5 @@
-import { captureMessage } from "./product-analytics.ts";
+import { stopBrowserErrors } from "./browser-errors.ts";
+import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
 import { EventType } from "@tanstack/ai/client";
 import { fetchServerSentEvents, StreamProcessor } from "@tanstack/ai-client";
@@ -675,6 +676,8 @@ export function reportSigninRequired(detail: SigninRequired): void {
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
   if (response.status !== 401) return response;
+  stopBrowserErrors();
+  stopAnalytics();
   let body: unknown;
   try {
     body = await response.clone().json();

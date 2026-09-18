@@ -1,3 +1,4 @@
+import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureConnectionReturn } from "./connection-return";
 import { renderModelConnectGate } from "./model-connect";
@@ -223,6 +224,7 @@ const ICON = {
 
 export async function signOut(): Promise<void> {
   stopAnalytics();
+  stopBrowserErrors();
   const portal = authMode === "portal";
   if (!portal) {
     try {
@@ -441,6 +443,7 @@ export type AuthGate =
 
 export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
+  stopBrowserErrors();
   shellMounted = false;
   const body = (() => {
     switch (gate.kind) {
@@ -1034,6 +1037,7 @@ export async function boot(): Promise<void> {
   }
   resetKeychainState();
   appState.me = (await r.json()) as Me;
+  void initializeBrowserErrors(appState.me);
   void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
   authMode = appState.me.mode ?? "portal";
   clearPortalAttempt();

@@ -1,4 +1,5 @@
 import "./instrument.ts";
+import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
@@ -191,13 +192,16 @@ if (
 }
 const analyticsConfig = analyticsKey ? { apiKey: analyticsKey, host: analyticsHost.origin } : undefined;
 
+const browserErrors = browserErrorConfig(process.env);
+const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
+
 const SPA_CSP = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}`,
+  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
   "frame-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'self'",
@@ -678,7 +682,13 @@ function namespacedSendKey(user: string, raw: unknown): string | undefined {
   return SEND_KEY_PATTERN.test(key) ? `web:${encodeURIComponent(user)}:${key}` : undefined;
 }
 
-async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string, threadRef: string): Promise<void> {
+async function postTurnAndMint(
+  req: IncomingMessage,
+  res: ServerResponse,
+  turn: Record<string, unknown>,
+  user: string,
+  threadRef: string,
+): Promise<void> {
   const startedAt = performance.now();
   let runId: string | undefined;
   res.once("finish", () => {
@@ -688,7 +698,11 @@ async function postTurnAndMint(res: ServerResponse, turn: unknown, user: string,
       elapsedMs: Math.round(performance.now() - startedAt),
     });
   });
-  const r = await coreFetch("POST", `/v1/turns?async=1`, JSON.stringify(turn));
+  const r = await coreFetch(
+    "POST",
+    `/v1/turns?async=1`,
+    JSON.stringify({ ...turn, ...(resolveIdentity(req)?.impersonator ? { analyticsSuppressed: true } : {}) }),
+  );
   if (r.status >= 200 && r.status < 300) {
     try {
       const parsed = JSON.parse(r.text) as Record<string, unknown> & { runId?: string };
@@ -1258,6 +1272,7 @@ const apiRoutes: readonly WebRoute[] = [
         org: ORG,
         companyName: companyBranding.orgName?.trim() || null,
         ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
+        ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
         mode: AUTH_MODE,
         slackWorkspaceUrl: workspaceUrl,
         individualModelAuth: parsed.individualModelAuth === true,
@@ -2239,7 +2254,7 @@ const apiRoutes: readonly WebRoute[] = [
       const replay: Record<string, unknown> = { ...record.request, approval };
       delete replay.idempotencyKey;
       if (idempotencyKey) replay.idempotencyKey = idempotencyKey;
-      return postTurnAndMint(res, replay, user, threadRef);
+      return postTurnAndMint(req, res, replay, user, threadRef);
     },
   },
   {
@@ -2327,7 +2342,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
       };
-      return postTurnAndMint(res, turn, user, threadRef);
+      return postTurnAndMint(req, res, turn, user, threadRef);
     },
   },
   {

@@ -302,8 +302,41 @@ performance capture and feature flags are disabled. Event properties exclude cha
 content, URLs, query strings, titles and referrers. Delivery is best effort.
 
 Set the same variables on core to capture `app_published` after a successful new
-application or version deployment. Core events use the application's creator and
+application or version deployment. Publications use the application's creator and
 company, matching browser identity. No key means no analytics requests.
+
+Core also captures `response_completed` and `response_failed` when a human turn
+reaches its final run state, including when a separate worker executes it.
+`completion_boundary=run` means processing finished, not confirmed delivery to the
+user. Successful silent or reaction-only results count as completed processing.
+`result_status` distinguishes those results; `surface` identifies web or Slack.
+Automation, automatic openers, impersonated turns, stopped turns, refusals, queued
+results and pending approvals do not emit outcomes. Retries emit only at the final
+run state. Stable insert IDs support deduplication. These best-effort events are
+not a complete reliability ledger and contain no response text or raw errors.
+
+## Optional browser error reporting
+
+Set `SENTRY_BROWSER_DSN` on the web server to enable browser error reporting.
+Use a public HTTPS DSN without a secret key, such as
+`https://public@sentry.example.com/1`. Backend `SENTRY_DSN` is never exposed or
+used as a browser fallback. The authenticated `/me` response supplies the public
+DSN and an optional `SENTRY_RELEASE` (or `GIT_SHA`). The server adds only the DSN
+origin to the web application's connection policy.
+
+Reporting starts after authentication and stops on sign-out or an authentication
+failure. It is disabled during impersonation and when the browser DSN is unset.
+Only uncaught errors and unhandled promise rejections are collected. Events retain
+standard error types, release, and same-origin compiled asset filenames with line
+and column numbers. Fingerprints use the sanitized error type, capture mechanism,
+and last retained stack position. Identical asset locations group across release
+label changes; changed asset hashes start separate groups. Without a retained
+frame, grouping falls back to the sanitized type and mechanism.
+Other stack frames and function names are omitted. Messages,
+URLs, requests, user identities, content, attachments, breadcrumbs, replay, logs,
+and tracing are excluded. A final transport gate rejects unsanitized SDK failures
+and non-event envelopes. Requests omit cookies and referrers. The ingestion
+server can still see the network source IP. Delivery is best effort.
 
 ## Personal AI accounts
 

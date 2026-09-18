@@ -1384,6 +1384,10 @@ export function buildApp(
           },
         })
       : undefined;
+  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
+  runs.onTerminal((run) => {
+    void productAnalytics.responseFinished(run);
+  });
   const ledger = runStore.ledger;
 
   let processes: ProcessRegistry | undefined;
@@ -1534,7 +1538,7 @@ export function buildApp(
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const deployService = createDeployService({
-    appPublished: createProductAnalytics(config.orgId, config.productAnalytics).appPublished,
+    appPublished: productAnalytics.appPublished,
     deployStore,
     provider: deployProvider,
     deployDir: join(config.dataDir, "deployments"),

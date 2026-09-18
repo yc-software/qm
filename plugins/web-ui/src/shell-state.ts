@@ -3,6 +3,7 @@ import type { SuggestedActivity } from "../../chassis/src/suggested-activities.t
 export type AuthMode = "portal" | "dev";
 
 export interface Me {
+  browserErrors?: { dsn: string; release?: string };
   analytics?: { apiKey: string; host: string };
   companyName?: string | null;
   welcomeCohort?: string;

@@ -5,7 +5,13 @@ import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 let coreStatus = 200;
-const core = createServer((req, res) => {
+const turns: Record<string, unknown>[] = [];
+const core = createServer(async (req, res) => {
+  if (req.url?.startsWith("/v1/turns")) {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    turns.push(JSON.parse(body));
+  }
   res.writeHead(coreStatus, { "content-type": "application/json" });
   if (req.url?.startsWith("/v1/approvals/approval-1?")) {
     res.end(
@@ -59,4 +65,21 @@ test("analytics config is authenticated, company-scoped and omitted during imper
   assert.equal((await (await fetch(`${base}/me`, { headers: headers("admin") })).json()).analytics, undefined);
   coreStatus = 503;
   assert.equal((await fetch(`${base}/me`, { headers: headers() })).status, 503);
+});
+
+test("authenticated impersonation suppresses analytics on turns and approval replay", async () => {
+  coreStatus = 200;
+  for (const impersonator of [undefined, "admin"]) {
+    for (const path of ["/api/turn", "/api/approvals/approval-1"]) {
+      const response = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: headers(impersonator),
+        body: JSON.stringify({ text: "test turn", approved: true, analyticsSuppressed: false }),
+      });
+      assert.equal(response.status, 200);
+      const turn = turns.at(-1)!;
+      assert.equal(turn.analyticsSuppressed, impersonator ? true : undefined);
+      assert.equal(JSON.stringify(turn).includes("admin"), false);
+    }
+  }
 });
