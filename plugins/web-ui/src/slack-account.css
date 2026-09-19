@@ -1,3 +1,8 @@
+qm-slack-account,
+qm-onboarding-slack {
+  display: block;
+}
+
 .welcome-slack {
   width: 100%;
   text-align: left;
