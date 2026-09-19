@@ -4,7 +4,7 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
-import { loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
+import { requireLoopAuthority, loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
 import { parseScopeId } from "../../types.ts";
 import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
@@ -352,7 +352,8 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
-  const turn = await deps.fire.itemAction(loop, item, kind, args);
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
+  const turn = await deps.fire.itemAction(loop, item, kind, args, loaded.actorId);
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
   }
@@ -369,6 +370,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
   const { deps, loop, item } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   const body = isObj(ctx.body) ? ctx.body : {};
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message) return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });

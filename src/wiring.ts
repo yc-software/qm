@@ -2210,6 +2210,8 @@ export function buildApp(
         fireDropResolution({ deliveries, idempotency, identity, run: (req) => app.turn(req), directory }, drop)
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
+    crons,
+    samePerson: (a, b) => app.samePerson(a, b),
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,
@@ -2247,7 +2249,7 @@ export function buildApp(
     directory,
     currentScopeMembers,
     sessions,
-    fireLoop: (loopId, fireKey) => loopFire.fire(loopId, fireKey),
+    fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     ...(config.databaseUrl
       ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
       : {}),

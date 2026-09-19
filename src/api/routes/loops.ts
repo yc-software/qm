@@ -1,3 +1,5 @@
+import { boundLoopCron } from "../../loops/authority.ts";
+import { unattendedGrantRefusal } from "../../cron/authority.ts";
 import type { Loop, LoopState } from "../../types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
@@ -91,6 +93,24 @@ export async function loadAdministrable(
     return null;
   }
   return { deps, loop, acting };
+}
+
+export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop): Promise<boolean> {
+  let cron;
+  try {
+    cron = await boundLoopCron(loop, deps.crons);
+  } catch (e) {
+    sendJson(ctx.res, 409, { error: "authority_mismatch", message: errMessage(e) });
+    return false;
+  }
+  if (!cron?.unattendedGrants?.length) return true;
+  const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
+  const refusal = principal
+    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
+    : "a privileged loop requires a live turn started by its owner";
+  if (!refusal) return true;
+  sendJson(ctx.res, 403, { error: "forbidden", message: refusal });
+  return false;
 }
 
 const GATES = new Set(["auto", "hold"]);
@@ -307,6 +327,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   const b = isObj(ctx.body) ? ctx.body : {};
   const patch: LoopPatch = {};
   if (typeof b.playbook === "string" && b.playbook.trim()) {
@@ -426,6 +447,7 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
   void deps.fire.fire(loop.id, fireKey).catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
@@ -436,6 +458,7 @@ async function decideOutput(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!requireLiveHuman(ctx, acting)) return;
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const b = isObj(ctx.body) ? ctx.body : {};
@@ -471,6 +494,7 @@ async function graduateShipAction(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!requireLiveHuman(ctx, acting)) return;
   const b = isObj(ctx.body) ? ctx.body : {};
   if (typeof b.shipAction !== "string" || !b.shipAction.trim())
@@ -499,6 +523,7 @@ async function setAutopilot(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
+  if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   const b = isObj(ctx.body) ? ctx.body : {};
   if (typeof b.enabled !== "boolean")
     return sendJson(ctx.res, 400, { error: "bad_request", message: "enabled must be a boolean" });

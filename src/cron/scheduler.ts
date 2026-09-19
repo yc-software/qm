@@ -1,3 +1,4 @@
+import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -85,7 +86,11 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
-  fireLoop?: (loopId: string, fireKey: string) => Promise<{ status?: TurnResult["status"]; note?: string }>;
+  fireLoop?: (
+    loopId: string,
+    fireKey: string,
+    cronId: string,
+  ) => Promise<{ status?: TurnResult["status"]; note?: string }>;
 }
 
 function truncate(s: string, maxChars: number): string {
@@ -210,7 +215,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         result = { status: "failed", note: "loop service unavailable" };
       } else
         try {
-          result = await deps.fireLoop(cron.loopId, fireKey);
+          result = await deps.fireLoop(cron.loopId, fireKey, cron.id);
         } catch (e) {
           result = { status: "failed", note: errMessage(e) };
         }
@@ -240,8 +245,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
         },
         {
-          owner: cron.owner,
-          ownerScopeId: cron.ownerScopeId,
+          ...cronTriggerAuthority(cron),
           input: renderCronFireInput(cron, mentionRoster),
           fireKey,
           threadRef,
@@ -252,9 +256,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
-          ...(cron.runAs ? { runAs: cron.runAs } : {}),
-          ...(cron.unattendedGrants ? { unattendedGrants: cron.unattendedGrants } : {}),
-          ...(cron.members ? { members: cron.members } : {}),
           ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
           recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,

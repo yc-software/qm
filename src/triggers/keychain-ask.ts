@@ -1,3 +1,4 @@
+import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { Cron, Destination, ScopeId } from "../types.ts";
@@ -73,17 +74,13 @@ export async function fireAskResolution(
   }
   const destination = cron ? cron.destination : ask.requesterDestination;
   const outcome = await runTrigger(deps, {
-    owner: cron?.owner ?? ask.requesterId,
-    ownerScopeId: ask.requesterScopeId,
+    ...cronTriggerAuthority(cron ?? { owner: ask.requesterId, ownerScopeId: ask.requesterScopeId }),
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
     deferWhenBusy: true,
     ...(cron
       ? {
-          ...(cron.runAs ? { runAs: cron.runAs } : {}),
-          ...(cron.members ? { members: cron.members } : {}),
-          ...(cron.unattendedGrants ? { unattendedGrants: cron.unattendedGrants } : {}),
           ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
           recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
         }
