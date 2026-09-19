@@ -13,7 +13,11 @@ test("suggested prompts render below the composer", () => {
     chat.indexOf('<div class="chat-bottom-dock">'),
     chat.indexOf("transcriptViewport.afterRender()"),
   );
-  assert.ok(dock.indexOf("ctx.composer.composerForm(agent)") < dock.indexOf("suggestedActivities("));
+  const composerIndex = dock.indexOf("ctx.composer.composerForm(agent)");
+  const suggestionsIndex = dock.indexOf("suggestedActivities(");
+  assert.notEqual(composerIndex, -1);
+  assert.notEqual(suggestionsIndex, -1);
+  assert.ok(composerIndex < suggestionsIndex);
 });
 
 test("activity selection fills and persists an editable draft without sending or overwriting work", async () => {
