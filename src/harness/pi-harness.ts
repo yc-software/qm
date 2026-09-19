@@ -2482,14 +2482,19 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const model = getRequiredModel(compactModelId);
         const providerKeys = await resolveProviderKeys();
         const runtime = await buildModelRuntime(providerKeys, modelGateway);
-        return summarizeHistory(input.history, model, (summaryModel, context, options) => {
-          input.recordModelCall({
-            model: compactModelId,
-            inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
-            entryCount: input.history.length,
-          });
-          return runtime.streamSimple(summaryModel, context, options);
-        });
+        return summarizeHistory(
+          input.history,
+          model,
+          (summaryModel, context, options) => {
+            input.recordModelCall({
+              model: compactModelId,
+              inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
+              entryCount: input.history.length,
+            });
+            return runtime.streamSimple(summaryModel, context, options);
+          },
+          { signal: input.cancel },
+        );
       },
 
       contextTokenBudget(scopeLabel?: string, model?: string): number | undefined {

@@ -462,6 +462,25 @@ test("the claude harness offers compaction and detection so a utility role canno
   assert.equal(verdict.respond, true);
 });
 
+test("Claude compaction rejects cancellation even when the SDK returns a summary", async () => {
+  const controller = new AbortController();
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    controller.abort();
+    yield resultMessage("a summary from the canceled call");
+  };
+  const harness = createClaudeHarness({});
+  await assert.rejects(
+    harness.models.compactHistory!({
+      session: { id: "session-1" } as HarnessTurnInput["session"],
+      history: [],
+      recordModelCall: () => {},
+      cancel: controller.signal,
+    }),
+    /Compaction was interrupted before completion/,
+  );
+});
+
 test("Claude preserves a committed runtime handoff when SDK interruption returns an error", async () => {
   const choice = { harnessId: "codex" as const, modelId: "gpt-6-astra" };
   currentScript = async function* (prompts) {

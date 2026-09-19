@@ -1775,6 +1775,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         onStalled: () => turnAbort.abort(),
       });
       let failureUserPayload: Record<string, unknown> | undefined;
+      let foregroundCompactionCompleted = false;
       try {
         await withManagedRosterVersion(async () => {
           await reconcileSessionParticipants(session.id);
@@ -2886,21 +2887,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ) {
           void provision(true).catch(swallowAs("orchestrator: eager provision", undefined));
         }
-        const compactStart = Date.now();
-        const history = await compactContextIfNeeded({
-          session,
-          lease,
-          visibleHistory,
-          scopeId,
-          orgScopeId: resolution.orgScopeId,
-          actorId: actor.id,
-          ...(input.model ? { model: input.model } : {}),
-        });
-        compactMs = Date.now() - compactStart;
-        const turnStart = Date.now();
-        let firstChunkAt: number | undefined;
-        let lastChunkAt: number | undefined;
-        const emittedEntries: SessionEntry[] = [];
         const syntheticPrompt =
           (input.proactiveOpener && !input.text.trim()) || automatedTurn || partial || approvalReplay;
         failureUserPayload =
@@ -2912,6 +2898,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
               }
             : undefined;
+        const compactStart = Date.now();
+        const history = await compactContextIfNeeded({
+          cancel: turnAbort.signal,
+          session,
+          lease,
+          visibleHistory,
+          scopeId,
+          orgScopeId: resolution.orgScopeId,
+          actorId: actor.id,
+          ...(input.model ? { model: input.model } : {}),
+        });
+        foregroundCompactionCompleted = true;
+        compactMs = Date.now() - compactStart;
+        const turnStart = Date.now();
+        let firstChunkAt: number | undefined;
+        let lastChunkAt: number | undefined;
+        const emittedEntries: SessionEntry[] = [];
         const titleText = input.displayText?.trim() || input.text;
         const fallbackTitle = !session.title && !syntheticPrompt ? fallbackSessionTitle(titleText) : undefined;
         const fallbackTitleWrite = fallbackTitle ? deps.sessions.updateTitle(session.id, fallbackTitle) : undefined;
@@ -4016,13 +4019,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }
-        scheduleBackgroundCompaction({
-          sessionId: session.id,
-          scopeId,
-          orgScopeId: resolution.orgScopeId,
-          actorId: actor.id,
-          ...(input.model ? { model: input.model } : {}),
-        });
+        if (foregroundCompactionCompleted)
+          scheduleBackgroundCompaction({
+            sessionId: session.id,
+            scopeId,
+            orgScopeId: resolution.orgScopeId,
+            actorId: actor.id,
+            ...(input.model ? { model: input.model } : {}),
+          });
       }
     },
   };
