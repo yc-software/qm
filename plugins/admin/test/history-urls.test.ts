@@ -134,7 +134,6 @@ test("a mangled ?scopecom link still lands on the session and canonicalizes", ()
 test("session deep-link entries synthesize a list back-stop and repair it from the session's own scope", () => {
   assert.match(html, /history\.pushState\(\{ \.\.\.st, deepLink: true \}, "", stateToUrl\(st\)\);/);
   assert.match(html, /governanceUI.transcript.show/);
-
 });
 
 test("a scope whose encoding the portal would reject stays in the query form", () => {
@@ -155,15 +154,33 @@ test("an undecodable scope segment falls back instead of throwing", () => {
 
 test("cron fire rows surface the result digest and retain silent styling", () => {
   const f = litFixture();
-  f.ui.history.history(f.root, {
-    sessions: [{ id: "fire1", category: "background", result: "Digest result", lastMessage: "Tool chatter", delivered: 0 }],
-    total: 1,
-  }, {
-    historyKind: "cron", cron: "job1", scope: "org:acme", orgScope: "org:acme", environments: [],
-    historyKindMatches: () => true, pageSize: 50, correctPage() {}, historyModeLabel: () => "Crons",
-    kindLabels: { conversation: "Conversations", cron: "Crons" }, pageShell() {}, cronName: () => "Job",
-    scopeKind: () => "org", plural: String, stateToUrl: () => "/session/fire1", go() {},
-  });
+  f.ui.history.history(
+    f.root,
+    {
+      sessions: [
+        { id: "fire1", category: "background", result: "Digest result", lastMessage: "Tool chatter", delivered: 0 },
+      ],
+      total: 1,
+    },
+    {
+      historyKind: "cron",
+      cron: "job1",
+      scope: "org:acme",
+      orgScope: "org:acme",
+      environments: [],
+      historyKindMatches: () => true,
+      pageSize: 50,
+      correctPage() {},
+      historyModeLabel: () => "Crons",
+      kindLabels: { conversation: "Conversations", cron: "Crons" },
+      pageShell() {},
+      cronName: () => "Job",
+      scopeKind: () => "org",
+      plural: String,
+      stateToUrl: () => "/session/fire1",
+      go() {},
+    },
+  );
   assert.equal(f.root.querySelector(".dense-name")!.textContent, "Digest result");
   assert.equal(f.root.querySelector(".dense-preview")!.textContent, "Tool chatter");
   assert.ok(f.root.querySelector(".history-silent"));
