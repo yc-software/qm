@@ -392,7 +392,6 @@ export async function startSlackPlugin(
         );
       }
     }
-    await directory.getUserSnapshot(app.client);
     await app.start();
     replaySweeper?.start();
   } catch (err) {
@@ -411,6 +410,7 @@ export async function startSlackPlugin(
   console.log(
     `[slack-plugin] account ${ACCOUNT_LABEL} connected as @${auth.user} (bot ${ids.botUserId}) in team ${auth.team} (${ids.ownTeamId}); in-process core`,
   );
+  void directory.getUserSnapshot(app.client);
   ackEmoji.refreshAckEmoji(app.client);
   ackEmojiOverride();
 

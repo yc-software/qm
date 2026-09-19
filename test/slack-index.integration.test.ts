@@ -130,8 +130,11 @@ class FakeSlackClient {
   };
   readonly bots = { info: async ({ bot }: { bot: string }) => ({ bot: this.botsById.get(bot) }) };
 
+  readonly userListingsBeforeStart: boolean[] = [];
+
   async *paginate(method: string, args: any): AsyncGenerator<any> {
     if (method === "users.list") {
+      this.userListingsBeforeStart.push(!FakeApp.instances.some((app) => app.client === this && app.started));
       yield { members: [...this.usersById.values()] };
       return;
     }
@@ -451,6 +454,8 @@ async function fixture(
     app.client.membersByChannel.set(id, ["U1", "UBOT"]);
   }
   const plugin = await started;
+  const warmupDeadline = Date.now() + 5_000;
+  while (core.directories.length === 0 && Date.now() < warmupDeadline) await new Promise((resolve) => setTimeout(resolve, 5));
   await new Promise((resolve) => setImmediate(resolve));
   return { app, client: app.client, core, stop: () => plugin.stop() };
 }
@@ -603,6 +608,18 @@ test("a queued run's ok reply carries the recovery delivery's marker, so a repla
     });
     assert.equal(replayed.ts, "posted-1", "the recovery probe finds the live handler's reply");
     assert.equal(f.client.posts.length, postsBefore, "an already-posted reply is never re-posted");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("the socket connects before the user directory is walked, and the walk still completes", async () => {
+  const f = await fixture();
+  try {
+    assert.ok(f.client.userListingsBeforeStart.length >= 1);
+    assert.deepEqual(f.client.userListingsBeforeStart, f.client.userListingsBeforeStart.map(() => false));
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.1" });
+    assert.equal(f.core.turns[0]?.conversation.audience[0].externalId, "U1");
   } finally {
     await f.stop();
   }
