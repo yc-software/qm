@@ -1423,6 +1423,8 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
+            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
+            ${ctx.composer.composerForm(agent)}
             ${
               emptyChat &&
               !editingApp &&
@@ -1443,8 +1445,6 @@ export function createChatSurface(
                   )
                 : nothing
             }
-            ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${backgroundActivityStrip()}
-            ${ctx.composer.composerForm(agent)}
           </div>
         </div>
       `,

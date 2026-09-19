@@ -2780,13 +2780,13 @@ qm-markdown .tok-in {
   display: grid;
   grid-template-rows: 1fr;
   width: min(var(--content-w), calc(100% - 32px));
-  margin: 0 auto 10px;
+  margin: 10px auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: 0 2px;
   opacity: 1;
   visibility: visible;
   transition:
     grid-template-rows 220ms ease,
-    margin-bottom 220ms ease,
+    margin-top 220ms ease,
     opacity 160ms ease,
     visibility 0s;
 }
@@ -2796,15 +2796,18 @@ qm-markdown .tok-in {
 }
 .suggested-activities.is-collapsed {
   grid-template-rows: 0fr;
-  margin-bottom: 0;
+  margin-top: 0;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transition:
     grid-template-rows 220ms ease,
-    margin-bottom 220ms ease,
+    margin-top 220ms ease,
     opacity 140ms ease,
     visibility 0s 220ms;
+}
+.empty-chat:has(.suggested-activities) .composer-wrap {
+  margin-bottom: 0;
 }
 .empty-chat:has(.suggested-activities) .chat-cta {
   transform: translateY(8px);
@@ -2866,7 +2869,7 @@ qm-markdown .tok-in {
 @media (max-width: 860px) {
   .suggested-activities {
     padding: 0 2px;
-    margin-bottom: 12px;
+    margin-top: 12px;
   }
 }
 .custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {

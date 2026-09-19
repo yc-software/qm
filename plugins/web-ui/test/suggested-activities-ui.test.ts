@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+
+test("suggested prompts render below the composer", () => {
+  const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
+  const dock = chat.slice(
+    chat.indexOf('<div class="chat-bottom-dock">'),
+    chat.indexOf("transcriptViewport.afterRender()"),
+  );
+  assert.ok(dock.indexOf("ctx.composer.composerForm(agent)") < dock.indexOf("suggestedActivities("));
+});
 
 test("activity selection fills and persists an editable draft without sending or overwriting work", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main></main>', {
