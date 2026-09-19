@@ -14,6 +14,8 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
       canonicalPayload(method, pathname + url.search, ""),
       false,
       ctx.allowUnsignedSourceAuth,
+      ctx.deps.tenantId,
+      ctx.deps.requireTenantBinding,
     ))
   ) {
     req.resume();

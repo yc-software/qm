@@ -31,6 +31,9 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
       capToken,
       capSecret,
       dir === "read" ? { dir, id: blobId ?? "" } : { dir },
+      Date.now(),
+      ctx.deps.tenantId,
+      ctx.deps.requireTenantBinding,
     );
     if (!claims) {
       req.resume();
@@ -54,6 +57,8 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
       canonicalPayload(method, pathname + url.search, tail),
       false,
       ctx.allowUnsignedSourceAuth,
+      ctx.deps.tenantId,
+      ctx.deps.requireTenantBinding,
     ))
   ) {
     req.resume();

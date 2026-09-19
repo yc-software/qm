@@ -1,3 +1,4 @@
+import { tenantState } from "../tenancy/context.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -28,13 +29,14 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const BOT_IDENTITY_STATE = Symbol("slack-bot-identity");
+const botIdentityState = () => tenantState(BOT_IDENTITY_STATE, () => ({ identity: {} as BotIdentityOverride }));
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  botIdentityState().identity = { ...identity };
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
+  const id = botIdentityState().identity;
   return {
     ...(id.username ? { username: id.username } : {}),
     ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),

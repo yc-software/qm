@@ -361,7 +361,9 @@ for (const backend of backends) {
     assert.equal(await runs.setDeliveryState(r.id, claimed?.leaseToken ?? "", { editRef: "171.003" }), true);
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.003");
     const seen: string[] = [];
-    runs.onTerminal((run) => seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`));
+    runs.onTerminal((run) => {
+      seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`);
+    });
     await runs.complete(r.id, claimed?.leaseToken ?? "", { status: "ok", reply: "done" });
     assert.deepEqual(seen, [`${r.id}:done:171.003`], "terminal listener sees the checkpointed state");
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.003");
@@ -370,7 +372,9 @@ for (const backend of backends) {
   test(`[${backend.name}] onTerminal fires once per terminal transition, including a parked fail`, async () => {
     const { runs } = backend.make();
     const seen: string[] = [];
-    runs.onTerminal((run) => seen.push(`${run.id}:${run.status}`));
+    runs.onTerminal((run) => {
+      seen.push(`${run.id}:${run.status}`);
+    });
 
     const ok = (await runs.enqueue({ sessionId: "sA", request: turn("a") })).run;
     const okClaim = await runs.claim("w1", 5_000);
@@ -383,6 +387,82 @@ for (const backend of backends) {
     const c2 = await runs.claim("w2", 5_000);
     await runs.fail(retried.id, c2?.leaseToken ?? "", "boom again", { retry: true });
     assert.deepEqual(seen, [`${ok.id}:done`, `${retried.id}:failed`], "exhausted attempts park the run and fire");
+  });
+
+  test(`[${backend.name}] terminal drain waits for nested effects without blocking completion or observers`, async () => {
+    const { runs } = backend.make();
+    const first = (await runs.enqueue({ sessionId: "first", request: turn("first") })).run;
+    const second = (await runs.enqueue({ sessionId: "second", request: turn("second") })).run;
+    const firstClaim = await runs.claimById(first.id, "worker", 5_000);
+    const secondClaim = await runs.claimById(second.id, "worker", 5_000);
+    assert.ok(firstClaim?.leaseToken);
+    assert.ok(secondClaim?.leaseToken);
+    const firstGate = Promise.withResolvers<void>();
+    const firstFinished = Promise.withResolvers<void>();
+    const nestedGate = Promise.withResolvers<void>();
+    const nestedEntered = Promise.withResolvers<void>();
+    const invoked: string[] = [];
+    const finished: string[] = [];
+    runs.onTerminal(async (run) => {
+      invoked.push(run.id);
+      if (run.id === first.id) {
+        await firstGate.promise;
+        await runs.complete(second.id, secondClaim.leaseToken!, { status: "ok", reply: "second" });
+      } else {
+        nestedEntered.resolve();
+        await nestedGate.promise;
+      }
+      finished.push(run.id);
+      if (run.id === first.id) firstFinished.resolve();
+    });
+    runs.onTerminal((run) => {
+      invoked.push(`sync:${run.id}`);
+    });
+    const observed = runs.waitFor(first.id).then(() => {
+      assert.deepEqual(invoked, [first.id, `sync:${first.id}`]);
+    });
+    assert.equal(await runs.complete(first.id, firstClaim.leaseToken, { status: "ok", reply: "first" }), true);
+    await observed;
+    assert.deepEqual(finished, []);
+    let drained = false;
+    const draining = runs.drainTerminal().then(() => {
+      drained = true;
+    });
+    firstGate.resolve();
+    await nestedEntered.promise;
+    await firstFinished.promise;
+    await new Promise<void>(setImmediate);
+    assert.equal(drained, false);
+    nestedGate.resolve();
+    await draining;
+    assert.deepEqual(new Set(finished), new Set([first.id, second.id]));
+    await runs.drainTerminal();
+  });
+
+  test(`[${backend.name}] terminal listener failures are reported and do not skip other effects`, async (t) => {
+    const { runs } = backend.make();
+    const reported = t.mock.method(console, "error", () => {});
+    const invoked: string[] = [];
+    runs.onTerminal(() => {
+      throw new Error("synchronous terminal failure");
+    });
+    runs.onTerminal(async () => {
+      await Promise.resolve();
+      throw new Error("asynchronous terminal failure");
+    });
+    runs.onTerminal(async (run) => {
+      await Promise.resolve();
+      invoked.push(run.id);
+    });
+    const run = (await runs.enqueue({ sessionId: "failure", request: turn("failure") })).run;
+    const claimed = await runs.claimById(run.id, "worker", 5_000);
+    assert.ok(claimed?.leaseToken);
+    assert.equal(await runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "done" }), true);
+    await runs.drainTerminal();
+    assert.deepEqual(invoked, [run.id]);
+    assert.equal(reported.mock.callCount(), 2);
+    assert.match(reported.mock.calls[0]?.arguments.join(" ") ?? "", /synchronous terminal failure/);
+    assert.match(reported.mock.calls[1]?.arguments.join(" ") ?? "", /asynchronous terminal failure/);
   });
 
   test(`[${backend.name}] ledger caches a side effect's output by (runId, attempt, callIndex)`, async () => {

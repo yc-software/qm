@@ -11,6 +11,7 @@ import {
   stagingApiHeaders,
 } from "../src/deployment/postdeploy-smoke.ts";
 import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
+import { createTenantContext, runWithTenant } from "../src/tenancy/context.ts";
 
 test("deployed database smoke rejects the parallel exception-handler failure class", () => {
   assert.match(PARALLEL_EXCEPTION_QUERY, /p\.proparallel = 's'/);
@@ -43,6 +44,23 @@ test("deployed API smoke proves the production portal-identity boundary", async 
   assert.equal(headers["x-admin-actor"], "josh@example.com@acme");
   const actor = await verifyPortalIdentity(headers[PORTAL_IDENTITY_HEADER]!, "portal-secret", now);
   assert.equal(actor?.p, "josh@example.com");
+});
+
+test("pooled staging smoke signs both the source tenant and portal identity tenant", async () => {
+  const context = createTenantContext({ id: "alpha", env: {}, pooled: true });
+  const headers = await runWithTenant(context, () =>
+    stagingApiHeaders("alice@example.com", "source-secret", "portal-secret", "GET", "/v1/admin/sessions"),
+  );
+  assert.equal(headers["x-qm-tenant"], "alpha");
+  const identity = await verifyPortalIdentity(
+    headers[PORTAL_IDENTITY_HEADER]!,
+    "portal-secret",
+    Date.now(),
+    "alpha",
+    true,
+  );
+  assert.equal(identity?.p, "alice@example.com");
+  assert.equal(identity?.orgId, "alpha");
 });
 
 test("deployed staging smoke reaches every Fly service and the public portal", () => {

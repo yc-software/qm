@@ -1,3 +1,4 @@
+import { tenantEnv } from "../tenancy/context.ts";
 import type { BrowserSessionStore } from "./browser-session-store.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
@@ -77,7 +78,7 @@ async function chooseEmojiPrincipal(deps: EmojiUploadDeps): Promise<string | nul
   const hasSession = async (p: string): Promise<boolean> =>
     !!(await store.get(p).catch(swallowAs("emoji session probe", null)));
   if (await hasSession(deps.principalId)) return deps.principalId;
-  const fallback = globalThis.process.env.SLACK_EMOJI_FALLBACK_PRINCIPAL || undefined;
+  const fallback = tenantEnv().SLACK_EMOJI_FALLBACK_PRINCIPAL || undefined;
   if (fallback && (await hasSession(fallback))) return fallback;
   return null;
 }

@@ -217,6 +217,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   const c1 = await runs.claim("w1", 5_000);
   await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
   await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
+  await runs.drainTerminal();
   const pending = await deliveries.pending("slack");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.text, "recovered reply");
@@ -227,12 +228,45 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   const c2 = await runs.claim("w2", 5_000);
   await deliveries.ackByKey(`run:${live.id}`, 99);
   await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
-  await new Promise((r) => setTimeout(r, 0));
+  await runs.drainTerminal();
   const after = await deliveries.pending("slack");
   assert.deepEqual(
     after.map((d) => d.idempotencyKey),
     [`run:${crashed.id}`],
     "live-acked copy stays suppressed",
+  );
+});
+
+test("wired stores: terminal drain waits until the recovery delivery is persisted", async () => {
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  const deliveryEntered = Promise.withResolvers<void>();
+  const deliveryGate = Promise.withResolvers<void>();
+  wireRunResultDeliveries(runs, {
+    ...deliveries,
+    async enqueue(input) {
+      deliveryEntered.resolve();
+      await deliveryGate.promise;
+      return deliveries.enqueue(input);
+    },
+  });
+  const run = (await runs.enqueue({ sessionId: "recovery", request: turn("recover", "C9:171.001") })).run;
+  const claimed = await runs.claimById(run.id, "worker", 5_000);
+  assert.ok(claimed?.leaseToken);
+  await runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "recovered reply" });
+  await deliveryEntered.promise;
+  let drained = false;
+  const draining = runs.drainTerminal().then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  assert.deepEqual(await deliveries.pending("slack"), []);
+  deliveryGate.resolve();
+  await draining;
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((delivery) => delivery.text),
+    ["recovered reply"],
   );
 });
 
@@ -244,7 +278,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
-  await new Promise((r) => setTimeout(r, 0));
+  await runs.drainTerminal();
 
   const stored = await runs.get(parked.id);
   assert.equal(stored?.status, "failed");
@@ -346,9 +380,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
 
-  for (let i = 0; i < 50 && (await sessions.getEntries(session.id)).length === 0; i++) {
-    await new Promise((r) => setTimeout(r, 10));
-  }
+  await runs.drainTerminal();
   const entries = await sessions.getEntries(session.id);
   assert.equal(entries.length, 1, "the run's own session carries the failure durably");
   assert.deepEqual(entries[0]!.payload, {

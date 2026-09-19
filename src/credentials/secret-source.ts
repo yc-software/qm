@@ -1,10 +1,11 @@
+import { tenantEnv } from "../tenancy/context.ts";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
 export interface SecretSource {
   get(name: string): Promise<string | undefined>;
 }
 
-export function createEnvSecretSource(env: NodeJS.ProcessEnv = globalThis.process.env): SecretSource {
+export function createEnvSecretSource(env: Readonly<NodeJS.ProcessEnv> = tenantEnv()): SecretSource {
   return {
     async get(name) {
       const value = env[name];

@@ -1,3 +1,4 @@
+import { currentTenant, tenantState } from "../tenancy/context.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
@@ -1138,10 +1139,15 @@ export interface ProviderKeys {
   [provider: string]: string | undefined;
 }
 
-let cachedCustomModels: { version: number; path: string | null } | null = null;
+const CUSTOM_MODELS_CACHE = Symbol("pi-custom-models");
+const customModelsCache = () =>
+  tenantState(CUSTOM_MODELS_CACHE, () => ({
+    current: null as { version: number; path: string | null } | null,
+  }));
 function customModelsPath(): string | null {
+  const cache = customModelsCache();
   const version = customProvidersVersion() + gatewayModelsVersion();
-  if (cachedCustomModels?.version === version) return cachedCustomModels.path;
+  if (cache.current?.version === version) return cache.current.path;
   const providers = { ...customModelsJson()?.providers, ...gatewayModelsJson() };
   const custom = Object.keys(providers).length ? { providers } : undefined;
   let path: string | null = null;
@@ -1149,7 +1155,7 @@ function customModelsPath(): string | null {
     path = join(mkdtempSync(join(tmpdir(), "pi-custom-models-")), "models.json");
     writeFileSync(path, JSON.stringify(custom));
   }
-  cachedCustomModels = { version, path };
+  cache.current = { version, path };
   return path;
 }
 
@@ -1173,6 +1179,23 @@ export async function buildModelRuntime(
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
     if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
+  }
+  if (currentTenant()?.pooled) {
+    const providerKeys = new Set(
+      Object.entries(apiKeys)
+        .filter(([, key]) => key)
+        .map(([provider]) => provider),
+    );
+    if (subscriptionToken) providerKeys.add(CODEX_SUBSCRIPTION_PROVIDER);
+    const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
+    runtime.hasConfiguredAuth = (provider) => providerKeys.has(provider) && hasConfiguredAuth(provider);
+    const getAuth = runtime.getAuth.bind(runtime);
+    runtime.getAuth = (async (model, overrides) => {
+      const provider = typeof model === "string" ? model : model.provider;
+      if (!providerKeys.has(provider) && !overrides?.apiKey) return undefined;
+      if (typeof model === "string") return getAuth(model, overrides);
+      return getAuth(model, overrides);
+    }) as typeof runtime.getAuth;
   }
   if (modelGateway) {
     const providers = new Set(

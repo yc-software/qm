@@ -1,6 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzip } from "node:zlib";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
+import { bindTenantPayload, TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { currentTenant } from "../tenancy/context.ts";
+
+export { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 const COMPRESS_MIN_BYTES = 1024;
 
@@ -156,10 +160,6 @@ export async function readRawBody(req: IncomingMessage): Promise<string> {
   return chunks.length === 0 ? "" : Buffer.concat(chunks).toString("utf8");
 }
 
-export function canonicalPayload(method: string, pathWithQuery: string, tail: string): string {
-  return `${method}\n${pathWithQuery}\n${tail}`;
-}
-
 export async function verifyOrReject(
   req: IncomingMessage,
   res: ServerResponse,
@@ -168,7 +168,18 @@ export async function verifyOrReject(
   payload: string,
   dedup: boolean,
   allowUnsigned = false,
+  expectedTenantId: string | undefined = currentTenant()?.id,
+  requireTenantBinding: boolean = currentTenant()?.pooled ?? false,
 ): Promise<boolean> {
+  const tenantId = headerValue(req, TENANT_HEADER);
+  if (
+    (req.headers[TENANT_HEADER] !== undefined && (!tenantId || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(tenantId))) ||
+    (tenantId !== undefined && expectedTenantId !== undefined && tenantId !== expectedTenantId) ||
+    (requireTenantBinding && (!expectedTenantId || tenantId !== expectedTenantId))
+  ) {
+    sendJson(res, 401, { error: "unauthorized", message: "source authentication requires a matching tenant" });
+    return false;
+  }
   if (!secret) {
     if (allowUnsigned) return true;
     sendJson(res, 401, { error: "unauthorized", message: "source authentication is not configured" });
@@ -176,10 +187,11 @@ export async function verifyOrReject(
   }
   const signature = String(req.headers["x-signature"] ?? "");
   const timestamp = Number(req.headers["x-timestamp"] ?? NaN);
+  const boundPayload = bindTenantPayload(payload, tenantId);
   const r =
     dedup && auth
-      ? await auth.verify({ signature, timestamp, body: payload, eventId: signature })
-      : verifySignature(secret, { signature, timestamp, body: payload }, Date.now(), SOURCE_AUTH_REPLAY_WINDOW_MS);
+      ? await auth.verify({ signature, timestamp, body: boundPayload, eventId: signature })
+      : verifySignature(secret, { signature, timestamp, body: boundPayload }, Date.now(), SOURCE_AUTH_REPLAY_WINDOW_MS);
   if (!r.ok) {
     sendJson(res, 401, { error: "unauthorized", message: r.reason });
     return false;

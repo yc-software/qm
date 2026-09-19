@@ -211,15 +211,35 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
-      const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
-      if (claimed) {
-        const result = processRun(
-          { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
-          claimed,
-        );
-        if (claimed.id === runId) return withAdminLink(await result);
-        await result.catch((error: unknown) => swallow("inline predecessor run failed", error));
-        continue;
+      if (deps.inlineTurns !== false) {
+        let release: (() => void) | null = null;
+        try {
+          if (deps.capacity) {
+            const remaining = deadline - performance.now();
+            if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
+            const abort = new AbortController();
+            const timer = setTimeout(() => abort.abort(), Math.ceil(remaining));
+            try {
+              release = await deps.capacity.acquire(abort.signal);
+            } finally {
+              clearTimeout(timer);
+            }
+            if (!release || performance.now() >= deadline)
+              throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
+          }
+          const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
+          if (claimed) {
+            const result = processRun(
+              { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
+              claimed,
+            );
+            if (claimed.id === runId) return withAdminLink(await result);
+            await result.catch((error: unknown) => swallow("inline predecessor run failed", error));
+            continue;
+          }
+        } finally {
+          release?.();
+        }
       }
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);

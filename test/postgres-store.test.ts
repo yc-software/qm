@@ -1519,7 +1519,9 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
     assert.equal((await runs.get(r.id))?.deliveryState?.editRef, "171.002");
 
     const seen: string[] = [];
-    runs.onTerminal((run) => seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`));
+    runs.onTerminal((run) => {
+      seen.push(`${run.id}:${run.status}:${run.deliveryState?.editRef ?? ""}`);
+    });
     const claimed = await runs.claimById(r.id, "w1", 5_000);
     await runs.complete(r.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
     assert.deepEqual(seen, [`${r.id}:done:171.002`], "terminal listener sees the checkpointed state");
@@ -1533,6 +1535,62 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
     await close();
   }
 });
+
+test(
+  "pg run store: close drains nested terminal effects before closing queries",
+  { skip, timeout: 5_000 },
+  async () => {
+    const { runs, close } = createPostgresRunStore(URL!);
+    const firstGate = Promise.withResolvers<void>();
+    const firstFinished = Promise.withResolvers<void>();
+    const nestedGate = Promise.withResolvers<void>();
+    const nestedEntered = Promise.withResolvers<void>();
+    try {
+      const first = (await runs.enqueue({ sessionId: `first-${randomUUID()}`, request: turn("first") })).run;
+      const second = (await runs.enqueue({ sessionId: `second-${randomUUID()}`, request: turn("second") })).run;
+      const firstClaim = await runs.claimById(first.id, "worker", 5_000);
+      const secondClaim = await runs.claimById(second.id, "worker", 5_000);
+      assert.ok(firstClaim?.leaseToken);
+      assert.ok(secondClaim?.leaseToken);
+      const finished: string[] = [];
+      runs.onTerminal(async (run) => {
+        if (run.id === first.id) {
+          await firstGate.promise;
+          await runs.complete(second.id, secondClaim.leaseToken!, { status: "ok", reply: "second" });
+        } else {
+          nestedEntered.resolve();
+          await nestedGate.promise;
+        }
+        assert.equal((await runs.get(run.id))?.status, "done");
+        finished.push(run.id);
+        if (run.id === first.id) firstFinished.resolve();
+      });
+      await runs.complete(first.id, firstClaim.leaseToken, { status: "ok", reply: "first" });
+      let drained = false;
+      const draining = runs.drainTerminal().then(() => {
+        drained = true;
+      });
+      let closed = false;
+      const closing = close().then(() => {
+        closed = true;
+      });
+      firstGate.resolve();
+      await nestedEntered.promise;
+      await firstFinished.promise;
+      await new Promise<void>(setImmediate);
+      assert.equal(drained, false);
+      assert.equal(closed, false);
+      nestedGate.resolve();
+      await Promise.all([draining, closing]);
+      assert.deepEqual(new Set(finished), new Set([first.id, second.id]));
+      await assert.rejects(runs.get(first.id), /Postgres store is closed/);
+    } finally {
+      firstGate.resolve();
+      nestedGate.resolve();
+      await close();
+    }
+  },
+);
 
 test("pg run store: reaper cannot clobber a run that completed or renewed its lease mid-sweep", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);

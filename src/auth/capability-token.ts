@@ -1,6 +1,7 @@
 import { orgId as configOrgId } from "../config.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import { currentTenant } from "../tenancy/context.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
@@ -20,6 +21,7 @@ interface BlobGrant {
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
+  orgId?: string;
   actorId: string;
   aud?: string;
   scopeId: ScopeId;
@@ -51,7 +53,24 @@ export interface CapabilityClaims {
 }
 
 export function mintCapabilityToken(claims: CapabilityClaims, secret: string): Promise<string> {
-  return mintSignedPayload({ orgId: configOrgId(), ...claims }, secret);
+  return mintSignedPayload({ ...claims, orgId: configOrgId() }, secret);
+}
+
+export function routingTokenTenant(token: string | null): string | null {
+  if (!token || token.length > 16_384) return null;
+  const parts = token.split(".");
+  let payload: string | undefined;
+  if (parts.length === 3) payload = parts[1];
+  else if (parts.length === 2) payload = parts[0];
+  if (!payload || !/^[A-Za-z0-9_-]+$/.test(payload)) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { orgId?: unknown } | null;
+    return typeof claims?.orgId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(claims.orgId)
+      ? claims.orgId
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function isValidCapabilityTimezone(timezone: unknown): timezone is string {
@@ -69,6 +88,8 @@ export async function verifyCapabilityToken(
   token: string,
   secret: string | string[],
   now: number = Date.now(),
+  expectedTenantId: string | undefined = currentTenant()?.id,
+  requireTenantBinding: boolean = currentTenant()?.pooled ?? false,
 ): Promise<CapabilityClaims | null> {
   const claims = (await verifySignedPayload(token, secret)) as CapabilityClaims | null;
   if (
@@ -79,6 +100,9 @@ export async function verifyCapabilityToken(
   ) {
     return null;
   }
+  if (claims.orgId !== undefined && (typeof claims.orgId !== "string" || !claims.orgId)) return null;
+  if (requireTenantBinding && (!expectedTenantId || claims.orgId !== expectedTenantId)) return null;
+  if (expectedTenantId && claims.orgId !== undefined && claims.orgId !== expectedTenantId) return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
@@ -113,8 +137,10 @@ export async function verifyBlobTransferCapability(
   secret: string | string[],
   expected: { dir: "read"; id: string } | { dir: "write" },
   now: number = Date.now(),
+  expectedTenantId?: string,
+  requireTenantBinding?: boolean,
 ): Promise<BlobTransferClaims | null> {
-  const claims = await verifyCapabilityToken(token, secret, now);
+  const claims = await verifyCapabilityToken(token, secret, now, expectedTenantId, requireTenantBinding);
   const grant = claims?.blob;
   if (!claims || claims.aud !== BLOB_TRANSFER_AUD || !grant || grant.dir !== expected.dir) return null;
   if (grant.id !== undefined && (typeof grant.id !== "string" || !BLOB_ID.test(grant.id))) return null;

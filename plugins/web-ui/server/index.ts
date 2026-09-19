@@ -37,6 +37,7 @@ import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
+  CORE_TENANT_ID,
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
 } from "../../chassis/src/env.ts";
@@ -624,7 +625,11 @@ async function coreFetchCap(
     return { status: 503, text: JSON.stringify({ error: "not_configured", message: "no session capability" }) };
   const r = await fetch(`${CORE}${pathWithQuery}`, {
     method,
-    headers: { "content-type": "application/json", [CAPABILITY_HEADER]: token },
+    headers: {
+      "content-type": "application/json",
+      [CAPABILITY_HEADER]: token,
+      ...(CORE_TENANT_ID ? { "x-qm-tenant": CORE_TENANT_ID } : {}),
+    },
     ...(rawBody ? { body: rawBody } : {}),
     redirect: "manual",
   });
@@ -3002,7 +3007,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/callback${url.search}`;
     let ok: boolean;
     try {
-      const r = await fetch(`${CORE}${corePath}`, { redirect: "manual" });
+      const r = await fetch(`${CORE}${corePath}`, {
+        redirect: "manual",
+        ...(CORE_TENANT_ID ? { headers: { "x-qm-tenant": CORE_TENANT_ID } } : {}),
+      });
       ok = r.status >= 200 && r.status < 300;
     } catch {
       ok = false;

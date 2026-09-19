@@ -10,6 +10,7 @@ import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, Run
 import { isTerminal, releasesDedupKey } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
+import { createRunTerminalListeners } from "./terminal-listeners.ts";
 
 export interface PostgresRuntime {
   runs: RunStore;
@@ -191,11 +192,11 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     const { rows } = await q("SELECT * FROM runs WHERE id = $1", [id]);
     return rows[0] ? rowToRun(rows[0]) : null;
   }
-  const terminalListeners: Array<(run: Run) => void> = [];
+  const terminalListeners = createRunTerminalListeners();
   function settle(run: Run | null): void {
     if (!run || !isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) listener(run);
+    terminalListeners.emit(run);
   }
   async function retire(
     run: Run,
@@ -251,6 +252,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            ORDER BY candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
          ) RETURNING *`,
         [token, now + ttlMs, workerId, now, runId ?? null, sessionId ?? null],
+        { timeoutMs: 1_500 },
       );
       return rows[0] ? rowToRun(rows[0]) : null;
     } catch (err) {
@@ -383,8 +385,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       await q("UPDATE runs SET returned_at = $2 WHERE id = $1 AND status IN ('done','failed')", [runId, Date.now()]);
     },
     onTerminal(listener): void {
-      terminalListeners.push(listener);
+      terminalListeners.add(listener);
     },
+
+    drainTerminal: terminalListeners.drain,
 
     get: getRun,
 
@@ -543,6 +547,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       clearTimeout(availabilityTimer);
       availabilityListeners.clear();
       await availabilityProbe;
+      await terminalListeners.drain();
       await available.close?.();
       await closePool();
     },

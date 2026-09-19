@@ -1,3 +1,4 @@
+import { tenantState } from "../tenancy/context.ts";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
@@ -16,7 +17,13 @@ interface PgPoolingConfig {
   sessionMax?: number;
 }
 
-let poolingConfig: PgPoolingConfig = {};
+interface PgRuntimeSettings {
+  pooling: PgPoolingConfig;
+  trust: { ssl?: { ca: string } };
+}
+
+const PG_SETTINGS = Symbol("postgres-settings");
+const pgSettings = () => tenantState<PgRuntimeSettings>(PG_SETTINGS, () => ({ pooling: {}, trust: {} }));
 
 export function configurePgPooling(config: PgPoolingConfig): void {
   if (config.poolUrl && !config.databaseUrl) throw new Error("DATABASE_POOL_URL requires DATABASE_URL");
@@ -28,16 +35,29 @@ export function configurePgPooling(config: PgPoolingConfig): void {
       throw new Error(`${name} must be an integer between 1 and 100`);
     }
   }
-  poolingConfig = { ...config };
+  pgSettings().pooling = { ...config };
 }
 
 const migrationQueue = createKeyedQueue();
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
-async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
+function poolKey(
+  connectionString: string,
+  kind: "query" | "session" | "migration",
+  settings: PgRuntimeSettings,
+): string {
+  return `${kind}:${connectionString}:${createHash("sha256").update(JSON.stringify(settings)).digest("hex")}`;
+}
+
+async function retainPool(
+  connectionString: string,
+  kind: "query" | "session" | "migration",
+  settings: PgRuntimeSettings,
+): Promise<Pool> {
+  const poolingConfig = settings.pooling;
   const pg = (await import("pg")).default;
-  const key = `${kind}:${connectionString}`;
+  const key = poolKey(connectionString, kind, settings);
   const existing = sharedPools.get(key);
   if (existing) {
     existing.users++;
@@ -48,7 +68,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
   if (!Number.isInteger(max) || max < 1 || max > 100)
     throw new Error(`${setting} must be an integer between 1 and 100`);
   let url = connectionString;
-  let ssl = pgCaOptions();
+  let ssl = settings.trust;
   if (kind === "query" && connectionString === poolingConfig.poolUrl && poolingConfig.caCert) {
     const parsed = new URL(connectionString);
     for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) parsed.searchParams.delete(key);
@@ -70,8 +90,9 @@ async function releasePool(
   connectionString: string,
   pool: Pool,
   kind: "query" | "session" | "migration",
+  settings: PgRuntimeSettings,
 ): Promise<void> {
-  const key = `${kind}:${connectionString}`;
+  const key = poolKey(connectionString, kind, settings);
   const entry = sharedPools.get(key);
   if (!entry || entry.pool !== pool) return;
   if (--entry.users === 0) {
@@ -80,7 +101,7 @@ async function releasePool(
   }
 }
 
-function pooledDatabaseUrl(connectionString: string): string {
+function pooledDatabaseUrl(connectionString: string, poolingConfig: PgPoolingConfig): string {
   const pooled = poolingConfig.poolUrl;
   if (!pooled || connectionString !== poolingConfig.databaseUrl) return connectionString;
   const directUrl = new URL(connectionString);
@@ -321,14 +342,12 @@ export function resolvePgCaTrust(opts: { cert?: string; certFile?: string }): { 
   return {};
 }
 
-let installedCaTrust: { ssl?: { ca: string } } = {};
-
 export function configurePgCaTrust(opts: { cert?: string; certFile?: string }): void {
-  installedCaTrust = resolvePgCaTrust(opts);
+  pgSettings().trust = resolvePgCaTrust(opts);
 }
 
 export function pgCaOptions(): { ssl?: { ca: string } } {
-  return installedCaTrust;
+  return pgSettings().trust;
 }
 
 const registeredMigrations = new Map<string, Map<string, PgMigration>>();
@@ -375,6 +394,7 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
 }
 
 export async function migrateRegisteredPgSchemas(connectionString?: string): Promise<void> {
+  const trust = pgCaOptions();
   const databases = connectionString
     ? [[connectionString, registeredMigrations.get(connectionString)] as const]
     : [...registeredMigrations.entries()];
@@ -382,7 +402,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
       const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() }));
+      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...trust }));
       try {
         await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
         await applyPgMigrations(
@@ -414,6 +434,7 @@ export function createPgPool(
   statementsOrMaintenance: readonly string[] | readonly PgMaintenanceDefinition[] = [],
   maintenanceDefinitions: readonly PgMaintenanceDefinition[] = [],
 ): PgPool {
+  const settings = { ...pgSettings() };
   const definitions =
     typeof idOrDefinitions === "string"
       ? [{ id: idOrDefinitions, statements: statementsOrMaintenance as readonly string[] }]
@@ -439,14 +460,14 @@ export function createPgPool(
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;
-  const queryUrl = pooledDatabaseUrl(connectionString);
+  const queryUrl = pooledDatabaseUrl(connectionString, settings.pooling);
   async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
     return migrationQueue(connectionString, async () => {
-      const instance = await retainPool(connectionString, "migration");
+      const instance = await retainPool(connectionString, "migration", settings);
       try {
         return await fn(instance);
       } finally {
-        await releasePool(connectionString, instance, "migration");
+        await releasePool(connectionString, instance, "migration", settings);
       }
     });
   }
@@ -465,12 +486,12 @@ export function createPgPool(
   async function pool(): Promise<Pool> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (queryPoolP ??= retainPool(queryUrl, "query"));
+    return (queryPoolP ??= retainPool(queryUrl, "query", settings));
   }
   async function sessionPool(): Promise<Pool> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (sessionPoolP ??= retainPool(connectionString, "session"));
+    return (sessionPoolP ??= retainPool(connectionString, "session", settings));
   }
   async function query(
     text: string,
@@ -548,8 +569,8 @@ export function createPgPool(
     closed = true;
     await readyP?.catch(() => {});
     await Promise.all([
-      queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
-      sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
+      queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query", settings)),
+      sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session", settings)),
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {

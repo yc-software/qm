@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
 import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
+import { createRunTerminalListeners } from "./terminal-listeners.ts";
 
 export interface MemoryRuntime {
   runs: RunStore;
@@ -20,7 +21,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const events = new EventEmitter();
   events.setMaxListeners(0);
   const returned = new Set<string>();
-  const terminalListeners: Array<(run: Run) => void> = [];
+  const terminalListeners = createRunTerminalListeners();
 
   function sessionUnavailable(sessionId: string, now: number): boolean {
     for (const r of runs.values()) {
@@ -42,7 +43,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   function settle(run: Run): void {
     if (!isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) listener(run);
+    terminalListeners.emit(run);
   }
 
   const store: RunStore = {
@@ -184,8 +185,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       returned.add(runId);
     },
     onTerminal(listener) {
-      terminalListeners.push(listener);
+      terminalListeners.add(listener);
     },
+
+    drainTerminal: terminalListeners.drain,
 
     async get(runId) {
       return runs.get(runId) ?? null;

@@ -95,6 +95,11 @@ and skills, sandbox image, infrastructure — lives in a **deployment directory*
 store, sandbox, memory) sits behind an interface. Memory can also be routed by scope to
 [external providers](./docs/memory-providers.md) while retaining the built-in notebook.
 
+One core process can also host several companies, sharing its HTTP listener and turn
+capacity while keeping separate databases, credentials, model configuration, and sandbox
+namespaces. See [native multitenancy](docs/multitenancy.md) for configuration, migration,
+and the boundaries of this deployment mode.
+
 ## Security and secrets
 
 QM's approach follows local coding agents like OpenCode, Codex, and Claude Code: the

@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface PortalIdentity {
+  orgId?: string;
   p: string;
   n?: string;
   imp?: string;
@@ -12,11 +13,18 @@ function digest(payload: string, secret: string): string {
 }
 
 export function mintPortalIdentity(claims: PortalIdentity, secret: string): string {
-  const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  const orgId = process.env.CORE_TENANT_ID ?? process.env.CORE_ORG_ID ?? claims.orgId;
+  const payload = Buffer.from(JSON.stringify({ ...claims, ...(orgId ? { orgId } : {}) }), "utf8").toString("base64url");
   return `${payload}.${digest(payload, secret)}`;
 }
 
-export function verifyPortalIdentity(token: string, secret: string, nowMs: number): PortalIdentity | null {
+export function verifyPortalIdentity(
+  token: string,
+  secret: string,
+  nowMs: number,
+  expectedTenantId: string | undefined = process.env.CORE_TENANT_ID,
+  requireTenantBinding: boolean = expectedTenantId !== undefined,
+): PortalIdentity | null {
   const dot = token.lastIndexOf(".");
   if (dot <= 0) return null;
   const payload = token.slice(0, dot);
@@ -30,6 +38,9 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
     return null;
   }
   if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
+  if (claims.orgId !== undefined && (typeof claims.orgId !== "string" || !claims.orgId)) return null;
+  if (requireTenantBinding && (!expectedTenantId || claims.orgId !== expectedTenantId)) return null;
+  if (expectedTenantId && claims.orgId !== undefined && claims.orgId !== expectedTenantId) return null;
   if (nowMs > claims.exp) return null;
   return claims;
 }

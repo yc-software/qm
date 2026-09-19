@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { createWorkCapacity } from "../src/runs/work-capacity.ts";
 
 const request: TurnRequest = {
   surface: "test",
@@ -64,4 +65,56 @@ test("inline waiting returns another worker's result without executing twice", a
   await built.runs.complete(claimed!.id, claimed!.leaseToken!, { status: "ok", reply: "other worker" });
   assert.equal((await pending).reply, "other worker");
   assert.equal((await built.runs.get(claimed!.id))?.attempts, 1);
+});
+
+test("a hosted app with background work disabled executes synchronous turns under tenant and host capacity", async (t) => {
+  const capacity = createWorkCapacity(2);
+  const firstHostSlot = await capacity.acquire();
+  const secondHostSlot = await capacity.acquire();
+  const built = buildApp(testConfig({ backgroundWorkEnabled: false, workers: 1, runWaitMs: 2_000 }), { capacity });
+  const claim = built.runs.claimForSession.bind(built.runs);
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  let claims = 0;
+  t.mock.method(built.runs, "claimForSession", async (...args: Parameters<typeof claim>) => {
+    claims++;
+    const run = await claim(...args);
+    entered.resolve();
+    await finish.promise;
+    return run;
+  });
+  built.runtime.start();
+  const first = built.app.turn({
+    ...request,
+    conversation: { kind: "dm", threadRef: "disabled-first" },
+    idempotencyKey: "disabled-first",
+  });
+  const second = built.app.turn({
+    ...request,
+    conversation: { kind: "dm", threadRef: "disabled-second" },
+    idempotencyKey: "disabled-second",
+  });
+  try {
+    await sleep(20);
+    assert.equal(claims, 0);
+    firstHostSlot!();
+    secondHostSlot!();
+    await entered.promise;
+    await sleep(20);
+    assert.equal(claims, 1);
+    finish.resolve();
+    const results = await Promise.all([first, second]);
+    assert.ok(results.every((result) => result.status === "ok"));
+    assert.equal(claims, 2);
+  } finally {
+    firstHostSlot!();
+    secondHostSlot!();
+    finish.resolve();
+    await Promise.allSettled([first, second]);
+    await built.runtime.stop();
+  }
+  const releasedFirst = await capacity.acquire();
+  const releasedSecond = await capacity.acquire();
+  releasedFirst!();
+  releasedSecond!();
 });

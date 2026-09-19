@@ -314,6 +314,8 @@ import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-sign
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createWorker, type Worker } from "./runs/worker.ts";
+import { createWorkCapacity, type WorkCapacity } from "./runs/work-capacity.ts";
+import { currentTenant } from "./tenancy/context.ts";
 import {
   createNoopInstanceRegistry,
   createLegacyEnrollmentBridge,
@@ -539,12 +541,14 @@ const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 export function buildApp(
   config: Config,
   overrides: {
+    capacity?: WorkCapacity;
     securityScreener?: SecurityScreener;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
   } = {},
 ): BuiltApp {
+  const capacity = overrides.capacity ? createWorkCapacity(Math.max(1, config.workers), overrides.capacity) : undefined;
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let noteAdmitted = () => {};
   const admittedWork = createAdmittedWork({
@@ -874,7 +878,12 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: e2bBodies,
       ...(e2b.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
+        ? {
+            snapshots: createS3SnapshotStore({
+              bucket: e2b.snapshotS3Bucket,
+              prefix: `${currentTenant()?.pooled ? config.s3Prefix : ""}e2b-home`,
+            }),
+          }
         : {}),
       onError: sandboxOnError,
     });
@@ -917,7 +926,12 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: modalBodies,
       ...(modal.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
+        ? {
+            snapshots: createS3SnapshotStore({
+              bucket: modal.snapshotS3Bucket,
+              prefix: `${currentTenant()?.pooled ? config.s3Prefix : ""}modal-home`,
+            }),
+          }
         : {}),
       onError: sandboxOnError,
     });
@@ -1461,7 +1475,6 @@ export function buildApp(
       : undefined;
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
   runs.onTerminal((run) => {
-    void productAnalytics.responseFinished(run);
     const startedAt = run.startedAt ?? run.finishedAt ?? Date.now();
     const finishTiming = startTiming("queue.task", "run", startedAt);
     let status: TimingStatus = "internal_error";
@@ -1473,6 +1486,7 @@ export function buildApp(
       data: { surface: run.request.surface, origin: resolveTurnOrigin(run.request).kind },
       measurements: { queue_wait: startedAt - run.createdAt },
     });
+    return productAnalytics.responseFinished(run);
   });
   const ledger = runStore.ledger;
 
@@ -1553,7 +1567,6 @@ export function buildApp(
           claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
           metadataUri: config.flyDeploy.metadataUri ?? "",
           executable: "wireproxy",
-          port: 18096,
         })
       : undefined;
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
@@ -1975,6 +1988,8 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    inlineTurns: !capacity || (!config.backgroundWorkEnabled && !config.backgroundDeploymentId),
+    capacity,
     admittedWork,
     ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
     swarms,
@@ -2080,7 +2095,7 @@ export function buildApp(
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
   runs.onTerminal((run) => {
-    void runs
+    return runs
       .activeForThread(run.sessionId)
       .then((live) => {
         if (!live) engaged.settle(run.sessionId);
@@ -2088,10 +2103,10 @@ export function buildApp(
       .catch(swallowAs("wake: settle on terminal", undefined));
   });
   runs.onTerminal((run) => {
-    void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
+    return app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
   });
   runs.onTerminal((run) => {
-    void (async () => {
+    return (async () => {
       const uuid = (await sessions.getByThread(run.sessionId))?.id;
       const rows = uuid ? await approvals.entries() : [];
       const awaiting = rows.some(
@@ -2119,7 +2134,7 @@ export function buildApp(
     });
   runs.onTerminal((run) => {
     if (run.sessionId.startsWith("agent:main:subagent:"))
-      void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
+      return returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
   });
   const sweepSessionReturns = async () => {
     let afterId: string | undefined;
@@ -2360,6 +2375,7 @@ export function buildApp(
   noteAdmitted = () => drain.noteBusy();
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
+      capacity,
       admittedWork,
       runs,
       sessions,
@@ -2525,17 +2541,34 @@ export function buildApp(
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await Promise.all(workers.map((w) => w.releaseInFlight()));
+      const failures: unknown[] = [];
+      try {
+        await harness.turns.close?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      await runs.drainTerminal();
       await drain.stop();
-      runs.close?.();
-      void runSignals.close?.();
-      void sessionStateBus.close?.();
-      void ledgerEventBus.close?.();
-      void runActivity.close?.();
       stopStreamSync();
-      void runStreamEvents.close?.();
-      await harness.turns.close?.();
-      await tasks.close?.();
-      await flyTunnel?.stop();
+      const cleanup = await Promise.allSettled(
+        [
+          () => runs.close?.(),
+          () => runSignals.close?.(),
+          () => sessionStateBus.close?.(),
+          () => ledgerEventBus.close?.(),
+          () => runActivity.close?.(),
+          () => runStreamEvents.close?.(),
+          () => tasks.close?.(),
+          () => flyTunnel?.stop(),
+        ].map((close) => Promise.resolve().then(close)),
+      );
+      failures.push(...cleanup.filter((result) => result.status === "rejected").map((result) => result.reason));
+      try {
+        await errors.flush();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length) throw new AggregateError(failures, "Runtime stores could not close cleanly");
     },
   };
 

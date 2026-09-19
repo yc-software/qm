@@ -1,7 +1,12 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from "node:http";
 import { BlockList, isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { EGRESS_PROXY_AUD, verifyCapabilityToken, type CapabilityClaims } from "./auth/capability-token.ts";
+import {
+  EGRESS_PROXY_AUD,
+  routingTokenTenant,
+  verifyCapabilityToken,
+  type CapabilityClaims,
+} from "./auth/capability-token.ts";
 import { egressDecision, hostMatches, isHostDenied, type EgressVerdict } from "./resolution/egress-policy.ts";
 import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
@@ -12,6 +17,9 @@ import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./config.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
 import { isPrivateNetworkIp } from "./util/network.ts";
+import { currentTenant, runWithTenant, type TenantContext } from "./tenancy/context.ts";
+import { loadHostConfig } from "./tenancy/manifest.ts";
+import { configurePgCaTrust, configurePgPooling, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const OPEN: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
 
@@ -50,8 +58,8 @@ function isAlwaysBlockedHost(host: string): boolean {
 }
 
 export function tokenFromRequest(req: IncomingMessage): string | null {
-  const raw = req.headers["proxy-authorization"] as string | undefined;
-  if (!raw) return null;
+  const raw = req.headers["proxy-authorization"];
+  if (typeof raw !== "string" || !raw) return null;
   const [scheme, value] = raw.split(/\s+/, 2);
   if (!scheme || !value) return null;
   if (scheme.toLowerCase() === "bearer") return value;
@@ -77,6 +85,8 @@ export type EgressAuditRecorder = Pick<EgressAuditSink, "record">;
 
 export interface EgressAuthzDeps {
   capabilitySecret?: string;
+  tenantId?: string;
+  requireTenantBinding?: boolean;
   audit: EgressAuditRecorder;
   tokenless?: "open" | "deny";
   now?: () => number;
@@ -90,7 +100,15 @@ function defaultLookup(host: string): Promise<string[]> {
 
 async function claimsFor(token: string | null, deps: EgressAuthzDeps): Promise<CapabilityClaims | null> {
   const claims =
-    token && deps.capabilitySecret ? await verifyCapabilityToken(token, deps.capabilitySecret, deps.now?.()) : null;
+    token && deps.capabilitySecret
+      ? await verifyCapabilityToken(
+          token,
+          deps.capabilitySecret,
+          deps.now?.(),
+          deps.tenantId,
+          deps.requireTenantBinding,
+        )
+      : null;
   return claims && claims.aud === EGRESS_PROXY_AUD ? claims : null;
 }
 
@@ -123,7 +141,19 @@ async function decide(
   return { allow: true, verdict: "ok", address: ips[0] };
 }
 
-export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
+export function buildEgressAuthzRequestListener(deps: EgressAuthzDeps): RequestListener {
+  const tenant = currentTenant();
+  if (tenant && deps.tenantId !== undefined && deps.tenantId !== tenant.id) {
+    throw new Error("Configured egress tenant does not match the runtime context");
+  }
+  deps = {
+    ...deps,
+    tenantId: deps.tenantId ?? tenant?.id,
+    requireTenantBinding: deps.requireTenantBinding ?? tenant?.pooled,
+  };
+  if (deps.requireTenantBinding && (!deps.tenantId || !deps.capabilitySecret || deps.tokenless === "open")) {
+    throw new Error("Pooled egress authorization requires a tenant, capability secret, and token-only access");
+  }
   const lookup = deps.lookup ?? defaultLookup;
   async function checkStatus(
     req: IncomingMessage,
@@ -140,7 +170,7 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
     const claims = await claimsFor(token, deps);
     let policy: EgressPolicy | undefined = DENY_ALL;
     if (claims) policy = claims.egress;
-    else if (!token && deps.tokenless === "open") policy = OPEN;
+    else if (!token && deps.tokenless === "open" && !deps.requireTenantBinding) policy = OPEN;
     const d = await decide(host, policy, lookup);
     try {
       deps.audit.record({
@@ -169,7 +199,38 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
       res.end();
     }
   }
-  return createServer((req, res) => void onRequest(req, res));
+  return (req, res) => void onRequest(req, res);
+}
+
+export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
+  return createServer(buildEgressAuthzRequestListener(deps));
+}
+
+export function buildPooledEgressAuthzRequestListener(
+  tenants: readonly { context: TenantContext; deps: EgressAuthzDeps }[],
+): RequestListener {
+  const runtimes = new Map(
+    tenants.map(({ context, deps }) => [
+      context.id,
+      {
+        context,
+        listener: runWithTenant(context, () =>
+          buildEgressAuthzRequestListener({ ...deps, tenantId: context.id, requireTenantBinding: true }),
+        ),
+      },
+    ]),
+  );
+  if (!tenants.length || runtimes.size !== tenants.length) throw new Error("Pooled egress requires unique tenants");
+  return (req, res) => {
+    const tenantId = routingTokenTenant(tokenFromRequest(req));
+    const runtime = tenantId ? runtimes.get(tenantId) : undefined;
+    const selector = req.headers["x-qm-tenant"];
+    if (!runtime || (selector !== undefined && selector !== tenantId)) {
+      res.writeHead(403).end();
+      return;
+    }
+    runWithTenant(runtime.context, () => runtime.listener(req, res));
+  };
 }
 
 const RELAY_FLUSH_MS = 2_000;
@@ -229,8 +290,43 @@ export function createRelayAuditSink(
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const port = numEnv(process.env.AUTHZ_PORT) ?? 48081;
+  if (process.env.QM_TENANTS_FILE) {
+    const host = loadHostConfig();
+    const tenants = await Promise.all(
+      host.tenants.map(({ context, config }) =>
+        runWithTenant(context, async () => {
+          configurePgPooling({
+            databaseUrl: config.databaseUrl,
+            poolUrl: config.databasePoolUrl,
+            caCert: config.databasePoolCaCert,
+            queryMax: config.databasePoolMax,
+            sessionMax: config.databaseDirectPoolMax,
+          });
+          configurePgCaTrust({ cert: config.databaseCaCert, certFile: config.databaseCaCertFile });
+          const audit = createPostgresEgressAuditSink(config.databaseUrl!);
+          await migrateRegisteredPgSchemas(config.databaseUrl);
+          return { context, deps: { audit, capabilitySecret: config.capabilitySecret } };
+        }),
+      ),
+    );
+    const server = createServer(buildPooledEgressAuthzRequestListener(tenants));
+    server.listen(port, "127.0.0.1", () =>
+      console.log(`[egress-authz] listening on 127.0.0.1:${port} (${tenants.length} tenants)`),
+    );
+    let shuttingDown = false;
+    const shutdown = (): void => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      server.close(() => {
+        void Promise.all(tenants.map(({ deps }) => deps.audit.close())).finally(() => process.exit());
+      });
+    };
+    for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, shutdown);
+    shutdownOnUncaught("egress-authz", shutdown);
+    return;
+  }
   const capabilitySecret = process.env.CAPABILITY_SECRET;
   const databaseUrl = process.env.DATABASE_URL;
   const coreApiUrl = process.env.CORE_API_URL;
@@ -256,4 +352,9 @@ function main(): void {
   shutdownOnUncaught("egress-authz", shutdown);
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main();
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  void main().catch((error: unknown) => {
+    console.error("[egress-authz] startup failed:", errMessage(error));
+    process.exit(1);
+  });
+}

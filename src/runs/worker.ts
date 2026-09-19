@@ -1,8 +1,10 @@
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
+import timers from "node:timers/promises";
 import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import type { TurnResult } from "../types.ts";
+import { scopeId, type TurnResult } from "../types.ts";
+import { orgId } from "../config.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import { NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
@@ -12,6 +14,7 @@ import { errMessage, errorAlreadyReported, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
+import type { WorkCapacity } from "./work-capacity.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -118,6 +121,7 @@ export interface WorkerDeps extends ProcessDeps {
   canClaim?: () => boolean;
   onClaimed?: () => void;
   admittedWork?: AdmittedWork;
+  capacity?: WorkCapacity;
 }
 
 export interface Worker {
@@ -133,6 +137,7 @@ const STOP_DRAIN_MS = 2_000;
 
 export function createWorker(deps: WorkerDeps): Worker {
   const workerId = deps.workerId ?? `w-${randomUUID().slice(0, 8)}`;
+  const failureScope = scopeId("org", orgId());
   const pollMs = deps.pollMs ?? 50;
   const recoveryPollMs = deps.recoveryPollMs ?? 5_000;
   const notifications = Boolean(deps.runs.subscribeAvailable);
@@ -161,6 +166,7 @@ export function createWorker(deps: WorkerDeps): Worker {
   let inFlight: { runId: string; leaseToken: string; threadRef: string } | null = null;
   let releasedLeaseToken: string | null = null;
   let releasing: Promise<void> | null = null;
+  let claimsAbort = new AbortController();
 
   async function loop(): Promise<void> {
     let claimFailures = 0;
@@ -175,45 +181,74 @@ export function createWorker(deps: WorkerDeps): Worker {
       claimDone = new Promise<void>((resolve) => {
         claimed = resolve;
       });
+      let release: (() => void) | null = null;
       try {
-        run = await deps.runs.claim(workerId, deps.leaseTtlMs);
-        claimFailures = 0;
-      } catch (e) {
+        if (deps.capacity) {
+          release = await deps.capacity.acquire(claimsAbort.signal);
+          if (!release || stopped) break;
+          if (deps.canClaim && !deps.canClaim()) continue;
+        }
+        try {
+          run = await deps.runs.claim(workerId, deps.leaseTtlMs);
+          claimFailures = 0;
+        } catch (e) {
+          claimed();
+          claimDone = null;
+          release?.();
+          claimFailures += 1;
+          if (!deps.capacity && claimFailures >= CLAIM_FAIL_CRASH_CONSECUTIVE) throw e;
+          if (!deps.capacity || claimFailures === 1 || claimFailures % CLAIM_FAIL_CRASH_CONSECUTIVE === 0) {
+            swallow("worker: claim failed (transient, retrying)", e);
+            deps.errors?.record(
+              {
+                category: "runtime",
+                code: "worker_claim_failed",
+                message: `worker ${workerId} failed to claim work ${claimFailures} consecutive times: ${errMessage(e)}`,
+                scopeLabel: failureScope,
+              },
+              e,
+            );
+          }
+          const retryMs = Math.min(
+            (deps.capacity ? Math.max(250, pollMs) : pollMs) * 2 ** Math.min(claimFailures, 5),
+            5_000,
+          );
+          await timers.setTimeout(retryMs, undefined, { signal: claimsAbort.signal }).catch((error: unknown) => {
+            if (!claimsAbort.signal.aborted) throw error;
+          });
+          continue;
+        }
+        if (!run) {
+          claimed();
+          claimDone = null;
+          release?.();
+          await waitForWork(observed);
+          continue;
+        }
+        if (stopped || (deps.canClaim && !deps.canClaim())) {
+          if (run.leaseToken !== null)
+            await deps.runs
+              .releaseLease(run.id, run.leaseToken)
+              .catch((e) => swallow("worker: post-stop claim handback failed", e));
+          break;
+        }
+        inFlight =
+          run.leaseToken !== null ? { runId: run.id, leaseToken: run.leaseToken, threadRef: run.sessionId } : null;
         claimed();
         claimDone = null;
-        claimFailures += 1;
-        if (claimFailures >= CLAIM_FAIL_CRASH_CONSECUTIVE) throw e;
-        swallow("worker: claim failed (transient, retrying)", e);
-        await sleep(Math.min(pollMs * 2 ** Math.min(claimFailures, 5), 5_000));
-        continue;
-      }
-      if (!run) {
-        claimed();
-        claimDone = null;
-        await waitForWork(observed);
-        continue;
-      }
-      if (stopped || (deps.canClaim && !deps.canClaim())) {
-        if (run.leaseToken !== null)
-          await deps.runs
-            .releaseLease(run.id, run.leaseToken)
-            .catch((e) => swallow("worker: post-stop claim handback failed", e));
-        claimed();
-        claimDone = null;
-        break;
-      }
-      inFlight =
-        run.leaseToken !== null ? { runId: run.id, leaseToken: run.leaseToken, threadRef: run.sessionId } : null;
-      claimed();
-      claimDone = null;
-      deps.onClaimed?.();
-      try {
-        const work = () => processRun(deps, run, { background: true });
-        if (deps.admittedWork) await deps.admittedWork.run(work);
-        else await work();
-      } catch (e) {
-        swallow("worker: background run crashed", e);
+        deps.onClaimed?.();
+        try {
+          const claimedRun = run;
+          const work = () => processRun(deps, claimedRun, { background: true });
+          if (deps.admittedWork) await deps.admittedWork.run(work);
+          else await work();
+        } catch (e) {
+          swallow("worker: background run crashed", e);
+        }
       } finally {
+        claimed();
+        claimDone = null;
+        release?.();
         inFlight = null;
       }
     }
@@ -221,6 +256,7 @@ export function createWorker(deps: WorkerDeps): Worker {
 
   function stopClaims(): Promise<void> {
     stopped = true;
+    claimsAbort.abort();
     unsubscribe?.();
     unsubscribe = undefined;
     notify();
@@ -231,6 +267,7 @@ export function createWorker(deps: WorkerDeps): Worker {
     start() {
       if (loopDone) return;
       stopped = false;
+      claimsAbort = new AbortController();
       unsubscribe = deps.runs.subscribeAvailable?.(notify, {
         pollMs,
         onResync: notify,

@@ -1,4 +1,5 @@
 import type { AdmittedWork } from "../util/admitted-work.ts";
+import type { WorkCapacity } from "../runs/work-capacity.ts";
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
@@ -593,6 +594,8 @@ export interface AppDeps {
   leaseTtlMs: number;
   maxAttempts: number;
   runWaitMs?: number;
+  inlineTurns?: boolean;
+  capacity?: WorkCapacity;
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;

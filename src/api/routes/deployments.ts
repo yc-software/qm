@@ -1,3 +1,4 @@
+import { tenantState } from "../../tenancy/context.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -19,7 +20,7 @@ import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
-import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
+import { deploymentGitToken, verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { portalSessionSub } from "../../deploy/viewer-session.ts";
@@ -66,14 +67,19 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       canonicalPayload(method, pathname + url.search, principal),
       false,
       ctx.allowUnsignedSourceAuth,
+      deps.tenantId,
+      deps.requireTenantBinding,
     ))
   )
     return;
-  if (deps.requireSignedPortalIdentity || deps.production) {
+  if (deps.requireSignedPortalIdentity || deps.production || deps.requireTenantBinding) {
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawTok = req.headers[PORTAL_IDENTITY_HEADER];
     const tok = Array.isArray(rawTok) ? rawTok[0] : rawTok;
-    const actor = psecret && tok ? await verifyPortalIdentity(tok, psecret, Date.now()) : null;
+    const actor =
+      psecret && tok
+        ? await verifyPortalIdentity(tok, psecret, Date.now(), deps.tenantId, deps.requireTenantBinding)
+        : null;
     if (!psecret || !actor || actor.p !== principal)
       return sendJson(res, 403, { error: "forbidden", message: "portal identity required" });
     if (deps.identity) {
@@ -135,6 +141,8 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
       canonicalPayload(method, pathname + url.search, actorHeader),
       false,
       ctx.allowUnsignedSourceAuth,
+      deps.tenantId,
+      deps.requireTenantBinding,
     ))
   )
     return;
@@ -156,6 +164,7 @@ const GATEWAY_AUTH_HEADERS = [
   "x-qm-app-host",
   "x-signature",
   "x-timestamp",
+  "x-qm-tenant",
   "x-as-principal",
   "x-admin-actor",
   "x-agent-capability",
@@ -169,18 +178,20 @@ const AGENT_FETCH_TIMEOUT_MS = 10_000;
 const AGENT_FETCH_MAX_REDIRECTS = 5;
 
 const THROTTLE_SHIELD_MS = 5_000;
-const throttledUpstreams = new Map<string, number>();
+const THROTTLED_UPSTREAMS = Symbol("throttledUpstreams");
+const throttledUpstreams = () => tenantState(THROTTLED_UPSTREAMS, () => new Map<string, number>());
 
 function armThrottleShield(upstreamKey: string, statusCode: number, upstream: NodeJS.EventEmitter): void {
   if (statusCode !== 429) return;
+  const throttles = throttledUpstreams();
   let sawBody = false;
   upstream.on("data", () => (sawBody = true));
   upstream.on("end", () => {
     if (sawBody) return;
-    if (throttledUpstreams.size > 1000) {
-      for (const [k, until] of throttledUpstreams) if (Date.now() >= until) throttledUpstreams.delete(k);
+    if (throttles.size > 1000) {
+      for (const [k, until] of throttles) if (Date.now() >= until) throttles.delete(k);
     }
-    throttledUpstreams.set(upstreamKey, Date.now() + THROTTLE_SHIELD_MS);
+    throttles.set(upstreamKey, Date.now() + THROTTLE_SHIELD_MS);
   });
 }
 const HTTP2_IDLE_TIMEOUT_MS = 60_000;
@@ -191,7 +202,9 @@ interface DeploymentHttp2Connection {
   idleTimer?: NodeJS.Timeout;
   retiring?: boolean;
 }
-const deploymentHttp2Sessions = new Map<string, DeploymentHttp2Connection>();
+const DEPLOYMENT_HTTP2_SESSIONS = Symbol("deploymentHttp2Sessions");
+const deploymentHttp2Sessions = () =>
+  tenantState(DEPLOYMENT_HTTP2_SESSIONS, () => new Map<string, DeploymentHttp2Connection>());
 
 function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string[]> {
   const out = proxyHeaders(req.headers, ["host", ...GATEWAY_AUTH_HEADERS]);
@@ -235,7 +248,7 @@ function gatewaySafeResponseHeaders(
 }
 
 function deploymentHttp2Session(origin: string): DeploymentHttp2Connection {
-  const existing = deploymentHttp2Sessions.get(origin);
+  const existing = deploymentHttp2Sessions().get(origin);
   if (existing && !existing.session.closed && !existing.session.destroyed) {
     if (existing.idleTimer) clearTimeout(existing.idleTimer);
     existing.idleTimer = undefined;
@@ -244,9 +257,9 @@ function deploymentHttp2Session(origin: string): DeploymentHttp2Connection {
   const session = connectHttp2(origin);
   session.unref();
   const connection: DeploymentHttp2Connection = { session, activeStreams: 0 };
-  deploymentHttp2Sessions.set(origin, connection);
+  deploymentHttp2Sessions().set(origin, connection);
   const remove = (): void => {
-    if (deploymentHttp2Sessions.get(origin) === connection) deploymentHttp2Sessions.delete(origin);
+    if (deploymentHttp2Sessions().get(origin) === connection) deploymentHttp2Sessions().delete(origin);
     if (connection.idleTimer) clearTimeout(connection.idleTimer);
     connection.idleTimer = undefined;
   };
@@ -260,7 +273,7 @@ function deploymentHttp2Session(origin: string): DeploymentHttp2Connection {
 }
 
 function retireDeploymentHttp2Connection(origin: string, connection: DeploymentHttp2Connection): void {
-  if (deploymentHttp2Sessions.get(origin) === connection) deploymentHttp2Sessions.delete(origin);
+  if (deploymentHttp2Sessions().get(origin) === connection) deploymentHttp2Sessions().delete(origin);
   if (connection.retiring || connection.session.destroyed) return;
   connection.retiring = true;
   connection.session.close();
@@ -271,7 +284,7 @@ function retireDeploymentHttp2Connection(origin: string, connection: DeploymentH
 
 function releaseDeploymentHttp2Stream(origin: string, connection: DeploymentHttp2Connection): void {
   connection.activeStreams--;
-  if (connection.activeStreams !== 0 || deploymentHttp2Sessions.get(origin) !== connection) return;
+  if (connection.activeStreams !== 0 || deploymentHttp2Sessions().get(origin) !== connection) return;
   connection.idleTimer = setTimeout(() => connection.session.close(), HTTP2_IDLE_TIMEOUT_MS);
   connection.idleTimer.unref();
 }
@@ -353,7 +366,7 @@ function proxyReachHttp2(
         code === "ERR_HTTP2_SESSION_ERROR" ||
         code === "ERR_HTTP2_INVALID_SESSION";
       if (sessionFailed) retireDeploymentHttp2Connection(origin, connection);
-      const moved = deploymentHttp2Sessions.get(origin) !== connection;
+      const moved = deploymentHttp2Sessions().get(origin) !== connection;
       if (
         !responseStarted &&
         replaySafe &&
@@ -420,13 +433,14 @@ function proxyReachHttp2(
 // quickly with a small self-refreshing "warming up" page.
 const WARM_RECENT_MS = 60_000;
 const COLD_FIRST_BYTE_TIMEOUT_MS = 4_000;
-const upstreamLastOk = new Map<string, number>();
+const UPSTREAM_LAST_OK = Symbol("upstreamLastOk");
+const upstreamLastOk = () => tenantState(UPSTREAM_LAST_OK, () => new Map<string, number>());
 
 function markUpstreamUp(upstreamKey: string): void {
-  if (upstreamLastOk.size > 1000) {
-    for (const [k, at] of upstreamLastOk) if (Date.now() - at > WARM_RECENT_MS) upstreamLastOk.delete(k);
+  if (upstreamLastOk().size > 1000) {
+    for (const [k, at] of upstreamLastOk()) if (Date.now() - at > WARM_RECENT_MS) upstreamLastOk().delete(k);
   }
-  upstreamLastOk.set(upstreamKey, Date.now());
+  upstreamLastOk().set(upstreamKey, Date.now());
 }
 
 function wantsWarmingPage(req: BaseCtx["req"], method: string): boolean {
@@ -438,7 +452,7 @@ function wantsWarmingPage(req: BaseCtx["req"], method: string): boolean {
 
 function warmingDialTimeoutMs(upstreamKey: string, htmlNav: boolean, configuredMs: number): number {
   if (!htmlNav) return configuredMs;
-  const lastOk = upstreamLastOk.get(upstreamKey) ?? 0;
+  const lastOk = upstreamLastOk().get(upstreamKey) ?? 0;
   if (Date.now() - lastOk < WARM_RECENT_MS) return configuredMs;
   return Math.min(configuredMs, COLD_FIRST_BYTE_TIMEOUT_MS);
 }
@@ -501,7 +515,7 @@ async function proxyReach(
     return sendJson(res, 403, { error: "forbidden", message: "not in the deployment's scope" });
   const { host, port } = reach.endpoint;
   const upstreamKey = `${host}:${port}`;
-  const shieldedUntil = throttledUpstreams.get(upstreamKey) ?? 0;
+  const shieldedUntil = throttledUpstreams().get(upstreamKey) ?? 0;
   if (Date.now() < shieldedUntil) {
     res.writeHead(429, {
       "content-type": "application/json",
@@ -996,27 +1010,6 @@ function gitServiceOf(tail: string, url: URL): "git-upload-pack" | "git-receive-
   return null;
 }
 
-function gitTokenFrom(ctx: BaseCtx): string | null {
-  const authz = ctx.req.headers.authorization;
-  if (typeof authz === "string") {
-    const basic = /^basic\s+(.+)$/i.exec(authz);
-    if (basic) {
-      try {
-        const decoded = Buffer.from(basic[1]!, "base64").toString("utf8");
-        const colon = decoded.indexOf(":");
-        const user = colon < 0 ? decoded : decoded.slice(0, colon);
-        const pass = colon < 0 ? "" : decoded.slice(colon + 1);
-        return pass || user || null;
-      } catch {
-        return null;
-      }
-    }
-    const bearer = /^bearer\s+(.+)$/i.exec(authz);
-    if (bearer) return bearer[1]!;
-  }
-  return ctx.url.searchParams.get("token") ?? ctx.url.searchParams.get("access_token");
-}
-
 function rejectGitAuth(res: BaseCtx["res"], message = "deployment git token required"): void {
   res.writeHead(401, { "content-type": "application/json", "www-authenticate": 'Basic realm="deployment git"' });
   res.end(JSON.stringify({ error: "unauthorized", message }));
@@ -1110,8 +1103,10 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
     return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
   let access: Awaited<ReturnType<typeof verifyDeployGitAccess>> = null;
   if (ctx.secret) {
-    const token = gitTokenFrom(ctx);
-    access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
+    const token = deploymentGitToken(ctx.req.headers.authorization, ctx.url);
+    access = token
+      ? await verifyDeployGitAccess(ctx.secret, token, Date.now(), ctx.deps.tenantId, ctx.deps.requireTenantBinding)
+      : null;
     if (!access) return rejectGitAuth(ctx.res);
     if (access.deploymentId !== parts.id)
       return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });

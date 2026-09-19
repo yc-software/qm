@@ -1,3 +1,4 @@
+import { tenantState } from "../tenancy/context.ts";
 import type { SessionEntry } from "../types.ts";
 import { contextSummaryPayload, entrySecurityTainted } from "../sessions/session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
@@ -52,7 +53,8 @@ export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
   return replayable.filter((e) => !entrySecurityTainted(e) && (!contextSummaryPayload(e) || e === latest));
 }
 
-const entryTokenCache = new Map<string, number>();
+const ENTRY_TOKEN_CACHE = Symbol("entry-tokens");
+const entryTokenCache = () => tenantState(ENTRY_TOKEN_CACHE, () => new Map<string, number>());
 const ENTRY_TOKEN_CACHE_MAX = 50_000;
 
 export function estimateEntryTokens(entry: SessionEntry): number {
@@ -62,13 +64,14 @@ export function estimateEntryTokens(entry: SessionEntry): number {
       ? [payload.text, payload.environment].filter((s) => typeof s === "string" && s).join("\n\n")
       : JSON.stringify(entry.payload ?? {});
   const key = `${entry.sessionId}:${entry.seq}:${text.length}`;
-  const hit = entryTokenCache.get(key);
+  const cache = entryTokenCache();
+  const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const n = countTokens(text);
-  if (entryTokenCache.size >= ENTRY_TOKEN_CACHE_MAX) {
-    entryTokenCache.delete(entryTokenCache.keys().next().value!);
+  if (cache.size >= ENTRY_TOKEN_CACHE_MAX) {
+    cache.delete(cache.keys().next().value!);
   }
-  entryTokenCache.set(key, n);
+  cache.set(key, n);
   return n;
 }
 

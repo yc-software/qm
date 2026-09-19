@@ -1,5 +1,6 @@
 import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
+import { tenantState } from "../tenancy/context.ts";
 
 const CAUSE_DEPTH = 5;
 
@@ -48,14 +49,15 @@ export function swallowAs<T>(context: string, fallback: T): (e: unknown) => T {
   };
 }
 
-const reportedErrors = new WeakSet<object>();
+const reportedErrorsKey = Symbol("reported errors");
+const reportedErrors = () => tenantState(reportedErrorsKey, () => new WeakSet<object>());
 
 export function markErrorReported(e: unknown): void {
-  if (typeof e === "object" && e !== null) reportedErrors.add(e);
+  if (typeof e === "object" && e !== null) reportedErrors().add(e);
 }
 
 export function errorAlreadyReported(e: unknown): boolean {
-  return typeof e === "object" && e !== null && reportedErrors.has(e);
+  return typeof e === "object" && e !== null && reportedErrors().has(e);
 }
 
 function isExpectedInterruption(e: unknown): boolean {
