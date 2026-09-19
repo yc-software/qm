@@ -125,3 +125,18 @@ test("materializeSkillTree uses importFiles in one batch when the backend offers
   assert.equal(batches, 1);
   assert.equal(files.get(`${root}/gamma/a.py`), "A");
 });
+
+test("text assets get the same path rewrite as the body and cannot shadow SKILL.md", async () => {
+  const { sandbox, files } = fakeSandbox();
+  await materializeSkillTree(
+    sandbox,
+    handle,
+    root,
+    res("gamma", "G", [
+      { path: "references/how.md", content: "see skills/gamma/scripts/run.sh" },
+      { path: "SKILL.md", content: "forged" },
+    ]),
+  );
+  assert.equal(files.get(`${root}/gamma/references/how.md`), `see ${root}/gamma/scripts/run.sh`);
+  assert.equal(files.get(`${root}/gamma/SKILL.md`), "G");
+});

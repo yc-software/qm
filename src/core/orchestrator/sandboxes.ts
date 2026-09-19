@@ -14,6 +14,7 @@ import { shq } from "../../util/shell.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
+  rehomeSkillPaths,
   renderSkillBody,
   skillDir,
   SKILLS_DIR,
@@ -312,7 +313,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.handle = handle;
     return handle;
   };
-  const skillsRoot = `${turnSessionDir}/${SKILLS_DIR}`;
+  const skillsRoot = `${turnFilesDir}/${SKILLS_DIR}`;
   const laidTrees = new Set<string>();
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution, sandboxId?: string): Promise<void> => {
     const treeKey = `${sandboxId ?? "default"}:${skillDir(skillsRoot, r)}`;
@@ -349,10 +350,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const resolution = (await visibleSkillsForTurn()).find((r) => r.skill?.manifest.name === name);
     if (!resolution?.skill) return missing;
     const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
-    const content =
-      file === "SKILL.md"
-        ? renderSkillBody(resolution, shipsFiles ? skillsRoot : undefined)
-        : resolution.skill.manifest.files?.find((f) => f.path === file)?.content;
+    const asset = resolution.skill.manifest.files?.find((f) => f.path === file)?.content;
+    let content: string | undefined;
+    if (file === "SKILL.md") content = renderSkillBody(resolution, shipsFiles ? skillsRoot : undefined);
+    else if (asset !== undefined) content = rehomeSkillPaths(resolution, asset, skillsRoot);
     if (content === undefined) return missing;
     if (deps.skills)
       void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));

@@ -19,9 +19,13 @@ export function packRoot(root: string, resolution: SkillResolution): string | nu
   return resolution.skill?.pack ? `${root}/.packs/${safeSkillDirName(resolution.skill.pack.packId)}` : null;
 }
 
-export function renderSkillBody(resolution: SkillResolution, root = SKILLS_DIR): string {
+export function rehomeSkillPaths(resolution: SkillResolution, text: string, root: string): string {
   const name = safeSkillDirName(resolution.skill!.manifest.name);
-  const body = resolution.skill!.manifest.body.split(`${SKILLS_DIR}/${name}/`).join(`${root}/${name}/`);
+  return text.split(`${SKILLS_DIR}/${name}/`).join(`${root}/${name}/`);
+}
+
+export function renderSkillBody(resolution: SkillResolution, root = SKILLS_DIR): string {
+  const body = rehomeSkillPaths(resolution, resolution.skill!.manifest.body, root);
   const pack = packRoot(root, resolution);
   return pack
     ? `${body}\n\n## Pack files\nResolve repository-relative shared-file paths against \`${pack}/\`; pack files never overwrite the workspace root.`
@@ -33,11 +37,17 @@ interface LayEntry {
   content: string;
 }
 
-function entriesUnder(dir: string, files: SkillFile[], label: string): LayEntry[] {
+function entriesUnder(
+  dir: string,
+  files: SkillFile[],
+  label: string,
+  content: (f: SkillFile) => string = (f) => f.content,
+): LayEntry[] {
   const entries: LayEntry[] = [];
   for (const f of files) {
     try {
-      entries.push({ path: `${dir}/${safeSkillFilePath(f.path)}`, content: f.content });
+      const rel = safeSkillFilePath(f.path);
+      if (rel !== "SKILL.md") entries.push({ path: `${dir}/${rel}`, content: content(f) });
     } catch (e) {
       swallow(`skills: bad ${label} path ${f.path}`, e);
     }
@@ -56,7 +66,9 @@ export async function materializeSkillTree(
   const dir = skillDir(root, resolution);
   const entries: LayEntry[] = [
     { path: `${dir}/SKILL.md`, content: renderSkillBody(resolution, root) },
-    ...entriesUnder(dir, resolution.skill.manifest.files ?? [], "asset"),
+    ...entriesUnder(dir, resolution.skill.manifest.files ?? [], "asset", (f) =>
+      rehomeSkillPaths(resolution, f.content, root),
+    ),
   ];
   for (const b of bundles)
     entries.push(...entriesUnder(`${root}/.packs/${safeSkillDirName(b.packId)}`, b.files, "bundle"));

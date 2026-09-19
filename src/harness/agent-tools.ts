@@ -1006,7 +1006,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(signal ? { signal } : {}),
       });
       signal?.throwIfAborted();
-      const where = dir ? `[skill files synced to ${dir}/${packDir ? `; pack files at ${packDir}/` : ""}]\n\n` : "";
+      const onSandbox = p.sandbox_id
+        ? ` on sandbox ${p.sandbox_id}; reach them with execute using that sandbox_id`
+        : "";
+      const where = dir
+        ? `[skill files synced to ${dir}/${packDir ? `; pack files at ${packDir}/` : ""}${onSandbox}]\n\n`
+        : "";
       return recordResult(
         callId,
         {

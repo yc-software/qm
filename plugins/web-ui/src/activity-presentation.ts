@@ -31,6 +31,10 @@ export function activityDescription(
 } {
   const tool = toolCategory({ ...result, ...call });
   if (tool === "read") return { category: "read", target: compactPath(call.path ?? result.path ?? "") };
+  if (tool === "skill") {
+    const name = call.name ?? result.name ?? "";
+    return { category: "read", target: `${name}/${call.path ?? result.path ?? "SKILL.md"}` };
+  }
   if (tool !== "execute") return { category: "other", target: "" };
   const command = call.command ?? "";
   const words = shellWords(command);
