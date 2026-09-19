@@ -1889,7 +1889,7 @@ export function createChatSurface(
                 .me=${appState.me}
                 .base=${withBase("")}
                 .adminBase=${ADMIN_BASE}
-                .widget=${part.type === "slack" ? "slack" : "apps"}
+                .widget=${part.type === "setup" ? "apps" : part.type}
                 .returnKey=${`reply:${message.timestamp}:${chunkIndex}:${partIndex}`}
                 .setupOnly=${true}
                 .animateWelcome=${false}

@@ -54,7 +54,7 @@ export class OnboardingWelcome extends LitElement {
   declare ideasDisabled: boolean;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
-  declare widget: "all" | "apps" | "slack";
+  declare widget: "all" | "apps" | "slack" | "slack-account";
   declare returnKey: string;
   declare base: string;
   declare adminBase: string;
@@ -64,7 +64,7 @@ export class OnboardingWelcome extends LitElement {
   declare authorizationError: string;
   private connections: Array<{ id: string; toolkit: string }> = [];
   private connectionError = "";
-  private workspaceConnected = false;
+  private workspaceConnected: boolean | null = null;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
   private restoreScrollTop: number | null = null;
@@ -72,7 +72,8 @@ export class OnboardingWelcome extends LitElement {
   private returnAccount = "";
   private refreshConnections = () => {
     if (!document.hidden) void this.refreshWorkspace();
-    if (!this.preview && this.widget !== "slack" && !document.hidden) void this.loadConnections();
+    if (!this.preview && !["slack", "slack-account"].includes(this.widget) && !document.hidden)
+      void this.loadConnections();
   };
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
@@ -106,7 +107,7 @@ export class OnboardingWelcome extends LitElement {
     return `${this.me?.org}:${this.me?.user}`;
   }
   private async refreshWorkspace(): Promise<void> {
-    if (this.widget === "apps" || this.me?.permissions?.includes("admin")) return;
+    if (this.widget === "apps" || (this.widget !== "slack-account" && this.me?.permissions?.includes("admin"))) return;
     try {
       const response = await fetch(`${this.base}api/composio/slack`, {
         cache: "no-store",
@@ -121,7 +122,9 @@ export class OnboardingWelcome extends LitElement {
     void this.refreshWorkspace();
     const params = previewParameters();
     const returnUrl =
-      !this.preview && this.widget !== "slack" ? takeConnectionReturn(this.previewUser(), this.returnKey) : null;
+      !this.preview && !["slack", "slack-account"].includes(this.widget)
+        ? takeConnectionReturn(this.previewUser(), this.returnKey)
+        : null;
     const realParams = returnUrl?.url.searchParams;
     const returning = !this.preview && isConnectionReturn();
     if (realParams) {
@@ -139,10 +142,10 @@ export class OnboardingWelcome extends LitElement {
       for (const key of ["composioReturn", "status", "error", "connectedAccountId"]) clean.searchParams.delete(key);
       history.replaceState(history.state, "", clean);
     }
-    if (!this.preview && this.widget !== "slack") {
+    if (!this.preview) {
       window.addEventListener("focus", this.refreshConnections);
       document.addEventListener("visibilitychange", this.refreshConnections);
-      void this.loadConnections();
+      if (!["slack", "slack-account"].includes(this.widget)) void this.loadConnections();
     }
     if (this.preview) {
       const visible = new URL(location.href);
@@ -187,7 +190,7 @@ export class OnboardingWelcome extends LitElement {
     ) {
       this.classList.add("welcome-rolling");
     }
-    if (this.widget !== "slack") void this.loadCatalog();
+    if (!["slack", "slack-account"].includes(this.widget)) void this.loadCatalog();
   }
   private drawPicker(): void {
     const target = this.querySelector<HTMLElement>(".welcome-picker");
@@ -443,7 +446,7 @@ export class OnboardingWelcome extends LitElement {
               }`
       }
       ${
-        this.widget !== "apps" && this.me?.permissions?.includes("admin")
+        !["apps", "slack-account"].includes(this.widget) && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack
               class="welcome-beat"
               style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
@@ -454,11 +457,12 @@ export class OnboardingWelcome extends LitElement {
             ></qm-onboarding-slack>`
           : nothing
       }
+      ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
       <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}>
-        ${this.workspaceConnected && this.widget !== "apps" && (this.widget === "slack" || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
+        ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
       </div>
       ${
-        this.widget === "slack"
+        ["slack", "slack-account"].includes(this.widget)
           ? nothing
           : html`<div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3450 : 1300}ms`}>
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}

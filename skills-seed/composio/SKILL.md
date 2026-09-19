@@ -56,4 +56,6 @@ If project-level callback identity verification is enabled, consent must return 
 
 When no authorized Composio credential is available, use the existing direct app skill. A permission denial is not permission to switch accounts or bypass approval. Composio's personal Slack connection does not install the separate QM bot.
 
-For Slack authorization, use QM’s dedicated **Connect Slack** button in web Settings (`/?view=settings`), signed into the existing web account. This also links the Slack identity. Do not use a generic Composio consent link for Slack. Installing the company bot is a separate action.
+For Slack authorization, offer `::link-slack-account{}` in web chat, signed into the existing web account. From Slack, direct them to **Link your Slack account** in QM web Settings (`/?view=settings`). This also links the Slack identity. Do not use a generic Composio consent link for Slack. Installing the company bot is a separate action.
+
+In web chat, offer personal Slack account linking with `::link-slack-account{}` as a standalone paragraph, outside code fences and quotations. Use it when someone wants Slack search, actions on their behalf, or access to their existing web connectors from Slack. This shows the personal linking card and its verified connection status, without the general app picker. Company bot installation must be completed first; use `::add-to-slack{}` for that separate administrator step. In Slack, send them to QM web Settings while signed into their existing web account; web widget directives do not render in Slack.
