@@ -178,7 +178,7 @@ export class CredentialState {
     if (body.delivery !== "env" && !this.draft.org && !body.grantees.length)
       return "Add at least one person or choose org-wide access.";
     if (body.delivery !== "env" && this.resolutionError) return this.resolutionError;
-    const unsupported = body.grantees.find((g: string) => /^group:/.test(g) || /^personal:[^,]*:/.test(g));
+    const unsupported = body.grantees.find((g: string) => g.startsWith("group:") || /^personal:[^,]*:/.test(g));
     if (unsupported)
       return (
         "Remove unsupported legacy grant “" +
@@ -662,8 +662,8 @@ function secretHint() {
     : "No stored secret yet. Enter one to make this credential usable.";
 }
 function grantTag(id: string) {
-  if (/^group:/.test(id)) return html`<small>unsupported · remove before saving</small>`;
-  if (/^channel:/.test(id)) return html`<small>channel</small>`;
+  if (id.startsWith("group:")) return html`<small>unsupported · remove before saving</small>`;
+  if (id.startsWith("channel:")) return html`<small>channel</small>`;
   return config.label(id) === id ? html`<small>unresolved</small>` : null;
 }
 

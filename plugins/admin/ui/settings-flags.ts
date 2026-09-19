@@ -81,8 +81,9 @@ async function remove(scopeId: string, featureName: string) {
 async function add() {
   if (state.saving || !state.selected.size) return;
   const feature = state.feature;
+  const selected = [...state.selected];
   try {
-    for (const id of [...state.selected]) {
+    for (const id of selected) {
       if (!(await update(id, true, feature))) break;
       state.selected.delete(id);
     }

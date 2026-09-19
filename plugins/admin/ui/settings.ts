@@ -129,7 +129,7 @@ export function load(data: Data, scope: string, only?: string) {
             effortLevel: data.runtime?.effortLevel || "auto",
             fastMode: data.runtime?.fastMode === true,
           }
-        : { ids: [...(data.webuiModels || []).filter(Boolean)] };
+        : { ids: (data.webuiModels || []).filter(Boolean) };
     s.normalize();
     s.saving = false;
     s.selected = "";

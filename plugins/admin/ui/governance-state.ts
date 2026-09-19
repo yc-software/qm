@@ -2,7 +2,7 @@ import { SettingState, settingRegistry } from "./setting-state.ts";
 export type Rule = { id: number; pattern: string; decision: string; reason: string };
 export type Bot = { id: number; name: string; mode: string; hours: string };
 let nextId = 0;
-export const fieldNames: Record<string, Record<string, string>> = {
+const fieldNames: Record<string, Record<string, string>> = {
   "security-posture": { "security-posture": "posture" },
   "sharing-posture": { "sharing-posture": "posture" },
   "org-ambient": { "governance-org-ambient": "on" },
