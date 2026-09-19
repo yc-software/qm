@@ -28,6 +28,7 @@ no run bearer is exposed to browser code or placed in a URL. The active-run resu
 (`/api/runs/active`) is per-process best-effort with a durable core fallback for personal threads.
 
 ```
+npm install --prefix ../admin
 npm install
 npm run build
 npm run serve
