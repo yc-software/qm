@@ -351,3 +351,5 @@ access failures do not retry on company credentials. Messages using a different
 account queue separately instead of steering an existing run; an explicit steer
 across accounts is refused. Organizations that already require individual accounts
 continue to require them.
+
+The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.
