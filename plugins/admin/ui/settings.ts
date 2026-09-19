@@ -8,6 +8,7 @@ export {
   credentialStatus,
   credentialLoading,
   loadCredentials,
+  keychainSummary,
 } from "./settings-credentials.ts";
 import { mountProviders } from "./settings-providers.ts";
 export { configureProviders, openProvider, loadProviders } from "./settings-providers.ts";

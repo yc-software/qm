@@ -103,11 +103,17 @@ test("catalog completion appends options only to the requesting settings view", 
 });
 
 test("branding saves commit the Lit draft and preserve unrelated settings", async () => {
-  const source = extract('document.querySelectorAll("[data-save]").forEach', '$("view-governance").addEventListener("input"');
+  const source = extract(
+    'document.querySelectorAll("[data-save]").forEach',
+    '$("view-governance").addEventListener("input"',
+  );
   for (const otherDraft of [false, true]) {
     const f = litFixture();
     try {
-      f.ui.settings.load({ branding: { selfLabel: "Saved name", accent: "#111111" }, soul: "Original SOUL" }, "org:test");
+      f.ui.settings.load(
+        { branding: { selfLabel: "Saved name", accent: "#111111" }, soul: "Original SOUL" },
+        "org:test",
+      );
       f.ui.settings.states.get("branding").change("accent", "#123456");
       if (otherDraft) f.ui.settings.states.get("soul").change("content", "Unsaved SOUL");
       const body = f.ui.collect("branding");
@@ -273,5 +279,22 @@ test("admin requests convert rejected fetches and interrupted bodies into failur
     assert.equal(result.ok, false);
     assert.equal(result.status, 0);
     assert.equal(result.data.message, "Network request failed.");
+  }
+});
+
+test("admin shell calls resolve against the shipped Lit bundle", () => {
+  const f = litFixture();
+  try {
+    const calls = [...html.matchAll(/governanceUI((?:\.[A-Za-z_$][\w$]*)+)\s*\(/g)];
+    assert.ok(calls.length > 0);
+    for (const [, path] of calls) {
+      const value = path!
+        .slice(1)
+        .split(".")
+        .reduce((owner: any, key) => owner?.[key], f.ui);
+      assert.equal(typeof value, "function", `governanceUI${path}`);
+    }
+  } finally {
+    f.dom.window.close();
   }
 });
