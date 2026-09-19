@@ -21,10 +21,9 @@ any issues that come up, and merge once CI is **fully** green.
    GitLab. Detect from the remote.
 
 3. **Wait for CI in one blocking process, with bounded transport retries.**
-   Read the `github-gitlab` skill. For GitHub, capture the PR's full head SHA and
-   use its bundled helper, not bare `gh pr checks --watch`:
-
-   Load the `github-gitlab` skill first; it reports the directory holding its scripts.
+   Load the `github-gitlab` skill; it reports the directory holding its scripts. For
+   GitHub, capture the PR's full head SHA and use its bundled helper, not bare
+   `gh pr checks --watch`:
 
    ```bash
    node <github-gitlab dir>/scripts/watch-ci.mjs --repo OWNER/REPO --pr NUMBER --head REVIEWED_HEAD_SHA

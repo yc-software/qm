@@ -2489,6 +2489,7 @@ export function createChatSurface(
   const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
     execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
     read: { icon: BookOpen, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
+    skill: { icon: BookOpen, active: "Loading skill", done: "Loaded skill", attempted: "Tried loading skill" },
     write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
     publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
     recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
@@ -2562,6 +2563,8 @@ export function createChatSurface(
         return call.command ? firstLine(call.command) : "";
       case "read":
         return call.path ?? result.path ?? "";
+      case "skill":
+        return `${call.name ?? result.name ?? ""}/${call.path ?? result.path ?? "SKILL.md"}`;
       case "write": {
         const path = call.path ?? result.path ?? "";
         const bytes = result.bytes ?? call.bytes;

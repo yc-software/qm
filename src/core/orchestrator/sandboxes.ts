@@ -350,7 +350,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const resolution = (await visibleSkillsForTurn()).find((r) => r.skill?.manifest.name === name);
     if (!resolution?.skill) return missing;
     const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
-    const asset = resolution.skill.manifest.files?.find((f) => f.path === file)?.content;
+    const asset = resolution.skill.manifest.files?.find((f) => {
+      try {
+        return safeSkillFilePath(f.path) === file;
+      } catch {
+        return false;
+      }
+    })?.content;
     let content: string | undefined;
     if (file === "SKILL.md") content = renderSkillBody(resolution, shipsFiles ? skillsRoot : undefined);
     else if (asset !== undefined) content = rehomeSkillPaths(resolution, asset, skillsRoot);

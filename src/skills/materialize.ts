@@ -42,12 +42,13 @@ function entriesUnder(
   files: SkillFile[],
   label: string,
   content: (f: SkillFile) => string = (f) => f.content,
+  skip: (rel: string) => boolean = () => false,
 ): LayEntry[] {
   const entries: LayEntry[] = [];
   for (const f of files) {
     try {
       const rel = safeSkillFilePath(f.path);
-      if (rel !== "SKILL.md") entries.push({ path: `${dir}/${rel}`, content: content(f) });
+      if (!skip(rel)) entries.push({ path: `${dir}/${rel}`, content: content(f) });
     } catch (e) {
       swallow(`skills: bad ${label} path ${f.path}`, e);
     }
@@ -66,8 +67,12 @@ export async function materializeSkillTree(
   const dir = skillDir(root, resolution);
   const entries: LayEntry[] = [
     { path: `${dir}/SKILL.md`, content: renderSkillBody(resolution, root) },
-    ...entriesUnder(dir, resolution.skill.manifest.files ?? [], "asset", (f) =>
-      rehomeSkillPaths(resolution, f.content, root),
+    ...entriesUnder(
+      dir,
+      resolution.skill.manifest.files ?? [],
+      "asset",
+      (f) => rehomeSkillPaths(resolution, f.content, root),
+      (rel) => rel === "SKILL.md",
     ),
   ];
   for (const b of bundles)

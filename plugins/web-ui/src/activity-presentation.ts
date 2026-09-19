@@ -33,7 +33,7 @@ export function activityDescription(
   if (tool === "read") return { category: "read", target: compactPath(call.path ?? result.path ?? "") };
   if (tool === "skill") {
     const name = call.name ?? result.name ?? "";
-    return { category: "read", target: `${name}/${call.path ?? result.path ?? "SKILL.md"}` };
+    return { category: "read", target: `${name}/${compactPath(call.path ?? result.path ?? "SKILL.md")}` };
   }
   if (tool !== "execute") return { category: "other", target: "" };
   const command = call.command ?? "";

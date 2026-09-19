@@ -140,3 +140,11 @@ test("text assets get the same path rewrite as the body and cannot shadow SKILL.
   assert.equal(files.get(`${root}/gamma/references/how.md`), `see ${root}/gamma/scripts/run.sh`);
   assert.equal(files.get(`${root}/gamma/SKILL.md`), "G");
 });
+
+test("a pack bundle may ship a root SKILL.md of its own", async () => {
+  const { sandbox, files } = fakeSandbox();
+  await materializeSkillTree(sandbox, handle, root, res("gmail", "G", [], "s1"), [
+    bundle("s1", [{ path: "SKILL.md", content: "pack readme" }]),
+  ]);
+  assert.equal(files.get(`${root}/.packs/s1/SKILL.md`), "pack readme");
+});

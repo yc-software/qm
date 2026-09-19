@@ -47,7 +47,7 @@ test("simple shell reads and searches get semantic labels, compound commands sta
   });
   assert.deepEqual(activityDescription({ tool: "skill", name: "publish", path: "templates/x.md" }), {
     category: "read",
-    target: "publish/templates/x.md",
+    target: "publish/x.md",
   });
 });
 
