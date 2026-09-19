@@ -21,7 +21,7 @@ test("inbox access rides the existing permissions plumbing", () => {
   assert.match(shell, /can\("inbox"\) \? html`\$\{inboxNavRow\(\)\}/);
   assert.match(shellState, /if \(view === "inbox" \|\| view === "calendar"\) return can\("inbox"\);/);
   assert.match(server, /process\.env\.INBOX_USERS/);
-  assert.match(server, /INBOX_USERS\.has\("all"\) \|\| INBOX_USERS\.has\(principalId\.trim\(\)\.toLowerCase\(\)\)/);
+  assert.match(server, /principalInAllowlist\(principalId, configuredUsers\)/);
   assert.match(server, /if \(isInboxUser\(user\)\) permissions\.push\("inbox"\);/);
   assert.match(inbox, /if \(!can\("inbox"\)\) return;/);
 });
